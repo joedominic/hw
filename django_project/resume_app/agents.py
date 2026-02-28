@@ -3,6 +3,7 @@ import operator
 from langchain_openai import ChatOpenAI
 from langchain_anthropic import ChatAnthropic
 from langchain_groq import ChatGroq
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langgraph.graph import StateGraph, END
 
@@ -14,6 +15,8 @@ def get_llm(provider: str, api_key: str):
         return ChatAnthropic(model="claude-3-5-sonnet-latest", api_key=api_key)
     elif provider == "Groq":
         return ChatGroq(model="llama3-70b-8192", api_key=api_key)
+    elif provider == "Google AI Studio":
+        return ChatGoogleGenerativeAI(model="gemini-1.5-pro", google_api_key=api_key)
     else:
         raise ValueError(f"Unsupported provider: {provider}")
 
