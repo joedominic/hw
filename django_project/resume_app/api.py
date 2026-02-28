@@ -3,6 +3,7 @@ from ninja.files import UploadedFile
 from .models import UserResume, JobDescription, OptimizedResume, AgentLog
 from .tasks import optimize_resume_task
 from typing import List
+import threading
 
 router = Router()
 
@@ -33,15 +34,15 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
         status="queued"
     )
 
-    # 4. Trigger Celery Task
-    task = optimize_resume_task.delay(
-        optimized.id,
-        job_desc.id,
-        payload.llm_provider,
-        payload.api_key
+    # 4. Trigger Background Thread (Replacing Celery)
+    thread = threading.Thread(
+        target=optimize_resume_task,
+        args=(optimized.id, job_desc.id, payload.llm_provider, payload.api_key),
+        daemon=True
     )
+    thread.start()
 
-    return {"task_id": task.id, "resume_id": optimized.id}
+    return {"task_id": "thread-triggered", "resume_id": optimized.id}
 
 @router.get("/status/{resume_id}", response=StatusResponse)
 def get_status(request, resume_id: int):

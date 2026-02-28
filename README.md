@@ -4,35 +4,28 @@ An automated platform that uses multi-agent AI (LangGraph) to tailor resumes to 
 
 ## Tech Stack
 - **Backend:** Django 6.0.2 + Django Ninja (API)
-- **Task Queue:** Celery + Redis
 - **AI Orchestration:** LangGraph + LangChain
 - **UI:** Streamlit (Stub)
+- **Background Tasks:** Python Threading (No Redis/Celery required)
 
 ## Setup Instructions
 
 ### 1. Prerequisites
 - Python 3.12+
-- Redis (See below for installation)
 
-### 2. Install Redis (No Docker)
-If you cannot use Docker, install Redis natively:
-- **macOS (Homebrew):** `brew install redis && brew services start redis`
-- **Ubuntu/Debian:** `sudo apt install redis-server && sudo systemctl start redis`
-- **Windows:** Use [Memurai](https://www.memurai.com/) or [Redis for Windows](https://github.com/microsoftarchive/redis/releases).
-
-### 3. Install Dependencies
+### 2. Install Dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Database Setup
+### 3. Database Setup
 ```bash
 cd django_project
 python manage.py migrate
 ```
 
-### 5. Running the Application
-You will need three terminal windows:
+### 4. Running the Application
+You will need two terminal windows:
 
 **Terminal 1: Django Backend**
 ```bash
@@ -40,13 +33,7 @@ cd django_project
 python manage.py runserver
 ```
 
-**Terminal 2: Celery Worker**
-```bash
-cd django_project
-celery -A core worker -l info
-```
-
-**Terminal 3: Streamlit UI**
+**Terminal 2: Streamlit UI**
 ```bash
 streamlit run ui/app.py
 ```
@@ -54,4 +41,5 @@ streamlit run ui/app.py
 ## Architecture Notes
 - **Why Streamlit?** It provides a high-level abstraction for real-time AI interactions (polling, status bars) which is perfect for this stub.
 - **Why Django?** Provides a robust ORM and admin interface for managing resume data and logs.
+- **Background Processing:** Background tasks are handled via Python threads to remove external dependencies like Redis. This is suitable for development/testing environments.
 - **The Workflow:** The system uses a 3-agent loop (Writer -> ATS Judge -> Recruiter Judge). It iterates up to 3 times or until the average score reaches 85/100.

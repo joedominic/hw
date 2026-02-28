@@ -1,11 +1,12 @@
-from celery import shared_task
 from .models import OptimizedResume, AgentLog
 from .agents import create_workflow, get_llm
 from .services import parse_pdf
 import os
 
-@shared_task(bind=True)
-def optimize_resume_task(self, resume_id, job_description_id, provider, api_key):
+def optimize_resume_task(resume_id, job_description_id, provider, api_key):
+    """
+    Refactored to run in a plain thread (not Celery).
+    """
     try:
         optimized_resume = OptimizedResume.objects.get(id=resume_id)
         job_desc = optimized_resume.job_description.content
@@ -34,9 +35,7 @@ def optimize_resume_task(self, resume_id, job_description_id, provider, api_key)
         # Run Graph
         last_state = initial_state
         for output in app.stream(initial_state):
-            # Save logs for each step
             for node_name, state_update in output.items():
-                # Merge update into our tracking state
                 last_state.update(state_update)
 
                 AgentLog.objects.create(
@@ -45,7 +44,6 @@ def optimize_resume_task(self, resume_id, job_description_id, provider, api_key)
                     thought=state_update
                 )
 
-                # Update status for UI polling
                 if 'ats_score' in state_update or 'recruiter_score' in state_update:
                     optimized_resume.status = f"Scoring: ATS={last_state.get('ats_score', 'N/A')}, Recruiter={last_state.get('recruiter_score', 'N/A')}"
                 elif 'optimized_resume' in state_update:
@@ -53,7 +51,7 @@ def optimize_resume_task(self, resume_id, job_description_id, provider, api_key)
 
                 optimized_resume.save()
 
-        # Final update using the accumulated state
+        # Final update
         optimized_resume.optimized_content = last_state['optimized_resume']
         optimized_resume.status = "completed"
         optimized_resume.save()
