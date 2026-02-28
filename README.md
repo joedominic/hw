@@ -3,7 +3,7 @@
 An automated platform that uses multi-agent AI (LangGraph) to tailor resumes to job descriptions iteratively.
 
 ## Tech Stack
-- **Backend:** Django 6.0.2 + Django Ninja (API)
+- **Backend:** Django 5.2.11 + Django Ninja (API)
 - **AI Orchestration:** LangGraph + LangChain
 - **UI:** Streamlit (Stub)
 - **Background Tasks:** Python Threading (No Redis/Celery required)
