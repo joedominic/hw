@@ -2,7 +2,7 @@ from ninja import Router, File, Schema, Form
 from ninja.files import UploadedFile
 from .models import UserResume, JobDescription, OptimizedResume, AgentLog
 from .tasks import optimize_resume_task
-from typing import List
+from typing import List, Optional
 import threading
 
 router = Router()
@@ -14,9 +14,9 @@ class OptimizeRequest(Schema):
 
 class StatusResponse(Schema):
     status: str
-    ats_score: int = None
-    recruiter_score: int = None
-    optimized_content: str = None
+    ats_score: Optional[int] = None
+    recruiter_score: Optional[int] = None
+    optimized_content: Optional[str] = None
     logs: List[dict] = []
 
 @router.post("/optimize")

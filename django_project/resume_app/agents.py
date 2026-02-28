@@ -16,7 +16,8 @@ def get_llm(provider: str, api_key: str):
     elif provider == "Groq":
         return ChatGroq(model="llama3-70b-8192", api_key=api_key)
     elif provider == "Google AI Studio":
-        return ChatGoogleGenerativeAI(model="gemini-1.5-pro", google_api_key=api_key)
+        # Using gemini-1.5-flash as it is more widely available and faster for testing
+        return ChatGoogleGenerativeAI(model="gemini-1.5-flash", google_api_key=api_key)
     else:
         raise ValueError(f"Unsupported provider: {provider}")
 
