@@ -8,7 +8,7 @@ st.title("🚀 AI Resume Optimizer")
 
 # Sidebar
 st.sidebar.header("LLM Configuration")
-provider = st.sidebar.selectbox("Select LLM Provider", ["OpenAI", "Anthropic", "Groq"])
+provider = st.sidebar.selectbox("Select LLM Provider", ["OpenAI", "Anthropic", "Groq", "Google AI Studio"])
 api_key = st.sidebar.text_input("API Key", type="password")
 
 if not api_key:
