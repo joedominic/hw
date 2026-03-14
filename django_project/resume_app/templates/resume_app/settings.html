@@ -1,0 +1,96 @@
+{% extends "resume_app/base.html" %}
+
+{% block title %}Settings{% endblock %}
+
+{% block content %}
+<div class="row mb-3">
+    <div class="col-12">
+        <h1 class="mb-3">Settings</h1>
+        <p class="text-muted">
+            Manage API keys and choose the active LLM provider. Resume Optimizer and Job search use models from the active provider.
+        </p>
+    </div>
+</div>
+
+{% if messages %}
+    <div class="row mb-3">
+        <div class="col-12">
+            {% for message in messages %}
+                <div class="alert alert-{{ message.tags|default:'info' }} mb-2" role="alert">
+                    {{ message }}
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+{% endif %}
+
+<div class="row">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header">
+                Active LLM provider
+            </div>
+            <div class="card-body">
+                <form method="post" class="row g-2 align-items-end">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="set_active_provider">
+                    <div class="col-md-8">
+                        <label class="form-label" for="active-provider-select">Configured provider</label>
+                        <select id="active-provider-select" name="active_provider" class="form-select">
+                            <option value="">Select a connected provider</option>
+                            {% for info in provider_infos %}
+                                {% if info.key_stored %}
+                                    <option value="{{ info.name }}" {% if info.is_active %}selected{% endif %}>{{ info.name }}</option>
+                                {% endif %}
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <button type="submit" class="btn btn-primary w-100">Save active provider</button>
+                    </div>
+                </form>
+                {% if active_provider %}
+                    <p class="small text-muted mt-2 mb-0">Current active provider: {{ active_provider }}</p>
+                {% else %}
+                    <p class="small text-muted mt-2 mb-0">No active provider selected yet.</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-header">
+                Integrations — LLM API keys
+            </div>
+            <div class="card-body">
+                <p class="small text-muted mb-4">
+                    Enter and save an API key for each provider you use. Keys are validated when you connect and stored encrypted.
+                </p>
+                {% for info in provider_infos %}
+                <div class="border rounded p-3 mb-3">
+                    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+                        <h5 class="mb-0">{{ info.name }}</h5>
+                        {% if info.key_stored %}
+                        <span class="badge bg-success">Key stored</span>
+                        {% else %}
+                        <span class="badge bg-secondary">No key</span>
+                        {% endif %}
+                    </div>
+                    <form method="post" class="mt-2">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="connect">
+                        <input type="hidden" name="provider" value="{{ info.name }}">
+                        <div class="mb-2">
+                            <label class="form-label" for="api-key-{{ info.name|slugify }}">API key</label>
+                            <input type="password" id="api-key-{{ info.name|slugify }}" name="api_key"
+                                   class="form-control" placeholder="Paste API key for {{ info.name }}"
+                                   autocomplete="off">
+                        </div>
+                        <button type="submit" class="btn btn-sm btn-primary">Connect &amp; save key</button>
+                    </form>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

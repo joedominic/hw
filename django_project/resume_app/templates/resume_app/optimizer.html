@@ -1,0 +1,714 @@
+{% extends "resume_app/base.html" %}
+
+{% block title %}Resume Optimizer{% endblock %}
+
+{% block content %}
+<div class="row mb-3">
+    <div class="col-12">
+        <h1 class="mb-3">Resume Optimizer</h1>
+        <p class="text-muted">
+            Upload your resume, paste a job description, choose a model from the configured provider, and run the optimization workflow.
+        </p>
+    </div>
+</div>
+
+{% if messages %}
+    <div class="row mb-3">
+        <div class="col-12">
+            {% for message in messages %}
+                <div class="alert alert-{{ message.tags|default:'info' }} mb-2" role="alert">
+                    {{ message }}
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+{% endif %}
+
+<div class="row">
+    <div class="col-lg-4 mb-4">
+        <div class="card">
+            <div class="card-header">
+                LLM configuration
+            </div>
+            <div class="card-body">
+                <p class="small mb-2">
+                    <strong>Provider:</strong> {{ selected_provider|default:"Not configured" }}
+                </p>
+
+                {% if llm_key_stored %}
+                    <p class="text-success small mb-1">Using connected key for {{ selected_provider }}.</p>
+                {% elif llm_key_error %}
+                    <p class="text-danger small mb-1">{{ llm_key_error }}</p>
+                    <a href="{% url 'settings' %}" class="btn btn-sm btn-outline-primary">Go to Settings</a>
+                {% else %}
+                    <p class="text-muted small mb-1">No API key configured for {{ selected_provider }}.</p>
+                    <a href="{% url 'settings' %}" class="btn btn-sm btn-outline-primary">Go to Settings</a>
+                {% endif %}
+
+                {% if llm_models %}
+                    <p class="small text-muted mb-0 mt-1">
+                        {{ llm_models|length }} model(s) available. Default:
+                        {{ llm_default_model|default:"(not set)" }}.
+                    </p>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-header">
+                Prompts
+            </div>
+            <div class="card-body">
+                <p class="small text-muted">
+                    These templates will be used for the writer and judges. Saved when you run a step, run the full optimizer, or click Save.
+                </p>
+                <p class="small mb-2">
+                    <a href="{% url 'prompt_library' %}">Edit in Prompt Library</a> — manage prompts in a dedicated page.
+                </p>
+                <form method="post" id="save-prompts-form">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="save_prompts">
+                    <input type="hidden" name="prompt_writer" id="save-prompts-writer" value="">
+                    <input type="hidden" name="prompt_ats_judge" id="save-prompts-ats" value="">
+                    <input type="hidden" name="prompt_recruiter_judge" id="save-prompts-recruiter" value="">
+                    <button type="submit" class="btn btn-sm btn-outline-secondary">Save prompts</button>
+                </form>
+                <script>
+                document.getElementById("save-prompts-form")?.addEventListener("submit", function () {
+                    var w = document.getElementById("prompt-writer-input"); var a = document.getElementById("prompt-ats-input"); var r = document.getElementById("prompt-recruiter-input");
+                    document.getElementById("save-prompts-writer").value = w ? w.value : "";
+                    document.getElementById("save-prompts-ats").value = a ? a.value : "";
+                    document.getElementById("save-prompts-recruiter").value = r ? r.value : "";
+                });
+                </script>
+                <form method="post" class="mt-1">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="reset_prompts">
+                    <button type="submit" class="btn btn-sm btn-outline-secondary">Reset to server defaults</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-8 mb-4">
+        <div class="card mb-3">
+            <div class="card-header">
+                1. Upload resume &amp; job description
+            </div>
+            <div class="card-body">
+                <form method="post" enctype="multipart/form-data" id="optimizer-form">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="run_optimizer">
+                    {% if prefill_resume_id %}
+                    <input type="hidden" name="use_resume_id" value="{{ prefill_resume_id }}">
+                    {% endif %}
+
+                    <div class="mb-3">
+                        <label class="form-label" for="resume-file-input">Resume (PDF)</label>
+                        {% if prefill_resume_id %}
+                        <p class="small text-success mb-1">Using resume: {{ prefill_resume_name|default:"Resume" }} (ID {{ prefill_resume_id }}). Upload a different file to use another resume.</p>
+                        {% endif %}
+                        <input type="file" id="resume-file-input" name="resume_file" accept="application/pdf"
+                               class="form-control">
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label" for="job-description-input">Job description</label>
+                        <textarea id="job-description-input" name="job_description" rows="8"
+                                  class="form-control"
+                                  placeholder="Paste the target job description here">{{ job_description_value }}</textarea>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label" for="llm-model-select">Model</label>
+                        <select id="llm-model-select" name="llm_model" class="form-select" {% if not llm_models %}disabled{% endif %}>
+                            {% if not llm_models %}
+                                <option>(Connect an API key to load models)</option>
+                            {% else %}
+                                {% for m in llm_models %}
+                                    <option value="{{ m }}" {% if m == selected_llm_model %}selected{% endif %}>{{ m }}</option>
+                                {% endfor %}
+                            {% endif %}
+                        </select>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label d-block">Prompts</label>
+                        <ul class="nav nav-tabs" id="prompt-tabs" role="tablist">
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link active" id="prompt-writer-tab" data-bs-toggle="tab" data-bs-target="#prompt-writer-pane" type="button" role="tab">Writer</button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="prompt-ats-tab" data-bs-toggle="tab" data-bs-target="#prompt-ats-pane" type="button" role="tab">ATS Judge</button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="prompt-recruiter-tab" data-bs-toggle="tab" data-bs-target="#prompt-recruiter-pane" type="button" role="tab">Recruiter Judge</button>
+                            </li>
+                        </ul>
+                        <div class="tab-content border border-top-0 rounded-bottom p-3 bg-white" id="prompt-tab-content">
+                            <div class="tab-pane fade show active" id="prompt-writer-pane" role="tabpanel">
+                                <label class="form-label visually-hidden" for="prompt-writer-input">Writer prompt</label>
+                                <textarea id="prompt-writer-input" name="prompt_writer" rows="14"
+                                          class="form-control font-monospace" style="min-height: 18rem;"
+                                          placeholder="Writer prompt template">{{ prompts.writer }}</textarea>
+                                <div class="form-text mt-1">
+                                    Placeholders: <code>{resume_text}</code>, <code>{job_description}</code>, <code>{feedback}</code>.
+                                </div>
+                            </div>
+                            <div class="tab-pane fade" id="prompt-ats-pane" role="tabpanel">
+                                <label class="form-label visually-hidden" for="prompt-ats-input">ATS judge prompt</label>
+                                <textarea id="prompt-ats-input" name="prompt_ats_judge" rows="14"
+                                          class="form-control font-monospace" style="min-height: 18rem;"
+                                          placeholder="ATS judge prompt template">{{ prompts.ats_judge }}</textarea>
+                                <div class="form-text mt-1">
+                                    Placeholders: <code>{optimized_resume}</code>, <code>{job_description}</code>.
+                                </div>
+                            </div>
+                            <div class="tab-pane fade" id="prompt-recruiter-pane" role="tabpanel">
+                                <label class="form-label visually-hidden" for="prompt-recruiter-input">Recruiter judge prompt</label>
+                                <textarea id="prompt-recruiter-input" name="prompt_recruiter_judge" rows="14"
+                                          class="form-control font-monospace" style="min-height: 18rem;"
+                                          placeholder="Recruiter judge prompt template">{{ prompts.recruiter_judge }}</textarea>
+                                <div class="form-text mt-1">
+                                    Placeholders: <code>{optimized_resume}</code>, <code>{job_description}</code>.
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label" for="workflow-preset">Workflow</label>
+                        <select id="workflow-preset" class="form-select" aria-describedby="workflow-help">
+                            <optgroup label="Built-in">
+                                <option value="default">Writer → ATS → Recruiter</option>
+                                <option value="recruiter_first">Recruiter → Writer → ATS → Recruiter</option>
+                            </optgroup>
+                            {% if saved_workflows %}
+                            <optgroup label="Saved workflows">
+                                {% for w in saved_workflows %}
+                                <option value="wf_{{ w.id }}" data-steps="{{ w.steps_json|force_escape }}">{{ w.name }}</option>
+                                {% endfor %}
+                            </optgroup>
+                            {% endif %}
+                        </select>
+                        <input type="hidden" name="workflow_steps" id="workflow-steps-input" value="">
+                        <input type="hidden" name="loop_to" id="loop-to-input" value="">
+                        <div id="workflow-help" class="form-text">Workflow runs once in the order shown. <a href="{% url 'workflow_list' %}">Manage workflows</a></div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="debug-check" name="debug"
+                                       {% if request.POST.debug %}checked{% endif %}>
+                                <label class="form-check-label" for="debug-check">
+                                    Debug mode (log full prompts)
+                                </label>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="rate-limit-input">Rate limit delay (s)</label>
+                            <input type="number" min="0" step="1" id="rate-limit-input" name="rate_limit_delay"
+                                   class="form-control form-control-sm"
+                                   value="{{ request.POST.rate_limit_delay|default:'' }}">
+                        </div>
+                    </div>
+                    <input type="hidden" name="max_iterations" value="1">
+                    <input type="hidden" name="score_threshold" value="85">
+
+                    <div class="mb-3" id="run-mode-toggle-wrap">
+                        <label class="form-label">Run mode</label>
+                        <div class="btn-group" role="group" aria-label="Run mode">
+                            <input type="radio" class="btn-check" name="run_mode" id="run-mode-full" value="full" checked>
+                            <label class="btn btn-outline-primary" for="run-mode-full">Full run</label>
+                            <input type="radio" class="btn-check" name="run_mode" id="run-mode-step" value="step">
+                            <label class="btn btn-outline-primary" for="run-mode-step">Step by step</label>
+                        </div>
+                    </div>
+                    <div id="full-run-actions">
+                        <button type="submit" class="btn btn-primary"
+                                {% if not llm_key_stored %}disabled{% endif %}>
+                            Run optimizer
+                        </button>
+                        {% if not llm_key_stored %}
+                            <p class="small text-danger mt-2 mb-0">
+                                Configure an active provider in Settings before running.
+                            </p>
+                        {% endif %}
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div class="card mb-3" id="run-single-step-card" style="display: none;">
+            <div class="card-header">
+                2. Step by step
+            </div>
+            <div class="card-body">
+                <p class="small text-muted mb-3">
+                    Run one step at a time using the job description, resume, model and prompts from the form above. When you re-run Writer after the judges, their feedback is passed so the Writer can incorporate it. Choose a step from the dropdown and run it. Monitor each step’s output before running the full chain.
+                </p>
+                <div class="mb-3" id="step-progress-visual">
+                    <span class="text-muted small">1. Writer</span> → <span class="text-muted small">2. ATS Judge</span> → <span class="text-muted small">3. Recruiter Judge</span>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="step-select">Step</label>
+                    <select id="step-select" class="form-select">
+                        <option value="writer">Writer (resume → tailored draft)</option>
+                        <option value="ats_judge">ATS Judge (draft → score + feedback)</option>
+                        <option value="recruiter_judge">Recruiter Judge (draft → score + feedback)</option>
+                    </select>
+                </div>
+                <div class="mb-3" id="step-draft-wrap">
+                    <label class="form-label" for="step-draft-input">Current resume draft (for ATS / Recruiter)</label>
+                    <textarea id="step-draft-input" class="form-control" rows="6" placeholder="Paste the resume draft to score, or run Writer first to fill this automatically."></textarea>
+                </div>
+                <button type="button" class="btn btn-outline-primary" id="run-step-btn" {% if not llm_key_stored %}disabled{% endif %}>
+                    Run step
+                </button>
+                <div id="run-step-output" class="mt-3" style="display: none;">
+                    <hr>
+                    <h6 class="mb-2">Input</h6>
+                    <div class="accordion mb-3" id="run-step-input-accordion">
+                        <div class="accordion-item">
+                            <h2 class="accordion-header">
+                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#run-step-input-body" aria-expanded="false">Prompt sent to LLM</button>
+                            </h2>
+                            <div id="run-step-input-body" class="accordion-collapse collapse" data-bs-parent="#run-step-input-accordion">
+                                <div class="accordion-body p-0">
+                                    <pre id="run-step-input" class="bg-light p-3 rounded mb-0" style="white-space: pre-wrap; max-height: 20rem; overflow: auto;"></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <h6 class="mb-2">Output</h6>
+                    <div id="run-step-result" class="bg-light p-3 rounded mb-2" style="white-space: pre-wrap;"></div>
+                    <p class="text-muted small mb-0" id="run-step-tokens" title="">Input: 0 · Output: 0</p>
+                </div>
+                <div id="run-step-error" class="alert alert-danger mt-3" style="display: none;" role="alert"></div>
+                <div id="run-step-spinner" class="mt-3" style="display: none;">
+                    <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                    <span id="run-step-spinner-text">Running…</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="card" id="optimizer-status-card">
+            <div class="card-header">
+                3. Optimization status
+            </div>
+            <div class="card-body" id="optimizer-status-container"
+                 {% if resume_id %}data-resume-id="{{ resume_id }}" data-status-url="{% url 'resume_status' resume_id=resume_id %}"{% endif %}>
+                <div id="optimizer-status-body">
+                    {% if resume_id %}
+                        {% if status %}
+                            <p class="mb-2"><strong>Status:</strong> {{ status.status_display|default:status.status }}</p>
+                            {% if status.ats_score is not None or status.recruiter_score is not None %}
+                                <p class="mb-2"><strong>ATS score:</strong> {{ status.ats_score|default:"—" }} | <strong>Recruiter score:</strong> {{ status.recruiter_score|default:"—" }}</p>
+                            {% endif %}
+                            <p class="text-muted small mb-2">Token usage (total): {{ status.total_input_tokens|default:0 }} in · {{ status.total_output_tokens|default:0 }} out</p>
+                            {% if status.status == "completed" %}
+                                <h5>Optimized resume</h5>
+                                <pre class="bg-light p-3 rounded" style="white-space: pre-wrap;">{{ status.optimized_content }}</pre>
+                                <div class="mt-3">
+                                    <a class="btn btn-sm btn-outline-secondary me-2" href="{% url 'resume_optimizer' %}">Run again</a>
+                                    <a class="btn btn-sm btn-outline-primary me-2" href="/api/resume/export/{{ resume_id }}/docx">Download Word</a>
+                                    <a class="btn btn-sm btn-outline-primary" href="/api/resume/export/{{ resume_id }}/pdf">Download PDF</a>
+                                </div>
+                            {% elif status.status == "failed" %}
+                                <p class="text-danger mb-2">{{ status.error_message|default:"Optimization failed." }}</p>
+                            {% else %}
+                                <p class="text-muted mb-2">Optimization is running. This section will update automatically.</p>
+                                <p class="mb-2"><button type="button" class="btn btn-sm btn-danger" id="stop-optimization-btn" data-resume-id="{{ resume_id }}">Stop optimization</button></p>
+                            {% endif %}
+                            {% if status.logs %}
+                                <hr><h6>Agent thoughts</h6>
+                                <div class="accordion" id="agentLogsAccordion">
+                                    {% for log in status.logs %}
+                                    <div class="accordion-item">
+                                        <h2 class="accordion-header"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#log-{{ forloop.counter }}">{{ log.step|default:"Step" }}{% if log.step_in is not None or log.step_out is not None %} — {{ log.step_in|default:0 }} in · {{ log.step_out|default:0 }} out{% endif %}</button></h2>
+                                        <div id="log-{{ forloop.counter }}" class="accordion-collapse collapse" data-bs-parent="#agentLogsAccordion"><div class="accordion-body"><pre class="mb-0" style="white-space: pre-wrap;">{{ log.thought_text|default:log.thought|safe }}</pre></div></div>
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                        {% else %}
+                            <p class="text-muted mb-0">No status available yet.</p>
+                        {% endif %}
+                    {% else %}
+                        <p class="text-muted mb-0" id="optimizer-status-placeholder">Optimization status will appear here when you run the full optimizer.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{{ block.super }}
+<script>
+(function () {
+    const stepSelect = document.getElementById("step-select");
+    const stepDraftWrap = document.getElementById("step-draft-wrap");
+    const stepDraftInput = document.getElementById("step-draft-input");
+    const runStepBtn = document.getElementById("run-step-btn");
+    const runStepOutput = document.getElementById("run-step-output");
+    const runStepInput = document.getElementById("run-step-input");
+    const runStepResult = document.getElementById("run-step-result");
+    const runStepTokens = document.getElementById("run-step-tokens");
+    const runStepError = document.getElementById("run-step-error");
+    const runStepSpinner = document.getElementById("run-step-spinner");
+    const runStepSpinnerText = document.getElementById("run-step-spinner-text");
+    const stepInputAccordion = document.getElementById("run-step-input-accordion");
+    const fullRunActions = document.getElementById("full-run-actions");
+    const runSingleStepCard = document.getElementById("run-single-step-card");
+    const runModeFull = document.getElementById("run-mode-full");
+    const runModeStep = document.getElementById("run-mode-step");
+    if (!runStepBtn) return;
+
+    const stepLabels = { writer: "Writer", ats_judge: "ATS Judge", recruiter_judge: "Recruiter Judge" };
+    var lastAtsFeedback = "";
+    var lastAtsScore = null;
+    var lastRecruiterFeedback = "";
+    var lastRecruiterScore = null;
+
+    function setRunModeUI() {
+        var stepMode = runModeStep && runModeStep.checked;
+        if (fullRunActions) fullRunActions.style.display = stepMode ? "none" : "block";
+        if (runSingleStepCard) runSingleStepCard.style.display = stepMode ? "block" : "none";
+    }
+    if (runModeFull) runModeFull.addEventListener("change", setRunModeUI);
+    if (runModeStep) runModeStep.addEventListener("change", setRunModeUI);
+    setRunModeUI();
+
+    stepSelect.addEventListener("change", function () {
+        stepDraftWrap.style.display = this.value === "writer" ? "none" : "block";
+    });
+    stepDraftWrap.style.display = stepSelect.value === "writer" ? "none" : "block";
+
+    function getCsrf() {
+        const input = document.querySelector('#optimizer-form input[name="csrfmiddlewaretoken"]');
+        return input ? input.value : '';
+    }
+
+    async function doRunStep() {
+        const step = stepSelect.value;
+        const form = document.getElementById("optimizer-form");
+        const jobDesc = (document.getElementById("job-description-input") || {}).value || '';
+        const provider = "{{ selected_provider|escapejs }}";
+        const model = (document.getElementById("llm-model-select") || {}).value || '';
+        const promptWriter = (document.getElementById("prompt-writer-input") || {}).value || '';
+        const promptAts = (document.getElementById("prompt-ats-input") || {}).value || '';
+        const promptRecruiter = (document.getElementById("prompt-recruiter-input") || {}).value || '';
+
+        runStepError.style.display = "none";
+        runStepError.textContent = "";
+        runStepOutput.style.display = "none";
+        runStepSpinner.style.display = "flex";
+        runStepSpinner.style.alignItems = "center";
+        runStepSpinner.style.gap = "0.5rem";
+        if (runStepSpinnerText) runStepSpinnerText.textContent = "Running " + (stepLabels[step] || step) + "…";
+        runStepBtn.disabled = true;
+
+        const fd = new FormData();
+        fd.append("step", step);
+        fd.append("job_description", jobDesc);
+        fd.append("llm_provider", provider);
+        fd.append("llm_model", model);
+        fd.append("debug", "true");  /* step-by-step always runs in debug mode */
+        fd.append("prompt_writer", promptWriter);
+        fd.append("prompt_ats_judge", promptAts);
+        fd.append("prompt_recruiter_judge", promptRecruiter);
+        fd.append("csrfmiddlewaretoken", getCsrf());
+
+        if (step === "writer") {
+            var feedbackParts = [];
+            if (lastAtsFeedback) feedbackParts.push("ATS" + (lastAtsScore != null ? " (score " + lastAtsScore + ")" : "") + ": " + lastAtsFeedback);
+            if (lastRecruiterFeedback) feedbackParts.push("Recruiter" + (lastRecruiterScore != null ? " (score " + lastRecruiterScore + ")" : "") + ": " + lastRecruiterFeedback);
+            if (feedbackParts.length) fd.append("feedback", feedbackParts.join(", "));
+            const fileInput = document.getElementById("resume-file-input");
+            if (fileInput && fileInput.files && fileInput.files[0]) {
+                fd.append("file", fileInput.files[0]);
+            } else {
+                var prefillId = "{{ prefill_resume_id|default:'' }}";
+                if (prefillId) fd.append("use_resume_id", prefillId);
+            }
+            if (step === "writer" && !fd.has("file") && !fd.has("use_resume_id")) {
+                runStepError.textContent = "For Writer step, upload a resume file or use a resume from Match.";
+                runStepError.style.display = "block";
+                runStepSpinner.style.display = "none";
+                runStepBtn.disabled = false;
+                return;
+            }
+        } else {
+            fd.append("optimized_resume", stepDraftInput.value || "");
+        }
+
+        console.log("[Run step] request: step=" + step + ", jobDescLen=" + jobDesc.length + ", draftLen=" + (stepDraftInput ? stepDraftInput.value.length : 0) + ", provider=" + provider + ", model=" + model);
+        try {
+            const resp = await fetch("/api/resume/run-step", { method: "POST", body: fd });
+            let data = {};
+            try {
+                data = await resp.json();
+            } catch (_) {
+                data = { error: resp.statusText || "Request failed" };
+            }
+            console.log("[Run step] response: status=" + resp.status + ", ok=" + resp.ok + ", data=" + JSON.stringify(data).slice(0, 800));
+            if (data.error) console.warn("[Run step] error from server:", data.error);
+            runStepSpinner.style.display = "none";
+            runStepBtn.disabled = false;
+
+            function showStepError(msg) {
+                var label = data.step ? (stepLabels[data.step] || data.step) + " failed: " : "";
+                runStepError.textContent = label + (msg || "Request failed");
+                runStepError.style.display = "block";
+            }
+
+            if (data.error) {
+                showStepError(data.error);
+                return;
+            }
+            if (!resp.ok) {
+                showStepError(data.detail || "Request failed");
+                return;
+            }
+
+            if (data.step === "ats_judge" && data.output) {
+                lastAtsFeedback = (data.output.feedback != null) ? String(data.output.feedback) : "";
+                lastAtsScore = data.output.ats_score != null ? data.output.ats_score : null;
+            } else if (data.step === "recruiter_judge" && data.output) {
+                lastRecruiterFeedback = (data.output.feedback != null) ? String(data.output.feedback) : "";
+                lastRecruiterScore = data.output.recruiter_score != null ? data.output.recruiter_score : null;
+            }
+
+            var lines = [];
+            if (data.step === "writer" && data.output && data.output.optimized_resume) {
+                stepDraftInput.value = data.output.optimized_resume;
+                lines.push(data.output.optimized_resume);
+            } else if (data.step === "ats_judge" && data.output) {
+                lines.push("ATS score: " + (data.output.ats_score ?? "—"));
+                if (data.output.feedback) lines.push("Feedback: " + data.output.feedback);
+                if (data.output.response_json) {
+                    lines.push("\n--- Response JSON (captured from LLM) ---\n" + JSON.stringify(data.output.response_json, null, 2));
+                } else {
+                    lines.push("\n(No structured JSON captured — LLM output may not have been valid JSON.)");
+                }
+            } else if (data.step === "recruiter_judge" && data.output) {
+                lines.push("Recruiter score: " + (data.output.recruiter_score ?? "—"));
+                if (data.output.feedback) lines.push("Feedback: " + data.output.feedback);
+                if (data.output.response_json) {
+                    lines.push("\n--- Response JSON (captured from LLM) ---\n" + JSON.stringify(data.output.response_json, null, 2));
+                } else {
+                    lines.push("\n(No structured JSON captured — LLM output may not have been valid JSON.)");
+                }
+            }
+            runStepResult.textContent = lines.length ? lines.join("\n\n") : (data.output ? JSON.stringify(data.output) : "");
+
+            if (runStepInput) {
+                var promptText = (data.output && data.output.debug_prompt) ? data.output.debug_prompt : "";
+                runStepInput.textContent = promptText;
+                if (stepInputAccordion) stepInputAccordion.style.display = promptText ? "block" : "none";
+            }
+
+            var inTok = (data.output && data.output.input_tokens != null) ? data.output.input_tokens : 0;
+            var outTok = (data.output && data.output.output_tokens != null) ? data.output.output_tokens : 0;
+            var est = (data.output && data.output.tokens_estimated) ? true : false;
+            runStepTokens.textContent = "Input: " + inTok + " · Output: " + outTok + (est ? " (estimated)" : "");
+            runStepTokens.title = est ? "Provider did not report token usage; values are approximate (chars ÷ 4)." : "";
+            runStepTokens.style.display = "block";
+
+            runStepOutput.style.display = "block";
+        } catch (e) {
+            runStepSpinner.style.display = "none";
+            runStepBtn.disabled = false;
+            runStepError.textContent = (stepLabels[step] || step) + " failed: " + (e.message || "Request failed");
+            runStepError.style.display = "block";
+        }
+    }
+
+    runStepBtn.addEventListener("click", function () { doRunStep(); });
+})();
+</script>
+<script>
+(function () {
+    const statusContainer = document.getElementById("optimizer-status-container");
+    const statusBody = document.getElementById("optimizer-status-body");
+    const optimizerForm = document.getElementById("optimizer-form");
+    const runModeFull = document.getElementById("run-mode-full");
+    if (!statusContainer || !statusBody) return;
+
+    function renderStatusFromJson(data, resumeId) {
+        if (!data || data.error) {
+            statusBody.innerHTML = "<p class=\"text-muted mb-0\">" + (data && data.error ? data.error : "Could not load status.") + "</p>";
+            return;
+        }
+        var html = "<p class=\"mb-2\"><strong>Status:</strong> " + (data.status_display || data.status || "—") + "</p>";
+        if (data.ats_score != null || data.recruiter_score != null) {
+            html += "<p class=\"mb-2\"><strong>ATS score:</strong> " + (data.ats_score != null ? data.ats_score : "—") + " | <strong>Recruiter score:</strong> " + (data.recruiter_score != null ? data.recruiter_score : "—") + "</p>";
+        }
+        html += "<p class=\"text-muted small mb-2\">Token usage (total): " + (data.total_input_tokens != null ? data.total_input_tokens : 0) + " in · " + (data.total_output_tokens != null ? data.total_output_tokens : 0) + " out</p>";
+        if (data.optimized_content != null && data.optimized_content !== "" || data.status === "completed") {
+            html += "<h5>Optimized resume</h5><pre class=\"bg-light p-3 rounded\" style=\"white-space: pre-wrap;\">" + (data.optimized_content ? String(data.optimized_content).replace(/</g, "&lt;").replace(/>/g, "&gt;") : "") + "</pre>";
+            html += "<div class=\"mt-3\"><a class=\"btn btn-sm btn-outline-secondary me-2\" href=\"{% url 'resume_optimizer' %}\">Run again</a>";
+            html += " <a class=\"btn btn-sm btn-outline-primary me-2\" href=\"/api/resume/export/" + resumeId + "/docx\">Download Word</a>";
+            html += " <a class=\"btn btn-sm btn-outline-primary\" href=\"/api/resume/export/" + resumeId + "/pdf\">Download PDF</a></div>";
+        } else if (data.error_message != null && data.error_message !== "" || data.status === "failed") {
+            html += "<p class=\"text-danger mb-2\">" + (data.error_message ? String(data.error_message).replace(/</g, "&lt;").replace(/>/g, "&gt;") : "Optimization failed.") + "</p>";
+        } else {
+            html += "<p class=\"text-muted mb-2\">Optimization is running. This section will update automatically.</p>";
+            html += "<p class=\"mb-2\"><button type=\"button\" class=\"btn btn-sm btn-danger\" id=\"stop-optimization-btn\" data-resume-id=\"" + resumeId + "\">Stop optimization</button></p>";
+        }
+        if (data.logs && data.logs.length) {
+            function thoughtToText(thought) {
+                if (thought == null) return "";
+                if (typeof thought === "string") return thought;
+                if (typeof thought !== "object") return String(thought);
+                var parts = [];
+                if (thought.feedback) parts.push(String(thought.feedback));
+                if (thought.reasoning) parts.push(String(thought.reasoning));
+                if (thought.message) parts.push(String(thought.message));
+                if (thought.optimized_resume && typeof thought.optimized_resume === "string") parts.push(thought.optimized_resume.slice(0, 2000) + (thought.optimized_resume.length > 2000 ? "…" : ""));
+                var rest = {};
+                var skip = ["feedback", "reasoning", "message", "optimized_resume", "input_tokens", "output_tokens", "ats_score", "recruiter_score"];
+                for (var k in thought) if (thought.hasOwnProperty(k) && skip.indexOf(k) < 0) rest[k] = thought[k];
+                if (Object.keys(rest).length) parts.push(JSON.stringify(rest, null, 2));
+                return parts.join("\n\n") || JSON.stringify(thought, null, 2);
+            }
+            html += "<hr><h6>Agent thoughts</h6><div class=\"accordion\" id=\"agentLogsAccordion\">";
+            data.logs.forEach(function (log, i) {
+                var id = "log-js-" + i;
+                var stepLabel = (log.step_name || log.step || "Step") + "";
+                var t = log.thought;
+                var stepIn = (t && (t.input_tokens != null || t.input != null)) ? (t.input_tokens != null ? t.input_tokens : t.input) : 0;
+                var stepOut = (t && (t.output_tokens != null || t.output != null)) ? (t.output_tokens != null ? t.output_tokens : t.output) : 0;
+                stepLabel += " — " + stepIn + " in · " + stepOut + " out";
+                html += "<div class=\"accordion-item\"><h2 class=\"accordion-header\"><button class=\"accordion-button collapsed\" type=\"button\" data-bs-toggle=\"collapse\" data-bs-target=\"#" + id + "\">" + stepLabel.replace(/</g, "&lt;").replace(/>/g, "&gt;") + "</button></h2>";
+                var bodyText = thoughtToText(log.thought);
+                html += "<div id=\"" + id + "\" class=\"accordion-collapse collapse\" data-bs-parent=\"#agentLogsAccordion\"><div class=\"accordion-body\"><pre class=\"mb-0\" style=\"white-space: pre-wrap;\">" + (bodyText ? bodyText.replace(/</g, "&lt;").replace(/>/g, "&gt;") : "") + "</pre></div></div></div>";
+            });
+            html += "</div>";
+        }
+        statusBody.innerHTML = html;
+    }
+
+    var pollTimer = null;
+    function startPolling(url, resumeId) {
+        if (pollTimer) clearTimeout(pollTimer);
+        function poll() {
+            if (!url) return;
+            fetch(url, { headers: { "X-Requested-With": "XMLHttpRequest" } })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (data) {
+                    if (data) renderStatusFromJson(data, resumeId);
+                    var done = data && (data.status === "completed" || data.status === "failed" || (data.optimized_content != null && data.optimized_content !== "") || (data.error_message != null && data.error_message !== ""));
+                    if (data && !done) pollTimer = setTimeout(poll, 2000);
+                })
+                .catch(function () { pollTimer = setTimeout(poll, 5000); });
+        }
+        poll();
+    }
+
+    var initialResumeId = statusContainer.getAttribute("data-resume-id");
+    var initialUrl = statusContainer.getAttribute("data-status-url");
+    if (initialResumeId && initialUrl) startPolling(initialUrl, initialResumeId);
+
+    function getCsrfOptimizer() {
+        var input = document.querySelector('#optimizer-form input[name="csrfmiddlewaretoken"]') || document.querySelector('input[name="csrfmiddlewaretoken"]');
+        return input ? input.value : '';
+    }
+    statusBody.addEventListener("click", function (e) {
+        var btn = e.target.closest("#stop-optimization-btn");
+        if (!btn || btn.disabled) return;
+        var rid = btn.getAttribute("data-resume-id");
+        if (!rid) return;
+        btn.disabled = true;
+        btn.textContent = "Stopping…";
+        fetch("/api/resume/status/" + rid + "/cancel", {
+            method: "POST",
+            headers: { "X-CSRFToken": getCsrfOptimizer(), "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" }
+        }).then(function (r) { return r.json(); }).then(function (d) {
+            if (d && d.success && initialUrl) {
+                if (pollTimer) clearTimeout(pollTimer);
+                pollTimer = null;
+                fetch(initialUrl, { headers: { "X-Requested-With": "XMLHttpRequest" } })
+                    .then(function (r) { return r.ok ? r.json() : null; })
+                    .then(function (data) { if (data) renderStatusFromJson(data, rid); });
+            }
+        });
+    });
+
+    var workflowPresets = {
+        default: { steps: ["writer", "ats_judge", "recruiter_judge"] },
+        recruiter_first: { steps: ["recruiter_judge", "writer", "ats_judge", "recruiter_judge"] }
+    };
+    function applyWorkflowPreset() {
+        var sel = document.getElementById("workflow-preset");
+        var stepsIn = document.getElementById("workflow-steps-input");
+        var loopIn = document.getElementById("loop-to-input");
+        if (!sel || !stepsIn || !loopIn) return;
+        loopIn.value = "";
+        var val = sel.value;
+        if (val.indexOf("wf_") === 0 && sel.selectedOptions && sel.selectedOptions.length) {
+            var opt = sel.selectedOptions[0];
+            var stepsJson = opt.getAttribute("data-steps");
+            if (stepsJson) stepsIn.value = stepsJson;
+        } else {
+            var preset = workflowPresets[val] || workflowPresets.default;
+            stepsIn.value = JSON.stringify(preset.steps);
+        }
+    }
+    var wfSel = document.getElementById("workflow-preset");
+    if (wfSel) { wfSel.addEventListener("change", applyWorkflowPreset); applyWorkflowPreset(); }
+
+    if (optimizerForm && runModeFull) {
+        optimizerForm.addEventListener("submit", function (e) {
+            if (!runModeFull.checked) return;
+            var fileInput = document.getElementById("resume-file-input");
+            var hasFile = fileInput && fileInput.files && fileInput.files[0];
+            if (!hasFile) return;
+            e.preventDefault();
+            var fd = new FormData(optimizerForm);
+            fd.set("action", "run_optimizer");
+            fd.append("file", fileInput.files[0]);
+            var submitBtn = optimizerForm.querySelector("button[type=submit]");
+            if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Starting…"; }
+            fetch("/api/resume/optimize", { method: "POST", body: fd })
+                .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, status: r.status, data: d }; }).catch(function () { return { ok: r.ok, status: r.status, data: null }; }); })
+                .then(function (result) {
+                    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = "Run optimizer"; }
+                    if (!result.ok) {
+                        var msg = "Optimization failed to start.";
+                        if (result.data) {
+                            var d = result.data.detail;
+                            if (typeof d === "string") msg = d;
+                            else if (Array.isArray(d) && d.length) msg = d.map(function (e) { return (e.loc ? e.loc.join(" ") + ": " : "") + (e.msg || e.message || String(e)); }).join("\n");
+                            else msg = JSON.stringify(result.data);
+                        } else if (result.status) msg = "Request failed (HTTP " + result.status + ").";
+                        alert(msg);
+                        return;
+                    }
+                    var rid = result.data && result.data.resume_id;
+                    if (!rid) { alert("No resume_id returned."); return; }
+                    var statusUrl = "/resume/status/" + rid + "/";
+                    statusContainer.setAttribute("data-resume-id", rid);
+                    statusContainer.setAttribute("data-status-url", statusUrl);
+                    document.getElementById("optimizer-status-placeholder") && document.getElementById("optimizer-status-placeholder").remove();
+                    statusBody.innerHTML = "<p class=\"text-muted mb-2\">Starting…</p>";
+                    fetch(statusUrl, { headers: { "X-Requested-With": "XMLHttpRequest" } })
+                        .then(function (r) { return r.ok ? r.json() : null; })
+                        .then(function (data) {
+                            renderStatusFromJson(data || {}, rid);
+                            startPolling(statusUrl, rid);
+                        });
+                })
+                .catch(function (err) {
+                    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = "Run optimizer"; }
+                    alert(typeof err === "object" && err && (err.message || err.msg) ? (err.message || err.msg) : String(err));
+                });
+        });
+    }
+})();
+</script>
+{% endblock %}
+

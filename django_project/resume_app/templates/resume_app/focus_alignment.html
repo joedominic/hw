@@ -1,0 +1,80 @@
+{% extends "resume_app/base.html" %}
+
+{% block title %}Sentence-level match — {{ alignment.job.title }} vs {{ alignment.liked_job.title }}{% endblock %}
+
+{% block content %}
+<div class="row mb-3">
+    <div class="col-12">
+        <h1 class="mb-2">Sentence-level match</h1>
+        <p class="text-muted small mb-0">
+            Showing how each sentence from <strong>{{ alignment.job.title }}</strong> @ {{ alignment.job.company_name }}
+            matches <strong>{{ alignment.liked_job.title }}</strong> @ {{ alignment.liked_job.company_name }}.
+        </p>
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <p class="small mb-1">
+            <strong>Title match:</strong> {{ alignment.title_percent }}%
+            &nbsp;·&nbsp;
+            <strong>Role match:</strong> {{ alignment.role_percent }}%
+            &nbsp;·&nbsp;
+            <strong>Combined:</strong> {{ alignment.combined_percent }}%
+        </p>
+        <p class="small text-muted mb-0">
+            Sentences marked as <span class="badge bg-success">Top‑k</span> contributed directly to the Role % (top {{ alignment.top_k }} mean of max similarities).
+        </p>
+        <p class="small text-muted mb-0 mt-1">
+            Rows below <strong>{{ alignment.min_similarity_percent }}%</strong> show &quot;No strong match&quot;. Tune <code>JOB_FOCUS_ALIGNMENT_MIN_SIM</code> in settings to limit results.
+        </p>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        Sentence alignments
+    </div>
+    <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+            <thead>
+                <tr>
+                    <th style="width: 45%;">Job sentence</th>
+                    <th style="width: 45%;">Best-matching liked sentence</th>
+                    <th style="width: 10%;">Similarity</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in alignment.sentences %}
+                <tr class="{% if row.in_top_k %}table-success{% elif row.below_threshold %}table-secondary{% endif %}">
+                    <td>
+                        {{ row.sentence }}
+                        {% if row.in_top_k %}
+                        <span class="badge bg-success ms-1">Top‑k</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {{ row.best_liked_sentence }}
+                        {% if row.below_threshold %}
+                        <span class="badge bg-secondary ms-1">below threshold</span>
+                        {% endif %}
+                    </td>
+                    <td><strong>{{ row.similarity_percent }}%</strong></td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="3" class="text-muted small text-center py-3">
+                        No role sentences could be compared for this pair.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="mt-3">
+    <a href="{% url 'focus_breakdown' alignment.job.id %}" class="btn btn-outline-secondary">Back to focus breakdown</a>
+</div>
+{% endblock %}
+

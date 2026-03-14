@@ -1,5 +1,11 @@
 #!/usr/bin/env python
 """Django's command-line utility for administrative tasks."""
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    message=".*doesn't match a supported version.*",
+    module="requests",
+)
 
 import os
 import sys

@@ -1,0 +1,73 @@
+{% extends "resume_app/base.html" %}
+
+{% block title %}Workflows{% endblock %}
+
+{% block content %}
+<div class="row mb-3">
+    <div class="col-12">
+        <h1 class="mb-3">Workflows</h1>
+        <p class="text-muted">
+            Saved custom workflows for Resume Optimization. Each workflow defines the order of steps (Writer, ATS Judge, Recruiter Judge), an optional loop, and exit conditions.
+        </p>
+    </div>
+</div>
+
+{% if messages %}
+    <div class="row mb-3">
+        <div class="col-12">
+            {% for message in messages %}
+                <div class="alert alert-{{ message.tags|default:'info' }} mb-2" role="alert">
+                    {{ message }}
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+{% endif %}
+
+<div class="row">
+    <div class="col-12">
+        <p>
+            <a href="{% url 'workflow_create' %}" class="btn btn-primary">New workflow</a>
+            <a href="{% url 'resume_optimizer' %}" class="btn btn-outline-secondary">Back to Optimizer</a>
+        </p>
+        {% if workflows %}
+        <div class="card">
+            <div class="card-body p-0">
+                <table class="table table-hover mb-0">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Steps</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for w in workflows %}
+                        <tr>
+                            <td>{{ w.name }}</td>
+                            <td>
+                                {% for label in w.step_labels_display %}
+                                    <span class="badge bg-secondary">{{ label }}</span>
+                                {% empty %}
+                                —
+                                {% endfor %}
+                            </td>
+                            <td>
+                                <a href="{% url 'workflow_edit' w.id %}" class="btn btn-sm btn-outline-primary">Edit</a>
+                                <form method="post" action="{% url 'workflow_delete' w.id %}" class="d-inline" onsubmit="return confirm('Delete this workflow?');">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% else %}
+        <p class="text-muted">No workflows yet. <a href="{% url 'workflow_create' %}">Create one</a> to use custom step order and exit conditions in the Resume Optimizer.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

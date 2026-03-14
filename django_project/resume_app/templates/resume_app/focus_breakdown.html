@@ -1,0 +1,141 @@
+{% extends "resume_app/base.html" %}
+
+{% block title %}Why this score? — {{ breakdown.job.title }}{% endblock %}
+
+{% block content %}
+<div class="row mb-3">
+    <div class="col-12">
+        <h1 class="mb-2">Why this score?</h1>
+        <p class="text-muted mb-0">
+            How this job compares to your liked jobs. Focus = {{ breakdown.alpha }} × title + {{ role_weight }} × role.
+        </p>
+    </div>
+</div>
+
+{% if llm_match %}
+<div class="card mb-4">
+    <div class="card-header">AI Match</div>
+    <div class="card-body">
+        <p class="mb-1"><strong>Score:</strong> <span class="badge bg-success">{{ llm_match.score }}</span> / 100</p>
+        {% if llm_match.reasoning %}
+        <p class="small text-muted mb-0"><strong>Reasoning:</strong> {{ llm_match.reasoning }}</p>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+<div class="card mb-4">
+    <div class="card-header"><strong>{{ breakdown.job.title }}</strong> @ {{ breakdown.job.company_name }}</div>
+    <div class="card-body">
+        <table class="table table-sm table-bordered mb-0">
+            <thead>
+                <tr><th>Component</th><th>%</th></tr>
+            </thead>
+            <tbody>
+                <tr><td>Title (vs liked jobs)</td><td>{{ breakdown.overall.title_percent }}%</td></tr>
+                <tr><td>Role (vs liked jobs)</td><td>{{ breakdown.overall.full_percent }}%</td></tr>
+                <tr><td><strong>Combined</strong></td><td><strong>{{ breakdown.overall.combined_percent }}%</strong></td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% if breakdown.preference_margin %}
+<div class="card mb-4">
+    <div class="card-header">Preference margin (experimental)</div>
+    <div class="card-body">
+        <p class="small text-muted">
+            Centroid-based view: compares this job's full description to the average of all <strong>liked</strong>
+            jobs and the average of all <strong>disliked</strong> jobs.
+        </p>
+        <table class="table table-sm table-bordered mb-0">
+            <thead>
+                <tr>
+                    <th>Component</th>
+                    <th>%</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Similarity to liked centroid</td>
+                    <td>{{ breakdown.preference_margin.like_percent }}%</td>
+                </tr>
+                <tr>
+                    <td>Similarity to disliked centroid</td>
+                    <td>{{ breakdown.preference_margin.dislike_percent }}%</td>
+                </tr>
+                <tr>
+                    <td><strong>Margin (like − dislike)</strong></td>
+                    <td><strong>{{ breakdown.preference_margin.margin_percent }}%</strong></td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<div class="card mb-4">
+    <div class="card-header">Per liked job</div>
+    <div class="card-body">
+        <table class="table table-sm mb-0">
+            <thead>
+                <tr>
+                    <th>Liked job</th>
+                    <th>Title %</th>
+                    <th>Role %</th>
+                    <th>Combined %</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in breakdown.by_liked %}
+                <tr>
+                    <td>{{ row.title }} @ {{ row.company_name }}</td>
+                    <td>{{ row.title_percent }}%</td>
+                    <td>{{ row.full_percent }}%</td>
+                    <td><strong>{{ row.combined_percent }}%</strong></td>
+                    <td>
+                        <a href="{% url 'focus_alignment' breakdown.job.id row.id %}" class="btn btn-sm btn-outline-secondary">Details</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{% if breakdown.by_disliked %}
+<div class="card mb-4">
+    <div class="card-header">Per disliked job (penalty signal)</div>
+    <div class="card-body">
+        <p class="small text-muted">
+            These are jobs you <strong>disliked</strong>. Higher scores here mean this job looks more like something you said you don’t want, which is why its Fit can be penalized.
+        </p>
+        <table class="table table-sm mb-0">
+            <thead>
+                <tr>
+                    <th>Disliked job</th>
+                    <th>Title %</th>
+                    <th>Role %</th>
+                    <th>Combined %</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in breakdown.by_disliked %}
+                <tr>
+                    <td>{{ row.title }} @ {{ row.company_name }}</td>
+                    <td>{{ row.title_percent }}%</td>
+                    <td>{{ row.full_percent }}%</td>
+                    <td><strong>{{ row.combined_percent }}%</strong></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<div class="mt-3">
+    <a href="{% url 'jobs_search' %}" class="btn btn-outline-secondary">Back to job search</a>
+</div>
+{% endblock %}

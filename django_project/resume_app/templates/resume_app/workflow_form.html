@@ -1,0 +1,154 @@
+{% extends "resume_app/base.html" %}
+
+{% block title %}{% if workflow %}Edit workflow{% else %}New workflow{% endif %}{% endblock %}
+
+{% block content %}
+<div class="row mb-3">
+    <div class="col-12">
+        <h1 class="mb-3">{% if workflow %}Edit workflow{% else %}New workflow{% endif %}</h1>
+        <p class="text-muted">
+            Build a chain of steps using prompts from the Prompt Library. The workflow runs once in order with no iteration.
+        </p>
+    </div>
+</div>
+
+{% if messages %}
+    <div class="row mb-3">
+        <div class="col-12">
+            {% for message in messages %}
+                <div class="alert alert-{{ message.tags|default:'info' }} mb-2" role="alert">
+                    {{ message }}
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+{% endif %}
+
+<div class="row">
+    <div class="col-lg-8">
+        <form method="post" id="workflow-form">
+            {% csrf_token %}
+            <div class="card mb-3">
+                <div class="card-header">Details</div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label" for="workflow-name">Name</label>
+                        <input type="text" id="workflow-name" name="name" class="form-control" required
+                               value="{{ workflow.name|default:'' }}" placeholder="e.g. Default loop">
+                    </div>
+                </div>
+            </div>
+
+            <div class="card mb-3">
+                <div class="card-header">Chain (order of steps)</div>
+                <div class="card-body">
+                    <p class="small text-muted mb-2">Add steps in order. Each step uses the corresponding prompt from the Prompt Library.</p>
+                    <div class="mb-2">
+                        <button type="button" class="btn btn-sm btn-outline-secondary me-1" data-add-step="writer">+ Writer</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary me-1" data-add-step="ats_judge">+ ATS Judge</button>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" data-add-step="recruiter_judge">+ Recruiter Judge</button>
+                    </div>
+                    <ul id="workflow-steps-list" class="list-group list-group-flush">
+                        <!-- Filled by JS; step ids in order -->
+                    </ul>
+                    <input type="hidden" name="workflow_steps" id="workflow-steps-input" value="" data-initial="{{ workflow_steps_json|force_escape }}">
+                </div>
+            </div>
+
+            <input type="hidden" name="loop_to" value="">
+            <input type="hidden" name="max_iterations" value="1">
+            <input type="hidden" name="score_threshold" value="85">
+
+            <div class="mb-3">
+                <button type="submit" class="btn btn-primary">{% if workflow %}Save changes{% else %}Create workflow{% endif %}</button>
+                <a href="{% url 'workflow_list' %}" class="btn btn-outline-secondary">Cancel</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+(function () {
+    var stepLabels = { writer: "Writer", ats_judge: "ATS Judge", recruiter_judge: "Recruiter Judge" };
+    var steps = [];
+    var listEl = document.getElementById("workflow-steps-list");
+    var inputEl = document.getElementById("workflow-steps-input");
+
+    function render() {
+        listEl.innerHTML = "";
+        steps.forEach(function (stepId, i) {
+            var li = document.createElement("li");
+            li.className = "list-group-item d-flex justify-content-between align-items-center";
+            li.innerHTML = "<span>" + (stepLabels[stepId] || stepId) + "</span>" +
+                "<span>" +
+                "<button type=\"button\" class=\"btn btn-sm btn-outline-secondary me-1 move-up\" data-i=\"" + i + "\">↑</button>" +
+                "<button type=\"button\" class=\"btn btn-sm btn-outline-secondary me-1 move-down\" data-i=\"" + i + "\">↓</button>" +
+                "<button type=\"button\" class=\"btn btn-sm btn-outline-danger remove\" data-i=\"" + i + "\">Remove</button>" +
+                "</span>";
+            listEl.appendChild(li);
+        });
+        inputEl.value = JSON.stringify(steps);
+    }
+
+    function wireButtons() {
+        listEl.querySelectorAll(".move-up").forEach(function (btn) {
+            btn.onclick = function () {
+                var i = parseInt(btn.getAttribute("data-i"), 10);
+                if (i > 0) {
+                    steps.splice(i - 1, 2, steps[i], steps[i - 1]);
+                    render();
+                    wireButtons();
+                }
+            };
+        });
+        listEl.querySelectorAll(".move-down").forEach(function (btn) {
+            btn.onclick = function () {
+                var i = parseInt(btn.getAttribute("data-i"), 10);
+                if (i < steps.length - 1) {
+                    steps.splice(i, 2, steps[i + 1], steps[i]);
+                    render();
+                    wireButtons();
+                }
+            };
+        });
+        listEl.querySelectorAll(".remove").forEach(function (btn) {
+            btn.onclick = function () {
+                var i = parseInt(btn.getAttribute("data-i"), 10);
+                steps.splice(i, 1);
+                render();
+                wireButtons();
+            };
+        });
+    }
+
+    document.querySelectorAll("[data-add-step]").forEach(function (btn) {
+        btn.onclick = function () {
+            steps.push(btn.getAttribute("data-add-step"));
+            render();
+            wireButtons();
+        };
+    });
+
+    // Load initial steps when editing
+    var stepsJson = document.getElementById("workflow-steps-input").getAttribute("data-initial");
+    if (stepsJson) {
+        try {
+            var parsed = JSON.parse(stepsJson);
+            if (Array.isArray(parsed)) steps = parsed;
+        } catch (e) {}
+    }
+
+    document.getElementById("workflow-form").addEventListener("submit", function (e) {
+        if (steps.length === 0) {
+            e.preventDefault();
+            alert("Add at least one step to the chain.");
+            return false;
+        }
+        inputEl.value = JSON.stringify(steps);
+    });
+
+    render();
+    wireButtons();
+})();
+</script>
+{% endblock %}
