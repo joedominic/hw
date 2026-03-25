@@ -8,7 +8,7 @@ from typing import List, Optional, Tuple
 
 from django.core.cache import cache
 
-from .models import JobListingAction, JobListingEmbedding, JobListing
+from .models import JobListingAction, JobListingEmbedding, JobListing, Track
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ def get_preference_vectors(track: Optional[str] = None) -> Optional[Tuple[List[f
         if not emb:
             continue
         disliked_vecs.append(emb)
-    logger.warning(
+    logger.info(
         "[preference] computing preference vectors (cache miss, track=%s): liked_rows=%d, disliked_rows=%d",
         track or "ic",
         len(liked_vecs),
@@ -119,8 +119,10 @@ def get_liked_jobs_for_focus_reason(track: Optional[str] = None):
 
 def invalidate_preference_cache() -> None:
     """Call when user likes or dislikes a job."""
-    key = get_preference_vector_cache_key()
-    cache.delete(key)
+    # Invalidate global key and all track-specific keys.
+    cache.delete(get_preference_vector_cache_key())
+    for slug in Track.objects.values_list("slug", flat=True):
+        cache.delete(get_preference_vector_cache_key(slug))
 
 
 def get_disliked_embeddings_cache_key(track: Optional[str] = None) -> str:
@@ -158,8 +160,10 @@ def get_disliked_embeddings(track: Optional[str] = None) -> List[Tuple[int, List
 
 def invalidate_disliked_embeddings_cache() -> None:
     """Call when user likes or dislikes a job."""
-    cache.delete(get_disliked_embeddings_cache_key("ic"))
-    cache.delete(get_disliked_embeddings_cache_key("mgmt"))
+    # Invalidate cache for all tracks (including default/global key).
+    cache.delete(get_disliked_embeddings_cache_key())
+    for slug in Track.objects.values_list("slug", flat=True):
+        cache.delete(get_disliked_embeddings_cache_key(slug))
 
 
 def get_liked_jobs_with_embeddings(track: Optional[str] = None):

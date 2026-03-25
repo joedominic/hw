@@ -1,0 +1,70 @@
+{% extends "resume_app/base.html" %}
+
+{% block title %}LLM test — ResumeElite{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-4xl">
+    <div class="mb-8">
+        <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">LLM test</h1>
+        <p class="mt-1 text-sm text-slate-600">
+            Verify connectivity and inspect a sample response from your configured provider.
+        </p>
+    </div>
+
+    {% if error %}
+        <div class="mb-6 rounded-concierge border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900" role="alert">{{ error }}</div>
+    {% endif %}
+    {% if response_text %}
+        <div class="mb-6 rounded-concierge border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900" role="alert">
+            Response received successfully.
+        </div>
+    {% endif %}
+
+    <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+        <form method="post" class="space-y-4">
+            {% csrf_token %}
+            <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div class="sm:col-span-1">
+                    <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="llm-provider">Provider</label>
+                    <select id="llm-provider" name="provider"
+                            class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                            onchange="window.location.href='/resume/llm-test/?provider=' + encodeURIComponent(this.value)">
+                        {% for p in providers %}
+                            <option value="{{ p }}" {% if p == provider %}selected{% endif %}>{{ p }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="sm:col-span-1">
+                    <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="llm-model">Model</label>
+                    <select id="llm-model" name="model" class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                        {% if models %}
+                            {% for m in models %}
+                                <option value="{{ m }}" {% if m == selected_model %}selected{% endif %}>{{ m }}</option>
+                            {% endfor %}
+                        {% else %}
+                            <option value="{{ selected_model }}" selected>{{ selected_model }}</option>
+                        {% endif %}
+                    </select>
+                </div>
+                <div class="sm:col-span-2 lg:col-span-2">
+                    <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="llm-prompt">Prompt</label>
+                    <textarea id="llm-prompt" name="prompt" rows="3" placeholder="Short test prompt…"
+                              class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">{{ prompt }}</textarea>
+                </div>
+            </div>
+            <button type="submit" class="rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+                Run test
+            </button>
+        </form>
+    </div>
+
+    {% if response_text %}
+    <div class="mt-6 rounded-concierge border border-slate-200 bg-white shadow-sm">
+        <div class="border-b border-slate-100 px-6 py-3 text-sm font-semibold text-concierge-slate">Response</div>
+        <div class="p-6">
+            <pre class="whitespace-pre-wrap break-words font-mono text-xs text-slate-700">{{ response_text }}</pre>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

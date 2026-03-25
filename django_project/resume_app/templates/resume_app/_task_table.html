@@ -1,0 +1,102 @@
+{% comment %}Shared task table: expects 'tasks' in context.{% endcomment %}
+<div class="overflow-x-auto rounded-concierge border border-slate-200">
+    <table class="min-w-full divide-y divide-slate-200 text-sm">
+        <thead class="bg-slate-50">
+            <tr>
+                <th class="whitespace-nowrap px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Name</th>
+                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Search</th>
+                <th class="whitespace-nowrap px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Track</th>
+                <th class="whitespace-nowrap px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Schedule</th>
+                <th class="whitespace-nowrap px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Next run</th>
+                <th class="whitespace-nowrap px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Last run</th>
+                <th class="whitespace-nowrap px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
+                <th class="whitespace-nowrap px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">Actions</th>
+            </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 bg-white">
+            {% for t in tasks %}
+                <tr class="hover:bg-slate-50/80">
+                    <td class="px-3 py-2 font-semibold text-concierge-slate">{{ t.name|default:"(untitled)" }}</td>
+                    <td class="px-3 py-2 text-slate-700">
+                        {{ t.search_term|truncatewords:8 }}
+                        {% if t.location %}
+                            <br><span class="text-xs text-slate-500">{{ t.location }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2">
+                        <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase text-slate-600">{{ t.track }}</span>
+                    </td>
+                    <td class="max-w-[10rem] px-3 py-2 text-xs text-slate-600" title="{{ t.frequency }}">{{ t.schedule_description|default:t.frequency }}</td>
+                    <td class="whitespace-nowrap px-3 py-2 text-xs text-slate-600">
+                        {% if t.next_run_at %}
+                            {{ t.next_run_at|date:"M j H:i" }}
+                        {% else %}
+                            <span class="text-slate-400">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2 text-xs">
+                        {% if t.last_run %}
+                            <span class="text-slate-500">{{ t.last_run.started_at|date:"M j H:i" }}</span>
+                            {% if t.last_run.finished_at %}
+                                <span class="ml-1" title="fetched {{ t.last_run.jobs_fetched }}, after filter {{ t.last_run.jobs_after_filter }}, added {{ t.last_run.jobs_added_to_pipeline }} to pipeline">
+                                    {% if t.last_run.status == 'completed' %}
+                                        <span class="rounded bg-emerald-100 px-1 text-emerald-800">✓</span> {{ t.last_run.jobs_added_to_pipeline }} added
+                                    {% elif t.last_run.status == 'failed' %}
+                                        <span class="rounded bg-red-100 px-1 text-red-800">✗</span>
+                                    {% else %}
+                                        <span class="rounded bg-slate-100 px-1 text-slate-600">…</span>
+                                    {% endif %}
+                                </span>
+                            {% endif %}
+                        {% else %}
+                            <span class="text-slate-400">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-3 py-2">
+                        {% if t.is_active %}
+                            <span class="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800">Active</span>
+                        {% else %}
+                            <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">Paused</span>
+                        {% endif %}
+                    </td>
+                    <td class="whitespace-nowrap px-3 py-2 text-right">
+                        <a href="{% url 'job_task_edit' t.id %}" class="mr-1 text-xs font-medium text-concierge-slate underline hover:no-underline">Edit</a>
+                        <a href="{% url 'job_task_run_now' t.id %}" class="mr-1 text-xs font-medium text-sky-700 underline hover:no-underline">Run</a>
+                        <a href="{% url 'job_task_toggle_active' t.id %}" class="text-xs font-medium text-amber-800 underline hover:no-underline">
+                            {% if t.is_active %}Pause{% else %}Activate{% endif %}
+                        </a>
+                    </td>
+                </tr>
+                {% if t.recent_runs %}
+                    <tr class="recent-runs-row bg-slate-50/50">
+                        <td colspan="8" class="p-0">
+                            <details class="group border-t border-slate-100">
+                                <summary class="cursor-pointer list-none px-4 py-2 text-left text-xs text-slate-500 hover:bg-slate-100 [&::-webkit-details-marker]:hidden">
+                                    <span class="group-open:hidden">Show {{ t.recent_runs|length }} run{{ t.recent_runs|length|pluralize }}</span>
+                                    <span class="hidden group-open:inline">Hide runs</span>
+                                </summary>
+                                <div class="border-t border-slate-100 px-4 py-3 text-xs">
+                                    <span class="font-semibold text-slate-500">Recent runs</span>
+                                    <ul class="mt-2 list-none space-y-1 pl-0">
+                                        {% for r in t.recent_runs %}
+                                            <li>
+                                                <span class="text-slate-500">{{ r.started_at|date:"M j H:i" }}</span>
+                                                <span class="ml-1 rounded px-1 text-[10px] font-semibold uppercase {% if r.status == 'completed' %}bg-emerald-100 text-emerald-800{% elif r.status == 'failed' %}bg-red-100 text-red-800{% else %}bg-slate-200 text-slate-700{% endif %}">{{ r.status }}</span>
+                                                {% if r.finished_at %}
+                                                    <span class="ml-1 text-slate-600">{{ r.jobs_fetched }}→{{ r.jobs_after_filter }}→{{ r.jobs_added_to_pipeline }} added</span>
+                                                    {% if r.error_message %}
+                                                        <span class="ml-1 text-red-600">{{ r.error_message|truncatechars:60 }}</span>
+                                                    {% endif %}
+                                                {% endif %}
+                                            </li>
+                                        {% endfor %}
+                                    </ul>
+                                </div>
+                            </details>
+                        </td>
+                    </tr>
+                {% endif %}
+            {% endfor %}
+        </tbody>
+    </table>
+</div>

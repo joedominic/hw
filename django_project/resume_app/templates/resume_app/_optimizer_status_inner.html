@@ -1,0 +1,61 @@
+{# Server-rendered status; polling JS replaces with full gauge + chips. #}
+{% with rid=optimized_resume_id %}
+<div class="grid gap-6 lg:grid-cols-2">
+    <div class="space-y-4">
+        <p class="text-sm"><span class="font-semibold text-concierge-slate">Status:</span> {{ status.status_display|default:status.status }}</p>
+        <div class="mx-auto flex h-36 w-36 flex-col items-center justify-center rounded-full border-4 border-slate-200 bg-slate-50 shadow-inner">
+            <span class="text-3xl font-bold text-concierge-slate">{% if status.ats_score is not None %}{{ status.ats_score }}{% else %}—{% endif %}</span>
+            <span class="text-xs text-slate-500">ATS match</span>
+        </div>
+        {% if status.recruiter_score is not None %}
+        <p class="text-center text-sm text-slate-600">Recruiter score: <span class="font-semibold text-concierge-slate">{{ status.recruiter_score }}</span></p>
+        {% endif %}
+        <p class="text-xs text-slate-500">Tokens (total): {{ status.total_input_tokens|default:0 }} in · {{ status.total_output_tokens|default:0 }} out</p>
+    </div>
+    <div class="space-y-4">
+        <h4 class="text-sm font-semibold text-concierge-slate">Signals from judges</h4>
+        <p class="text-xs font-medium uppercase tracking-wide text-slate-400">Keyword / feedback tags</p>
+        <p class="text-sm text-slate-500">Polling will parse the latest judge feedback into tags when available.</p>
+        <p class="mt-4 text-xs font-medium uppercase tracking-wide text-slate-400">Summary</p>
+        {% if status.ats_score is not None or status.recruiter_score is not None %}
+        <ul class="list-disc space-y-1 pl-5 text-sm text-slate-700">
+            {% if status.ats_score is not None %}<li>ATS score: {{ status.ats_score }}</li>{% endif %}
+            {% if status.recruiter_score is not None %}<li>Recruiter score: {{ status.recruiter_score }}</li>{% endif %}
+        </ul>
+        {% else %}
+        <p class="text-sm text-slate-500">Scores will appear when judges complete.</p>
+        {% endif %}
+    </div>
+</div>
+
+{% if status.status == "completed" %}
+<div class="mt-8 border-t border-slate-100 pt-6">
+    <h4 class="text-lg font-semibold text-concierge-slate">New resume draft</h4>
+    <pre class="mt-3 max-h-[28rem] overflow-auto whitespace-pre-wrap rounded-concierge border border-slate-200 bg-slate-50 p-4 text-xs text-slate-800">{{ status.optimized_content }}</pre>
+    <div class="mt-4 flex flex-wrap gap-3">
+        <a class="inline-flex items-center rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800" href="/api/resume/export/{{ rid }}/pdf">Export PDF</a>
+        <a class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50" href="/api/resume/export/{{ rid }}/docx">Export Word</a>
+        <a class="inline-flex items-center text-sm font-medium text-slate-500 hover:text-concierge-slate" href="{% url 'resume_optimizer' %}">Run again</a>
+    </div>
+</div>
+{% elif status.status == "failed" %}
+<p class="mt-4 rounded-concierge border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">{{ status.error_message|default:"Optimization failed." }}</p>
+{% else %}
+<p class="mt-4 text-sm text-slate-500">Optimization is running. This section will update automatically.</p>
+<p class="mt-2"><button type="button" class="rounded-concierge bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700" id="stop-optimization-btn" data-resume-id="{{ rid }}">Stop optimization</button></p>
+{% endif %}
+
+{% if status.logs %}
+<div class="mt-8 border-t border-slate-100 pt-6">
+    <h4 class="text-sm font-semibold text-concierge-slate">Agent thoughts</h4>
+    <div class="mt-3 space-y-2">
+        {% for log in status.logs %}
+        <details class="rounded-concierge border border-slate-200 bg-white">
+            <summary class="cursor-pointer px-3 py-2 text-sm font-medium">{{ log.step|default:"Step" }}{% if log.step_in is not None or log.step_out is not None %} — {{ log.step_in|default:0 }} in · {{ log.step_out|default:0 }} out{% endif %}</summary>
+            <pre class="max-h-80 overflow-auto whitespace-pre-wrap border-t border-slate-100 p-3 text-xs">{{ log.thought_text|default:log.thought }}</pre>
+        </details>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+{% endwith %}

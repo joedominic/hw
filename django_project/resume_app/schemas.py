@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import List, Optional
 
 from ninja import Schema
@@ -23,6 +24,7 @@ class JobPayload(Schema):
     snippet: str
     url: str
     source: str
+    source_display: Optional[str] = None
     focus_score: Optional[float] = None
     focus_percent: Optional[int] = None
     focus_reason: Optional[List[dict]] = None
@@ -30,6 +32,10 @@ class JobPayload(Schema):
     focus_percent_after_penalty: Optional[int] = None
     preference_margin_percent: Optional[int] = None
     matching_score: Optional[int] = None
+    interview_probability: Optional[int] = None
+    interview_reasoning: Optional[str] = None
+    fetched_at: Optional[datetime] = None  # when we pulled the job into the app (or from posting if we had it)
+    optimized_resume_id: Optional[int] = None  # latest OptimizedResume for Applying board (pipeline-linked)
 
 
 class JobDetailPayload(Schema):
@@ -56,7 +62,6 @@ class MatchRequest(Schema):
 class MatchResponse(Schema):
     score: int
     reasoning: str
-    thoughts: str
     job_listing_id: int
     resume_id: int
 
@@ -86,7 +91,6 @@ class JobMatchPayload(Schema):
     keyword: Optional[str] = None
     fit_score: Optional[int] = None
     reasoning: str
-    thoughts: str
     analyzed_at: str
     status: str
     resume_id: int
@@ -135,6 +139,7 @@ class ResumeOption(Schema):
     id: int
     uploaded_at: str
     label: str
+    track: Optional[str] = ""
 
 
 class DisqualifierAddRequest(Schema):

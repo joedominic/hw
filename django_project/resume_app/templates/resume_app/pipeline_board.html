@@ -1,0 +1,64 @@
+{% extends "resume_app/base.html" %}
+
+{% block title %}{{ board_page_title }} — ResumeElite{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-6xl">
+    <div class="mb-6">
+        <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">{{ board_page_title }}</h1>
+        <p class="mt-1 text-sm text-slate-600">{{ board_page_subtitle }}</p>
+        {% if show_board_metrics %}
+        <p class="mt-2 text-xs text-slate-500">
+            Flow: <span class="font-medium text-concierge-slate">Pipeline</span> → Vetting → Applying → Done
+        </p>
+        <p class="text-xs text-slate-500">
+            Done (all time): <strong class="text-concierge-slate">{{ done_total }}</strong>
+            · Last 7 days: <strong class="text-concierge-slate">{{ done_this_week }}</strong>
+            · Conversion: <strong class="text-concierge-slate">{{ conversion_percent }}%</strong>
+        </p>
+        {% endif %}
+    </div>
+
+    {% include "resume_app/_concierge_messages.html" %}
+    {% include "resume_app/_pipeline_stage_tabs.html" %}
+
+    <form method="get" class="mb-6 space-y-4">
+        <input type="hidden" name="track" value="{{ pipeline_track }}">
+        <div class="flex flex-col gap-2 sm:flex-row">
+            <input type="search" name="q" class="min-w-0 flex-1 rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate" placeholder="Search title, company, description…" value="{{ pipeline_search_query|default:'' }}" aria-label="Search pipeline board">
+            <div class="flex flex-wrap gap-2">
+                <button type="submit" class="rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50">Apply filters</button>
+                {% if pipeline_has_active_filters %}
+                    <a href="{{ board_clear_url }}" class="inline-flex items-center rounded-concierge border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100">Clear all</a>
+                {% endif %}
+            </div>
+        </div>
+        <div class="flex flex-col gap-3 rounded-concierge border border-slate-100 bg-slate-50/80 p-3 sm:flex-row sm:flex-wrap sm:items-end">
+            <div class="flex min-w-[10rem] flex-col gap-1">
+                <label for="pipeline-filter-source" class="text-xs font-medium text-slate-500">Source (JobSpy)</label>
+                <select id="pipeline-filter-source" name="source" class="rounded-concierge border border-slate-200 bg-white px-2 py-2 text-sm text-concierge-slate">
+                    <option value="">All sources</option>
+                    {% for src_val, src_label in pipeline_source_options %}
+                        <option value="{{ src_val }}" {% if pipeline_source_selected == src_val %}selected{% endif %}>{{ src_label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="flex flex-col gap-1">
+                <label for="pipeline-pref-min" class="text-xs font-medium text-slate-500">Pref score min</label>
+                <input id="pipeline-pref-min" type="number" name="pref_min" inputmode="numeric" placeholder="e.g. -10" value="{{ pipeline_pref_min|default:'' }}" class="w-full min-w-[6rem] rounded-concierge border border-slate-200 bg-white px-2 py-2 text-sm sm:w-28">
+            </div>
+            <div class="flex flex-col gap-1">
+                <label for="pipeline-pref-max" class="text-xs font-medium text-slate-500">Pref score max</label>
+                <input id="pipeline-pref-max" type="number" name="pref_max" inputmode="numeric" placeholder="e.g. 20" value="{{ pipeline_pref_max|default:'' }}" class="w-full min-w-[6rem] rounded-concierge border border-slate-200 bg-white px-2 py-2 text-sm sm:w-28">
+            </div>
+            <p class="text-xs text-slate-500 sm:max-w-xs sm:pb-1">
+                Pref is the preference margin % (liked vs disliked embeddings). Jobs without a score yet are hidden when a min/max is set.
+            </p>
+        </div>
+    </form>
+
+    <div class="rounded-concierge border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+        {% include "resume_app/_pipeline_jobs.html" with stage_label=board_stage empty_message=board_empty_message empty_help_list=board_empty_help_list empty_clear_url=board_clear_url %}
+    </div>
+</div>
+{% endblock %}

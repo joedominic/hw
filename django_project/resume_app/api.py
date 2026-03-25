@@ -1,3 +1,8 @@
+"""
+Django Ninja API: resume optimization, LLM settings, workflows, prompts, uploads.
+
+Mounted with the app’s `/api/resume/` prefix. Job search and pipeline JSON live in `jobs_api`.
+"""
 from ninja import Router, File, Schema, Form
 from ninja.files import UploadedFile
 from ninja.errors import HttpError
@@ -6,13 +11,13 @@ from django.http import FileResponse
 from django.utils import timezone
 from .models import UserResume, JobDescription, OptimizedResume, AgentLog, LLMProviderConfig, OptimizerWorkflow
 from .jobs_api import router as jobs_router
-from .tasks import run_optimize_resume_task
+from .tasks import optimize_resume_task
+from .prompts import DEFAULT_MATCHING_PROMPT
 from .agents import (
     DEFAULT_WRITER_PROMPT,
     DEFAULT_ATS_JUDGE_PROMPT,
     DEFAULT_RECRUITER_JUDGE_PROMPT,
     DEFAULT_FIT_CHECK_PROMPT,
-    DEFAULT_MATCHING_PROMPT,
     VALID_STEP_IDS,
     get_llm,
     run_fit_check,
@@ -103,7 +108,7 @@ class RunStepRequest(Schema):
     step: str  # writer | ats_judge | recruiter_judge
     job_description: str
     use_resume_id: Optional[int] = None
-    optimized_resume: Optional[str] = None  # for ats_judge, recruiter_judge
+    optimized_resume: Optional[str] = None  # draft text; writer uses when non-empty. Judges: draft or file/use_resume_id (PDF text).
     feedback: Optional[str] = None  # for writer (comma-separated)
     prompt_writer: Optional[str] = None
     prompt_ats_judge: Optional[str] = None
@@ -116,7 +121,7 @@ class RunStepRequest(Schema):
 class RunStepResponse(Schema):
     """Response for POST /run-step. Frontend: use output.debug_prompt for Input, output for Output, output.input_tokens/output_tokens for token count. error is set when the step failed."""
     step: str  # "writer" | "ats_judge" | "recruiter_judge"
-    output: dict  # writer: {optimized_resume, debug_prompt?, input_tokens?, output_tokens?}; ats_judge: {ats_score, feedback, debug_prompt?, input_tokens?, output_tokens?, response_json?}; recruiter_judge: {recruiter_score, feedback, debug_prompt?, input_tokens?, output_tokens?, response_json?}
+    output: dict  # writer: {optimized_resume, ...}; ats/recruiter: {scores, feedback, ...}; judges accept draft or PDF via same file/use_resume_id as Writer when draft empty
     error: Optional[str] = None  # when set, step failed; frontend should show step name + error
 
 
@@ -153,14 +158,19 @@ def run_step(
     }
     # Step-by-step always runs in debug mode
     debug = True
-    # Persist edited prompts to session so they're used on next page load
+    # Persist edited prompts to UserPromptProfile
     if hasattr(request, "session"):
-        request.session["optimizer_prompts"] = {
-            "writer": payload.prompt_writer or "",
-            "ats_judge": payload.prompt_ats_judge or "",
-            "recruiter_judge": payload.prompt_recruiter_judge or "",
-        }
-        request.session.modified = True
+        from .prompt_store import get_effective_prompts, save_prompts_to_profile
+
+        merged = get_effective_prompts(request)
+        merged.update(
+            {
+                "writer": payload.prompt_writer or "",
+                "ats_judge": payload.prompt_ats_judge or "",
+                "recruiter_judge": payload.prompt_recruiter_judge or "",
+            }
+        )
+        save_prompts_to_profile(request, merged)
 
     def _get_resume_text():
         if file and getattr(file, "size", 0) and getattr(file, "name", "").strip().lower().endswith(PDF_EXTENSION):
@@ -187,8 +197,9 @@ def run_step(
             feedback = [f.strip() for f in (payload.feedback or "").split(",") if f.strip()]
             state = {
                 "resume_text": resume_text,
+                "source_resume_text": resume_text,
                 "job_description": payload.job_description,
-                "optimized_resume": "",
+                "optimized_resume": (payload.optimized_resume or "").strip(),
                 "ats_score": 0,
                 "recruiter_score": 0,
                 "feedback": feedback,
@@ -205,10 +216,19 @@ def run_step(
 
         if step in ("ats_judge", "recruiter_judge"):
             optimized_resume = (payload.optimized_resume or "").strip()
+            resume_text = ""
             if not optimized_resume:
-                raise HttpError(400, "For ATS/Recruiter steps provide optimized_resume (current draft text).")
+                parsed = _get_resume_text()
+                if parsed:
+                    resume_text = (parsed or "").strip()
+            if not optimized_resume and not resume_text:
+                raise HttpError(
+                    400,
+                    "For ATS/Recruiter steps provide optimized_resume (current draft text), "
+                    "or upload a PDF resume / use_resume_id to score the original resume.",
+                )
             state = {
-                "resume_text": "",
+                "resume_text": resume_text,
                 "job_description": payload.job_description,
                 "optimized_resume": optimized_resume,
                 "ats_score": 0,
@@ -304,7 +324,7 @@ def fit_check(request, payload: FitCheckRequest = Form(...), file: UploadedFile 
 
 @router.get("/prompts", response=PromptsResponse)
 def get_prompts(request):
-    """Return default LLM prompt templates. Use placeholders: {resume_text}, {job_description}, {feedback}, {optimized_resume}, {job_descriptions}."""
+    """Return default LLM prompt templates. Writer: {source_resume_text}, {resume_text}, {optimized_resume}, {job_description}, {feedback}."""
     from .prompts import DEFAULT_INSIGHTS_PROMPT
     return {
         "writer": DEFAULT_WRITER_PROMPT,
@@ -414,7 +434,7 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
         score_threshold = st
 
     # Enqueue Huey task (Redis-backed worker)
-    result = run_optimize_resume_task(
+    result = optimize_resume_task(
         optimized.id,
         job_desc.id,
         payload.llm_provider,

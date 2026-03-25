@@ -1,11 +1,47 @@
 from django.contrib import admin
-from .models import LLMProviderConfig, JobListing, JobMatchResult, JobListingEmbedding, UserDisqualifier, OptimizerWorkflow
+from .models import (
+    AppAutomationSettings,
+    LLMProviderPreference,
+    LLMProviderConfig,
+    JobListing,
+    JobMatchResult,
+    JobListingEmbedding,
+    UserDisqualifier,
+    OptimizerWorkflow,
+    UserPromptProfile,
+)
+
+
+@admin.register(AppAutomationSettings)
+class AppAutomationSettingsAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "pipeline_to_vetting_enabled",
+        "pipeline_preference_margin_min",
+        "vetting_to_applying_enabled",
+        "vetting_interview_probability_min",
+        "applying_optimizer_workflow",
+        "updated_at",
+    )
 
 
 @admin.register(LLMProviderConfig)
 class LLMProviderConfigAdmin(admin.ModelAdmin):
-    list_display = ("provider", "default_model", "last_validated_at", "updated_at")
+    list_display = (
+        "provider",
+        "is_active",
+        "priority",
+        "default_model",
+        "last_validated_at",
+        "updated_at",
+    )
     readonly_fields = ("last_validated_at", "created_at", "updated_at")
+
+
+@admin.register(LLMProviderPreference)
+class LLMProviderPreferenceAdmin(admin.ModelAdmin):
+    list_display = ("provider_config", "model", "priority", "updated_at")
+    list_filter = ("provider_config__provider",)
 
 
 @admin.register(JobListing)
@@ -36,3 +72,9 @@ class UserDisqualifierAdmin(admin.ModelAdmin):
 class OptimizerWorkflowAdmin(admin.ModelAdmin):
     list_display = ("name", "max_iterations", "score_threshold", "updated_at")
     list_filter = ("max_iterations",)
+
+
+@admin.register(UserPromptProfile)
+class UserPromptProfileAdmin(admin.ModelAdmin):
+    list_display = ("id", "updated_at")
+    readonly_fields = ("updated_at",)

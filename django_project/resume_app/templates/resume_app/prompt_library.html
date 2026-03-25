@@ -1,118 +1,111 @@
 {% extends "resume_app/base.html" %}
 
-{% block title %}Prompt Library{% endblock %}
+{% block title %}Prompt library — ResumeElite{% endblock %}
 
 {% block content %}
-<div class="row mb-3">
-    <div class="col-12">
-        <h1 class="mb-3">Prompt Library</h1>
-        <p class="text-muted">
-            Edit prompt templates for the Resume Optimizer. Saved prompts are used when you run the optimizer or a step.
+<div class="mx-auto max-w-6xl">
+    <div class="mb-8">
+        <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Prompt library</h1>
+        <p class="mt-1 text-sm text-slate-600">
+            Templates for the optimizer, matching, and job insights. Saved prompts apply on the next run.
         </p>
     </div>
-</div>
 
-{% if messages %}
-    <div class="row mb-3">
-        <div class="col-12">
-            {% for message in messages %}
-                <div class="alert alert-{{ message.tags|default:'info' }} mb-2" role="alert">
-                    {{ message }}
-                </div>
-            {% endfor %}
-        </div>
-    </div>
-{% endif %}
+    {% include "resume_app/_concierge_messages.html" %}
 
-<div class="row">
-    <div class="col-lg-10">
-        <div class="card">
-            <div class="card-header">
-                Prompt templates
-            </div>
-            <div class="card-body">
-                <form method="post" id="prompt-library-form">
-                    {% csrf_token %}
-                    <input type="hidden" name="action" value="save_prompts">
-                    <div class="mb-3">
-                        <label class="form-label d-block">Select a prompt to edit</label>
-                        <ul class="nav nav-tabs" id="prompt-tabs" role="tablist">
-                            <li class="nav-item" role="presentation">
-                                <button class="nav-link active" id="prompt-writer-tab" data-bs-toggle="tab" data-bs-target="#prompt-writer-pane" type="button" role="tab">Writer</button>
-                            </li>
-                            <li class="nav-item" role="presentation">
-                                <button class="nav-link" id="prompt-ats-tab" data-bs-toggle="tab" data-bs-target="#prompt-ats-pane" type="button" role="tab">ATS Judge</button>
-                            </li>
-                            <li class="nav-item" role="presentation">
-                                <button class="nav-link" id="prompt-recruiter-tab" data-bs-toggle="tab" data-bs-target="#prompt-recruiter-pane" type="button" role="tab">Recruiter Judge</button>
-                            </li>
-                            <li class="nav-item" role="presentation">
-                                <button class="nav-link" id="prompt-matching-tab" data-bs-toggle="tab" data-bs-target="#prompt-matching-pane" type="button" role="tab">Matching</button>
-                            </li>
-                            <li class="nav-item" role="presentation">
-                                <button class="nav-link" id="prompt-insights-tab" data-bs-toggle="tab" data-bs-target="#prompt-insights-pane" type="button" role="tab">Insights</button>
-                            </li>
-                        </ul>
-                        <div class="tab-content border border-top-0 rounded-bottom p-3 bg-white" id="prompt-tab-content">
-                            <div class="tab-pane fade show active" id="prompt-writer-pane" role="tabpanel">
-                                <label class="form-label visually-hidden" for="prompt-writer-input">Writer prompt</label>
-                                <textarea id="prompt-writer-input" name="prompt_writer" rows="18"
-                                          class="form-control font-monospace" style="min-height: 22rem;"
-                                          placeholder="Writer prompt template">{{ prompts.writer }}</textarea>
-                                <div class="form-text mt-1">
-                                    Placeholders: <code>{resume_text}</code>, <code>{job_description}</code>, <code>{feedback}</code>.
-                                </div>
-                            </div>
-                            <div class="tab-pane fade" id="prompt-ats-pane" role="tabpanel">
-                                <label class="form-label visually-hidden" for="prompt-ats-input">ATS judge prompt</label>
-                                <textarea id="prompt-ats-input" name="prompt_ats_judge" rows="18"
-                                          class="form-control font-monospace" style="min-height: 22rem;"
-                                          placeholder="ATS judge prompt template">{{ prompts.ats_judge }}</textarea>
-                                <div class="form-text mt-1">
-                                    Placeholders: <code>{optimized_resume}</code>, <code>{job_description}</code>.
-                                </div>
-                            </div>
-                            <div class="tab-pane fade" id="prompt-recruiter-pane" role="tabpanel">
-                                <label class="form-label visually-hidden" for="prompt-recruiter-input">Recruiter judge prompt</label>
-                                <textarea id="prompt-recruiter-input" name="prompt_recruiter_judge" rows="18"
-                                          class="form-control font-monospace" style="min-height: 22rem;"
-                                          placeholder="Recruiter judge prompt template">{{ prompts.recruiter_judge }}</textarea>
-                                <div class="form-text mt-1">
-                                    Placeholders: <code>{optimized_resume}</code>, <code>{job_description}</code>.
-                                </div>
-                            </div>
-                            <div class="tab-pane fade" id="prompt-matching-pane" role="tabpanel">
-                                <label class="form-label visually-hidden" for="prompt-matching-input">Matching prompt</label>
-                                <textarea id="prompt-matching-input" name="prompt_matching" rows="18"
-                                          class="form-control font-monospace" style="min-height: 22rem;"
-                                          placeholder="Matching prompt template">{{ prompts.matching|default:"" }}</textarea>
-                                <div class="form-text mt-1">
-                                    Used after job search to compute an independent LLM match score per job. Placeholders: <code>{resume_text}</code>, <code>{job_description}</code>.
-                                </div>
-                            </div>
-                            <div class="tab-pane fade" id="prompt-insights-pane" role="tabpanel">
-                                <label class="form-label visually-hidden" for="prompt-insights-input">Insights prompt</label>
-                                <textarea id="prompt-insights-input" name="prompt_insights" rows="18"
-                                          class="form-control font-monospace" style="min-height: 22rem;"
-                                          placeholder="Insights prompt template">{{ prompts.insights|default:"" }}</textarea>
-                                <div class="form-text mt-1">
-                                    Used on Job Search when you click Insights (selected jobs). Placeholder: <code>{job_descriptions}</code> (concatenated descriptions of selected jobs).
-                                </div>
-                            </div>
+    <div class="rounded-concierge border border-slate-200 bg-white shadow-sm">
+        <div class="border-b border-slate-100 px-6 py-3 text-sm font-semibold text-concierge-slate">Prompt templates</div>
+        <div class="p-6">
+            <form method="post" id="prompt-library-form">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="save_prompts">
+                <div class="mb-4">
+                    <label class="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500">Select prompt</label>
+                    <div class="flex flex-wrap gap-1 border-b border-slate-200" id="prompt-tabs" role="tablist">
+                        <button type="button" role="tab" aria-selected="true" aria-controls="prompt-writer-pane" id="prompt-writer-tab" data-prompt-pane="prompt-writer-pane"
+                                class="prompt-tab-btn -mb-px rounded-t border border-b-0 border-slate-200 bg-white px-3 py-2 text-sm font-medium text-concierge-slate">Writer</button>
+                        <button type="button" role="tab" aria-selected="false" aria-controls="prompt-ats-pane" id="prompt-ats-tab" data-prompt-pane="prompt-ats-pane"
+                                class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">ATS Judge</button>
+                        <button type="button" role="tab" aria-selected="false" aria-controls="prompt-recruiter-pane" id="prompt-recruiter-tab" data-prompt-pane="prompt-recruiter-pane"
+                                class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">Recruiter Judge</button>
+                        <button type="button" role="tab" aria-selected="false" aria-controls="prompt-matching-pane" id="prompt-matching-tab" data-prompt-pane="prompt-matching-pane"
+                                class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">Matching</button>
+                        <button type="button" role="tab" aria-selected="false" aria-controls="prompt-insights-pane" id="prompt-insights-tab" data-prompt-pane="prompt-insights-pane"
+                                class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">Insights</button>
+                    </div>
+                    <div class="rounded-b border border-t-0 border-slate-200 bg-slate-50/30 p-4" id="prompt-tab-content">
+                        <div id="prompt-writer-pane" role="tabpanel" aria-labelledby="prompt-writer-tab">
+                            <label class="sr-only" for="prompt-writer-input">Writer prompt</label>
+                            <textarea id="prompt-writer-input" name="prompt_writer" rows="18"
+                                      class="w-full min-h-[22rem] rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="Writer prompt template">{{ prompts.writer }}</textarea>
+                            <p class="mt-2 text-xs text-slate-500">Placeholders: <code class="rounded bg-slate-100 px-1">{resume_text}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code>, <code class="rounded bg-slate-100 px-1">{feedback}</code></p>
+                        </div>
+                        <div id="prompt-ats-pane" role="tabpanel" aria-labelledby="prompt-ats-tab" class="hidden">
+                            <label class="sr-only" for="prompt-ats-input">ATS judge prompt</label>
+                            <textarea id="prompt-ats-input" name="prompt_ats_judge" rows="18"
+                                      class="w-full min-h-[22rem] rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="ATS judge prompt template">{{ prompts.ats_judge }}</textarea>
+                            <p class="mt-2 text-xs text-slate-500">Placeholders: <code class="rounded bg-slate-100 px-1">{optimized_resume}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code></p>
+                        </div>
+                        <div id="prompt-recruiter-pane" role="tabpanel" aria-labelledby="prompt-recruiter-tab" class="hidden">
+                            <label class="sr-only" for="prompt-recruiter-input">Recruiter judge prompt</label>
+                            <textarea id="prompt-recruiter-input" name="prompt_recruiter_judge" rows="18"
+                                      class="w-full min-h-[22rem] rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="Recruiter judge prompt template">{{ prompts.recruiter_judge }}</textarea>
+                            <p class="mt-2 text-xs text-slate-500">Placeholders: <code class="rounded bg-slate-100 px-1">{optimized_resume}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code></p>
+                        </div>
+                        <div id="prompt-matching-pane" role="tabpanel" aria-labelledby="prompt-matching-tab" class="hidden">
+                            <label class="sr-only" for="prompt-matching-input">Matching prompt</label>
+                            <textarea id="prompt-matching-input" name="prompt_matching" rows="18"
+                                      class="w-full min-h-[22rem] rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="Matching prompt template">{{ prompts.matching|default:"" }}</textarea>
+                            <p class="mt-2 text-xs text-slate-500">LLM match per job. <code class="rounded bg-slate-100 px-1">{resume_text}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code></p>
+                        </div>
+                        <div id="prompt-insights-pane" role="tabpanel" aria-labelledby="prompt-insights-tab" class="hidden">
+                            <label class="sr-only" for="prompt-insights-input">Insights prompt</label>
+                            <textarea id="prompt-insights-input" name="prompt_insights" rows="18"
+                                      class="w-full min-h-[22rem] rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="Insights prompt template">{{ prompts.insights|default:"" }}</textarea>
+                            <p class="mt-2 text-xs text-slate-500">Job Search Insights. Placeholder: <code class="rounded bg-slate-100 px-1">{job_descriptions}</code></p>
                         </div>
                     </div>
-                    <div class="d-flex flex-wrap gap-2 align-items-center">
-                        <button type="submit" class="btn btn-primary">Save prompts</button>
-                        <a href="{% url 'resume_optimizer' %}" class="btn btn-outline-secondary">Back to Optimizer</a>
-                    </div>
-                </form>
-                <form method="post" class="mt-3">
-                    {% csrf_token %}
-                    <input type="hidden" name="action" value="reset_prompts">
-                    <button type="submit" class="btn btn-sm btn-outline-secondary">Reset to server defaults</button>
-                </form>
-            </div>
+                </div>
+                <div class="flex flex-wrap gap-3">
+                    <button type="submit" class="rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">Save prompts</button>
+                    <a href="{% url 'resume_optimizer' %}" class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50">Optimizer</a>
+                </div>
+            </form>
+            <form method="post" class="mt-6 border-t border-slate-100 pt-4">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="reset_prompts">
+                <button type="submit" class="text-sm font-medium text-slate-500 underline hover:text-concierge-slate">Reset to server defaults</button>
+            </form>
         </div>
     </div>
 </div>
+<script>
+(function () {
+    var active = 'border-slate-200 bg-white text-concierge-slate';
+    var inactive = 'border-transparent bg-transparent text-slate-500 hover:border-slate-200 hover:text-slate-700';
+    var tabs = document.querySelectorAll('.prompt-tab-btn');
+    function showPane(id) {
+        document.querySelectorAll('[id^="prompt-"][id$="-pane"]').forEach(function (p) {
+            var on = p.id === id;
+            p.classList.toggle('hidden', !on);
+        });
+        tabs.forEach(function (btn) {
+            var on = btn.getAttribute('data-prompt-pane') === id;
+            btn.setAttribute('aria-selected', on ? 'true' : 'false');
+            btn.className = 'prompt-tab-btn -mb-px rounded-t border border-b-0 px-3 py-2 text-sm font-medium ' + (on ? active : inactive);
+        });
+    }
+    tabs.forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var id = btn.getAttribute('data-prompt-pane');
+            if (id) showPane(id);
+        });
+    });
+})();
+</script>
 {% endblock %}

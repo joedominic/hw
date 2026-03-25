@@ -1,346 +1,417 @@
 {% extends "resume_app/base.html" %}
 
-{% block title %}Resume Optimizer{% endblock %}
+{% block extra_head %}
+<style>
+    #optimizer-status-body .optimizer-md { max-height: 32rem; overflow: auto; padding-right: 0.25rem; }
+    #optimizer-status-body .optimizer-md h1 { font-size: 1.25rem; font-weight: 700; margin: 0.75rem 0 0.5rem; color: #0f172a; }
+    #optimizer-status-body .optimizer-md h2 { font-size: 1.1rem; font-weight: 700; margin: 0.75rem 0 0.375rem; color: #0f172a; }
+    #optimizer-status-body .optimizer-md h3 { font-size: 1rem; font-weight: 600; margin: 0.5rem 0 0.25rem; color: #0f172a; }
+    #optimizer-status-body .optimizer-md h4 { font-size: 0.95rem; font-weight: 600; margin: 0.5rem 0 0.25rem; color: #334155; }
+    #optimizer-status-body .optimizer-md p { margin: 0.375rem 0; line-height: 1.55; }
+    #optimizer-status-body .optimizer-md ul, #optimizer-status-body .optimizer-md ol { margin: 0.375rem 0; padding-left: 1.25rem; }
+    #optimizer-status-body .optimizer-md li { margin: 0.25rem 0; }
+    #optimizer-status-body .optimizer-md li > p { margin: 0.15rem 0; }
+    #optimizer-status-body .optimizer-md table { width: 100%; border-collapse: collapse; font-size: 0.75rem; margin: 0.5rem 0; }
+    #optimizer-status-body .optimizer-md th, #optimizer-status-body .optimizer-md td { border: 1px solid #e2e8f0; padding: 0.35rem 0.5rem; text-align: left; vertical-align: top; }
+    #optimizer-status-body .optimizer-md th { background: #f8fafc; font-weight: 600; }
+    #optimizer-status-body .optimizer-md code { font-size: 0.85em; background: #f1f5f9; padding: 0.1rem 0.3rem; border-radius: 0.25rem; }
+    #optimizer-status-body .optimizer-md pre { background: #f8fafc; padding: 0.5rem 0.75rem; border-radius: 0.375rem; overflow-x: auto; font-size: 0.75rem; margin: 0.5rem 0; border: 1px solid #e2e8f0; }
+    #optimizer-status-body .optimizer-md pre code { background: transparent; padding: 0; font-size: inherit; }
+    #optimizer-status-body .optimizer-md blockquote { border-left: 3px solid #cbd5e1; margin: 0.5rem 0; padding-left: 0.75rem; color: #64748b; }
+    #optimizer-status-body .optimizer-md strong { font-weight: 600; color: #0f172a; }
+    #optimizer-status-body .optimizer-md a { color: #0f172a; text-decoration: underline; text-underline-offset: 2px; }
+    #optimizer-status-body .optimizer-md hr { margin: 0.75rem 0; border: 0; border-top: 1px solid #e2e8f0; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js" crossorigin="anonymous"></script>
+{% endblock %}
+
+{% block title %}Setup &amp; configuration — ResumeElite{% endblock %}
 
 {% block content %}
-<div class="row mb-3">
-    <div class="col-12">
-        <h1 class="mb-3">Resume Optimizer</h1>
-        <p class="text-muted">
-            Upload your resume, paste a job description, choose a model from the configured provider, and run the optimization workflow.
+<div class="mx-auto max-w-6xl">
+    <div class="mb-8">
+        <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Setup &amp; configuration</h1>
+        <p class="mt-1 max-w-2xl text-sm text-slate-600">
+            Tune your LLM engine, persona prompts, and workflow—then move through input and optimization in a focused, step-by-step flow.
         </p>
+        <div class="mt-6 flex flex-wrap items-center gap-4" id="wizard-stepper" role="navigation" aria-label="Progress">
+            <button type="button" data-goto-step="1" class="wizard-step-dot flex items-center gap-2 rounded-concierge border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-concierge-slate shadow-sm">
+                <span class="flex h-7 w-7 items-center justify-center rounded-full bg-concierge-slate text-xs text-white">1</span>
+                Setup
+            </button>
+            <span class="hidden text-slate-300 sm:inline">→</span>
+            <button type="button" data-goto-step="2" class="wizard-step-dot flex items-center gap-2 rounded-concierge border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-500 shadow-sm">
+                <span class="flex h-7 w-7 items-center justify-center rounded-full bg-slate-200 text-xs text-slate-600">2</span>
+                Input &amp; upload
+            </button>
+            <span class="hidden text-slate-300 sm:inline">→</span>
+            <button type="button" data-goto-step="3" class="wizard-step-dot flex items-center gap-2 rounded-concierge border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-500 shadow-sm">
+                <span class="flex h-7 w-7 items-center justify-center rounded-full bg-slate-200 text-xs text-slate-600">3</span>
+                Optimization
+            </button>
+        </div>
     </div>
-</div>
 
-{% if messages %}
-    <div class="row mb-3">
-        <div class="col-12">
+    {% if messages %}
+        <div class="mb-6 space-y-2">
             {% for message in messages %}
-                <div class="alert alert-{{ message.tags|default:'info' }} mb-2" role="alert">
+                <div class="rounded-concierge border px-4 py-3 text-sm {% if message.tags == 'error' %}border-red-200 bg-red-50 text-red-900{% elif message.tags == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-900{% else %}border-slate-200 bg-white text-slate-800{% endif %}" role="alert">
                     {{ message }}
                 </div>
             {% endfor %}
         </div>
-    </div>
-{% endif %}
+    {% endif %}
 
-<div class="row">
-    <div class="col-lg-4 mb-4">
-        <div class="card">
-            <div class="card-header">
-                LLM configuration
-            </div>
-            <div class="card-body">
-                <p class="small mb-2">
-                    <strong>Provider:</strong> {{ selected_provider|default:"Not configured" }}
-                </p>
+    <form method="post" enctype="multipart/form-data" id="optimizer-form" class="space-y-8">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="run_optimizer">
+        {% if prefill_resume_id %}
+        <input type="hidden" name="use_resume_id" value="{{ prefill_resume_id }}">
+        {% endif %}
+        <input type="hidden" name="workflow_steps" id="workflow-steps-input" value="">
+        <input type="hidden" name="loop_to" id="loop-to-input" value="">
+        <input type="hidden" name="max_iterations" value="1">
+        <input type="hidden" name="score_threshold" value="85">
 
-                {% if llm_key_stored %}
-                    <p class="text-success small mb-1">Using connected key for {{ selected_provider }}.</p>
-                {% elif llm_key_error %}
-                    <p class="text-danger small mb-1">{{ llm_key_error }}</p>
-                    <a href="{% url 'settings' %}" class="btn btn-sm btn-outline-primary">Go to Settings</a>
-                {% else %}
-                    <p class="text-muted small mb-1">No API key configured for {{ selected_provider }}.</p>
-                    <a href="{% url 'settings' %}" class="btn btn-sm btn-outline-primary">Go to Settings</a>
-                {% endif %}
-
-                {% if llm_models %}
-                    <p class="small text-muted mb-0 mt-1">
-                        {{ llm_models|length }} model(s) available. Default:
-                        {{ llm_default_model|default:"(not set)" }}.
+        {# ——— Step 1 ——— #}
+        <div id="wizard-panel-1" class="wizard-panel space-y-8" data-step="1">
+            <div class="grid gap-6 lg:grid-cols-2">
+                <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <h2 class="text-lg font-semibold text-concierge-slate">LLM provider</h2>
+                        {% if llm_key_stored %}
+                            <span class="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-800">Active</span>
+                        {% else %}
+                            <span class="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800">Setup required</span>
+                        {% endif %}
+                    </div>
+                    <p class="mt-1 text-sm text-slate-600">
+                        <span class="font-medium text-concierge-slate">{{ selected_provider|default:"Not configured" }}</span>
+                        {% if llm_key_stored %}
+                            <span class="text-emerald-600"> · Connected</span>
+                        {% endif %}
                     </p>
-                {% endif %}
-            </div>
-        </div>
-
-        <div class="card mt-3">
-            <div class="card-header">
-                Prompts
-            </div>
-            <div class="card-body">
-                <p class="small text-muted">
-                    These templates will be used for the writer and judges. Saved when you run a step, run the full optimizer, or click Save.
-                </p>
-                <p class="small mb-2">
-                    <a href="{% url 'prompt_library' %}">Edit in Prompt Library</a> — manage prompts in a dedicated page.
-                </p>
-                <form method="post" id="save-prompts-form">
-                    {% csrf_token %}
-                    <input type="hidden" name="action" value="save_prompts">
-                    <input type="hidden" name="prompt_writer" id="save-prompts-writer" value="">
-                    <input type="hidden" name="prompt_ats_judge" id="save-prompts-ats" value="">
-                    <input type="hidden" name="prompt_recruiter_judge" id="save-prompts-recruiter" value="">
-                    <button type="submit" class="btn btn-sm btn-outline-secondary">Save prompts</button>
-                </form>
-                <script>
-                document.getElementById("save-prompts-form")?.addEventListener("submit", function () {
-                    var w = document.getElementById("prompt-writer-input"); var a = document.getElementById("prompt-ats-input"); var r = document.getElementById("prompt-recruiter-input");
-                    document.getElementById("save-prompts-writer").value = w ? w.value : "";
-                    document.getElementById("save-prompts-ats").value = a ? a.value : "";
-                    document.getElementById("save-prompts-recruiter").value = r ? r.value : "";
-                });
-                </script>
-                <form method="post" class="mt-1">
-                    {% csrf_token %}
-                    <input type="hidden" name="action" value="reset_prompts">
-                    <button type="submit" class="btn btn-sm btn-outline-secondary">Reset to server defaults</button>
-                </form>
-            </div>
-        </div>
-    </div>
-
-    <div class="col-lg-8 mb-4">
-        <div class="card mb-3">
-            <div class="card-header">
-                1. Upload resume &amp; job description
-            </div>
-            <div class="card-body">
-                <form method="post" enctype="multipart/form-data" id="optimizer-form">
-                    {% csrf_token %}
-                    <input type="hidden" name="action" value="run_optimizer">
-                    {% if prefill_resume_id %}
-                    <input type="hidden" name="use_resume_id" value="{{ prefill_resume_id }}">
+                    {% if llm_key_stored %}
+                        <p class="mt-2 text-xs text-slate-500">Using stored credentials for this provider.</p>
+                    {% elif llm_key_error %}
+                        <p class="mt-2 text-xs text-red-600">{{ llm_key_error }}</p>
+                        <a href="{% url 'settings' %}" class="mt-2 inline-block text-sm font-medium text-concierge-slate underline">Open settings</a>
+                    {% else %}
+                        <p class="mt-2 text-xs text-slate-500">Connect an API key in Settings to load models.</p>
+                        <a href="{% url 'settings' %}" class="mt-2 inline-block text-sm font-medium text-concierge-slate underline">Open settings</a>
                     {% endif %}
 
-                    <div class="mb-3">
-                        <label class="form-label" for="resume-file-input">Resume (PDF)</label>
-                        {% if prefill_resume_id %}
-                        <p class="small text-success mb-1">Using resume: {{ prefill_resume_name|default:"Resume" }} (ID {{ prefill_resume_id }}). Upload a different file to use another resume.</p>
-                        {% endif %}
-                        <input type="file" id="resume-file-input" name="resume_file" accept="application/pdf"
-                               class="form-control">
-                    </div>
-
-                    <div class="mb-3">
-                        <label class="form-label" for="job-description-input">Job description</label>
-                        <textarea id="job-description-input" name="job_description" rows="8"
-                                  class="form-control"
-                                  placeholder="Paste the target job description here">{{ job_description_value }}</textarea>
-                    </div>
-
-                    <div class="mb-3">
-                        <label class="form-label" for="llm-model-select">Model</label>
-                        <select id="llm-model-select" name="llm_model" class="form-select" {% if not llm_models %}disabled{% endif %}>
-                            {% if not llm_models %}
-                                <option>(Connect an API key to load models)</option>
-                            {% else %}
-                                {% for m in llm_models %}
-                                    <option value="{{ m }}" {% if m == selected_llm_model %}selected{% endif %}>{{ m }}</option>
-                                {% endfor %}
-                            {% endif %}
-                        </select>
-                    </div>
-
-                    <div class="mb-3">
-                        <label class="form-label d-block">Prompts</label>
-                        <ul class="nav nav-tabs" id="prompt-tabs" role="tablist">
-                            <li class="nav-item" role="presentation">
-                                <button class="nav-link active" id="prompt-writer-tab" data-bs-toggle="tab" data-bs-target="#prompt-writer-pane" type="button" role="tab">Writer</button>
-                            </li>
-                            <li class="nav-item" role="presentation">
-                                <button class="nav-link" id="prompt-ats-tab" data-bs-toggle="tab" data-bs-target="#prompt-ats-pane" type="button" role="tab">ATS Judge</button>
-                            </li>
-                            <li class="nav-item" role="presentation">
-                                <button class="nav-link" id="prompt-recruiter-tab" data-bs-toggle="tab" data-bs-target="#prompt-recruiter-pane" type="button" role="tab">Recruiter Judge</button>
-                            </li>
-                        </ul>
-                        <div class="tab-content border border-top-0 rounded-bottom p-3 bg-white" id="prompt-tab-content">
-                            <div class="tab-pane fade show active" id="prompt-writer-pane" role="tabpanel">
-                                <label class="form-label visually-hidden" for="prompt-writer-input">Writer prompt</label>
-                                <textarea id="prompt-writer-input" name="prompt_writer" rows="14"
-                                          class="form-control font-monospace" style="min-height: 18rem;"
-                                          placeholder="Writer prompt template">{{ prompts.writer }}</textarea>
-                                <div class="form-text mt-1">
-                                    Placeholders: <code>{resume_text}</code>, <code>{job_description}</code>, <code>{feedback}</code>.
-                                </div>
+                    <div class="mt-5 space-y-4">
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="llm-model-select">Model version</label>
+                            <select id="llm-model-select" name="llm_model" class="w-full rounded-concierge border border-slate-200 bg-white px-3 py-2 text-sm text-concierge-slate focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate {% if not llm_models %}opacity-60{% endif %}" {% if not llm_models %}disabled{% endif %}>
+                                {% if not llm_models %}
+                                    <option>(Connect an API key to load models)</option>
+                                {% else %}
+                                    {% for m in llm_models %}
+                                        <option value="{{ m }}" {% if m == selected_llm_model %}selected{% endif %}>{{ m }}</option>
+                                    {% endfor %}
+                                {% endif %}
+                            </select>
+                        </div>
+                        <div>
+                            <div class="mb-1 flex justify-between text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                <label for="llm-temperature">Temperature</label>
+                                <span id="llm-temperature-label" class="font-mono text-concierge-slate">{{ optimizer_temperature }}</span>
                             </div>
-                            <div class="tab-pane fade" id="prompt-ats-pane" role="tabpanel">
-                                <label class="form-label visually-hidden" for="prompt-ats-input">ATS judge prompt</label>
-                                <textarea id="prompt-ats-input" name="prompt_ats_judge" rows="14"
-                                          class="form-control font-monospace" style="min-height: 18rem;"
-                                          placeholder="ATS judge prompt template">{{ prompts.ats_judge }}</textarea>
-                                <div class="form-text mt-1">
-                                    Placeholders: <code>{optimized_resume}</code>, <code>{job_description}</code>.
-                                </div>
-                            </div>
-                            <div class="tab-pane fade" id="prompt-recruiter-pane" role="tabpanel">
-                                <label class="form-label visually-hidden" for="prompt-recruiter-input">Recruiter judge prompt</label>
-                                <textarea id="prompt-recruiter-input" name="prompt_recruiter_judge" rows="14"
-                                          class="form-control font-monospace" style="min-height: 18rem;"
-                                          placeholder="Recruiter judge prompt template">{{ prompts.recruiter_judge }}</textarea>
-                                <div class="form-text mt-1">
-                                    Placeholders: <code>{optimized_resume}</code>, <code>{job_description}</code>.
-                                </div>
-                            </div>
+                            <input type="range" id="llm-temperature" name="llm_temperature" min="0" max="2" step="0.1" value="{{ optimizer_temperature }}"
+                                   class="h-2 w-full cursor-pointer appearance-none rounded-full bg-slate-200 accent-concierge-slate">
+                            <p class="mt-1 text-xs text-slate-400">Stored for future API use; provider defaults apply today.</p>
                         </div>
                     </div>
-
-                    <div class="mb-3">
-                        <label class="form-label" for="workflow-preset">Workflow</label>
-                        <select id="workflow-preset" class="form-select" aria-describedby="workflow-help">
-                            <optgroup label="Built-in">
-                                <option value="default">Writer → ATS → Recruiter</option>
-                                <option value="recruiter_first">Recruiter → Writer → ATS → Recruiter</option>
-                            </optgroup>
-                            {% if saved_workflows %}
-                            <optgroup label="Saved workflows">
-                                {% for w in saved_workflows %}
-                                <option value="wf_{{ w.id }}" data-steps="{{ w.steps_json|force_escape }}">{{ w.name }}</option>
-                                {% endfor %}
-                            </optgroup>
-                            {% endif %}
-                        </select>
-                        <input type="hidden" name="workflow_steps" id="workflow-steps-input" value="">
-                        <input type="hidden" name="loop_to" id="loop-to-input" value="">
-                        <div id="workflow-help" class="form-text">Workflow runs once in the order shown. <a href="{% url 'workflow_list' %}">Manage workflows</a></div>
-                    </div>
-
-                    <div class="row mb-3">
-                        <div class="col-md-6">
-                            <div class="form-check">
-                                <input class="form-check-input" type="checkbox" id="debug-check" name="debug"
-                                       {% if request.POST.debug %}checked{% endif %}>
-                                <label class="form-check-label" for="debug-check">
-                                    Debug mode (log full prompts)
-                                </label>
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label" for="rate-limit-input">Rate limit delay (s)</label>
-                            <input type="number" min="0" step="1" id="rate-limit-input" name="rate_limit_delay"
-                                   class="form-control form-control-sm"
-                                   value="{{ request.POST.rate_limit_delay|default:'' }}">
-                        </div>
-                    </div>
-                    <input type="hidden" name="max_iterations" value="1">
-                    <input type="hidden" name="score_threshold" value="85">
-
-                    <div class="mb-3" id="run-mode-toggle-wrap">
-                        <label class="form-label">Run mode</label>
-                        <div class="btn-group" role="group" aria-label="Run mode">
-                            <input type="radio" class="btn-check" name="run_mode" id="run-mode-full" value="full" checked>
-                            <label class="btn btn-outline-primary" for="run-mode-full">Full run</label>
-                            <input type="radio" class="btn-check" name="run_mode" id="run-mode-step" value="step">
-                            <label class="btn btn-outline-primary" for="run-mode-step">Step by step</label>
-                        </div>
-                    </div>
-                    <div id="full-run-actions">
-                        <button type="submit" class="btn btn-primary"
-                                {% if not llm_key_stored %}disabled{% endif %}>
-                            Run optimizer
+                    <div class="mt-6 flex flex-wrap gap-3">
+                        <button type="button" id="save-engine-btn" class="rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+                            Save engine settings
                         </button>
-                        {% if not llm_key_stored %}
-                            <p class="small text-danger mt-2 mb-0">
-                                Configure an active provider in Settings before running.
-                            </p>
-                        {% endif %}
+                        <a href="{% url 'llm_test' %}" class="inline-flex items-center justify-center rounded-concierge border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-concierge-slate hover:bg-slate-100">
+                            Test connection
+                        </a>
                     </div>
-                </form>
+                </div>
+
+                <div class="rounded-concierge bg-concierge-slate p-6 text-white shadow-sm">
+                    <h2 class="text-lg font-semibold">Workflow health</h2>
+                    <p class="mt-1 text-xs text-slate-400">Snapshot from your last run when available.</p>
+                    <dl class="mt-6 space-y-4">
+                        <div>
+                            <dt class="text-xs font-medium uppercase tracking-wide text-slate-400">LLM response time</dt>
+                            <dd class="mt-0.5 text-2xl font-semibold">{% if status and status.logs %}—{% else %}—{% endif %}</dd>
+                            <dd class="text-xs text-slate-500">Per-step timing is not yet aggregated.</dd>
+                        </div>
+                        <div>
+                            <dt class="text-xs font-medium uppercase tracking-wide text-slate-400">Prompt token usage</dt>
+                            <dd class="mt-0.5 text-2xl font-semibold">
+                                {% if status %}
+                                    {{ status.total_input_tokens|default:0 }} <span class="text-lg font-normal text-slate-400">in</span>
+                                    · {{ status.total_output_tokens|default:0 }} <span class="text-lg font-normal text-slate-400">out</span>
+                                {% else %}
+                                    <span class="text-slate-400">Ready</span>
+                                {% endif %}
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="text-xs font-medium uppercase tracking-wide text-slate-400">Engine</dt>
+                            <dd class="mt-0.5 text-2xl font-semibold">{% if llm_key_stored %}Online{% else %}Offline{% endif %}</dd>
+                        </div>
+                    </dl>
+                    <div class="mt-6 flex -space-x-2">
+                        <span class="inline-flex h-8 w-8 items-center justify-center rounded-full border-2 border-concierge-slate bg-slate-600 text-xs font-bold">W</span>
+                        <span class="inline-flex h-8 w-8 items-center justify-center rounded-full border-2 border-concierge-slate bg-slate-500 text-xs font-bold">A</span>
+                        <span class="inline-flex h-8 w-8 items-center justify-center rounded-full border-2 border-concierge-slate bg-slate-400 text-xs font-bold">R</span>
+                    </div>
+                </div>
+            </div>
+
+            <div>
+                <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+                    <h2 class="text-lg font-semibold text-concierge-slate">Persona prompt matrix</h2>
+                    <a href="{% url 'prompt_library' %}" class="text-sm font-medium text-concierge-slate underline">Full prompt library</a>
+                </div>
+                <div class="grid gap-4 md:grid-cols-3">
+                    <div class="rounded-concierge border border-slate-200 bg-white p-4 shadow-sm">
+                        <div class="flex h-10 w-10 items-center justify-center rounded-concierge bg-slate-100 text-lg">✍</div>
+                        <h3 class="mt-3 font-semibold text-concierge-slate">The Writer</h3>
+                        <p class="mt-1 text-xs text-slate-500">Tailors your resume to the job description.</p>
+                        <p class="mt-3 line-clamp-3 rounded-concierge bg-slate-50 p-2 font-mono text-xs leading-relaxed text-slate-600">{{ prompts.writer|truncatechars:160 }}</p>
+                        <details class="mt-3 group">
+                            <summary class="cursor-pointer text-sm font-medium text-concierge-slate hover:underline">Edit instruction set</summary>
+                            <label class="mt-2 block text-xs text-slate-500" for="prompt-writer-input">Writer prompt</label>
+                            <textarea id="prompt-writer-input" name="prompt_writer" rows="10"
+                                      class="mt-1 w-full rounded-concierge border border-slate-200 p-2 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="Writer prompt template">{{ prompts.writer }}</textarea>
+                            <p class="mt-1 text-xs text-slate-400">Placeholders: <code class="rounded bg-slate-100 px-1">{source_resume_text}</code> (PDF facts, fixed), <code class="rounded bg-slate-100 px-1">{resume_text}</code> (PDF text on first Writer, then last tailored output each step), <code class="rounded bg-slate-100 px-1">{optimized_resume}</code> (prior draft when set), <code class="rounded bg-slate-100 px-1">{job_description}</code>, <code class="rounded bg-slate-100 px-1">{feedback}</code></p>
+                        </details>
+                    </div>
+                    <div class="rounded-concierge border border-slate-200 bg-white p-4 shadow-sm">
+                        <div class="flex h-10 w-10 items-center justify-center rounded-concierge bg-slate-100 text-lg">⚖</div>
+                        <h3 class="mt-3 font-semibold text-concierge-slate">ATS judge</h3>
+                        <p class="mt-1 text-xs text-slate-500">Scores keyword and structure fit for ATS systems.</p>
+                        <p class="mt-3 line-clamp-3 rounded-concierge bg-slate-50 p-2 font-mono text-xs leading-relaxed text-slate-600">{{ prompts.ats_judge|truncatechars:160 }}</p>
+                        <details class="mt-3 group">
+                            <summary class="cursor-pointer text-sm font-medium text-concierge-slate hover:underline">Edit instruction set</summary>
+                            <label class="mt-2 block text-xs text-slate-500" for="prompt-ats-input">ATS judge prompt</label>
+                            <textarea id="prompt-ats-input" name="prompt_ats_judge" rows="10"
+                                      class="mt-1 w-full rounded-concierge border border-slate-200 p-2 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="ATS judge prompt template">{{ prompts.ats_judge }}</textarea>
+                            <p class="mt-1 text-xs text-slate-400">Placeholders: <code class="rounded bg-slate-100 px-1">{optimized_resume}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code></p>
+                        </details>
+                    </div>
+                    <div class="rounded-concierge border border-slate-200 bg-white p-4 shadow-sm">
+                        <div class="flex h-10 w-10 items-center justify-center rounded-concierge bg-slate-100 text-lg">👤</div>
+                        <h3 class="mt-3 font-semibold text-concierge-slate">The recruiter</h3>
+                        <p class="mt-1 text-xs text-slate-500">Human-style review and narrative feedback.</p>
+                        <p class="mt-3 line-clamp-3 rounded-concierge bg-slate-50 p-2 font-mono text-xs leading-relaxed text-slate-600">{{ prompts.recruiter_judge|truncatechars:160 }}</p>
+                        <details class="mt-3 group">
+                            <summary class="cursor-pointer text-sm font-medium text-concierge-slate hover:underline">Edit instruction set</summary>
+                            <label class="mt-2 block text-xs text-slate-500" for="prompt-recruiter-input">Recruiter judge prompt</label>
+                            <textarea id="prompt-recruiter-input" name="prompt_recruiter_judge" rows="10"
+                                      class="mt-1 w-full rounded-concierge border border-slate-200 p-2 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="Recruiter judge prompt template">{{ prompts.recruiter_judge }}</textarea>
+                            <p class="mt-1 text-xs text-slate-400">Placeholders: <code class="rounded bg-slate-100 px-1">{optimized_resume}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code></p>
+                        </details>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid gap-6 lg:grid-cols-2 lg:items-end">
+                <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+                    <h2 class="text-lg font-semibold text-concierge-slate">Execution pipeline</h2>
+                    <p class="mt-1 text-xs text-slate-500">Operational toggles for this workspace.</p>
+                    <ul class="mt-4 space-y-3 text-sm">
+                        <li class="flex items-start gap-3">
+                            <input class="mt-1 h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" type="checkbox" id="debug-check" name="debug" {% if request.POST.debug %}checked{% endif %}>
+                            <label for="debug-check" class="text-slate-700">Debug mode — log full prompts to agent thoughts</label>
+                        </li>
+                        <li class="flex items-start gap-3 opacity-50">
+                            <input type="checkbox" checked disabled class="mt-1 h-4 w-4 rounded border-slate-300" aria-disabled="true">
+                            <span class="text-slate-600">Auto-summarize long bullets <span class="text-xs text-slate-400">(roadmap)</span></span>
+                        </li>
+                        <li class="flex items-start gap-3 opacity-50">
+                            <input type="checkbox" checked disabled class="mt-1 h-4 w-4 rounded border-slate-300" aria-disabled="true">
+                            <span class="text-slate-600">Gender-neutral language filter <span class="text-xs text-slate-400">(roadmap)</span></span>
+                        </li>
+                        <li class="flex items-start gap-3 opacity-50">
+                            <input type="checkbox" disabled class="mt-1 h-4 w-4 rounded border-slate-300" aria-disabled="true">
+                            <span class="text-slate-600">Industry jargon swap <span class="text-xs text-slate-400">(roadmap)</span></span>
+                        </li>
+                    </ul>
+                </div>
+                <div class="flex flex-wrap items-center justify-end gap-4">
+                    <a href="{% url 'resume_optimizer' %}" class="text-sm font-medium text-slate-500 hover:text-concierge-slate">Discard changes</a>
+                    <button type="button" class="goto-step-2 inline-flex items-center gap-2 rounded-concierge bg-concierge-slate px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+                        Continue to input
+                        <span aria-hidden="true">→</span>
+                    </button>
+                </div>
             </div>
         </div>
 
-        <div class="card mb-3" id="run-single-step-card" style="display: none;">
-            <div class="card-header">
-                2. Step by step
+        {# ——— Step 2 ——— #}
+        <div id="wizard-panel-2" class="wizard-panel hidden space-y-6" data-step="2">
+            <div class="mb-2 flex flex-wrap items-center justify-between gap-3">
+                <h2 class="text-lg font-semibold text-concierge-slate">Input &amp; upload</h2>
+                <p class="text-xs text-slate-500">Select template → provide documents → run AI optimization</p>
             </div>
-            <div class="card-body">
-                <p class="small text-muted mb-3">
-                    Run one step at a time using the job description, resume, model and prompts from the form above. When you re-run Writer after the judges, their feedback is passed so the Writer can incorporate it. Choose a step from the dropdown and run it. Monitor each step’s output before running the full chain.
-                </p>
-                <div class="mb-3" id="step-progress-visual">
-                    <span class="text-muted small">1. Writer</span> → <span class="text-muted small">2. ATS Judge</span> → <span class="text-muted small">3. Recruiter Judge</span>
+            <div class="grid gap-6 lg:grid-cols-2">
+                <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+                    <h3 class="font-semibold text-concierge-slate">Upload resume</h3>
+                    <p class="mt-1 text-xs text-slate-500">PDF required for extraction.</p>
+                    {% if prefill_resume_id %}
+                        <p class="mt-2 rounded-concierge bg-emerald-50 px-3 py-2 text-xs text-emerald-900">Using resume: {{ prefill_resume_name|default:"Resume" }} (ID {{ prefill_resume_id }}). Choose a file below to override.</p>
+                    {% endif %}
+                    <label class="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-concierge border-2 border-dashed border-slate-200 bg-slate-50 px-6 py-12 text-center hover:border-slate-300">
+                        <span class="text-sm font-medium text-concierge-slate">Drop PDF here or browse</span>
+                        <span class="mt-1 text-xs text-slate-500">application/pdf</span>
+                        <input type="file" id="resume-file-input" name="resume_file" accept="application/pdf" class="sr-only">
+                    </label>
+                    <p id="resume-file-name" class="mt-2 text-center text-xs text-slate-500"></p>
+                    <div class="mt-6 border-t border-slate-100 pt-4">
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Recent documents</p>
+                        <p class="mt-2 text-xs text-slate-500">Uploaded files appear after you run an optimization. Use Match to attach a saved resume.</p>
+                    </div>
                 </div>
-                <div class="mb-3">
-                    <label class="form-label" for="step-select">Step</label>
-                    <select id="step-select" class="form-select">
-                        <option value="writer">Writer (resume → tailored draft)</option>
-                        <option value="ats_judge">ATS Judge (draft → score + feedback)</option>
-                        <option value="recruiter_judge">Recruiter Judge (draft → score + feedback)</option>
-                    </select>
+                <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+                    <div class="flex flex-wrap items-start justify-between gap-2">
+                        <h3 class="font-semibold text-concierge-slate">Job description</h3>
+                        <button type="button" class="text-xs font-medium text-slate-400" disabled title="Coming soon">Auto-fill from URL</button>
+                    </div>
+                    <textarea id="job-description-input" name="job_description" rows="14"
+                              class="mt-3 w-full rounded-concierge border border-slate-200 p-3 text-sm text-concierge-slate focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                              placeholder="Paste the target job description here">{{ job_description_value }}</textarea>
                 </div>
-                <div class="mb-3" id="step-draft-wrap">
-                    <label class="form-label" for="step-draft-input">Current resume draft (for ATS / Recruiter)</label>
-                    <textarea id="step-draft-input" class="form-control" rows="6" placeholder="Paste the resume draft to score, or run Writer first to fill this automatically."></textarea>
-                </div>
-                <button type="button" class="btn btn-outline-primary" id="run-step-btn" {% if not llm_key_stored %}disabled{% endif %}>
-                    Run step
-                </button>
-                <div id="run-step-output" class="mt-3" style="display: none;">
-                    <hr>
-                    <h6 class="mb-2">Input</h6>
-                    <div class="accordion mb-3" id="run-step-input-accordion">
-                        <div class="accordion-item">
-                            <h2 class="accordion-header">
-                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#run-step-input-body" aria-expanded="false">Prompt sent to LLM</button>
-                            </h2>
-                            <div id="run-step-input-body" class="accordion-collapse collapse" data-bs-parent="#run-step-input-accordion">
-                                <div class="accordion-body p-0">
-                                    <pre id="run-step-input" class="bg-light p-3 rounded mb-0" style="white-space: pre-wrap; max-height: 20rem; overflow: auto;"></pre>
-                                </div>
-                            </div>
+            </div>
+
+            <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+                <label class="mb-1 block text-sm font-medium text-concierge-slate" for="workflow-preset">Workflow</label>
+                <select id="workflow-preset" class="w-full max-w-xl rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate" aria-describedby="workflow-help">
+                    <optgroup label="Built-in">
+                        <option value="default">Writer → ATS → Recruiter</option>
+                        <option value="recruiter_first">Recruiter → Writer → ATS → Recruiter</option>
+                    </optgroup>
+                    {% if saved_workflows %}
+                    <optgroup label="Saved workflows">
+                        {% for w in saved_workflows %}
+                        <option value="wf_{{ w.id }}" data-steps="{{ w.steps_json|force_escape }}">{{ w.name }}</option>
+                        {% endfor %}
+                    </optgroup>
+                    {% endif %}
+                </select>
+                <p id="workflow-help" class="mt-2 text-xs text-slate-500">Runs once in order shown. <a href="{% url 'workflow_list' %}" class="font-medium text-concierge-slate underline">Manage workflows</a></p>
+
+                <div class="mt-6 grid gap-4 sm:grid-cols-2">
+                    <div>
+                        <label class="mb-1 block text-xs font-medium text-slate-600" for="rate-limit-input">Rate limit delay (seconds)</label>
+                        <input type="number" min="0" step="1" id="rate-limit-input" name="rate_limit_delay"
+                               class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm"
+                               value="{{ request.POST.rate_limit_delay|default:'' }}">
+                    </div>
+                    <div id="run-mode-toggle-wrap">
+                        <span class="mb-1 block text-xs font-medium text-slate-600">Run mode</span>
+                        <div class="flex flex-wrap gap-2">
+                            <label class="inline-flex cursor-pointer items-center gap-2 rounded-concierge border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50">
+                                <input type="radio" class="text-concierge-slate focus:ring-concierge-slate" name="run_mode" id="run-mode-full" value="full" checked>
+                                Full run
+                            </label>
+                            <label class="inline-flex cursor-pointer items-center gap-2 rounded-concierge border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50">
+                                <input type="radio" class="text-concierge-slate focus:ring-concierge-slate" name="run_mode" id="run-mode-step" value="step">
+                                Step by step
+                            </label>
                         </div>
                     </div>
-                    <h6 class="mb-2">Output</h6>
-                    <div id="run-step-result" class="bg-light p-3 rounded mb-2" style="white-space: pre-wrap;"></div>
-                    <p class="text-muted small mb-0" id="run-step-tokens" title="">Input: 0 · Output: 0</p>
                 </div>
-                <div id="run-step-error" class="alert alert-danger mt-3" style="display: none;" role="alert"></div>
-                <div id="run-step-spinner" class="mt-3" style="display: none;">
-                    <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+
+                <div class="mt-6 flex flex-wrap items-center gap-4" id="full-run-actions">
+                    <button type="submit" class="rounded-concierge bg-concierge-slate px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:opacity-50"
+                            {% if not llm_key_stored %}disabled{% endif %}>
+                        Run optimizer
+                    </button>
+                    <button type="button" data-goto-step="1" class="text-sm font-medium text-slate-500 hover:text-concierge-slate">← Back to setup</button>
+                    <button type="button" data-goto-step="3" class="text-sm font-medium text-concierge-slate underline">Skip to results</button>
+                    {% if not llm_key_stored %}
+                        <p class="w-full text-xs text-red-600">Configure an active provider in Settings before running.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        {# ——— Step 3 ——— #}
+        <div id="wizard-panel-3" class="wizard-panel hidden space-y-6" data-step="3">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+                <h2 class="text-lg font-semibold text-concierge-slate">Optimization &amp; results</h2>
+                <button type="button" data-goto-step="2" class="text-sm font-medium text-slate-500 hover:text-concierge-slate">← Back to input</button>
+            </div>
+
+            <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm" id="run-single-step-card" style="display: none;">
+                <h3 class="font-semibold text-concierge-slate">Step by step</h3>
+                <p class="mt-1 text-xs text-slate-500">Run one agent at a time; the draft field updates after Writer. A second Writer pass uses that draft when you keep it filled.</p>
+                <div class="mt-4 text-xs text-slate-600" id="step-progress-visual" aria-live="polite"></div>
+                <div class="mt-4">
+                    <label class="mb-1 block text-sm font-medium" for="step-select">Step</label>
+                    <select id="step-select" class="w-full max-w-md rounded-concierge border border-slate-200 px-3 py-2 text-sm"></select>
+                </div>
+                <div class="mt-4" id="step-draft-wrap">
+                    <label class="mb-1 block text-sm font-medium" for="step-draft-input">Current resume draft</label>
+                    <p id="step-draft-hint" class="mb-1 text-xs text-slate-500"></p>
+                    <textarea id="step-draft-input" class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs" rows="6" placeholder="First Writer pass: can be empty. After Writer or judges: draft appears here for revision or scoring."></textarea>
+                </div>
+                <button type="button" class="mt-4 rounded-concierge border border-concierge-slate bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50 disabled:opacity-50" id="run-step-btn" {% if not llm_key_stored %}disabled{% endif %}>Run step</button>
+                <div id="run-step-output" class="mt-4 hidden border-t border-slate-100 pt-4">
+                    <h4 class="text-sm font-semibold">Output</h4>
+                    <details class="mt-2 rounded-concierge border border-slate-200 bg-slate-50">
+                        <summary class="cursor-pointer px-3 py-2 text-xs font-medium">Prompt sent to LLM</summary>
+                        <pre id="run-step-input" class="max-h-80 overflow-auto whitespace-pre-wrap border-t border-slate-200 p-3 text-xs"></pre>
+                    </details>
+                    <pre id="run-step-result" class="mt-2 max-h-96 overflow-auto whitespace-pre-wrap rounded-concierge bg-slate-50 p-3 text-xs"></pre>
+                    <p class="mt-2 text-xs text-slate-500" id="run-step-tokens" title=""></p>
+                </div>
+                <div id="run-step-error" class="mt-4 hidden rounded-concierge border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900" role="alert"></div>
+                <div id="run-step-spinner" class="mt-4 hidden items-center gap-2 text-sm text-slate-600">
+                    <span class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-concierge-slate"></span>
                     <span id="run-step-spinner-text">Running…</span>
                 </div>
             </div>
-        </div>
 
-        <div class="card" id="optimizer-status-card">
-            <div class="card-header">
-                3. Optimization status
-            </div>
-            <div class="card-body" id="optimizer-status-container"
-                 {% if resume_id %}data-resume-id="{{ resume_id }}" data-status-url="{% url 'resume_status' resume_id=resume_id %}"{% endif %}>
-                <div id="optimizer-status-body">
-                    {% if resume_id %}
-                        {% if status %}
-                            <p class="mb-2"><strong>Status:</strong> {{ status.status_display|default:status.status }}</p>
-                            {% if status.ats_score is not None or status.recruiter_score is not None %}
-                                <p class="mb-2"><strong>ATS score:</strong> {{ status.ats_score|default:"—" }} | <strong>Recruiter score:</strong> {{ status.recruiter_score|default:"—" }}</p>
-                            {% endif %}
-                            <p class="text-muted small mb-2">Token usage (total): {{ status.total_input_tokens|default:0 }} in · {{ status.total_output_tokens|default:0 }} out</p>
-                            {% if status.status == "completed" %}
-                                <h5>Optimized resume</h5>
-                                <pre class="bg-light p-3 rounded" style="white-space: pre-wrap;">{{ status.optimized_content }}</pre>
-                                <div class="mt-3">
-                                    <a class="btn btn-sm btn-outline-secondary me-2" href="{% url 'resume_optimizer' %}">Run again</a>
-                                    <a class="btn btn-sm btn-outline-primary me-2" href="/api/resume/export/{{ resume_id }}/docx">Download Word</a>
-                                    <a class="btn btn-sm btn-outline-primary" href="/api/resume/export/{{ resume_id }}/pdf">Download PDF</a>
-                                </div>
-                            {% elif status.status == "failed" %}
-                                <p class="text-danger mb-2">{{ status.error_message|default:"Optimization failed." }}</p>
+            <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm" id="optimizer-status-card">
+                <h3 class="font-semibold text-concierge-slate">Run status</h3>
+                <div class="mt-4" id="optimizer-status-container"
+                     {% if optimized_resume_id %}data-resume-id="{{ optimized_resume_id }}" data-status-url="{% url 'resume_status' resume_id=optimized_resume_id %}"{% endif %}>
+                    <div id="optimizer-status-body">
+                        {% if optimized_resume_id %}
+                            {% if status %}
+                                {% include "resume_app/_optimizer_status_inner.html" %}
                             {% else %}
-                                <p class="text-muted mb-2">Optimization is running. This section will update automatically.</p>
-                                <p class="mb-2"><button type="button" class="btn btn-sm btn-danger" id="stop-optimization-btn" data-resume-id="{{ resume_id }}">Stop optimization</button></p>
-                            {% endif %}
-                            {% if status.logs %}
-                                <hr><h6>Agent thoughts</h6>
-                                <div class="accordion" id="agentLogsAccordion">
-                                    {% for log in status.logs %}
-                                    <div class="accordion-item">
-                                        <h2 class="accordion-header"><button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#log-{{ forloop.counter }}">{{ log.step|default:"Step" }}{% if log.step_in is not None or log.step_out is not None %} — {{ log.step_in|default:0 }} in · {{ log.step_out|default:0 }} out{% endif %}</button></h2>
-                                        <div id="log-{{ forloop.counter }}" class="accordion-collapse collapse" data-bs-parent="#agentLogsAccordion"><div class="accordion-body"><pre class="mb-0" style="white-space: pre-wrap;">{{ log.thought_text|default:log.thought|safe }}</pre></div></div>
-                                    </div>
-                                    {% endfor %}
-                                </div>
+                                <p class="text-sm text-slate-500">No status available yet.</p>
                             {% endif %}
                         {% else %}
-                            <p class="text-muted mb-0">No status available yet.</p>
+                            <p class="text-sm text-slate-500" id="optimizer-status-placeholder">Run the full optimizer or switch to step mode to see live output here.</p>
                         {% endif %}
-                    {% else %}
-                        <p class="text-muted mb-0" id="optimizer-status-placeholder">Optimization status will appear here when you run the full optimizer.</p>
-                    {% endif %}
+                    </div>
                 </div>
             </div>
         </div>
+    </form>
+
+    <div class="mt-8 rounded-concierge border border-slate-200 bg-white p-4 shadow-sm">
+        <p class="text-xs text-slate-500">Save persona prompts without running a job (same as before).</p>
+        <form method="post" id="save-prompts-form" class="mt-3 flex flex-wrap items-center gap-3">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="save_prompts">
+            <input type="hidden" name="prompt_writer" id="save-prompts-writer" value="">
+            <input type="hidden" name="prompt_ats_judge" id="save-prompts-ats" value="">
+            <input type="hidden" name="prompt_recruiter_judge" id="save-prompts-recruiter" value="">
+            <button type="submit" class="rounded-concierge border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-medium text-concierge-slate hover:bg-slate-100">Save prompts only</button>
+        </form>
+        <form method="post" class="mt-2">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="reset_prompts">
+            <button type="submit" class="text-xs text-slate-500 underline hover:text-concierge-slate">Reset prompts to server defaults</button>
+        </form>
     </div>
 </div>
 {% endblock %}
@@ -348,9 +419,85 @@
 {% block extra_js %}
 {{ block.super }}
 <script>
+document.getElementById("save-prompts-form")?.addEventListener("submit", function () {
+    var w = document.getElementById("prompt-writer-input");
+    var a = document.getElementById("prompt-ats-input");
+    var r = document.getElementById("prompt-recruiter-input");
+    document.getElementById("save-prompts-writer").value = w ? w.value : "";
+    document.getElementById("save-prompts-ats").value = a ? a.value : "";
+    document.getElementById("save-prompts-recruiter").value = r ? r.value : "";
+});
+(function () {
+    var initial = {{ wizard_initial_step|default:1 }};
+    function showStep(n) {
+        [1, 2, 3].forEach(function (s) {
+            var el = document.getElementById("wizard-panel-" + s);
+            if (el) el.classList.toggle("hidden", s !== n);
+        });
+        document.querySelectorAll("#wizard-stepper .wizard-step-dot").forEach(function (btn) {
+            var t = parseInt(btn.getAttribute("data-goto-step"), 10);
+            var num = btn.querySelector("span.flex.h-7");
+            var active = t === n;
+            btn.classList.toggle("text-concierge-slate", active);
+            btn.classList.toggle("text-slate-500", !active);
+            if (num) {
+                num.classList.toggle("bg-concierge-slate", active);
+                num.classList.toggle("text-white", active);
+                num.classList.toggle("bg-slate-200", !active);
+                num.classList.toggle("text-slate-600", !active);
+            }
+        });
+    }
+    window.__optimizerWizardGoTo = showStep;
+    document.querySelectorAll("[data-goto-step]").forEach(function (el) {
+        el.addEventListener("click", function () {
+            var s = parseInt(el.getAttribute("data-goto-step"), 10);
+            if (s >= 1 && s <= 3) showStep(s);
+        });
+    });
+    document.querySelectorAll(".goto-step-2").forEach(function (el) {
+        el.addEventListener("click", function () { showStep(2); });
+    });
+    showStep(initial);
+
+    var temp = document.getElementById("llm-temperature");
+    var tempLabel = document.getElementById("llm-temperature-label");
+    if (temp && tempLabel) {
+        temp.addEventListener("input", function () { tempLabel.textContent = temp.value; });
+    }
+
+    var saveEngine = document.getElementById("save-engine-btn");
+    if (saveEngine) {
+        saveEngine.addEventListener("click", function () {
+            var fd = new FormData();
+            var csrf = document.querySelector("#optimizer-form input[name=csrfmiddlewaretoken]");
+            if (csrf) fd.append("csrfmiddlewaretoken", csrf.value);
+            fd.append("action", "save_engine_settings");
+            var sel = document.getElementById("llm-model-select");
+            if (sel && !sel.disabled) fd.append("llm_model", sel.value);
+            if (temp) fd.append("llm_temperature", temp.value);
+            saveEngine.disabled = true;
+            fetch(window.location.pathname, { method: "POST", body: fd, headers: { "X-Requested-With": "XMLHttpRequest" } })
+                .then(function (r) {
+                    saveEngine.disabled = false;
+                    if (r.ok) window.location.reload();
+                })
+                .catch(function () { saveEngine.disabled = false; });
+        });
+    }
+
+    var fileIn = document.getElementById("resume-file-input");
+    var fileLbl = document.getElementById("resume-file-name");
+    if (fileIn && fileLbl) {
+        fileIn.addEventListener("change", function () {
+            fileLbl.textContent = (fileIn.files && fileIn.files[0]) ? fileIn.files[0].name : "";
+        });
+    }
+})();
+</script>
+<script>
 (function () {
     const stepSelect = document.getElementById("step-select");
-    const stepDraftWrap = document.getElementById("step-draft-wrap");
     const stepDraftInput = document.getElementById("step-draft-input");
     const runStepBtn = document.getElementById("run-step-btn");
     const runStepOutput = document.getElementById("run-step-output");
@@ -360,32 +507,75 @@
     const runStepError = document.getElementById("run-step-error");
     const runStepSpinner = document.getElementById("run-step-spinner");
     const runStepSpinnerText = document.getElementById("run-step-spinner-text");
-    const stepInputAccordion = document.getElementById("run-step-input-accordion");
     const fullRunActions = document.getElementById("full-run-actions");
     const runSingleStepCard = document.getElementById("run-single-step-card");
     const runModeFull = document.getElementById("run-mode-full");
     const runModeStep = document.getElementById("run-mode-step");
-    if (!runStepBtn) return;
 
     const stepLabels = { writer: "Writer", ats_judge: "ATS Judge", recruiter_judge: "Recruiter Judge" };
+    const stepOptionHints = {
+        writer: "resume → tailored draft",
+        ats_judge: "draft → score + feedback",
+        recruiter_judge: "draft → score + feedback",
+    };
     var lastAtsFeedback = "";
     var lastAtsScore = null;
     var lastRecruiterFeedback = "";
     var lastRecruiterScore = null;
 
+    function selectedStepId() {
+        var opt = stepSelect && stepSelect.selectedOptions && stepSelect.selectedOptions[0];
+        return (opt && opt.getAttribute("data-step")) || "writer";
+    }
+
+    function updateStepDraftHint() {
+        var hint = document.getElementById("step-draft-hint");
+        if (!hint) return;
+        var sid = selectedStepId();
+        if (sid === "writer") {
+            hint.textContent = "Optional on first pass from your PDF. If filled, Writer revises this draft (e.g. after a prior Writer or judges).";
+        } else {
+            hint.textContent = "Paste a tailored draft, or leave empty and upload a PDF / use Match resume to score the original (same as full workflow when judge runs first).";
+        }
+    }
+
+    window.__optimizerUpdateStepUI = function (steps) {
+        var vis = document.getElementById("step-progress-visual");
+        if (!stepSelect || !vis) return;
+        var list = Array.isArray(steps) && steps.length ? steps : ["writer", "ats_judge", "recruiter_judge"];
+        vis.innerHTML = list.map(function (s, i) {
+            return '<span class="text-slate-500">' + (i + 1) + ". " + (stepLabels[s] || s) + "</span>";
+        }).join(" <span class=\"text-slate-300\">→</span> ");
+        stepSelect.innerHTML = "";
+        list.forEach(function (s, i) {
+            var o = document.createElement("option");
+            o.value = String(i);
+            o.setAttribute("data-step", s);
+            var hint = stepOptionHints[s] ? " (" + stepOptionHints[s] + ")" : "";
+            o.textContent = (i + 1) + ". " + (stepLabels[s] || s) + hint;
+            stepSelect.appendChild(o);
+        });
+        stepSelect.selectedIndex = 0;
+        updateStepDraftHint();
+    };
+
+    if (!runStepBtn) return;
+
     function setRunModeUI() {
         var stepMode = runModeStep && runModeStep.checked;
-        if (fullRunActions) fullRunActions.style.display = stepMode ? "none" : "block";
+        if (fullRunActions) fullRunActions.style.display = stepMode ? "none" : "flex";
         if (runSingleStepCard) runSingleStepCard.style.display = stepMode ? "block" : "none";
     }
     if (runModeFull) runModeFull.addEventListener("change", setRunModeUI);
-    if (runModeStep) runModeStep.addEventListener("change", setRunModeUI);
+    if (runModeStep) runModeStep.addEventListener("change", function () {
+        setRunModeUI();
+        if (runModeStep.checked && typeof window.__optimizerWizardGoTo === "function") {
+            window.__optimizerWizardGoTo(3);
+        }
+    });
     setRunModeUI();
 
-    stepSelect.addEventListener("change", function () {
-        stepDraftWrap.style.display = this.value === "writer" ? "none" : "block";
-    });
-    stepDraftWrap.style.display = stepSelect.value === "writer" ? "none" : "block";
+    if (stepSelect) stepSelect.addEventListener("change", updateStepDraftHint);
 
     function getCsrf() {
         const input = document.querySelector('#optimizer-form input[name="csrfmiddlewaretoken"]');
@@ -393,7 +583,7 @@
     }
 
     async function doRunStep() {
-        const step = stepSelect.value;
+        const step = selectedStepId();
         const form = document.getElementById("optimizer-form");
         const jobDesc = (document.getElementById("job-description-input") || {}).value || '';
         const provider = "{{ selected_provider|escapejs }}";
@@ -402,12 +592,11 @@
         const promptAts = (document.getElementById("prompt-ats-input") || {}).value || '';
         const promptRecruiter = (document.getElementById("prompt-recruiter-input") || {}).value || '';
 
-        runStepError.style.display = "none";
+        runStepError.classList.add("hidden");
         runStepError.textContent = "";
-        runStepOutput.style.display = "none";
-        runStepSpinner.style.display = "flex";
-        runStepSpinner.style.alignItems = "center";
-        runStepSpinner.style.gap = "0.5rem";
+        runStepOutput.classList.add("hidden");
+        runStepSpinner.classList.remove("hidden");
+        runStepSpinner.classList.add("flex");
         if (runStepSpinnerText) runStepSpinnerText.textContent = "Running " + (stepLabels[step] || step) + "…";
         runStepBtn.disabled = true;
 
@@ -416,7 +605,7 @@
         fd.append("job_description", jobDesc);
         fd.append("llm_provider", provider);
         fd.append("llm_model", model);
-        fd.append("debug", "true");  /* step-by-step always runs in debug mode */
+        fd.append("debug", "true");
         fd.append("prompt_writer", promptWriter);
         fd.append("prompt_ats_judge", promptAts);
         fd.append("prompt_recruiter_judge", promptRecruiter);
@@ -436,16 +625,39 @@
             }
             if (step === "writer" && !fd.has("file") && !fd.has("use_resume_id")) {
                 runStepError.textContent = "For Writer step, upload a resume file or use a resume from Match.";
-                runStepError.style.display = "block";
-                runStepSpinner.style.display = "none";
+                runStepError.classList.remove("hidden");
+                runStepSpinner.classList.add("hidden");
+                runStepSpinner.classList.remove("flex");
                 runStepBtn.disabled = false;
                 return;
             }
+            var writerDraft = (stepDraftInput && stepDraftInput.value || "").trim();
+            if (writerDraft) {
+                fd.append("optimized_resume", writerDraft);
+            }
         } else {
-            fd.append("optimized_resume", stepDraftInput.value || "");
+            var judgeDraft = (stepDraftInput && stepDraftInput.value || "").trim();
+            if (judgeDraft) {
+                fd.append("optimized_resume", judgeDraft);
+            } else {
+                var judgeFileInput = document.getElementById("resume-file-input");
+                if (judgeFileInput && judgeFileInput.files && judgeFileInput.files[0]) {
+                    fd.append("file", judgeFileInput.files[0]);
+                } else {
+                    var judgePrefillId = "{{ prefill_resume_id|default:'' }}";
+                    if (judgePrefillId) fd.append("use_resume_id", judgePrefillId);
+                }
+                if (!fd.has("file") && !fd.has("use_resume_id")) {
+                    runStepError.textContent = "For ATS/Recruiter, paste a draft in the box, or upload a resume PDF / use a resume from Match.";
+                    runStepError.classList.remove("hidden");
+                    runStepSpinner.classList.add("hidden");
+                    runStepSpinner.classList.remove("flex");
+                    runStepBtn.disabled = false;
+                    return;
+                }
+            }
         }
 
-        console.log("[Run step] request: step=" + step + ", jobDescLen=" + jobDesc.length + ", draftLen=" + (stepDraftInput ? stepDraftInput.value.length : 0) + ", provider=" + provider + ", model=" + model);
         try {
             const resp = await fetch("/api/resume/run-step", { method: "POST", body: fd });
             let data = {};
@@ -454,15 +666,14 @@
             } catch (_) {
                 data = { error: resp.statusText || "Request failed" };
             }
-            console.log("[Run step] response: status=" + resp.status + ", ok=" + resp.ok + ", data=" + JSON.stringify(data).slice(0, 800));
-            if (data.error) console.warn("[Run step] error from server:", data.error);
-            runStepSpinner.style.display = "none";
+            runStepSpinner.classList.add("hidden");
+            runStepSpinner.classList.remove("flex");
             runStepBtn.disabled = false;
 
             function showStepError(msg) {
                 var label = data.step ? (stepLabels[data.step] || data.step) + " failed: " : "";
                 runStepError.textContent = label + (msg || "Request failed");
-                runStepError.style.display = "block";
+                runStepError.classList.remove("hidden");
             }
 
             if (data.error) {
@@ -508,7 +719,8 @@
             if (runStepInput) {
                 var promptText = (data.output && data.output.debug_prompt) ? data.output.debug_prompt : "";
                 runStepInput.textContent = promptText;
-                if (stepInputAccordion) stepInputAccordion.style.display = promptText ? "block" : "none";
+                var det = runStepInput.closest("details");
+                if (det) det.open = false;
             }
 
             var inTok = (data.output && data.output.input_tokens != null) ? data.output.input_tokens : 0;
@@ -518,12 +730,13 @@
             runStepTokens.title = est ? "Provider did not report token usage; values are approximate (chars ÷ 4)." : "";
             runStepTokens.style.display = "block";
 
-            runStepOutput.style.display = "block";
+            runStepOutput.classList.remove("hidden");
         } catch (e) {
-            runStepSpinner.style.display = "none";
+            runStepSpinner.classList.add("hidden");
+            runStepSpinner.classList.remove("flex");
             runStepBtn.disabled = false;
             runStepError.textContent = (stepLabels[step] || step) + " failed: " + (e.message || "Request failed");
-            runStepError.style.display = "block";
+            runStepError.classList.remove("hidden");
         }
     }
 
@@ -538,28 +751,104 @@
     const runModeFull = document.getElementById("run-mode-full");
     if (!statusContainer || !statusBody) return;
 
+    if (typeof marked !== "undefined" && typeof marked.use === "function") {
+        marked.use({ gfm: true, breaks: false });
+    }
+
+    function esc(s) {
+        return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+
+    function atsGaugeHtml(score) {
+        var s = score == null || score === "" ? null : Math.max(0, Math.min(100, Number(score)));
+        var r = 36;
+        var c = 2 * Math.PI * r;
+        var pct = s == null ? 0 : s / 100;
+        var offset = c * (1 - pct);
+        var label = s == null ? "—" : String(Math.round(s));
+        return (
+            '<div class="relative mx-auto h-36 w-36 shrink-0">' +
+            '<svg class="h-full w-full -rotate-90" viewBox="0 0 100 100" aria-hidden="true">' +
+            '<circle cx="50" cy="50" r="' + r + '" fill="none" stroke="#e2e8f0" stroke-width="8"/>' +
+            '<circle cx="50" cy="50" r="' + r + '" fill="none" stroke="#0f172a" stroke-width="8" stroke-linecap="round" ' +
+            'stroke-dasharray="' + c + '" stroke-dashoffset="' + offset + '"/>' +
+            "</svg>" +
+            '<div class="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">' +
+            '<span class="text-2xl font-bold text-concierge-slate">' + esc(label) + "</span>" +
+            '<span class="text-xs text-slate-500">ATS match</span></div></div>'
+        );
+    }
+
+    function judgeFeedbackMarkdownHtml(text) {
+        if (!text || !String(text).trim()) {
+            return '<p class="text-sm text-slate-500">No judge feedback yet.</p>';
+        }
+        if (typeof marked === "undefined" || typeof DOMPurify === "undefined") {
+            return '<div class="rounded-concierge border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">Markdown libraries failed to load. Showing plain text.</div>' +
+                '<pre class="mt-2 max-h-80 overflow-auto whitespace-pre-wrap rounded-concierge border border-slate-200 bg-slate-50 p-3 text-xs text-slate-800">' + esc(String(text)) + "</pre>";
+        }
+        try {
+            var raw = marked.parse(String(text));
+            var clean = DOMPurify.sanitize(raw, { USE_PROFILES: { html: true } });
+            return '<div class="optimizer-md rounded-concierge border border-slate-200 bg-slate-50/80 p-4">' + clean + "</div>";
+        } catch (err) {
+            return '<pre class="max-h-80 overflow-auto whitespace-pre-wrap rounded-concierge border border-slate-200 bg-slate-50 p-3 text-xs text-slate-800">' + esc(String(text)) + "</pre>";
+        }
+    }
+
+    function lastJudgeFeedback(data) {
+        var logs = data.logs || [];
+        for (var i = logs.length - 1; i >= 0; i--) {
+            var th = logs[i].thought;
+            if (th && typeof th === "object" && th.feedback) return String(th.feedback);
+        }
+        return "";
+    }
+
     function renderStatusFromJson(data, resumeId) {
         if (!data || data.error) {
-            statusBody.innerHTML = "<p class=\"text-muted mb-0\">" + (data && data.error ? data.error : "Could not load status.") + "</p>";
+            statusBody.innerHTML = "<p class=\"text-sm text-slate-500\">" + esc(data && data.error ? data.error : "Could not load status.") + "</p>";
             return;
         }
-        var html = "<p class=\"mb-2\"><strong>Status:</strong> " + (data.status_display || data.status || "—") + "</p>";
-        if (data.ats_score != null || data.recruiter_score != null) {
-            html += "<p class=\"mb-2\"><strong>ATS score:</strong> " + (data.ats_score != null ? data.ats_score : "—") + " | <strong>Recruiter score:</strong> " + (data.recruiter_score != null ? data.recruiter_score : "—") + "</p>";
+        var fb = lastJudgeFeedback(data);
+        var ats = data.ats_score;
+        var rec = data.recruiter_score;
+
+        var html = '<div class="grid gap-6 lg:grid-cols-2">';
+        html += '<div class="space-y-4">';
+        html += '<p class="text-sm"><span class="font-semibold text-concierge-slate">Status:</span> ' + esc(data.status_display || data.status || "—") + "</p>";
+        html += atsGaugeHtml(ats);
+        if (rec != null) {
+            html += '<p class="text-center text-sm text-slate-600">Recruiter score: <span class="font-semibold text-concierge-slate">' + esc(rec) + "</span></p>";
         }
-        html += "<p class=\"text-muted small mb-2\">Token usage (total): " + (data.total_input_tokens != null ? data.total_input_tokens : 0) + " in · " + (data.total_output_tokens != null ? data.total_output_tokens : 0) + " out</p>";
-        if (data.optimized_content != null && data.optimized_content !== "" || data.status === "completed") {
-            html += "<h5>Optimized resume</h5><pre class=\"bg-light p-3 rounded\" style=\"white-space: pre-wrap;\">" + (data.optimized_content ? String(data.optimized_content).replace(/</g, "&lt;").replace(/>/g, "&gt;") : "") + "</pre>";
-            html += "<div class=\"mt-3\"><a class=\"btn btn-sm btn-outline-secondary me-2\" href=\"{% url 'resume_optimizer' %}\">Run again</a>";
-            html += " <a class=\"btn btn-sm btn-outline-primary me-2\" href=\"/api/resume/export/" + resumeId + "/docx\">Download Word</a>";
-            html += " <a class=\"btn btn-sm btn-outline-primary\" href=\"/api/resume/export/" + resumeId + "/pdf\">Download PDF</a></div>";
+        html += '<p class="text-xs text-slate-500">Tokens (total): ' + esc(data.total_input_tokens != null ? data.total_input_tokens : 0) + " in · " + esc(data.total_output_tokens != null ? data.total_output_tokens : 0) + " out</p>";
+        html += "</div>";
+
+        html += '<div class="space-y-4">';
+        html += "<h4 class=\"text-sm font-semibold text-concierge-slate\">Signals from judges</h4>";
+        html += "<p class=\"text-xs font-medium uppercase tracking-wide text-slate-400\">Feedback (markdown)</p>";
+        html += judgeFeedbackMarkdownHtml(fb);
+        html += "</div></div>";
+
+        var doneContent = data.optimized_content != null && data.optimized_content !== "" || data.status === "completed";
+        if (doneContent) {
+            html += '<div class="mt-8 border-t border-slate-100 pt-6">';
+            html += '<h4 class="text-lg font-semibold text-concierge-slate">New resume draft</h4>';
+            html += '<pre class="mt-3 max-h-[28rem] overflow-auto whitespace-pre-wrap rounded-concierge border border-slate-200 bg-slate-50 p-4 text-xs text-slate-800">' + esc(data.optimized_content || "") + "</pre>";
+            html += '<div class="mt-4 flex flex-wrap gap-3">';
+            html += '<a class="inline-flex items-center rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800" href="/api/resume/export/' + esc(resumeId) + '/pdf">Export PDF</a>';
+            html += '<a class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50" href="/api/resume/export/' + esc(resumeId) + '/docx">Export Word</a>';
+            html += '<a class="inline-flex items-center text-sm font-medium text-slate-500 hover:text-concierge-slate" href="{% url 'resume_optimizer' %}">Run again</a>';
+            html += "</div></div>";
         } else if (data.error_message != null && data.error_message !== "" || data.status === "failed") {
-            html += "<p class=\"text-danger mb-2\">" + (data.error_message ? String(data.error_message).replace(/</g, "&lt;").replace(/>/g, "&gt;") : "Optimization failed.") + "</p>";
+            html += '<p class="mt-4 rounded-concierge border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">' + esc(data.error_message || "Optimization failed.") + "</p>";
         } else {
-            html += "<p class=\"text-muted mb-2\">Optimization is running. This section will update automatically.</p>";
-            html += "<p class=\"mb-2\"><button type=\"button\" class=\"btn btn-sm btn-danger\" id=\"stop-optimization-btn\" data-resume-id=\"" + resumeId + "\">Stop optimization</button></p>";
+            html += '<p class="mt-4 text-sm text-slate-500">Optimization is running. This section updates automatically.</p>';
+            html += '<p class="mt-2"><button type="button" class="rounded-concierge bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700" id="stop-optimization-btn" data-resume-id="' + esc(resumeId) + '">Stop optimization</button></p>';
         }
+
         if (data.logs && data.logs.length) {
+            html += '<div class="mt-8 border-t border-slate-100 pt-6"><h4 class="text-sm font-semibold text-concierge-slate">Agent thoughts</h4><div class="mt-3 space-y-2">';
             function thoughtToText(thought) {
                 if (thought == null) return "";
                 if (typeof thought === "string") return thought;
@@ -568,14 +857,16 @@
                 if (thought.feedback) parts.push(String(thought.feedback));
                 if (thought.reasoning) parts.push(String(thought.reasoning));
                 if (thought.message) parts.push(String(thought.message));
-                if (thought.optimized_resume && typeof thought.optimized_resume === "string") parts.push(thought.optimized_resume.slice(0, 2000) + (thought.optimized_resume.length > 2000 ? "…" : ""));
+                if (thought.optimized_resume && typeof thought.optimized_resume === "string") {
+                    var s = thought.optimized_resume;
+                    parts.push(s.slice(0, 2000) + (s.length > 2000 ? "…" : ""));
+                }
                 var rest = {};
                 var skip = ["feedback", "reasoning", "message", "optimized_resume", "input_tokens", "output_tokens", "ats_score", "recruiter_score"];
                 for (var k in thought) if (thought.hasOwnProperty(k) && skip.indexOf(k) < 0) rest[k] = thought[k];
                 if (Object.keys(rest).length) parts.push(JSON.stringify(rest, null, 2));
                 return parts.join("\n\n") || JSON.stringify(thought, null, 2);
             }
-            html += "<hr><h6>Agent thoughts</h6><div class=\"accordion\" id=\"agentLogsAccordion\">";
             data.logs.forEach(function (log, i) {
                 var id = "log-js-" + i;
                 var stepLabel = (log.step_name || log.step || "Step") + "";
@@ -583,11 +874,11 @@
                 var stepIn = (t && (t.input_tokens != null || t.input != null)) ? (t.input_tokens != null ? t.input_tokens : t.input) : 0;
                 var stepOut = (t && (t.output_tokens != null || t.output != null)) ? (t.output_tokens != null ? t.output_tokens : t.output) : 0;
                 stepLabel += " — " + stepIn + " in · " + stepOut + " out";
-                html += "<div class=\"accordion-item\"><h2 class=\"accordion-header\"><button class=\"accordion-button collapsed\" type=\"button\" data-bs-toggle=\"collapse\" data-bs-target=\"#" + id + "\">" + stepLabel.replace(/</g, "&lt;").replace(/>/g, "&gt;") + "</button></h2>";
                 var bodyText = thoughtToText(log.thought);
-                html += "<div id=\"" + id + "\" class=\"accordion-collapse collapse\" data-bs-parent=\"#agentLogsAccordion\"><div class=\"accordion-body\"><pre class=\"mb-0\" style=\"white-space: pre-wrap;\">" + (bodyText ? bodyText.replace(/</g, "&lt;").replace(/>/g, "&gt;") : "") + "</pre></div></div></div>";
+                html += "<details class=\"rounded-concierge border border-slate-200 bg-white\"><summary class=\"cursor-pointer px-3 py-2 text-sm font-medium\">" + esc(stepLabel) + "</summary>";
+                html += "<pre class=\"max-h-80 overflow-auto whitespace-pre-wrap border-t border-slate-100 p-3 text-xs\">" + esc(bodyText) + "</pre></details>";
             });
-            html += "</div>";
+            html += "</div></div>";
         }
         statusBody.innerHTML = html;
     }
@@ -642,20 +933,33 @@
         default: { steps: ["writer", "ats_judge", "recruiter_judge"] },
         recruiter_first: { steps: ["recruiter_judge", "writer", "ats_judge", "recruiter_judge"] }
     };
+    function getWorkflowStepsArray() {
+        var sel = document.getElementById("workflow-preset");
+        if (!sel) return workflowPresets.default.steps;
+        var val = sel.value;
+        if (val.indexOf("wf_") === 0 && sel.selectedOptions && sel.selectedOptions.length) {
+            var opt = sel.selectedOptions[0];
+            var stepsJson = opt.getAttribute("data-steps");
+            if (stepsJson) {
+                try {
+                    var parsed = JSON.parse(stepsJson);
+                    if (Array.isArray(parsed) && parsed.length) return parsed;
+                } catch (e) {}
+            }
+        }
+        var preset = workflowPresets[val] || workflowPresets.default;
+        return preset.steps;
+    }
     function applyWorkflowPreset() {
         var sel = document.getElementById("workflow-preset");
         var stepsIn = document.getElementById("workflow-steps-input");
         var loopIn = document.getElementById("loop-to-input");
         if (!sel || !stepsIn || !loopIn) return;
         loopIn.value = "";
-        var val = sel.value;
-        if (val.indexOf("wf_") === 0 && sel.selectedOptions && sel.selectedOptions.length) {
-            var opt = sel.selectedOptions[0];
-            var stepsJson = opt.getAttribute("data-steps");
-            if (stepsJson) stepsIn.value = stepsJson;
-        } else {
-            var preset = workflowPresets[val] || workflowPresets.default;
-            stepsIn.value = JSON.stringify(preset.steps);
+        var steps = getWorkflowStepsArray();
+        stepsIn.value = JSON.stringify(steps);
+        if (typeof window.__optimizerUpdateStepUI === "function") {
+            window.__optimizerUpdateStepUI(steps);
         }
     }
     var wfSel = document.getElementById("workflow-preset");
@@ -673,6 +977,7 @@
             fd.append("file", fileInput.files[0]);
             var submitBtn = optimizerForm.querySelector("button[type=submit]");
             if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Starting…"; }
+            if (typeof window.__optimizerWizardGoTo === "function") window.__optimizerWizardGoTo(3);
             fetch("/api/resume/optimize", { method: "POST", body: fd })
                 .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, status: r.status, data: d }; }).catch(function () { return { ok: r.ok, status: r.status, data: null }; }); })
                 .then(function (result) {
@@ -693,8 +998,9 @@
                     var statusUrl = "/resume/status/" + rid + "/";
                     statusContainer.setAttribute("data-resume-id", rid);
                     statusContainer.setAttribute("data-status-url", statusUrl);
-                    document.getElementById("optimizer-status-placeholder") && document.getElementById("optimizer-status-placeholder").remove();
-                    statusBody.innerHTML = "<p class=\"text-muted mb-2\">Starting…</p>";
+                    var ph = document.getElementById("optimizer-status-placeholder");
+                    if (ph) ph.remove();
+                    statusBody.innerHTML = "<p class=\"text-sm text-slate-500\">Starting…</p>";
                     fetch(statusUrl, { headers: { "X-Requested-With": "XMLHttpRequest" } })
                         .then(function (r) { return r.ok ? r.json() : null; })
                         .then(function (data) {
@@ -711,4 +1017,3 @@
 })();
 </script>
 {% endblock %}
-

@@ -1,9 +1,19 @@
+"""
+Server-rendered pages: GET templates and POST handlers that redirect (often with messages).
+
+Form-based flows live here (tracks/resumes, automation, settings, optimizer-adjacent pages).
+JSON/HTMX/async actions use Django Ninja in `resume_app.api` (optimizer, LLM, workflows) and
+`resume_app.jobs_api` (job search, pipeline, preferences). See `resume_app/docs/ARCHITECTURE_UI.md`.
+"""
 import json
+from datetime import timedelta
+from urllib.parse import urlencode
 
 from django.contrib import messages
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404, render, redirect
 from django.urls import reverse
+from django.db import models
 
 from ninja.errors import HttpError
 
@@ -30,34 +40,79 @@ from .jobs_api import (
     jobs_save as api_jobs_save,
     jobs_unsave as api_jobs_unsave,
     jobs_mark_applied as api_jobs_mark_applied,
-    jobs_run_keyword_search as api_jobs_run_keyword_search,
     get_focus_breakdown,
     get_focus_sentence_alignment,
     JobSearchRequest,
     MarkAppliedRequest,
-    KeywordEntry,
-    RunKeywordSearchRequest,
 )
+from .pipeline_board import applying_view, done_view, pipeline_view, vetting_view
+from .models import (
+    JobListingAction,
+    PipelineEntry,
+    JobSearchTask,
+    JobSearchTaskRun,
+    Track,
+    JobListingEmbedding,
+)
+from .preference import invalidate_preference_cache, invalidate_disliked_embeddings_cache
+from .job_sources import DEFAULT_SITE_NAMES
+from .tasks import run_job_search_task, get_next_run_at, validate_cron
+from .utils import cron_to_short_description
+from .huey_dashboard import PERIODIC_TASKS, get_periodic_task_info, get_periodic_task_wrapper
+from .prompt_store import get_effective_prompts, save_prompts_to_profile
+from .llm_session import (
+    get_active_llm_provider as _get_active_llm_provider,
+    get_provider_preferences as _get_provider_preferences,
+    get_provider_preference_rows as _get_provider_preference_rows,
+    set_active_provider as _set_active_llm_provider,
+)
+from django.utils import timezone
+from django.core.exceptions import ValidationError
 
 
-def _get_active_llm_provider(request):
-    """Return the provider selected in Settings, or the first connected provider."""
-    from .models import LLMProviderConfig
-
-    active_provider = (request.session.get("active_llm_provider") or "").strip()
-    connected = list(
-        LLMProviderConfig.objects.filter(encrypted_api_key__isnull=False)
-        .exclude(encrypted_api_key="")
-        .order_by("provider")
-        .values_list("provider", flat=True)
-    )
-    if active_provider and active_provider in connected:
-        return active_provider
-    if connected:
-        request.session["active_llm_provider"] = connected[0]
-        request.session.modified = True
-        return connected[0]
-    return None
+def _parse_task_form(request, default_track: str, valid_track_slugs: set):
+    """
+    Parse shared job task form fields from POST. Returns (data, errors).
+    data: dict with name, search_term, location, track, jobs_to_fetch, frequency, start_time, site_name.
+    errors: list of message strings; if non-empty, data may be incomplete.
+    """
+    name = (request.POST.get("name") or "").strip()
+    search_term = (request.POST.get("search_term") or "").strip()
+    if not search_term:
+        return {}, ["Search term is required."]
+    location = (request.POST.get("location") or "").strip()
+    raw_track = (request.POST.get("track") or "").strip().lower()
+    track = raw_track if raw_track in valid_track_slugs else default_track
+    try:
+        jobs_to_fetch = max(10, min(200, int(request.POST.get("jobs_to_fetch") or 50)))
+    except ValueError:
+        jobs_to_fetch = 50
+    frequency = (request.POST.get("frequency") or "0 9 * * *").strip()
+    try:
+        validate_cron(frequency)
+    except ValueError as e:
+        return {}, [str(e)]
+    start_time = None
+    start_time_str = (request.POST.get("start_time") or "").strip()
+    if start_time_str:
+        try:
+            from datetime import datetime
+            start_time = datetime.strptime(start_time_str, "%H:%M").time()
+        except ValueError:
+            pass
+    site_name = request.POST.getlist("site_name") or ["indeed"]
+    if not site_name:
+        site_name = ["indeed"]
+    return {
+        "name": name,
+        "search_term": search_term,
+        "location": location,
+        "track": track,
+        "jobs_to_fetch": jobs_to_fetch,
+        "frequency": frequency,
+        "start_time": start_time,
+        "site_name": site_name,
+    }, []
 
 
 def optimizer_view(request):
@@ -70,9 +125,9 @@ def optimizer_view(request):
     """
     selected_provider = _get_active_llm_provider(request)
 
-    # UserResume id (from Match / job search)
+    # UserResume id (from Match / job search) — do not use for OptimizedResume PK; use opt_id for that.
     resume_id = request.GET.get("resume_id")
-    # OptimizedResume id (for viewing existing runs)
+    # OptimizedResume id: loads status, agent logs, Word/PDF download in the status card.
     opt_id = request.GET.get("opt_id")
     job_id = request.GET.get("job_id")
     prefill_job_description = ""
@@ -118,19 +173,16 @@ def optimizer_view(request):
     else:
         llm_key_error = "No LLM provider configured. Choose one in Settings."
 
-    # Prompts: keep last-edited values in session, otherwise load defaults from API
-    prompts = request.session.get("optimizer_prompts")
-    if not prompts:
-        try:
-            prompts_obj = api_get_prompts(request)
-            prompts = {
-                "writer": prompts_obj["writer"],
-                "ats_judge": prompts_obj["ats_judge"],
-                "recruiter_judge": prompts_obj["recruiter_judge"],
-            }
-            request.session["optimizer_prompts"] = prompts
-        except Exception:
-            prompts = {"writer": "", "ats_judge": "", "recruiter_judge": ""}
+    # Prompts: persisted in UserPromptProfile (see prompt_store), with code defaults
+    try:
+        full_prompts = get_effective_prompts(request)
+        prompts = {
+            "writer": full_prompts["writer"],
+            "ats_judge": full_prompts["ats_judge"],
+            "recruiter_judge": full_prompts["recruiter_judge"],
+        }
+    except Exception:
+        prompts = {"writer": "", "ats_judge": "", "recruiter_judge": ""}
 
     if request.method == "POST":
         action = request.POST.get("action")
@@ -138,25 +190,56 @@ def optimizer_view(request):
         if action == "reset_prompts":
             try:
                 prompts_obj = api_get_prompts(request)
+                save_prompts_to_profile(
+                    request,
+                    {
+                        "writer": prompts_obj["writer"],
+                        "ats_judge": prompts_obj["ats_judge"],
+                        "recruiter_judge": prompts_obj["recruiter_judge"],
+                        "matching": prompts_obj.get("matching", ""),
+                        "insights": prompts_obj.get("insights", ""),
+                    },
+                )
                 prompts = {
                     "writer": prompts_obj["writer"],
                     "ats_judge": prompts_obj["ats_judge"],
                     "recruiter_judge": prompts_obj["recruiter_judge"],
                 }
-                request.session["optimizer_prompts"] = prompts
                 messages.success(request, "Prompts reset to server defaults.")
             except Exception as e:
                 messages.error(request, f"Could not reset prompts: {e}")
 
         elif action == "save_prompts":
+            merged = get_effective_prompts(request)
+            merged.update(
+                {
+                    "writer": request.POST.get("prompt_writer") or merged.get("writer", ""),
+                    "ats_judge": request.POST.get("prompt_ats_judge") or merged.get("ats_judge", ""),
+                    "recruiter_judge": request.POST.get("prompt_recruiter_judge") or merged.get("recruiter_judge", ""),
+                }
+            )
+            save_prompts_to_profile(request, merged)
             prompts = {
-                "writer": request.POST.get("prompt_writer") or prompts.get("writer", ""),
-                "ats_judge": request.POST.get("prompt_ats_judge") or prompts.get("ats_judge", ""),
-                "recruiter_judge": request.POST.get("prompt_recruiter_judge") or prompts.get("recruiter_judge", ""),
+                "writer": merged["writer"],
+                "ats_judge": merged["ats_judge"],
+                "recruiter_judge": merged["recruiter_judge"],
             }
-            request.session["optimizer_prompts"] = prompts
-            request.session.modified = True
             messages.success(request, "Prompts saved for future runs.")
+
+        elif action == "save_engine_settings":
+            llm_model = (request.POST.get("llm_model") or "").strip()
+            if llm_model:
+                request.session["optimizer_llm_model"] = llm_model
+            temp_raw = (request.POST.get("llm_temperature") or "").strip()
+            if temp_raw != "":
+                try:
+                    t = float(temp_raw)
+                    request.session["optimizer_temperature"] = str(max(0.0, min(2.0, t)))
+                except ValueError:
+                    pass
+            request.session.modified = True
+            messages.success(request, "Engine settings saved for the next run.")
+            return redirect(reverse("resume_optimizer"))
 
         elif action == "run_optimizer":
             from django.core.files.uploadedfile import SimpleUploadedFile
@@ -186,13 +269,21 @@ def optimizer_view(request):
             rate_limit_delay = (request.POST.get("rate_limit_delay") or "").strip()
             max_iterations = (request.POST.get("max_iterations") or "").strip()
 
-            # Updated prompts from form
+            # Updated prompts from form (persist matching/insights from profile)
+            merged = get_effective_prompts(request)
+            merged.update(
+                {
+                    "writer": request.POST.get("prompt_writer") or merged.get("writer", ""),
+                    "ats_judge": request.POST.get("prompt_ats_judge") or merged.get("ats_judge", ""),
+                    "recruiter_judge": request.POST.get("prompt_recruiter_judge") or merged.get("recruiter_judge", ""),
+                }
+            )
+            save_prompts_to_profile(request, merged)
             prompts = {
-                "writer": request.POST.get("prompt_writer") or prompts.get("writer", ""),
-                "ats_judge": request.POST.get("prompt_ats_judge") or prompts.get("ats_judge", ""),
-                "recruiter_judge": request.POST.get("prompt_recruiter_judge") or prompts.get("recruiter_judge", ""),
+                "writer": merged["writer"],
+                "ats_judge": merged["ats_judge"],
+                "recruiter_judge": merged["recruiter_judge"],
             }
-            request.session["optimizer_prompts"] = prompts
 
             if not llm_key_stored:
                 messages.error(request, "No API key stored for this provider. Connect an API key before running.")
@@ -286,6 +377,15 @@ def optimizer_view(request):
     saved_workflows = list(OptimizerWorkflow.objects.all())
     for w in saved_workflows:
         w.steps_json = json.dumps(w.steps)
+    optimized_resume_id = None
+    if opt_id:
+        try:
+            optimized_resume_id = int(opt_id)
+        except (ValueError, TypeError):
+            pass
+    wizard_initial_step = 1
+    if optimized_resume_id or (status_data and status_data.get("status")):
+        wizard_initial_step = 3
     context = {
         "selected_provider": selected_provider,
         "llm_models": llm_models,
@@ -295,22 +395,34 @@ def optimizer_view(request):
         "llm_key_error": llm_key_error,
         "prompts": prompts,
         "resume_id": resume_id,
+        "optimized_resume_id": optimized_resume_id,
         "status": status_data,
         "prefill_job_description": prefill_job_description,
         "prefill_resume_id": prefill_resume_id,
         "prefill_resume_name": prefill_resume_name,
         "job_description_value": job_description_value,
         "saved_workflows": saved_workflows,
+        "optimizer_temperature": request.session.get("optimizer_temperature", "0.7"),
+        "wizard_initial_step": wizard_initial_step,
     }
     return render(request, "resume_app/optimizer.html", context)
 
 
 def settings_view(request):
     """
-    Settings / Integrations: manage LLM provider API keys in one place.
-    Used by Resume Optimizer and other tools that need LLM access.
+    Settings: LLM integrations (tab) and app automation thresholds (tab).
     """
-    from .models import LLMProviderConfig
+    from .models import (
+        AppAutomationSettings,
+        LLMProviderConfig,
+        LLMProviderPreference,
+        OptimizerWorkflow,
+        Track,
+    )
+    from .crypto import decrypt_api_key
+    from .llm_factory import get_llm
+    from .llm_services import list_models_for_provider
+    from langchain_core.messages import HumanMessage
 
     active_provider = _get_active_llm_provider(request)
     provider_infos = []
@@ -320,26 +432,210 @@ def settings_view(request):
             "name": p,
             "key_stored": bool(config and config.encrypted_api_key),
             "is_active": p == active_provider,
+            "priority": config.priority if config else 100,
+            "default_model": config.default_model if config else "",
         })
 
     if request.method == "POST":
         action = request.POST.get("action")
+        if action == "refresh_provider_models":
+            cached: dict[str, list] = {}
+            for cfg in _get_provider_preferences():
+                if not cfg.encrypted_api_key:
+                    continue
+                try:
+                    key = decrypt_api_key(cfg.encrypted_api_key)
+                    if key:
+                        cached[cfg.provider] = list(list_models_for_provider(cfg.provider, key))
+                    else:
+                        cached[cfg.provider] = []
+                except Exception:
+                    cached[cfg.provider] = []
+            request.session["settings_provider_models_map"] = cached
+            request.session.modified = True
+            messages.success(
+                request,
+                "Loaded model lists from providers. If a provider timed out, try again.",
+            )
+            return redirect(reverse("settings") + "?tab=llm")
+        if action == "save_app_automation":
+            automation = AppAutomationSettings.get_solo()
+            automation.pipeline_to_vetting_enabled = bool(
+                request.POST.get("pipeline_to_vetting_enabled")
+            )
+            automation.vetting_to_applying_enabled = bool(
+                request.POST.get("vetting_to_applying_enabled")
+            )
+            try:
+                automation.pipeline_preference_margin_min = int(
+                    (request.POST.get("pipeline_preference_margin_min") or "0").strip()
+                )
+            except ValueError:
+                messages.error(request, "Pref margin threshold must be a whole number.")
+                return redirect(reverse("settings") + "?tab=app")
+            try:
+                vip = int(
+                    (request.POST.get("vetting_interview_probability_min") or "70").strip()
+                )
+            except ValueError:
+                messages.error(request, "Interview probability threshold must be a whole number.")
+                return redirect(reverse("settings") + "?tab=app")
+            if vip < 0 or vip > 100:
+                messages.error(request, "Interview probability must be between 0 and 100.")
+                return redirect(reverse("settings") + "?tab=app")
+            automation.vetting_interview_probability_min = vip
+            raw_wf = (request.POST.get("applying_optimizer_workflow") or "").strip()
+            if raw_wf:
+                try:
+                    automation.applying_optimizer_workflow = OptimizerWorkflow.objects.get(pk=int(raw_wf))
+                except (ValueError, OptimizerWorkflow.DoesNotExist):
+                    messages.error(request, "Invalid optimizer workflow selection.")
+                    return redirect(reverse("settings") + "?tab=app")
+            else:
+                automation.applying_optimizer_workflow = None
+            automation.save(
+                update_fields=[
+                    "pipeline_to_vetting_enabled",
+                    "pipeline_preference_margin_min",
+                    "vetting_to_applying_enabled",
+                    "vetting_interview_probability_min",
+                    "applying_optimizer_workflow",
+                    "updated_at",
+                ]
+            )
+            messages.success(request, "App automation settings saved.")
+            return redirect(reverse("settings") + "?tab=app")
+        if action == "dedupe_pipeline":
+            from .job_dedupe import dedupe_pipeline_entries
+
+            track = (request.POST.get("dedupe_track") or "*").strip().lower()
+            stage = (request.POST.get("dedupe_stage") or "all").strip().lower()
+            include_done = bool(request.POST.get("dedupe_include_done"))
+            try:
+                result = dedupe_pipeline_entries(
+                    track_slug=track,
+                    stage=stage,
+                    include_done=include_done,
+                )
+            except ValueError as e:
+                messages.error(request, str(e))
+                return redirect(reverse("settings") + "?tab=app")
+
+            n = int(result.get("entries_removed", 0))
+            g = int(result.get("duplicate_groups", 0))
+            if n == 0:
+                messages.info(request, "No duplicate groups found for the selected scope.")
+            else:
+                messages.success(
+                    request,
+                    f"Removed {n} duplicate pipeline row(s) across {g} group(s).",
+                )
+            return redirect(reverse("settings") + "?tab=app")
+        if action == "save_provider_preferences":
+            ping_prompt = "Respond with exactly: OK"
+            ping_results = []
+            remove_ids = set()
+            for rid in request.POST.getlist("remove_pref_id"):
+                try:
+                    remove_ids.add(int(rid))
+                except (TypeError, ValueError):
+                    pass
+
+            pref_ids = request.POST.getlist("pref_id")
+            pref_providers = request.POST.getlist("pref_provider")
+            pref_models = request.POST.getlist("pref_model")
+            pref_priorities = request.POST.getlist("pref_priority")
+            row_count = max(
+                len(pref_ids),
+                len(pref_providers),
+                len(pref_models),
+                len(pref_priorities),
+            )
+
+            saved_rows = []
+            for i in range(row_count):
+                raw_id = pref_ids[i].strip() if i < len(pref_ids) else ""
+                provider = pref_providers[i].strip() if i < len(pref_providers) else ""
+                model = pref_models[i].strip() if i < len(pref_models) else ""
+                raw_priority = pref_priorities[i].strip() if i < len(pref_priorities) else "100"
+                if not provider:
+                    continue
+                try:
+                    priority = max(0, int(raw_priority or "100"))
+                except ValueError:
+                    messages.error(request, f"Priority for {provider} must be a whole number.")
+                    return redirect(reverse("settings") + "?tab=llm")
+                cfg = (
+                    LLMProviderConfig.objects.filter(provider=provider)
+                    .exclude(encrypted_api_key="")
+                    .first()
+                )
+                if not cfg:
+                    continue
+                pref_obj = None
+                if raw_id:
+                    try:
+                        rid = int(raw_id)
+                        if rid in remove_ids:
+                            LLMProviderPreference.objects.filter(id=rid).delete()
+                            continue
+                        pref_obj = LLMProviderPreference.objects.filter(id=rid).first()
+                    except (TypeError, ValueError):
+                        pref_obj = None
+                if pref_obj is None:
+                    pref_obj = LLMProviderPreference()
+                pref_obj.provider_config = cfg
+                pref_obj.model = model
+                pref_obj.priority = priority
+                pref_obj.save()
+                saved_rows.append(pref_obj)
+
+            if remove_ids:
+                LLMProviderPreference.objects.filter(id__in=remove_ids).delete()
+
+            for row in saved_rows:
+                cfg = row.provider_config
+                model = (row.model or cfg.default_model or "").strip()
+                if cfg.encrypted_api_key and model:
+                    try:
+                        api_key_decrypted = decrypt_api_key(cfg.encrypted_api_key)
+                        llm = get_llm(cfg.provider, api_key_decrypted, model=model)
+                        resp = llm.invoke([HumanMessage(content=ping_prompt)])
+                        text = (getattr(resp, "content", None) or str(resp)).strip()
+                        if text.upper().startswith("OK"):
+                            ping_results.append(f"{cfg.provider}/{model}: OK")
+                        else:
+                            ping_results.append(f"{cfg.provider}/{model}: unexpected response")
+                    except Exception as e:
+                        ping_results.append(f"{cfg.provider}/{model}: failed ({e})")
+            messages.success(request, "LLM provider preference list saved.")
+            for line in ping_results:
+                if line.endswith(": OK"):
+                    messages.success(request, f"Connectivity check passed — {line}")
+                else:
+                    messages.warning(request, f"Connectivity check — {line}")
+            return redirect(reverse("settings") + "?tab=llm")
         if action == "connect":
             provider = (request.POST.get("provider") or "").strip()
             api_key = (request.POST.get("api_key") or "").strip()
             if not provider or provider not in LLM_PROVIDERS:
                 messages.error(request, "Invalid provider.")
             elif not api_key:
-                messages.error(request, "Enter an API key before connecting.")
+                if provider == "Ollama Local":
+                    messages.error(request, "Enter the Ollama host/IP before connecting.")
+                else:
+                    messages.error(request, "Enter an API key before connecting.")
             else:
                 try:
                     had_active_provider = bool(_get_active_llm_provider(request))
                     api_llm_connect(request, ConnectRequest(provider=provider, api_key=api_key))
                     if not had_active_provider:
+                        _set_active_llm_provider(provider)
                         request.session["active_llm_provider"] = provider
                         request.session.modified = True
+                    request.session.pop("settings_provider_models_map", None)
                     messages.success(request, f"API key for {provider} validated and saved.")
-                    return redirect(reverse("settings"))
+                    return redirect(reverse("settings") + "?tab=llm")
                 except HttpError as e:
                     messages.error(request, str(e))
         elif action == "set_active_provider":
@@ -348,57 +644,173 @@ def settings_view(request):
             if not valid_connected:
                 messages.error(request, "Choose a connected provider.")
             else:
+                _set_active_llm_provider(provider)
                 request.session["active_llm_provider"] = provider
                 request.session.modified = True
                 messages.success(request, f"{provider} is now the active provider.")
-                return redirect(reverse("settings"))
+                return redirect(reverse("settings") + "?tab=llm")
 
+    tab = (request.GET.get("tab") or "llm").strip().lower()
+    if tab not in ("llm", "app"):
+        tab = "llm"
+    provider_preference_list = list(_get_provider_preferences())
+    connected_provider_names = [cfg.provider for cfg in provider_preference_list]
+    pref_rows = list(_get_provider_preference_rows().order_by("priority", "id"))
+    if not pref_rows and connected_provider_names:
+        for cfg in provider_preference_list:
+            LLMProviderPreference.objects.create(
+                provider_config=cfg,
+                model=cfg.default_model or "",
+                priority=cfg.priority,
+            )
+        pref_rows = list(_get_provider_preference_rows().order_by("priority", "id"))
+    session_models = request.session.get("settings_provider_models_map")
+    if not isinstance(session_models, dict):
+        session_models = {}
+    provider_preference_rows = []
+    provider_models_map: dict[str, list] = {}
+    for pref in pref_rows:
+        cfg = pref.provider_config
+        models = list(session_models.get(cfg.provider) or [])
+        provider_models_map[cfg.provider] = models
+        provider_preference_rows.append({"pref": pref, "cfg": cfg, "models": models})
+    for cfg in provider_preference_list:
+        if cfg.provider not in provider_models_map:
+            provider_models_map[cfg.provider] = list(session_models.get(cfg.provider) or [])
+
+    tracks_for_dedupe = list(Track.ensure_baseline())
     context = {
         "provider_infos": provider_infos,
+        "provider_preference_list": provider_preference_list,
+        "provider_preference_rows": provider_preference_rows,
+        "connected_provider_names": connected_provider_names,
+        "provider_models_map": provider_models_map,
         "active_provider": active_provider,
+        "settings_tab": tab,
+        "app_automation": AppAutomationSettings.get_solo(),
+        "optimizer_workflows": list(OptimizerWorkflow.objects.all().order_by("name")),
+        "dedupe_tracks": tracks_for_dedupe,
     }
     return render(request, "resume_app/settings.html", context)
 
 
+def llm_test_view(request):
+    """
+    Manual test page for LLM connectivity + response rendering.
+
+    Uses stored `LLMProviderConfig` keys where possible (including Ollama Local host/IP).
+    """
+    from .models import LLMProviderConfig
+    from .crypto import decrypt_api_key
+    from .llm_factory import get_llm
+    from langchain_core.messages import HumanMessage
+    from .llm_services import list_models_for_provider, DEFAULT_MODELS
+
+    provider = (request.GET.get("provider") or "").strip()
+    if not provider:
+        provider = request.session.get("active_llm_provider") or _get_active_llm_provider(request) or ""
+    if not provider:
+        provider = "Ollama Local" if LLMProviderConfig.objects.filter(provider="Ollama Local").exists() else next(iter(LLM_PROVIDERS))
+
+    if provider not in LLM_PROVIDERS:
+        provider = next(iter(LLM_PROVIDERS))
+
+    config = LLMProviderConfig.objects.filter(provider=provider).first()
+    api_key_decrypted = ""
+    models = []
+    error = None
+    selected_model = (request.GET.get("model") or "").strip() if hasattr(request, "GET") else ""
+    if config and config.encrypted_api_key:
+        api_key_decrypted = decrypt_api_key(config.encrypted_api_key)
+        try:
+            models = list_models_for_provider(provider, api_key_decrypted)
+        except Exception as e:
+            error = str(e)
+            models = []
+    if not selected_model:
+        selected_model = (config.default_model or "").strip() if config else ""
+    if not selected_model:
+        selected_model = DEFAULT_MODELS.get(provider) or (models[0] if models else "")
+
+    if request.method == "POST":
+        provider = (request.POST.get("provider") or provider).strip()
+        prompt = (request.POST.get("prompt") or "").strip()
+        model = (request.POST.get("model") or selected_model).strip()
+        if provider not in LLM_PROVIDERS:
+            error = "Invalid provider."
+        elif not prompt:
+            error = "Prompt is required."
+        else:
+            config = LLMProviderConfig.objects.filter(provider=provider).first()
+            if not config or not config.encrypted_api_key:
+                error = f"No stored connection for {provider}. Go to Settings and connect first."
+            else:
+                api_key_decrypted = decrypt_api_key(config.encrypted_api_key)
+                try:
+                    llm = get_llm(provider, api_key_decrypted, model=model or None)
+                    resp = llm.invoke([HumanMessage(content=prompt)])
+                    # LangChain chat models typically expose `content`
+                    response_text = getattr(resp, "content", None) or str(resp)
+                    return render(
+                        request,
+                        "resume_app/llm_test.html",
+                        {
+                            "provider": provider,
+                            "providers": sorted(LLM_PROVIDERS),
+                            "models": models,
+                            "selected_model": model,
+                            "prompt": prompt,
+                            "response_text": response_text,
+                            "error": None,
+                        },
+                    )
+                except Exception as e:
+                    error = str(e)
+
+    return render(
+        request,
+        "resume_app/llm_test.html",
+        {
+            "provider": provider,
+            "providers": sorted(LLM_PROVIDERS),
+            "models": models,
+            "selected_model": selected_model,
+            "prompt": "",
+            "response_text": None,
+            "error": error,
+        },
+    )
+
+
 def prompt_library_view(request):
     """
-    Prompt Library: edit and manage Writer / ATS Judge / Recruiter / Matching prompt templates in one place.
-    Saved prompts are stored in session and used by the Resume Optimizer and Job Search.
+    Prompt Library: edit Writer / ATS / Recruiter / Matching / Insights templates.
+    Values are stored in UserPromptProfile (see prompt_store).
     """
-    prompts = request.session.get("optimizer_prompts")
-    if prompts is not None:
-        if "matching" not in prompts:
-            prompts = {**prompts, "matching": ""}
-        if "insights" not in prompts:
-            prompts = {**prompts, "insights": ""}
-        request.session["optimizer_prompts"] = prompts
-    if not prompts:
-        try:
-            prompts_obj = api_get_prompts(request)
-            prompts = {
-                "writer": prompts_obj["writer"],
-                "ats_judge": prompts_obj["ats_judge"],
-                "recruiter_judge": prompts_obj["recruiter_judge"],
-                "matching": prompts_obj.get("matching", ""),
-                "insights": prompts_obj.get("insights", ""),
-            }
-            request.session["optimizer_prompts"] = prompts
-        except Exception:
-            prompts = {"writer": "", "ats_judge": "", "recruiter_judge": "", "matching": "", "insights": ""}
+    try:
+        prompts = get_effective_prompts(request)
+    except Exception:
+        prompts = {
+            "writer": "",
+            "ats_judge": "",
+            "recruiter_judge": "",
+            "matching": "",
+            "insights": "",
+        }
 
     if request.method == "POST":
         action = request.POST.get("action")
         if action == "save_prompts":
+            base = get_effective_prompts(request)
             prompts = {
-                "writer": request.POST.get("prompt_writer") or prompts.get("writer", ""),
-                "ats_judge": request.POST.get("prompt_ats_judge") or prompts.get("ats_judge", ""),
-                "recruiter_judge": request.POST.get("prompt_recruiter_judge") or prompts.get("recruiter_judge", ""),
-                "matching": request.POST.get("prompt_matching") or prompts.get("matching", ""),
-                "insights": request.POST.get("prompt_insights") or prompts.get("insights", ""),
+                "writer": request.POST.get("prompt_writer") or base.get("writer", ""),
+                "ats_judge": request.POST.get("prompt_ats_judge") or base.get("ats_judge", ""),
+                "recruiter_judge": request.POST.get("prompt_recruiter_judge") or base.get("recruiter_judge", ""),
+                "matching": request.POST.get("prompt_matching") or base.get("matching", ""),
+                "insights": request.POST.get("prompt_insights") or base.get("insights", ""),
             }
-            request.session["optimizer_prompts"] = prompts
-            request.session.modified = True
-            messages.success(request, "Prompts saved. They will be used by the Resume Optimizer.")
+            save_prompts_to_profile(request, prompts)
+            messages.success(request, "Prompts saved. They will be used by the Resume Optimizer and Job Search.")
             return redirect(reverse("prompt_library"))
         if action == "reset_prompts":
             try:
@@ -410,7 +822,7 @@ def prompt_library_view(request):
                     "matching": prompts_obj.get("matching", ""),
                     "insights": prompts_obj.get("insights", ""),
                 }
-                request.session["optimizer_prompts"] = prompts
+                save_prompts_to_profile(request, prompts)
                 messages.success(request, "Prompts reset to server defaults.")
                 return redirect(reverse("prompt_library"))
             except Exception as e:
@@ -581,7 +993,7 @@ def job_search_view(request):
                         messages.success(request, "Disqualifier removed.")
                     except ValueError:
                         pass
-            elif action in {"like", "dislike", "save", "unsave", "match", "mark_applied"} and not job_id:
+            elif action in {"like", "dislike", "save", "unsave", "mark_applied"} and not job_id:
                 messages.error(request, "Missing job id for action.")
             elif action == "like":
                 api_jobs_like(request, job_listing_id=int(job_id))
@@ -617,6 +1029,11 @@ def job_search_view(request):
     show_excluded = view_mode == "excluded"
     query = (request.GET.get("q") or "").strip()
     location = (request.GET.get("location") or "").strip()
+    selected_site_names = [s.strip().lower() for s in request.GET.getlist("site_name") if (s or "").strip()]
+    allowed_site_names = ["indeed", "linkedin", "glassdoor", "google", "zip_recruiter"]
+    selected_site_names = [s for s in selected_site_names if s in allowed_site_names]
+    if not selected_site_names:
+        selected_site_names = list(DEFAULT_SITE_NAMES)
     resume_id_raw = (request.GET.get("resume_id") or "").strip()
     # Treat blank or explicit "None" as no resume selected
     if not resume_id_raw or resume_id_raw.lower() == "none":
@@ -672,10 +1089,27 @@ def job_search_view(request):
     disqualifier_prompt = None
     current_disqualifiers = []
 
-    # Track / profile: IC vs Management
-    raw_track = (request.GET.get("track") or request.session.get("job_search_track") or "ic").lower()
-    if raw_track not in ("ic", "mgmt"):
-        raw_track = "ic"
+    # Track / profile: dynamic list (e.g. IC vs Management vs custom).
+    tracks_qs = Track.ensure_baseline()
+    available_slugs = list(tracks_qs.values_list("slug", flat=True))
+    raw_track_param = (request.GET.get("track") or "").strip().lower()
+    raw_track = raw_track_param or (request.session.get("job_search_track") or "").strip().lower()
+    if not raw_track or raw_track not in available_slugs:
+        raw_track = Track.get_default_slug()
+
+    # Resume -> track association (default only):
+    # If a resume has a stored track AND the user did not explicitly pick a track in this request,
+    # default the page track to the resume's stored track.
+    if resume_id_val is not None and not raw_track_param:
+        try:
+            from .models import UserResume
+
+            selected_resume = UserResume.objects.filter(id=resume_id_val).first()
+            if selected_resume and selected_resume.track and selected_resume.track in available_slugs:
+                raw_track = selected_resume.track
+        except Exception:
+            # Best-effort; never block job search.
+            pass
     request.session["job_search_track"] = raw_track
     request.session.modified = True
 
@@ -693,7 +1127,7 @@ def job_search_view(request):
             payload = JobSearchRequest(
                 search_term=query,
                 location=location or None,
-                site_name=None,
+                site_name=selected_site_names,
                 results_wanted=results_wanted_val,
                 resume_id=resume_id_val,
                 sort=sort_param,
@@ -702,15 +1136,12 @@ def job_search_view(request):
                 track=raw_track,
             )
             search_results = api_jobs_search(request, payload=payload)
-            # Always pass a dict so template has .jobs and .total even when empty
             jobs_list = getattr(search_results, "jobs", None) or []
             search_results = {
-                "jobs": [
-                    j.model_dump() if hasattr(j, "model_dump") else vars(j)
-                    for j in jobs_list
-                ],
+                "jobs": jobs_list,
                 "total": getattr(search_results, "total", 0) or len(jobs_list),
             }
+        # Empty q: do not replay session-cached results; user must submit a search.
     except HttpError as e:
         messages.error(request, str(e))
     except Exception as e:
@@ -752,6 +1183,7 @@ def job_search_view(request):
     sort_param = (request.GET.get("sort") or "focus").strip().lower()
     if sort_param not in ("focus", "resume"):
         sort_param = "focus"
+    preserved_site_query = urlencode([("site_name", s) for s in selected_site_names])
     context = {
         "resumes": resumes,
         "query": query,
@@ -774,17 +1206,504 @@ def job_search_view(request):
         "job_search_llm_default_model": job_search_llm_default_model,
         "job_search_llm_model": job_search_llm_model,
         "job_search_track": raw_track,
+        "job_tracks": list(tracks_qs),
+        "site_options": allowed_site_names,
+        "selected_site_names": selected_site_names,
+        "preserved_site_query": preserved_site_query,
     }
     return render(request, "resume_app/jobs_search.html", context)
 
 
+def job_tasks_view(request):
+    """List job search tasks with next run and run history."""
+    tracks_qs = Track.ensure_baseline()
+    track_list = list(tracks_qs)
+    selected_slug = (request.GET.get("track") or "").strip().lower()
+    if not selected_slug and track_list:
+        selected_slug = track_list[0].slug
+    selected_track = None
+    if selected_slug:
+        selected_track = next((t for t in track_list if t.slug == selected_slug), None)
+    if not selected_track and track_list:
+        selected_track = track_list[0]
+        selected_slug = selected_track.slug
+
+    tasks_qs = JobSearchTask.objects.all().order_by("name", "id")
+    if selected_slug:
+        tasks_qs = tasks_qs.filter(track=selected_slug)
+    tasks = list(tasks_qs)
+    for t in tasks:
+        t.recent_runs = list(t.runs.all()[:10])
+        t.last_run = t.recent_runs[0] if t.recent_runs else None
+        t.schedule_description = cron_to_short_description(t.frequency or "")
+
+    context = {
+        "tracks": track_list,
+        "selected_track": selected_track,
+        "selected_track_slug": selected_slug,
+        "tasks": tasks,
+    }
+    return render(request, "resume_app/job_automation.html", context)
+
+
+def huey_dashboard_view(request):
+    """UI for monitoring Huey queue depth and controlling periodic tasks (pause/restore)."""
+
+    from huey.contrib.djhuey import HUEY
+
+    immediate = bool(getattr(HUEY, "immediate", False))
+    queue_stats = None
+    queue_stats_error = None
+    if not immediate:
+        try:
+            storage = HUEY.storage
+            queue_stats = {
+                "pending": storage.queue_size(),
+                "scheduled": storage.schedule_size(),
+                "results": storage.result_store_size(),
+            }
+        except Exception as e:
+            queue_stats_error = str(e)
+
+    periodic_rows: list[dict[str, object]] = []
+    now = timezone.now()
+    for info in PERIODIC_TASKS:
+        task_fn_name = info["task_fn_name"]
+        wrapper = get_periodic_task_wrapper(task_fn_name)
+        if wrapper is None:
+            # Shouldn't happen unless tasks.py was modified.
+            continue
+
+        is_revoked = False
+        try:
+            is_revoked = bool(wrapper.is_revoked())
+        except Exception:
+            is_revoked = False
+
+        next_run_at = None
+        try:
+            next_run_at = get_next_run_at(info["cron_string"], from_time=now)
+        except Exception:
+            next_run_at = None
+
+        periodic_rows.append(
+            {
+                "task_fn_name": task_fn_name,
+                "display_name": info["display_name"],
+                "cron_string": info["cron_string"],
+                "schedule_description": cron_to_short_description(info["cron_string"]),
+                "description": info["description"],
+                "is_revoked": is_revoked,
+                "next_run_at": next_run_at,
+            }
+        )
+
+    recent_runs = (
+        JobSearchTaskRun.objects.select_related("task")
+        .order_by("-started_at")[:10]
+    )
+
+    context = {
+        "immediate": immediate,
+        "queue_stats": queue_stats,
+        "queue_stats_error": queue_stats_error,
+        "periodic_tasks": periodic_rows,
+        "recent_runs": recent_runs,
+    }
+    return render(request, "resume_app/huey_dashboard.html", context)
+
+
+def huey_periodic_revoke_view(request, task_name: str):
+    """Pause a specific Huey periodic task via revoke()."""
+
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+
+    from huey.contrib.djhuey import HUEY
+
+    immediate = bool(getattr(HUEY, "immediate", False))
+    if immediate:
+        messages.error(request, "Huey is in immediate mode; periodic pause controls are disabled.")
+        return redirect("huey_dashboard")
+
+    info = get_periodic_task_info(task_name)
+    if not info:
+        messages.error(request, f"Unknown periodic task: {task_name}")
+        return redirect("huey_dashboard")
+
+    wrapper = get_periodic_task_wrapper(task_name)
+    if wrapper is None:
+        messages.error(request, f"Periodic task not found: {task_name}")
+        return redirect("huey_dashboard")
+
+    try:
+        wrapper.revoke()
+    except Exception as e:
+        messages.error(request, f"Failed to pause task: {e}")
+        return redirect("huey_dashboard")
+
+    messages.success(request, f'Paused: {info["display_name"]}')
+    return redirect("huey_dashboard")
+
+
+def huey_periodic_restore_view(request, task_name: str):
+    """Restore a specific Huey periodic task via restore()."""
+
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+
+    from huey.contrib.djhuey import HUEY
+
+    immediate = bool(getattr(HUEY, "immediate", False))
+    if immediate:
+        messages.error(request, "Huey is in immediate mode; periodic restore controls are disabled.")
+        return redirect("huey_dashboard")
+
+    info = get_periodic_task_info(task_name)
+    if not info:
+        messages.error(request, f"Unknown periodic task: {task_name}")
+        return redirect("huey_dashboard")
+
+    wrapper = get_periodic_task_wrapper(task_name)
+    if wrapper is None:
+        messages.error(request, f"Periodic task not found: {task_name}")
+        return redirect("huey_dashboard")
+
+    try:
+        wrapper.restore()
+    except Exception as e:
+        messages.error(request, f"Failed to restore task: {e}")
+        return redirect("huey_dashboard")
+
+    messages.success(request, f'Restored: {info["display_name"]}')
+    return redirect("huey_dashboard")
+
+
+def huey_flush_queue_view(request):
+    """Flush pending Huey queue (destructive)."""
+
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+
+    from huey.contrib.djhuey import HUEY
+
+    immediate = bool(getattr(HUEY, "immediate", False))
+    if immediate:
+        messages.error(request, "Huey is in immediate mode; there is no Redis queue to flush.")
+        return redirect("huey_dashboard")
+
+    confirm = (request.POST.get("confirm") or "").strip().lower()
+    if confirm != "yes":
+        messages.error(request, "Queue flush cancelled (missing confirmation).")
+        return redirect("huey_dashboard")
+
+    try:
+        storage = HUEY.storage
+        storage.flush_queue()
+    except Exception as e:
+        messages.error(request, f"Failed to flush queue: {e}")
+        return redirect("huey_dashboard")
+
+    messages.success(request, "Huey queue flushed (pending tasks removed).")
+    return redirect("huey_dashboard")
+
+
+def job_task_create_view(request):
+    """Create a new job search task. Sets next_run_at from cron."""
+    tracks_qs = Track.ensure_baseline()
+    track_list = list(tracks_qs)
+    default_track = Track.get_default_slug()
+    if request.method != "POST":
+        context = {
+            "task": None,
+            "form_track": default_track,
+            "job_tracks": track_list,
+            "form_frequency": "0 9 * * *",
+            "form_jobs_to_fetch": 50,
+            "form_site_name": list(DEFAULT_SITE_NAMES),
+            "form_start_time": "",
+        }
+        return render(request, "resume_app/job_task_form.html", context)
+
+    data, errs = _parse_task_form(request, default_track, {t.slug for t in track_list})
+    if errs:
+        for e in errs:
+            messages.error(request, e)
+        return redirect("job_task_create")
+
+    task = JobSearchTask(
+        name=data["name"],
+        search_term=data["search_term"],
+        location=data["location"],
+        track=data["track"],
+        jobs_to_fetch=data["jobs_to_fetch"],
+        frequency=data["frequency"],
+        start_time=data["start_time"],
+        site_name=data["site_name"],
+        is_active=True,
+    )
+    try:
+        task.full_clean()
+    except ValidationError as e:
+        for _k, v in e.message_dict.items():
+            for msg in (v if isinstance(v, list) else [v]):
+                messages.error(request, msg)
+        return redirect("job_task_create")
+    task.next_run_at = get_next_run_at(task.frequency)
+    task.save()
+    messages.success(request, f"Task \"{task.name or task.search_term}\" created. Next run: {task.next_run_at}")
+    return redirect("job_automation")
+
+
+def job_task_edit_view(request, task_id):
+    """Edit a job search task. Optionally update next_run_at."""
+    task = get_object_or_404(JobSearchTask, id=task_id)
+    tracks_qs = Track.ensure_baseline()
+    track_list = list(tracks_qs)
+    if request.method != "POST":
+        context = {
+            "task": task,
+            "form_track": task.track,
+            "job_tracks": track_list,
+            "form_frequency": task.frequency,
+            "form_jobs_to_fetch": task.jobs_to_fetch,
+            "form_site_name": task.site_name or list(DEFAULT_SITE_NAMES),
+            "form_start_time": task.start_time.strftime("%H:%M") if task.start_time else "",
+        }
+        return render(request, "resume_app/job_task_form.html", context)
+
+    data, errs = _parse_task_form(request, Track.get_default_slug(), {t.slug for t in track_list})
+    if errs:
+        for e in errs:
+            messages.error(request, e)
+        return redirect("job_task_edit", task_id=task_id)
+    task.name = data["name"]
+    task.search_term = data["search_term"]
+    task.location = data["location"]
+    task.track = data["track"]
+    task.jobs_to_fetch = data["jobs_to_fetch"]
+    task.frequency = data["frequency"]
+    task.start_time = data["start_time"]
+    task.site_name = data["site_name"]
+    try:
+        task.full_clean()
+    except ValidationError as e:
+        for _k, v in e.message_dict.items():
+            for msg in (v if isinstance(v, list) else [v]):
+                messages.error(request, msg)
+        return redirect("job_task_edit", task_id=task_id)
+    task.save()
+    messages.success(request, "Task updated.")
+    return redirect("job_automation")
+
+
+def job_task_run_now_view(request, task_id):
+    """Enqueue run_job_search_task once (does not change next_run_at)."""
+    task = get_object_or_404(JobSearchTask, id=task_id)
+    run_job_search_task(task_id)
+    messages.success(request, f"Task \"{task.name or task.search_term}\" queued to run now.")
+    return redirect("job_automation")
+
+
+def job_task_toggle_active_view(request, task_id):
+    """Toggle is_active and redirect to task list."""
+    task = get_object_or_404(JobSearchTask, id=task_id)
+    task.is_active = not task.is_active
+    task.save()
+    status = "activated" if task.is_active else "paused"
+    messages.success(request, f"Task \"{task.name or task.search_term}\" {status}.")
+    return redirect("job_automation")
+
+
+def track_list_view(request):
+    """
+    Tracks & resumes page: search tracks (CRUD for Track) and resume PDFs (upload, assign
+    default track, delete). POST `action` distinguishes create_track, upload_resume,
+    assign_resume_tracks, delete_resume.
+    """
+    tracks_qs = Track.ensure_baseline()
+    tracks = list(tracks_qs)
+    default_track_slug = Track.get_default_slug()
+
+    # Keep this bounded: track management should stay snappy even with many resumes.
+    from .models import UserResume
+
+    resumes = list(UserResume.objects.order_by("-uploaded_at")[:200])
+
+    if request.method == "POST":
+        action = (request.POST.get("action") or "create_track").strip()
+
+        if action == "upload_resume":
+            from .models import UserResume
+
+            resume_file = request.FILES.get("resume_file")
+            if not resume_file:
+                messages.error(request, "Please select a PDF resume to upload.")
+                return redirect("track_list")
+
+            track_slug = (request.POST.get("track_slug") or "").strip().lower()
+            track_slugs = {t.slug for t in tracks}
+            if track_slug and track_slug not in track_slugs:
+                messages.error(request, "Invalid track selection.")
+                return redirect("track_list")
+
+            original_name = (getattr(resume_file, "name", "") or "resume.pdf").strip()
+            # Windows sometimes includes path-like names in uploads.
+            original_name = original_name.split("\\")[-1].split("/")[-1].strip()
+            if not original_name.lower().endswith(".pdf"):
+                messages.error(request, "Resume file must be a PDF.")
+                return redirect("track_list")
+            original_name = (original_name or "resume.pdf")[:255]
+
+            UserResume.objects.create(
+                file=resume_file,
+                original_filename=original_name,
+                track=track_slug or "",
+            )
+            messages.success(request, "Resume uploaded.")
+            return redirect("track_list")
+
+        # Delete a resume (and its derived optimization/match rows) from the same Tracks page.
+        if action == "delete_resume":
+            from .models import UserResume
+
+            delete_resume_id_raw = (request.POST.get("delete_resume_id") or "").strip()
+            try:
+                delete_resume_id = int(delete_resume_id_raw)
+            except (ValueError, TypeError):
+                messages.error(request, "Invalid resume id.")
+                return redirect("track_list")
+
+            resume = UserResume.objects.filter(id=delete_resume_id).first()
+            if not resume:
+                messages.error(request, "Resume not found.")
+                return redirect("track_list")
+
+            # Best-effort file cleanup (if storage supports it).
+            try:
+                resume.file.delete(save=False)
+            except Exception:
+                pass
+            resume.delete()
+            messages.success(request, "Resume deleted.")
+            return redirect("track_list")
+
+        if action == "assign_resume_tracks":
+            track_slugs = {t.slug for t in tracks}
+            updated_count = 0
+            for key, value in request.POST.items():
+                if not key.startswith("resume_track_"):
+                    continue
+                rid_raw = key.replace("resume_track_", "", 1)
+                try:
+                    rid = int(rid_raw)
+                except (ValueError, TypeError):
+                    continue
+                new_slug = (value or "").strip().lower()
+                if new_slug and new_slug not in track_slugs:
+                    continue  # ignore invalid slugs
+                updated_count += UserResume.objects.filter(id=rid).update(track=new_slug or "")
+            messages.success(
+                request,
+                f"Updated track assignment for {updated_count} resume(s).",
+            )
+            return redirect("track_list")
+
+        # Default branch: create a new track
+        slug = (request.POST.get("slug") or "").strip().lower()
+        label = (request.POST.get("label") or "").strip()
+        description = (request.POST.get("description") or "").strip()
+        is_default = bool(request.POST.get("is_default"))
+        if not slug:
+            messages.error(request, "Slug is required.")
+        elif not label:
+            messages.error(request, "Label is required.")
+        elif Track.objects.filter(slug=slug).exists():
+            messages.error(request, f"Track with slug '{slug}' already exists.")
+        else:
+            if is_default:
+                Track.objects.update(is_default=False)
+            track = Track.objects.create(
+                slug=slug,
+                label=label,
+                description=description,
+                is_default=is_default,
+            )
+            messages.success(request, f"Track \"{track.label}\" created.")
+            return redirect("track_list")
+
+    context = {
+        "tracks": tracks,
+        "resumes": resumes,
+        "default_track_slug": default_track_slug,
+    }
+    return render(request, "resume_app/tracks.html", context)
+
+
+def track_delete_view(request, slug: str):
+    """
+    Delete a track and cascade-delete associated data:
+    - JobSearchTask for that track
+    - PipelineEntry rows for that track
+    - JobListingAction / JobListingEmbedding rows for that track
+    """
+    if request.method != "POST":
+        return redirect("track_list")
+
+    track = Track.objects.filter(slug=slug).first()
+    if not track:
+        messages.error(request, "Track not found.")
+        return redirect("track_list")
+
+    if Track.objects.count() <= 1:
+        messages.error(request, "Cannot delete the only remaining track.")
+        return redirect("track_list")
+
+    slug_val = track.slug
+
+    # Disassociate any resumes assigned to this track.
+    try:
+        from .models import UserResume
+        UserResume.objects.filter(track=slug_val).update(track="")
+    except Exception:
+        pass
+
+    # Delete scheduled searches for this track
+    JobSearchTask.objects.filter(track=slug_val).delete()
+    # Delete pipeline rows for this track
+    PipelineEntry.objects.filter(track=slug_val).delete()
+    # Delete job actions/embeddings for this track
+    JobListingAction.objects.filter(track=slug_val).delete()
+    JobListingEmbedding.objects.filter(track=slug_val).delete()
+    # Invalidate preference caches so embeddings/centroids are recomputed
+    try:
+        invalidate_preference_cache()
+        invalidate_disliked_embeddings_cache()
+    except Exception:
+        # Best-effort; failure here should not block delete.
+        pass
+
+    was_default = track.is_default
+    label = track.label or track.slug
+    track.delete()
+
+    if was_default:
+        # Ensure we still have a default track.
+        Track.ensure_baseline()
+
+    messages.success(request, f"Track \"{label}\" and its associated tasks/pipeline/actions were deleted.")
+    return redirect("track_list")
+
+
 def focus_breakdown_view(request, job_listing_id: int):
     """Why? page: show title vs role similarity breakdown and resume–job top matches."""
-    # Use the same track (IC vs Management) as the job search page so centroids
-    # and preference margins line up with what you see in Results.
-    raw_track = (request.GET.get("track") or request.session.get("job_search_track") or "ic").lower()
-    if raw_track not in ("ic", "mgmt"):
-        raw_track = "ic"
+    # Use the same track as the job search page so centroids and preference
+    # margins line up with what you see in Results.
+    tracks_qs = Track.ensure_baseline()
+    available_slugs = list(tracks_qs.values_list("slug", flat=True))
+    raw_track = (request.GET.get("track") or request.session.get("job_search_track") or "").strip().lower()
+    if not raw_track or raw_track not in available_slugs:
+        raw_track = Track.get_default_slug()
     request.session["job_search_track"] = raw_track
     request.session.modified = True
 
@@ -831,112 +1750,6 @@ def focus_alignment_view(request, job_listing_id: int, liked_job_id: int):
         )
         return redirect("focus_breakdown", job_listing_id=job_listing_id)
     return render(request, "resume_app/focus_alignment.html", {"alignment": data})
-
-
-def keyword_search_view(request):
-    """
-    Keyword search page.
-    - Configure multiple (keyword, resume) pairs
-    - Run batched searches with fit checks
-    - See applied jobs
-    """
-    # We keep keyword rows in the session; each row is {"keyword": str, "resume_id": int or None}
-    entries = request.session.get("keyword_entries") or []
-
-    if request.method == "POST":
-        action = request.POST.get("action")
-
-        if action == "add_row":
-            entries.append({"keyword": "", "resume_id": None})
-            request.session["keyword_entries"] = entries
-            return redirect("jobs_keywords")
-
-        if action == "remove_row":
-            idx_raw = request.POST.get("index")
-            try:
-                idx = int(idx_raw)
-                if 0 <= idx < len(entries):
-                    entries.pop(idx)
-                    request.session["keyword_entries"] = entries
-            except (TypeError, ValueError):
-                messages.error(request, "Invalid row index.")
-            return redirect("jobs_keywords")
-
-        if action == "run_keywords":
-            # Update entries from form data first
-            new_entries = []
-            row_indices = request.POST.getlist("row_index")
-            for idx_raw in row_indices:
-                kw = (request.POST.get(f"keyword_{idx_raw}") or "").strip()
-                resume_id_raw = request.POST.get(f"resume_id_{idx_raw}") or ""
-                resume_id_val = int(resume_id_raw) if resume_id_raw else None
-                if kw and resume_id_val:
-                    new_entries.append({"keyword": kw, "resume_id": resume_id_val})
-            entries = new_entries
-            request.session["keyword_entries"] = entries
-
-            location = (request.POST.get("location") or "").strip()
-            results_wanted_raw = (request.POST.get("results_wanted") or "").strip()
-            try:
-                results_wanted = int(results_wanted_raw) if results_wanted_raw else 20
-            except ValueError:
-                results_wanted = 20
-
-            if not entries:
-                messages.error(request, "Add at least one keyword and select a resume for each.")
-            else:
-                try:
-                    payload = RunKeywordSearchRequest(
-                        entries=[KeywordEntry(keyword=e["keyword"], resume_id=e["resume_id"]) for e in entries],
-                        location=location or None,
-                        site_name=None,
-                        results_wanted=results_wanted,
-                    )
-                    result = api_jobs_run_keyword_search(request, payload=payload)
-                    request.session["keyword_results"] = [
-                        r.model_dump() if hasattr(r, "model_dump") else r.dict()
-                        for r in result.results
-                    ]
-                    request.session["keyword_errors"] = result.errors
-                    messages.success(request, "Keyword search completed.")
-                except HttpError as e:
-                    messages.error(request, str(e))
-                except Exception as e:
-                    messages.error(request, f"Error running keyword search: {e}")
-            return redirect("jobs_keywords")
-
-    # GET: render page
-    try:
-        resumes = api_jobs_list_resumes(request)
-    except Exception as e:
-        messages.error(request, f"Could not load resumes: {e}")
-        resumes = []
-
-    if not entries:
-        entries = [{"keyword": "", "resume_id": resumes[0].id if resumes else None}]
-        request.session["keyword_entries"] = entries
-
-    keyword_results = request.session.get("keyword_results") or []
-    keyword_errors = request.session.get("keyword_errors") or []
-
-    # Applied jobs list
-    try:
-        applied_matches = api_jobs_matches(request, resume_id=None, min_score=None, status="applied")
-    except HttpError as e:
-        messages.error(request, str(e))
-        applied_matches = []
-    except Exception as e:
-        messages.error(request, f"Error loading applied jobs: {e}")
-        applied_matches = []
-
-    context = {
-        "entries": entries,
-        "resumes": resumes,
-        "keyword_results": keyword_results,
-        "keyword_errors": keyword_errors,
-        "applied_matches": applied_matches,
-    }
-    return render(request, "resume_app/jobs_keywords.html", context)
 
 
 def optimizer_status_view(request, resume_id: int):

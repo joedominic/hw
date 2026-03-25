@@ -1,78 +1,158 @@
 {% load static %}
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="h-full">
 <head>
     <meta charset="utf-8">
-    <title>{% block title %}AI Resume Optimizer{% endblock %}</title>
+    <title>{% block title %}ResumeElite{% endblock %}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link
-        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
-        rel="stylesheet"
-        integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
-        crossorigin="anonymous"
-    >
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        concierge: {
+                            slate: "#0F172A",
+                            canvas: "#F7F9FB",
+                            muted: "#64748B",
+                        },
+                    },
+                    borderRadius: { concierge: "4px" },
+                    fontFamily: {
+                        sans: ["Manrope", "system-ui", "sans-serif"],
+                    },
+                },
+            },
+        };
+    </script>
+    <style>
+        body.concierge-app { font-family: Manrope, system-ui, sans-serif; }
+        dialog.concierge-dialog { margin: auto; max-width: calc(100vw - 2rem); border: none; padding: 0; background: transparent; }
+        dialog.concierge-dialog::backdrop { background: rgb(15 23 42 / 0.45); }
+    </style>
     {% block extra_head %}{% endblock %}
 </head>
-<body class="bg-light">
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
-    <div class="container-fluid">
-        <a class="navbar-brand" href="{% url 'resume_optimizer' %}">AI Resume Optimizer</a>
-        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNavbar">
-            <span class="navbar-toggler-icon"></span>
-        </button>
-        <div class="collapse navbar-collapse" id="mainNavbar">
-            <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-                <li class="nav-item">
-                    <a class="nav-link{% if request.resolver_match.url_name == 'resume_optimizer' %} active{% endif %}"
-                       href="{% url 'resume_optimizer' %}">
-                        Optimizer
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link{% if request.resolver_match.url_name == 'jobs_search' %} active{% endif %}"
-                       href="{% url 'jobs_search' %}">
-                        Job Search
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link{% if request.resolver_match.url_name == 'jobs_keywords' %} active{% endif %}"
-                       href="{% url 'jobs_keywords' %}">
-                        Keyword Search
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link{% if request.resolver_match.url_name == 'prompt_library' %} active{% endif %}"
-                       href="{% url 'prompt_library' %}">
-                        Prompts
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link{% if request.resolver_match.url_name == 'workflow_list' or request.resolver_match.url_name == 'workflow_create' or request.resolver_match.url_name == 'workflow_edit' %} active{% endif %}"
-                       href="{% url 'workflow_list' %}">
-                        Workflows
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link{% if request.resolver_match.url_name == 'settings' %} active{% endif %}"
-                       href="{% url 'settings' %}">
-                        Settings
-                    </a>
-                </li>
-            </ul>
+<body class="concierge-app min-h-full bg-concierge-canvas text-concierge-slate antialiased">
+{% with url_name=request.resolver_match.url_name %}
+<div class="flex min-h-screen">
+    {# Mobile sidebar overlay #}
+    <div id="concierge-sidebar-backdrop" class="fixed inset-0 z-40 bg-concierge-slate/40 lg:hidden hidden" aria-hidden="true"></div>
+
+    <aside id="concierge-sidebar"
+           class="fixed inset-y-0 left-0 z-50 flex w-64 -translate-x-full flex-col border-r border-slate-200 bg-white transition-transform duration-200 lg:static lg:translate-x-0">
+        <div class="border-b border-slate-100 px-4 py-4">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Optimizer Core</p>
+            <div class="mt-2 inline-flex items-center gap-2 rounded-concierge border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-800">
+                <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                Active &amp; ready
+            </div>
         </div>
+        <nav class="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-4 text-sm">
+            <p class="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Resume</p>
+            <a href="{% url 'resume_optimizer' %}"
+               class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'resume_optimizer' or url_name == 'home' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
+                Optimizer
+            </a>
+            <a href="{% url 'prompt_library' %}"
+               class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'prompt_library' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
+                Prompt library
+            </a>
+
+            <p class="mt-4 px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Jobs</p>
+            <a href="{% url 'jobs_search' %}"
+               class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'jobs_search' or url_name == 'focus_breakdown' or url_name == 'focus_alignment' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
+                Search
+            </a>
+            <a href="{% url 'pipeline' %}"
+               class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'pipeline' or url_name == 'vetting' or url_name == 'applying' or url_name == 'done' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
+                Pipeline
+            </a>
+            <p class="mt-3 px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Workspace</p>
+            <div class="ml-2 space-y-0.5 border-l border-slate-200 pl-2">
+                <a href="{% url 'job_automation' %}"
+                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'job_automation' or url_name == 'job_task_create' or url_name == 'job_task_edit' or url_name == 'job_task_run_now' or url_name == 'job_task_toggle_active' or url_name == 'huey_dashboard' or url_name == 'huey_periodic_revoke' or url_name == 'huey_periodic_restore' or url_name == 'huey_flush_queue' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
+                    Automation
+                </a>
+                <a href="{% url 'track_list' %}"
+                   title="Tracks and resume PDFs"
+                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'track_list' or url_name == 'track_delete' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
+                    Tracks &amp; resumes
+                </a>
+                <a href="{% url 'workflow_list' %}"
+                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'workflow_list' or url_name == 'workflow_create' or url_name == 'workflow_edit' or url_name == 'workflow_delete' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
+                    Workflows
+                </a>
+            </div>
+
+            <p class="mt-4 px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">System</p>
+            <a href="{% url 'settings' %}"
+               class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'settings' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
+                Settings
+            </a>
+
+            <div class="mt-auto border-t border-slate-100 pt-4">
+                <div class="mx-1 rounded-concierge bg-concierge-slate px-3 py-3 text-white">
+                    <p class="text-xs font-medium text-slate-300">Workspace</p>
+                    <p class="mt-1 text-sm font-semibold">Tracks &amp; automation</p>
+                    <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                        <a href="{% url 'job_automation' %}" class="text-emerald-300 hover:text-emerald-200">Automation →</a>
+                        <a href="{% url 'track_list' %}" class="text-emerald-300 hover:text-emerald-200">Tracks →</a>
+                    </div>
+                </div>
+            </div>
+        </nav>
+    </aside>
+
+    <div class="flex min-w-0 flex-1 flex-col">
+        <header class="sticky top-0 z-30 flex h-16 items-center justify-between gap-4 border-b border-slate-200 bg-white px-4 lg:px-6">
+            <div class="flex items-center gap-3">
+                <button type="button" id="concierge-menu-btn" class="inline-flex rounded-concierge p-2 text-slate-600 hover:bg-slate-100 lg:hidden" aria-label="Open menu">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+                </button>
+                <a href="{% url 'resume_optimizer' %}" class="text-lg font-bold tracking-tight text-concierge-slate">ResumeElite</a>
+                <span class="hidden text-xs font-medium text-slate-400 sm:inline">Digital Concierge</span>
+            </div>
+            <nav class="hidden flex-wrap items-center gap-1 lg:flex text-sm font-medium text-slate-600" aria-label="Quick links">
+                <a href="{% url 'resume_optimizer' %}" class="rounded-concierge px-2 py-1 hover:bg-slate-50 hover:text-concierge-slate">Dashboard</a>
+                <a href="{% url 'jobs_search' %}" class="rounded-concierge px-2 py-1 hover:bg-slate-50 hover:text-concierge-slate">Search</a>
+                <a href="{% url 'pipeline' %}" class="rounded-concierge px-2 py-1 hover:bg-slate-50 hover:text-concierge-slate">Pipeline</a>
+                <span class="hidden px-1 text-slate-300 sm:inline" aria-hidden="true">|</span>
+                <a href="{% url 'job_automation' %}" class="rounded-concierge px-2 py-1 {% if url_name == 'job_automation' or url_name == 'job_task_create' or url_name == 'job_task_edit' or url_name == 'job_task_run_now' or url_name == 'job_task_toggle_active' or url_name == 'huey_dashboard' or url_name == 'huey_periodic_revoke' or url_name == 'huey_periodic_restore' or url_name == 'huey_flush_queue' %}bg-slate-100 text-concierge-slate{% else %}hover:bg-slate-50 hover:text-concierge-slate{% endif %}">Automation</a>
+                <a href="{% url 'track_list' %}" class="rounded-concierge px-2 py-1 {% if url_name == 'track_list' or url_name == 'track_delete' %}bg-slate-100 text-concierge-slate{% else %}hover:bg-slate-50 hover:text-concierge-slate{% endif %}" title="Tracks and resume PDFs">Tracks</a>
+                <a href="{% url 'workflow_list' %}" class="rounded-concierge px-2 py-1 {% if url_name == 'workflow_list' or url_name == 'workflow_create' or url_name == 'workflow_edit' or url_name == 'workflow_delete' %}bg-slate-100 text-concierge-slate{% else %}hover:bg-slate-50 hover:text-concierge-slate{% endif %}">Workflows</a>
+            </nav>
+            <div class="flex items-center gap-2">
+                <a href="{% url 'settings' %}" class="rounded-concierge p-2 text-slate-500 hover:bg-slate-100 hover:text-concierge-slate" title="Settings">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                </a>
+            </div>
+        </header>
+
+        <main class="flex-1 px-4 py-6 lg:px-8 lg:py-8">
+            {% block content %}{% endblock %}
+        </main>
     </div>
-</nav>
+</div>
+{% endwith %}
 
-<main class="container mb-5">
-    {% block content %}{% endblock %}
-</main>
-
-<script
-    src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
-    integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
-    crossorigin="anonymous"
-></script>
+<script>
+(function () {
+    var sidebar = document.getElementById("concierge-sidebar");
+    var backdrop = document.getElementById("concierge-sidebar-backdrop");
+    var btn = document.getElementById("concierge-menu-btn");
+    function openM() { sidebar.classList.remove("-translate-x-full"); backdrop.classList.remove("hidden"); }
+    function closeM() { sidebar.classList.add("-translate-x-full"); backdrop.classList.add("hidden"); }
+    if (btn && sidebar && backdrop) {
+        btn.addEventListener("click", function () {
+            if (sidebar.classList.contains("-translate-x-full")) openM(); else closeM();
+        });
+        backdrop.addEventListener("click", closeM);
+    }
+})();
+</script>
 {% block extra_js %}{% endblock %}
 </body>
 </html>
-

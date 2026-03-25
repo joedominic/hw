@@ -1,0 +1,31 @@
+{# Expects: pipeline_track, stage_counts, pipeline_tracks, pipeline_board_extra_query (optional) #}
+{% with u=request.resolver_match.url_name %}
+{% with qx=pipeline_board_extra_query|default:"" %}
+<nav class="mb-4 flex flex-wrap items-center gap-2 border-b border-slate-200 pb-3 text-sm" aria-label="Pipeline stages">
+    <a href="{% url 'pipeline' %}?track={{ pipeline_track }}{% if qx %}&amp;{{ qx }}{% endif %}"
+       class="inline-flex items-center gap-1.5 rounded-concierge px-3 py-1.5 font-medium {% if u == 'pipeline' %}bg-concierge-slate text-white{% else %}bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50{% endif %}">
+        Pipeline <span class="rounded-full px-1.5 py-0 text-xs tabular-nums {% if u == 'pipeline' %}bg-white/20 text-white{% else %}bg-slate-100 text-slate-600{% endif %}">{{ stage_counts.pipeline }}</span>
+    </a>
+    <a href="{% url 'vetting' %}?track={{ pipeline_track }}{% if qx %}&amp;{{ qx }}{% endif %}"
+       class="inline-flex items-center gap-1.5 rounded-concierge px-3 py-1.5 font-medium {% if u == 'vetting' %}bg-concierge-slate text-white{% else %}bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50{% endif %}">
+        Vetting <span class="rounded-full px-1.5 py-0 text-xs tabular-nums {% if u == 'vetting' %}bg-white/20 text-white{% else %}bg-slate-100 text-slate-600{% endif %}">{{ stage_counts.vetting }}</span>
+    </a>
+    <a href="{% url 'applying' %}?track={{ pipeline_track }}{% if qx %}&amp;{{ qx }}{% endif %}"
+       class="inline-flex items-center gap-1.5 rounded-concierge px-3 py-1.5 font-medium {% if u == 'applying' %}bg-concierge-slate text-white{% else %}bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50{% endif %}">
+        Applying <span class="rounded-full px-1.5 py-0 text-xs tabular-nums {% if u == 'applying' %}bg-white/20 text-white{% else %}bg-slate-100 text-slate-600{% endif %}">{{ stage_counts.applying }}</span>
+    </a>
+    <a href="{% url 'done' %}?track={{ pipeline_track }}{% if qx %}&amp;{{ qx }}{% endif %}"
+       class="inline-flex items-center gap-1.5 rounded-concierge px-3 py-1.5 font-medium {% if u == 'done' %}bg-concierge-slate text-white{% else %}bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50{% endif %}">
+        Done <span class="rounded-full px-1.5 py-0 text-xs tabular-nums {% if u == 'done' %}bg-white/20 text-white{% else %}bg-slate-100 text-slate-600{% endif %}">{{ stage_counts.done }}</span>
+    </a>
+    <span class="hidden h-4 w-px self-center bg-slate-200 sm:inline-block" aria-hidden="true"></span>
+    <span class="text-xs font-medium uppercase tracking-wide text-slate-400">Track</span>
+    {% for t in pipeline_tracks %}
+        <a href="{% if u == 'pipeline' %}{% url 'pipeline' %}{% elif u == 'vetting' %}{% url 'vetting' %}{% elif u == 'applying' %}{% url 'applying' %}{% else %}{% url 'done' %}{% endif %}?track={{ t.slug }}{% if qx %}&amp;{{ qx }}{% endif %}"
+           class="rounded-concierge px-2.5 py-1 text-xs font-medium {% if pipeline_track == t.slug %}bg-slate-200 text-concierge-slate{% else %}text-slate-500 hover:bg-slate-100{% endif %}">
+            {{ t.label }}
+        </a>
+    {% endfor %}
+</nav>
+{% endwith %}
+{% endwith %}

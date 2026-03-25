@@ -21,6 +21,9 @@ SECRET_KEY = env("SECRET_KEY", default="django-insecure-+a#*@w#!qb+w*1_6vd4my0q2
 # SECURITY: don't run with debug turned on in production!
 DEBUG = env("DEBUG")
 
+# LLM test + Huey monitor nav links; defaults to DEBUG when unset.
+SHOW_DEV_TOOLS = env.bool("SHOW_DEV_TOOLS", default=DEBUG)
+
 # Comma-separated list, e.g. "localhost,127.0.0.1,.example.com"
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=[])
 
@@ -60,6 +63,7 @@ TEMPLATES = [
                 "django.template.context_processors.request",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
+                "resume_app.context_processors.dev_tools",
             ],
         },
     },
@@ -172,7 +176,8 @@ JOB_DISLIKED_SIMILARITY_THRESHOLD = 0.3  # only penalize when similarity above t
 # Hide jobs with similar_to_disliked_percent >= this (None = never hide, 100 = hide only 100% similar).
 JOB_DISLIKED_SIMILARITY_HIDE_THRESHOLD = 100
 
-# Huey async task queue (Redis at 192.168.2.174)
+# Huey async task queue (Redis). Set HUEY_IMMEDIATE=1 to run without Redis (tasks run in-process).
+HUEY_IMMEDIATE = env.bool("HUEY_IMMEDIATE", default=False)
 HUEY_REDIS_HOST = env("HUEY_REDIS_HOST", default="192.168.2.174")
 HUEY_REDIS_PORT = env.int("HUEY_REDIS_PORT", default=6379)
 HUEY_REDIS_DB = env.int("HUEY_REDIS_DB", default=0)
@@ -181,7 +186,7 @@ HUEY = {
     "huey_class": "huey.RedisHuey",
     "results": True,
     "store_none": False,
-    "immediate": False,  # always use Redis so consumer is required
+    "immediate": HUEY_IMMEDIATE,
     "utc": True,
     "blocking": True,
     "connection": {
@@ -192,8 +197,21 @@ HUEY = {
     },
     "consumer": {
         "workers": 2,
+        # thread: works on Windows. process: not picklable on Windows (spawn).
         "worker_type": "thread",
         "scheduler_interval": 1,
-        "periodic": False,
+        "periodic": not HUEY_IMMEDIATE,
+    },
+}
+
+# python-jobspy logs Glassdoor API hiccups at ERROR even when the HTTP request succeeds.
+# Downgrade so runserver output stays readable; other JobSpy:* loggers unchanged.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "loggers": {
+        "JobSpy:Glassdoor": {
+            "level": "WARNING",
+        },
     },
 }

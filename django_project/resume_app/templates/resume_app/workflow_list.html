@@ -1,73 +1,64 @@
 {% extends "resume_app/base.html" %}
 
-{% block title %}Workflows{% endblock %}
+{% block title %}Workflows — ResumeElite{% endblock %}
 
 {% block content %}
-<div class="row mb-3">
-    <div class="col-12">
-        <h1 class="mb-3">Workflows</h1>
-        <p class="text-muted">
-            Saved custom workflows for Resume Optimization. Each workflow defines the order of steps (Writer, ATS Judge, Recruiter Judge), an optional loop, and exit conditions.
-        </p>
-    </div>
-</div>
-
-{% if messages %}
-    <div class="row mb-3">
-        <div class="col-12">
-            {% for message in messages %}
-                <div class="alert alert-{{ message.tags|default:'info' }} mb-2" role="alert">
-                    {{ message }}
-                </div>
-            {% endfor %}
+<div class="mx-auto max-w-5xl">
+    <div class="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+        <div>
+            <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Workflows</h1>
+            <p class="mt-1 max-w-2xl text-sm text-slate-600">
+                Custom step orders for resume optimization (Writer, ATS, Recruiter), saved for the optimizer dropdown.
+            </p>
+            <p class="mt-2 text-xs text-slate-500">Open from the Optimizer via “Manage workflows,” or use the button below.</p>
+        </div>
+        <div class="flex flex-wrap gap-2">
+            <a href="{% url 'workflow_create' %}" class="inline-flex items-center justify-center rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">New workflow</a>
+            <a href="{% url 'resume_optimizer' %}" class="inline-flex items-center justify-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50">Optimizer</a>
         </div>
     </div>
-{% endif %}
 
-<div class="row">
-    <div class="col-12">
-        <p>
-            <a href="{% url 'workflow_create' %}" class="btn btn-primary">New workflow</a>
-            <a href="{% url 'resume_optimizer' %}" class="btn btn-outline-secondary">Back to Optimizer</a>
-        </p>
-        {% if workflows %}
-        <div class="card">
-            <div class="card-body p-0">
-                <table class="table table-hover mb-0">
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Steps</th>
-                            <th></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for w in workflows %}
-                        <tr>
-                            <td>{{ w.name }}</td>
-                            <td>
-                                {% for label in w.step_labels_display %}
-                                    <span class="badge bg-secondary">{{ label }}</span>
-                                {% empty %}
-                                —
-                                {% endfor %}
-                            </td>
-                            <td>
-                                <a href="{% url 'workflow_edit' w.id %}" class="btn btn-sm btn-outline-primary">Edit</a>
-                                <form method="post" action="{% url 'workflow_delete' w.id %}" class="d-inline" onsubmit="return confirm('Delete this workflow?');">
-                                    {% csrf_token %}
-                                    <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
-                                </form>
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        {% else %}
-        <p class="text-muted">No workflows yet. <a href="{% url 'workflow_create' %}">Create one</a> to use custom step order and exit conditions in the Resume Optimizer.</p>
-        {% endif %}
+    {% include "resume_app/_concierge_messages.html" %}
+
+    {% if workflows %}
+    <div class="overflow-hidden rounded-concierge border border-slate-200 bg-white shadow-sm">
+        <table class="min-w-full divide-y divide-slate-200 text-sm">
+            <thead class="bg-slate-50">
+                <tr>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Name</th>
+                    <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Steps</th>
+                    <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 bg-white">
+                {% for w in workflows %}
+                <tr class="hover:bg-slate-50/80">
+                    <td class="px-4 py-3 font-medium text-concierge-slate">{{ w.name }}</td>
+                    <td class="px-4 py-3">
+                        <div class="flex flex-wrap gap-1">
+                            {% for label in w.step_labels_display %}
+                                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">{{ label }}</span>
+                            {% empty %}
+                                <span class="text-slate-400">—</span>
+                            {% endfor %}
+                        </div>
+                    </td>
+                    <td class="px-4 py-3 text-right">
+                        <a href="{% url 'workflow_edit' w.id %}" class="mr-2 text-sm font-medium text-concierge-slate underline hover:no-underline">Edit</a>
+                        <form method="post" action="{% url 'workflow_delete' w.id %}" class="inline" onsubmit="return confirm('Delete this workflow?');">
+                            {% csrf_token %}
+                            <button type="submit" class="text-sm font-medium text-red-600 hover:text-red-800">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
     </div>
+    {% else %}
+    <p class="rounded-concierge border border-dashed border-slate-200 bg-white px-6 py-8 text-center text-sm text-slate-500">
+        No workflows yet. <a href="{% url 'workflow_create' %}" class="font-medium text-concierge-slate underline">Create one</a> for custom step order in the optimizer.
+    </p>
+    {% endif %}
 </div>
 {% endblock %}

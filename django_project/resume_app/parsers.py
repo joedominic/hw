@@ -17,6 +17,12 @@ class FitCheckResult(BaseModel):
     """Candidate-job fit: score 0-100, reasoning, and thoughts on why/why not a fit."""
 
     score: int = Field(ge=0, le=100, description="Overall fit score 0-100")
+    interview_probability: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description="Probability (0-100) that the candidate would be called for an interview if they applied.",
+    )
     reasoning: str = Field(
         description="Brief reasoning based on match, seniority, and likelihood of interview call"
     )
@@ -106,6 +112,7 @@ def _extract_json_object(content: str) -> Optional[dict]:
                             root_keys = {
                                 "ats_match_score",
                                 "score",
+                                "recruiter_score",
                                 "analysis",
                                 "feedback",
                                 "missing_keywords",
@@ -158,6 +165,38 @@ def _extract_json_object(content: str) -> Optional[dict]:
     return None
 
 
+# Match score lines like "Resume Match Score (0-100): 78" or markdown
+# "**Resume Match Score (0-100):** **78**" (models often bold the label and number).
+# Value may be markdown-wrapped multiple times, e.g. "(0-100):** **78**"
+_PLAIN_SCORE_LINE_RE = re.compile(
+    r"(?:\*+\s*)?"
+    r"(?:Resume\s+Match\s+Score|ATS\s+Match\s+Score|Recruiter\s+Score|Match\s+Score|Fit\s+Score|Score)"
+    r"\s*(?:\([^)]*\))?"
+    r"\s*(?:\*+\s*)?"
+    r":\s*(?:\*+\s*)*(\d{1,3})\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_plain_text_score(content: str) -> Optional[int]:
+    """Best-effort 0–100 score from prose/markdown when JSON is absent."""
+    if not content or not isinstance(content, str):
+        return None
+    m = _PLAIN_SCORE_LINE_RE.search(content)
+    if m:
+        try:
+            return max(0, min(100, int(m.group(1))))
+        except (ValueError, TypeError):
+            pass
+    m2 = re.search(r"\bscore\s*[=:]\s*(?:\*+\s*)*(\d{1,3})\b", content, re.IGNORECASE)
+    if m2:
+        try:
+            return max(0, min(100, int(m2.group(1))))
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
 def parse_score_fallback(content: str, node_name: str) -> tuple[ScoreFeedback, Optional[dict]]:
     """Fallback when structured output is not available or fails."""
     logger.debug("[%s] parse_score_fallback content len=%s", node_name, len(content) if content else 0)
@@ -165,7 +204,7 @@ def parse_score_fallback(content: str, node_name: str) -> tuple[ScoreFeedback, O
     if data is not None:
         logger.warning("[%s] parse_score_fallback extracted data keys=%s", node_name, list(data.keys()))
         try:
-            raw_score = _get_key(data, "ats_match_score", "score")
+            raw_score = _get_key(data, "ats_match_score", "score", "recruiter_score")
             score = int(raw_score) if raw_score is not None else 70
             score = max(0, min(100, score))
             feedback_sections = []
@@ -210,30 +249,15 @@ def parse_score_fallback(content: str, node_name: str) -> tuple[ScoreFeedback, O
                 repr(str(data)[:500]),
             )
     if content and isinstance(content, str):
-        score_match = re.search(
-            r"(?:Resume\s+Match\s+Score|ATS\s+Match\s+Score|Recruiter\s+Score|Match\s+Score|Score)"
-            r"\s*(?:\([^)]*\))?\s*:\s*(\d{1,3})",
-            content,
-            re.IGNORECASE,
-        )
-        if not score_match:
-            score_match = re.search(
-                r"\bscore\s*[=:]\s*(\d{1,3})\b", content, re.IGNORECASE
+        score = _extract_plain_text_score(content)
+        if score is not None:
+            feedback = content.strip()[:2000] + ("..." if len(content) > 2000 else "")
+            logger.warning(
+                "[%s] parse_score_fallback extracted score from plain text: %s",
+                node_name,
+                score,
             )
-        if score_match:
-            try:
-                score = max(0, min(100, int(score_match.group(1))))
-                feedback = content.strip()[:2000] + (
-                    "..." if len(content) > 2000 else ""
-                )
-                logger.warning(
-                    "[%s] parse_score_fallback extracted score from plain text: %s",
-                    node_name,
-                    score,
-                )
-                return ScoreFeedback(score=score, feedback=feedback), None
-            except (ValueError, TypeError):
-                pass
+            return ScoreFeedback(score=score, feedback=feedback), None
     logger.warning("[%s] parse_score_fallback returning default (no data or exception)", node_name)
     return ScoreFeedback(score=70, feedback="Could not parse score. Defaulting."), None
 
@@ -243,6 +267,7 @@ def parse_fit_check_fallback(content: str) -> FitCheckResult:
     if not text:
         return FitCheckResult(
             score=50,
+            interview_probability=None,
             reasoning="Could not parse fit check. Defaulting.",
             thoughts="",
         )
@@ -258,6 +283,15 @@ def parse_fit_check_fallback(content: str) -> FitCheckResult:
             "ats_match_score",
             "fit_score",
         )
+        raw_ip = _get_key(
+            data,
+            "interview_probability",
+            "interviewProbability",
+            "interview_likelihood",
+            "interviewLikelihood",
+            "interview_prob",
+            "interviewProb",
+        )
         reasoning = _get_key(
             data,
             "reasoning",
@@ -269,24 +303,44 @@ def parse_fit_check_fallback(content: str) -> FitCheckResult:
         try:
             score = int(raw_score) if raw_score is not None else 50
             score = max(0, min(100, score))
+            ip = None
+            if raw_ip is not None:
+                try:
+                    if isinstance(raw_ip, str):
+                        # Handle common formats like "72%", "Interview: 72/100", etc.
+                        m = re.search(r"(\d{1,3})", raw_ip)
+                        if m:
+                            ip_val = int(m.group(1))
+                            ip = max(0, min(100, ip_val))
+                    else:
+                        ip_val = int(raw_ip)
+                        ip = max(0, min(100, ip_val))
+                except (TypeError, ValueError):
+                    ip = None
+            # Fallback: sometimes the model includes interview probability in the
+            # reasoning string but uses a non-matching key name in JSON.
+            if ip is None:
+                ip_text_match = re.search(
+                    r"interview[^0-9]{0,30}(\d{1,3})\s*%?",
+                    text,
+                    re.IGNORECASE,
+                )
+                if ip_text_match:
+                    try:
+                        ip_val = int(ip_text_match.group(1))
+                        ip = max(0, min(100, ip_val))
+                    except (TypeError, ValueError):
+                        ip = None
             return FitCheckResult(
                 score=score,
+                interview_probability=ip,
                 reasoning=str(reasoning or thoughts or "Parsed from JSON fallback."),
                 thoughts=str(thoughts or reasoning or ""),
             )
         except (TypeError, ValueError):
             pass
 
-    score_match = re.search(
-        r"(?:Resume\s+Match\s+Score|ATS\s+Match\s+Score|Recruiter\s+Score|Match\s+Score|Fit\s+Score|Score)"
-        r"\s*(?:\([^)]*\))?\s*[:=-]?\s*(\d{1,3})(?:\s*/\s*100)?",
-        text,
-        re.IGNORECASE,
-    )
-    if not score_match:
-        score_match = re.search(
-            r"\bscore\s*[=:]\s*(\d{1,3})(?:\s*/\s*100)?\b", text, re.IGNORECASE
-        )
+    score_val = _extract_plain_text_score(text)
 
     reasoning = ""
     thoughts = ""
@@ -323,19 +377,28 @@ def parse_fit_check_fallback(content: str) -> FitCheckResult:
             if len(filtered) > 1:
                 thoughts = thoughts or "\n".join(filtered[1:])[:1000]
 
-    if score_match:
-        try:
-            score = max(0, min(100, int(score_match.group(1))))
-            return FitCheckResult(
-                score=score,
-                reasoning=reasoning or "Parsed score from plain-text response.",
-                thoughts=thoughts or reasoning or "",
-            )
-        except (TypeError, ValueError):
-            pass
+    if score_val is not None:
+        interview_probability = None
+        ip_match = re.search(
+            r"(?:Interview\s+(?:probability|likelihood))\s*[:=-]?\s*(\d{1,3})\s*(?:%|/100)?",
+            text,
+            re.IGNORECASE,
+        )
+        if ip_match:
+            try:
+                interview_probability = max(0, min(100, int(ip_match.group(1))))
+            except (TypeError, ValueError):
+                interview_probability = None
+        return FitCheckResult(
+            score=score_val,
+            interview_probability=interview_probability,
+            reasoning=reasoning or "Parsed score from plain-text response.",
+            thoughts=thoughts or reasoning or "",
+        )
 
     return FitCheckResult(
         score=50,
+        interview_probability=None,
         reasoning=(reasoning or text[:500] or "Could not parse fit check. Defaulting."),
         thoughts=thoughts or "",
     )

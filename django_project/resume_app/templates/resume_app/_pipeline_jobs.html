@@ -1,0 +1,128 @@
+{% if not pipeline_jobs %}
+    <div class="text-sm text-slate-600">
+        {% if pipeline_search_query %}
+            <p class="mb-0">No jobs match "{{ pipeline_search_query }}". <a href="{{ empty_clear_url }}" class="font-medium text-concierge-slate underline">Clear all filters</a> to see up to {% firstof pipeline_count_before_text_search pipeline_total_count %} job(s) matching your source/pref filters.</p>
+        {% else %}
+            <p class="mb-1">{{ empty_message }}</p>
+            {% if empty_help_list %}
+                <ul class="mb-0 list-disc pl-5 text-sm">
+                    {% for item in empty_help_list %}
+                        <li>{{ item }}</li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        {% endif %}
+    </div>
+{% else %}
+    <p class="mb-3 text-xs text-slate-500">
+        {% if pipeline_search_query %}
+            Showing {{ pipeline_jobs|length }} of {% firstof pipeline_count_before_text_search pipeline_total_count %} job(s) matching "{{ pipeline_search_query }}" (after source/pref filters).
+        {% elif pipeline_has_active_filters %}
+            Showing {{ pipeline_jobs|length }} of {{ pipeline_total_count }} job(s) in {{ stage_label }} with current filters.
+        {% else %}
+            {{ pipeline_jobs|length }} job(s) in {{ stage_label }}.
+        {% endif %}
+    </p>
+
+    <form id="pipeline-bulk-form" method="post" class="mb-4">
+        {% csrf_token %}
+        <input type="hidden" name="track" value="{{ pipeline_track }}">
+        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <label class="inline-flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+                <input class="h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" type="checkbox" id="select-all-jobs">
+                <span>Select all</span>
+            </label>
+            <div class="flex flex-wrap gap-2">
+                <button type="submit" name="action" value="bulk_like" class="rounded-concierge border border-sky-200 bg-white px-3 py-1.5 text-xs font-semibold text-sky-900 hover:bg-sky-50">
+                    Like selected
+                </button>
+                <button type="submit" name="action" value="bulk_dislike" class="rounded-concierge border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-800 hover:bg-red-50">
+                    Dislike selected
+                </button>
+                <button type="submit" name="action" value="bulk_delete" class="rounded-concierge border border-amber-200 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-50">
+                    Delete selected
+                </button>
+                {% if stage_label == "applying" %}
+                <button type="submit" name="action" value="bulk_optimize" class="rounded-concierge border border-violet-200 bg-white px-3 py-1.5 text-xs font-semibold text-violet-900 hover:bg-violet-50">
+                    Optimize selected
+                </button>
+                {% endif %}
+            </div>
+        </div>
+    </form>
+
+    {% for j in pipeline_jobs %}
+        <div class="mb-3 rounded-concierge border border-slate-200 bg-white p-3 shadow-sm">
+            <div class="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+                <div class="flex min-w-0 flex-1 items-start gap-2">
+                    <input form="pipeline-bulk-form" class="job-select-checkbox mt-1 h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" type="checkbox" name="job_ids" value="{{ j.id }}" id="job-select-{{ j.id }}">
+                    <div class="min-w-0">
+                        <p class="font-semibold text-concierge-slate">{{ j.title }}</p>
+                        <div class="mt-1 flex flex-wrap items-center gap-1">
+                            {% if j.focus_percent is not None %}
+                                <span class="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-900">Fit {{ j.focus_percent }}{% if j.focus_percent_after_penalty is not None %}→{{ j.focus_percent_after_penalty }}{% endif %}%</span>
+                                <a href="{% url 'focus_breakdown' j.id %}?track={{ pipeline_track }}" class="rounded-concierge border border-sky-200 px-2 py-0.5 text-xs font-medium text-sky-800 hover:bg-sky-50">Why?</a>
+                            {% endif %}
+                            {% if stage_label == "vetting" and j.interview_probability is not None %}
+                                <span class="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900" title="{{ j.interview_reasoning|default:''|truncatechars:180 }}">
+                                    Interview {{ j.interview_probability }}%
+                                </span>
+                            {% endif %}
+                            {% if j.preference_margin_percent is not None %}
+                                <span class="rounded-full px-2 py-0.5 text-xs font-medium {% if j.preference_margin_percent < -3 %}bg-red-100 text-red-900{% elif j.preference_margin_percent > 3 %}bg-emerald-100 text-emerald-900{% else %}bg-slate-100 text-slate-700{% endif %}">Pref {{ j.preference_margin_percent }}%</span>
+                            {% endif %}
+                            {% if j.source_display or j.source %}
+                                <span class="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-900" title="{{ j.source }}">{{ j.source_display|default:j.source }}</span>
+                            {% endif %}
+                        </div>
+                        <p class="mt-1 text-xs text-slate-500">{{ j.company_name }} · {{ j.location|default:"—" }}</p>
+                        {% if j.fetched_at %}
+                            <p class="text-xs text-slate-400">Found {{ j.fetched_at|date:"M j, Y" }}</p>
+                        {% endif %}
+                        {% if j.focus_reason %}
+                            <div class="mt-2 text-xs text-slate-600">
+                                Similar to: {% for r in j.focus_reason %}{{ r.title }} @ {{ r.company_name }} ({{ r.similarity_percent }}%){% if not forloop.last %}; {% endif %}{% endfor %}
+                            </div>
+                        {% endif %}
+                        {% if j.snippet %}<p class="mt-2 text-xs text-slate-600">{{ j.snippet }}</p>{% endif %}
+                    </div>
+                </div>
+                <div class="flex flex-shrink-0 flex-wrap justify-end gap-1">
+                    <form method="post" class="contents" id="pipeline-job-form-{{ j.id }}">
+                        {% csrf_token %}
+                        <input type="hidden" name="job_id" value="{{ j.id }}">
+                        <input type="hidden" name="track" value="{{ pipeline_track }}">
+                        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                        <button type="submit" name="action" value="save" class="rounded-concierge border border-emerald-200 bg-white px-2 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-50">Save</button>
+                        {% if j.url %}
+                            <a href="{{ j.url }}" target="_blank" rel="noopener" class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-concierge-slate hover:bg-slate-50">View</a>
+                        {% endif %}
+                        {% if stage_label == "applying" %}
+                            {% if j.optimized_resume_id %}
+                                <a href="{% url 'resume_optimizer' %}?opt_id={{ j.optimized_resume_id }}" class="inline-flex items-center rounded-concierge border border-violet-200 bg-violet-50 px-2 py-1 text-xs font-medium text-violet-900 hover:bg-violet-100">Optimization</a>
+                            {% endif %}
+                            <button type="submit" name="action" value="optimize_resume" class="rounded-concierge border border-violet-200 bg-white px-2 py-1 text-xs font-medium text-violet-900 hover:bg-violet-50" title="Queue a new optimization run">{% if j.optimized_resume_id %}Re-optimize{% else %}Optimize{% endif %}</button>
+                        {% endif %}
+                        <button type="submit" name="action" value="like" class="rounded-concierge border border-sky-200 bg-white px-2 py-1 text-xs font-medium text-sky-900 hover:bg-sky-50">Like</button>
+                        <button type="submit" name="action" value="dislike" class="rounded-concierge border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-800 hover:bg-red-50">Dislike</button>
+                        <button type="submit" name="action" value="delete" class="rounded-concierge border border-amber-200 bg-white px-2 py-1 text-xs font-medium text-amber-900 hover:bg-amber-50" title="Remove from pipeline (won't be re-added)">Delete</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    {% endfor %}
+
+    <script>
+        (function() {
+            const selectAll = document.getElementById('select-all-jobs');
+            if (!selectAll) return;
+            const checkboxes = document.getElementsByClassName('job-select-checkbox');
+            selectAll.addEventListener('change', function() {
+                for (let i = 0; i < checkboxes.length; i++) {
+                    checkboxes[i].checked = selectAll.checked;
+                }
+            });
+        })();
+    </script>
+{% endif %}

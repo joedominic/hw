@@ -1,0 +1,73 @@
+{% extends "resume_app/base.html" %}
+
+{% block title %}Job automation — ResumeElite{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-6xl">
+    {% include "resume_app/_jobs_workspace_tabs.html" with workspace_automation_track=selected_track_slug %}
+    <div class="mb-8 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+            <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Job search automation</h1>
+            <p class="mt-1 text-sm text-slate-600">
+                Tracks separate profiles; scheduled tasks fetch jobs into the track’s pipeline.
+            </p>
+        </div>
+        <div class="flex shrink-0 flex-col items-end gap-1 text-right">
+            <a href="{% url 'huey_dashboard' %}" class="inline-flex items-center justify-center rounded-concierge border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-concierge-slate hover:bg-slate-50">
+                Huey queue &amp; scheduler →
+            </a>
+            <p class="max-w-xs text-xs text-slate-500">Background worker (<code class="rounded bg-slate-100 px-1">run_huey</code>) must be running. Periodic tasks enqueue from here.</p>
+        </div>
+    </div>
+
+    {% include "resume_app/_concierge_messages.html" %}
+
+    <div class="grid gap-6 lg:grid-cols-12">
+        <div class="lg:col-span-4">
+            <div class="flex h-full flex-col rounded-concierge border border-slate-200 bg-white shadow-sm">
+                <div class="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-concierge-slate">Tracks</div>
+                <div class="flex flex-1 flex-col p-4">
+                    {% if not tracks %}
+                        <p class="text-sm text-slate-500">No tracks yet.</p>
+                    {% else %}
+                        <div class="space-y-1">
+                            {% for t in tracks %}
+                                <a href="{% url 'job_automation' %}?track={{ t.slug }}"
+                                   class="flex items-center justify-between rounded-concierge border px-3 py-2.5 text-sm font-medium transition-colors {% if selected_track_slug == t.slug %}border-concierge-slate bg-slate-100 text-concierge-slate{% else %}border-transparent hover:bg-slate-50 text-slate-700{% endif %}">
+                                    <div>
+                                        <div class="font-semibold">{{ t.label }}</div>
+                                        <div class="text-xs {% if selected_track_slug == t.slug %}text-slate-600{% else %}text-slate-500{% endif %}">
+                                            <code class="rounded bg-slate-100 px-1">{{ t.slug }}</code>
+                                            {% if t.is_default %} · Default{% endif %}
+                                        </div>
+                                    </div>
+                                </a>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        <div class="lg:col-span-8">
+            <div class="flex h-full flex-col rounded-concierge border border-slate-200 bg-white shadow-sm">
+                <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
+                    <div>
+                        <span class="text-sm font-semibold text-concierge-slate">Scheduled searches</span>
+                        {% if selected_track %}
+                            <span class="ml-1 text-xs text-slate-500">· {{ selected_track.label }}</span>
+                        {% endif %}
+                    </div>
+                    <a href="{% url 'job_task_create' %}" class="rounded-concierge bg-concierge-slate px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800">New task</a>
+                </div>
+                <div class="p-4">
+                    {% if not tasks %}
+                        <p class="text-sm text-slate-500">No scheduled searches yet.</p>
+                    {% else %}
+                        {% include "resume_app/_task_table.html" with tasks=tasks %}
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,96 +1,415 @@
 {% extends "resume_app/base.html" %}
 
-{% block title %}Settings{% endblock %}
+{% block title %}Settings — ResumeElite{% endblock %}
 
 {% block content %}
-<div class="row mb-3">
-    <div class="col-12">
-        <h1 class="mb-3">Settings</h1>
-        <p class="text-muted">
-            Manage API keys and choose the active LLM provider. Resume Optimizer and Job search use models from the active provider.
+<div class="mx-auto max-w-4xl">
+    <div class="mb-8">
+        <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Settings</h1>
+        <p class="mt-1 text-sm text-slate-600">
+            LLM connections and app automation. Job search and the optimizer use the active provider.
         </p>
     </div>
-</div>
 
-{% if messages %}
-    <div class="row mb-3">
-        <div class="col-12">
-            {% for message in messages %}
-                <div class="alert alert-{{ message.tags|default:'info' }} mb-2" role="alert">
-                    {{ message }}
-                </div>
-            {% endfor %}
-        </div>
+    {% include "resume_app/_concierge_messages.html" %}
+
+    <div class="mb-6 flex flex-wrap gap-2 border-b border-slate-200 pb-1">
+        <a href="?tab=llm"
+           class="rounded-t-concierge px-4 py-2 text-sm font-semibold {% if settings_tab == 'llm' %}bg-white text-concierge-slate ring-1 ring-slate-200 ring-b-0{% else %}text-slate-600 hover:text-concierge-slate{% endif %}">
+            LLM settings
+        </a>
+        <a href="?tab=app"
+           class="rounded-t-concierge px-4 py-2 text-sm font-semibold {% if settings_tab == 'app' %}bg-white text-concierge-slate ring-1 ring-slate-200 ring-b-0{% else %}text-slate-600 hover:text-concierge-slate{% endif %}">
+            App settings
+        </a>
     </div>
-{% endif %}
 
-<div class="row">
-    <div class="col-lg-8">
-        <div class="card">
-            <div class="card-header">
-                Active LLM provider
-            </div>
-            <div class="card-body">
-                <form method="post" class="row g-2 align-items-end">
-                    {% csrf_token %}
-                    <input type="hidden" name="action" value="set_active_provider">
-                    <div class="col-md-8">
-                        <label class="form-label" for="active-provider-select">Configured provider</label>
-                        <select id="active-provider-select" name="active_provider" class="form-select">
-                            <option value="">Select a connected provider</option>
-                            {% for info in provider_infos %}
-                                {% if info.key_stored %}
-                                    <option value="{{ info.name }}" {% if info.is_active %}selected{% endif %}>{{ info.name }}</option>
-                                {% endif %}
+    {% if settings_tab == 'app' %}
+    <div class="space-y-6">
+        <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 class="text-lg font-semibold text-concierge-slate">Pipeline automation</h2>
+            <p class="mt-1 text-sm text-slate-600">
+                Thresholds use the same values as the pipeline board: <strong>Pref %</strong> is preference margin (can be negative); <strong>Interview %</strong> is filled after vetting matching runs (requires a configured LLM).
+            </p>
+            <form method="post" class="mt-6 space-y-6">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="save_app_automation">
+
+                <div class="rounded-concierge border border-slate-100 bg-slate-50/50 p-4">
+                    <label class="flex cursor-pointer items-start gap-3">
+                        <input type="checkbox" name="pipeline_to_vetting_enabled" value="1"
+                               class="mt-1 h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate"
+                               {% if app_automation.pipeline_to_vetting_enabled %}checked{% endif %}>
+                        <span>
+                            <span class="font-medium text-concierge-slate">Auto-move Pipeline → Vetting</span>
+                            <span class="mt-1 block text-sm font-normal text-slate-600">When Pref margin is at or above the threshold.</span>
+                        </span>
+                    </label>
+                    <div class="mt-4 sm:max-w-xs">
+                        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="pipeline-pref-min">Minimum Pref margin (%)</label>
+                        <input type="number" id="pipeline-pref-min" name="pipeline_preference_margin_min"
+                               value="{{ app_automation.pipeline_preference_margin_min }}"
+                               class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                    </div>
+                </div>
+
+                <div class="rounded-concierge border border-slate-100 bg-slate-50/50 p-4">
+                    <label class="flex cursor-pointer items-start gap-3">
+                        <input type="checkbox" name="vetting_to_applying_enabled" value="1"
+                               class="mt-1 h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate"
+                               {% if app_automation.vetting_to_applying_enabled %}checked{% endif %}>
+                        <span>
+                            <span class="font-medium text-concierge-slate">Auto-move Vetting → Applying</span>
+                            <span class="mt-1 block text-sm font-normal text-slate-600">When interview probability is at or above the threshold.</span>
+                        </span>
+                    </label>
+                    <div class="mt-4 sm:max-w-xs">
+                        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="vetting-ip-min">Minimum interview probability (0–100)</label>
+                        <input type="number" id="vetting-ip-min" name="vetting_interview_probability_min" min="0" max="100"
+                               value="{{ app_automation.vetting_interview_probability_min }}"
+                               class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                    </div>
+                </div>
+
+                <div class="rounded-concierge border border-slate-100 bg-slate-50/50 p-4">
+                    <h3 class="text-sm font-semibold text-concierge-slate">Applying → resume optimization</h3>
+                    <p class="mt-1 text-sm text-slate-600">
+                        When jobs enter Applying (manual save from Vetting, auto-promotion, or bulk optimize), the default workflow below is used. Leave empty for the built-in Writer → ATS → Recruiter sequence.
+                    </p>
+                    <div class="mt-4 sm:max-w-md">
+                        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="applying-optimizer-workflow">Default workflow</label>
+                        <select id="applying-optimizer-workflow" name="applying_optimizer_workflow"
+                                class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                            <option value="">Built-in default</option>
+                            {% for w in optimizer_workflows %}
+                                <option value="{{ w.id }}" {% if app_automation.applying_optimizer_workflow_id == w.id %}selected{% endif %}>{{ w.name }}</option>
                             {% endfor %}
                         </select>
                     </div>
-                    <div class="col-md-4">
-                        <button type="submit" class="btn btn-primary w-100">Save active provider</button>
-                    </div>
-                </form>
-                {% if active_provider %}
-                    <p class="small text-muted mt-2 mb-0">Current active provider: {{ active_provider }}</p>
-                {% else %}
-                    <p class="small text-muted mt-2 mb-0">No active provider selected yet.</p>
-                {% endif %}
-            </div>
+                </div>
+
+                <button type="submit" class="rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+                    Save app settings
+                </button>
+            </form>
         </div>
 
-        <div class="card mt-3">
-            <div class="card-header">
-                Integrations — LLM API keys
-            </div>
-            <div class="card-body">
-                <p class="small text-muted mb-4">
-                    Enter and save an API key for each provider you use. Keys are validated when you connect and stored encrypted.
-                </p>
-                {% for info in provider_infos %}
-                <div class="border rounded p-3 mb-3">
-                    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
-                        <h5 class="mb-0">{{ info.name }}</h5>
-                        {% if info.key_stored %}
-                        <span class="badge bg-success">Key stored</span>
-                        {% else %}
-                        <span class="badge bg-secondary">No key</span>
-                        {% endif %}
-                    </div>
-                    <form method="post" class="mt-2">
-                        {% csrf_token %}
-                        <input type="hidden" name="action" value="connect">
-                        <input type="hidden" name="provider" value="{{ info.name }}">
-                        <div class="mb-2">
-                            <label class="form-label" for="api-key-{{ info.name|slugify }}">API key</label>
-                            <input type="password" id="api-key-{{ info.name|slugify }}" name="api_key"
-                                   class="form-control" placeholder="Paste API key for {{ info.name }}"
-                                   autocomplete="off">
-                        </div>
-                        <button type="submit" class="btn btn-sm btn-primary">Connect &amp; save key</button>
-                    </form>
-                </div>
-                {% endfor %}
-            </div>
+        <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 class="text-lg font-semibold text-concierge-slate">Deduplicate pipeline</h2>
+            <p class="mt-1 text-sm text-slate-600">
+                Same job in multiple locations creates extra rows. Scheduled searches dedupe <strong>Pipeline</strong> automatically after each run; use this to clean a broader scope (other stages or all tracks) anytime.
+            </p>
+            <form method="post" class="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="dedupe_pipeline" />
+                <label class="flex min-w-[10rem] flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Track
+                    <select name="dedupe_track" class="rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                        <option value="*">All tracks</option>
+                        {% for t in dedupe_tracks %}
+                            <option value="{{ t.slug }}">{{ t.label }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label class="flex min-w-[10rem] flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Stage
+                    <select name="dedupe_stage" class="rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                        <option value="all">All (pipeline, vetting, applying)</option>
+                        <option value="pipeline">Pipeline</option>
+                        <option value="vetting">Vetting</option>
+                        <option value="applying">Applying</option>
+                        <option value="done">Done</option>
+                    </select>
+                </label>
+                <label class="flex items-center gap-2 text-sm text-slate-700 sm:pb-2">
+                    <input type="checkbox" name="dedupe_include_done" value="1" class="h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" />
+                    <span>When using <strong>All</strong> stages, also include <strong>Done</strong></span>
+                </label>
+                <button type="submit" class="rounded-concierge border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate shadow-sm hover:bg-slate-50">
+                    Run deduplication
+                </button>
+            </form>
         </div>
     </div>
+    {% else %}
+    <div class="space-y-6">
+        <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 class="text-lg font-semibold text-concierge-slate">Active LLM provider</h2>
+            <form method="post" class="mt-4 flex flex-col gap-4 sm:flex-row sm:items-end">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="set_active_provider">
+                <div class="min-w-0 flex-1">
+                    <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="active-provider-select">Configured provider</label>
+                    <select id="active-provider-select" name="active_provider" class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                        <option value="">Select a connected provider</option>
+                        {% for info in provider_infos %}
+                            {% if info.key_stored %}
+                                <option value="{{ info.name }}" {% if info.is_active %}selected{% endif %}>{{ info.name }}</option>
+                            {% endif %}
+                        {% endfor %}
+                    </select>
+                </div>
+                <button type="submit" class="shrink-0 rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+                    Save active provider
+                </button>
+            </form>
+            {% if active_provider %}
+                <p class="mt-3 text-xs text-slate-500">Current: <span class="font-medium text-concierge-slate">{{ active_provider }}</span></p>
+            {% else %}
+                <p class="mt-3 text-xs text-slate-500">No active provider selected yet.</p>
+            {% endif %}
+            <a class="mt-4 inline-flex w-full items-center justify-center rounded-concierge border border-slate-200 bg-slate-50 py-2 text-sm font-medium text-concierge-slate hover:bg-slate-100 sm:w-auto sm:px-4" href="{% url 'llm_test' %}">
+                Test LLM connection
+            </a>
+        </div>
+
+        <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 class="text-lg font-semibold text-concierge-slate">Integrations</h2>
+            <p class="mt-1 text-sm text-slate-600">
+                Connect keys first, then refresh model lists and set provider priority for Huey.
+            </p>
+            <div class="mt-4">
+                <h3 class="text-sm font-semibold text-concierge-slate">Provider API keys</h3>
+                <p class="mt-1 text-xs text-slate-500">
+                    <span class="inline-flex items-center gap-1.5"><span class="inline-block h-2 w-2 rounded-full bg-emerald-500" aria-hidden="true"></span> Saved</span>
+                    <span class="mx-1.5 text-slate-300">·</span>
+                    <span class="inline-flex items-center gap-1.5"><span class="inline-block h-2 w-2 rounded-full bg-slate-300" aria-hidden="true"></span> Not set</span>
+                    — click a provider to connect or replace a key. Validated on connect; stored encrypted.
+                </p>
+                <div class="mt-3 flex flex-wrap gap-2" role="group" aria-label="Choose a provider to connect">
+                    {% for info in provider_infos %}
+                    <button type="button"
+                            class="provider-key-pill inline-flex max-w-[11rem] items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-left text-xs font-semibold transition focus:outline-none focus:ring-2 focus:ring-concierge-slate focus:ring-offset-1 {% if info.key_stored %}border-emerald-200 bg-emerald-50 text-emerald-900 hover:bg-emerald-100{% else %}border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100{% endif %}"
+                            data-provider="{{ info.name }}"
+                            data-ollama-local="{% if info.name == 'Ollama Local' %}1{% else %}0{% endif %}"
+                            data-has-key="{% if info.key_stored %}1{% else %}0{% endif %}"
+                            title="{{ info.name }}{% if info.key_stored %} — key saved{% else %} — no key yet{% endif %}">
+                        {% if info.key_stored %}
+                        <span class="shrink-0 text-emerald-600" aria-hidden="true">✓</span>
+                        {% else %}
+                        <span class="shrink-0 text-slate-400" aria-hidden="true">○</span>
+                        {% endif %}
+                        <span class="min-w-0 truncate">{{ info.name }}</span>
+                    </button>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <dialog id="provider-key-dialog" class="concierge-dialog w-full max-w-md p-0">
+                <form method="post" class="rounded-concierge border border-slate-200 bg-white p-5 shadow-xl">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="connect">
+                    <input type="hidden" name="provider" id="provider-key-provider-input" value="">
+                    <div class="flex items-start justify-between gap-2">
+                        <div>
+                            <h4 id="provider-key-dialog-title" class="text-base font-semibold text-concierge-slate">Connect provider</h4>
+                            <p id="provider-key-dialog-hint" class="mt-1 text-xs text-slate-500"></p>
+                        </div>
+                        <button type="button" id="provider-key-dialog-close" class="rounded-concierge p-1 text-slate-400 hover:bg-slate-100 hover:text-concierge-slate" aria-label="Close">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                    </div>
+                    <label class="mt-4 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="provider-key-field" id="provider-key-label">API key</label>
+                    <input name="api_key" id="provider-key-field" value=""
+                           class="mt-1 w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                           autocomplete="off">
+                    <div class="mt-4 flex flex-wrap gap-2">
+                        <button type="submit" class="rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">
+                            Connect &amp; save
+                        </button>
+                        <button type="button" id="provider-key-dialog-cancel" class="rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                            Cancel
+                        </button>
+                    </div>
+                </form>
+            </dialog>
+            <script>
+                (function() {
+                    var dialog = document.getElementById('provider-key-dialog');
+                    var form = dialog && dialog.querySelector('form');
+                    var providerInput = document.getElementById('provider-key-provider-input');
+                    var keyField = document.getElementById('provider-key-field');
+                    var titleEl = document.getElementById('provider-key-dialog-title');
+                    var hintEl = document.getElementById('provider-key-dialog-hint');
+                    var labelEl = document.getElementById('provider-key-label');
+                    if (!dialog || !form || !providerInput || !keyField) return;
+
+                    function openFor(pill) {
+                        var name = pill.getAttribute('data-provider') || '';
+                        var isOllama = pill.getAttribute('data-ollama-local') === '1';
+                        var hasKey = pill.getAttribute('data-has-key') === '1';
+                        providerInput.value = name;
+                        titleEl.textContent = name;
+                        hintEl.textContent = hasKey
+                            ? 'Replacing the key will overwrite the stored secret for this provider.'
+                            : 'Paste your credential and connect. Nothing is sent until you submit.';
+                        if (isOllama) {
+                            keyField.type = 'text';
+                            labelEl.textContent = 'Ollama host / URL';
+                            keyField.placeholder = 'e.g. 192.168.1.10 or 192.168.1.10:11434';
+                        } else {
+                            keyField.type = 'password';
+                            labelEl.textContent = 'API key';
+                            keyField.placeholder = 'Paste key for ' + name;
+                        }
+                        keyField.value = '';
+                        dialog.showModal();
+                        setTimeout(function() { keyField.focus(); }, 0);
+                    }
+
+                    function closeDialog() {
+                        dialog.close();
+                    }
+
+                    dialog.addEventListener('close', function() {
+                        keyField.value = '';
+                    });
+
+                    document.querySelectorAll('.provider-key-pill').forEach(function(btn) {
+                        btn.addEventListener('click', function() { openFor(btn); });
+                    });
+                    document.getElementById('provider-key-dialog-close').addEventListener('click', closeDialog);
+                    document.getElementById('provider-key-dialog-cancel').addEventListener('click', closeDialog);
+                })();
+            </script>
+            <form method="post" class="mt-6 flex flex-wrap items-center gap-3">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="refresh_provider_models">
+                <button type="submit" class="rounded-concierge border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50">
+                    Refresh model lists from providers
+                </button>
+                <p class="text-xs text-slate-500 max-w-xl">
+                    Fills the model dropdowns by calling each connected provider (can take a few seconds). The settings page no longer does this automatically on load.
+                </p>
+            </form>
+            <form method="post" class="mt-4 rounded-concierge border border-slate-200 bg-slate-50/50 p-4">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="save_provider_preferences">
+                <h3 class="text-sm font-semibold text-concierge-slate">Provider/model preference list (for Huey + fallback)</h3>
+                <p class="mt-1 text-xs text-slate-600">
+                    Order is controlled by priority (lower runs first). Active provider is always tried first. Until you use “Refresh model lists from providers,” each row only shows your saved model (or default) in the dropdown.
+                </p>
+                <div class="mt-3 space-y-3">
+                    <div id="pref-rows" class="space-y-3">
+                    {% for row in provider_preference_rows %}
+                    {% with pref=row.pref cfg=row.cfg models=row.models %}
+                    <div class="pref-row grid gap-3 rounded-concierge border border-slate-200 bg-white p-3 sm:grid-cols-4">
+                        <input type="hidden" name="pref_id" value="{{ pref.id }}">
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Provider</label>
+                            <select name="pref_provider" class="pref-provider w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm">
+                                {% for name in connected_provider_names %}
+                                        <option value="{{ name }}" {% if name == cfg.provider %}selected{% endif %}>{{ name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Priority</label>
+                            <input type="number" min="0" step="1" name="pref_priority" value="{{ pref.priority }}"
+                                   class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Preferred model</label>
+                            <select name="pref_model"
+                                    data-selected="{{ pref.model|default:cfg.default_model }}"
+                                    class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                                {% for m in models %}
+                                    <option value="{{ m }}" {% if m == pref.model or m == cfg.default_model and not pref.model %}selected{% endif %}>{{ m }}</option>
+                                {% empty %}
+                                    <option value="{{ pref.model|default:cfg.default_model }}" selected>{{ pref.model|default:cfg.default_model|default:"(no models available)" }}</option>
+                                {% endfor %}
+                                {% if pref.model and pref.model not in models %}
+                                    <option value="{{ pref.model }}" selected>{{ pref.model }}</option>
+                                {% endif %}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Remove</label>
+                            <label class="inline-flex items-center gap-2 text-sm text-slate-700">
+                                <input type="checkbox" name="remove_pref_id" value="{{ pref.id }}"
+                                       class="h-4 w-4 rounded border-slate-300 text-red-600 focus:ring-red-500">
+                                Remove row
+                            </label>
+                        </div>
+                    </div>
+                    {% endwith %}
+                    {% empty %}
+                    <p class="text-xs text-slate-500">Connect at least one provider to configure preference order.</p>
+                    {% endfor %}
+                    </div>
+                </div>
+                <div class="mt-4 flex flex-wrap gap-2">
+                    <button type="button" id="add-pref-row" class="rounded-concierge border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-concierge-slate hover:bg-slate-50">
+                        Add row
+                    </button>
+                    <button type="submit" class="rounded-concierge border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-concierge-slate hover:bg-slate-50">
+                        Save preference list
+                    </button>
+                </div>
+            </form>
+            {{ connected_provider_names|json_script:"connected-providers-json" }}
+            {{ provider_models_map|json_script:"provider-models-map-json" }}
+            <script>
+                (function() {
+                    const rowsWrap = document.getElementById('pref-rows');
+                    const addBtn = document.getElementById('add-pref-row');
+                    if (!rowsWrap || !addBtn) return;
+                    const connected = JSON.parse(document.getElementById('connected-providers-json').textContent || '[]');
+                    const providerModelsMap = JSON.parse(document.getElementById('provider-models-map-json').textContent || '{}');
+                    function buildProviderOptions(selected) {
+                        return connected.map(function(p) {
+                            const sel = p === selected ? ' selected' : '';
+                            return '<option value="' + p + '"' + sel + '>' + p + '</option>';
+                        }).join('');
+                    }
+                    function buildModelOptions(provider, selected) {
+                        const models = providerModelsMap[provider] || [];
+                        if (!models.length) {
+                            const fallback = selected || '';
+                            const label = fallback || '(no models available)';
+                            return '<option value="' + fallback + '" selected>' + label + '</option>';
+                        }
+                        return models.map(function(m) {
+                            const sel = m === selected ? ' selected' : '';
+                            return '<option value="' + m + '"' + sel + '>' + m + '</option>';
+                        }).join('');
+                    }
+                    function wireProviderChange(row) {
+                        const providerSelect = row.querySelector('select[name="pref_provider"]');
+                        const modelSelect = row.querySelector('select[name="pref_model"]');
+                        if (!providerSelect || !modelSelect) return;
+                        providerSelect.addEventListener('change', function() {
+                            const selectedProvider = providerSelect.value;
+                            modelSelect.innerHTML = buildModelOptions(selectedProvider, '');
+                        });
+                    }
+                    addBtn.addEventListener('click', function() {
+                        if (!connected.length) return;
+                        const provider = connected[0];
+                        const row = document.createElement('div');
+                        row.className = 'pref-row grid gap-3 rounded-concierge border border-slate-200 bg-white p-3 sm:grid-cols-4';
+                        row.innerHTML = '' +
+                            '<input type="hidden" name="pref_id" value="">' +
+                            '<div><label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Provider</label><select name="pref_provider" class="pref-provider w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm">' + buildProviderOptions(provider) + '</select></div>' +
+                            '<div><label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Priority</label><input type="number" min="0" step="1" name="pref_priority" value="100" class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm"></div>' +
+                            '<div><label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Preferred model</label><select name="pref_model" class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm">' + buildModelOptions(provider, '') + '</select></div>' +
+                            '<div><label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Remove</label><button type="button" class="remove-unsaved rounded-concierge border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50">Remove row</button></div>';
+                        rowsWrap.appendChild(row);
+                        wireProviderChange(row);
+                        const removeBtn = row.querySelector('.remove-unsaved');
+                        if (removeBtn) {
+                            removeBtn.addEventListener('click', function() {
+                                row.remove();
+                            });
+                        }
+                    });
+                    rowsWrap.querySelectorAll('.pref-row').forEach(function(row) {
+                        wireProviderChange(row);
+                    });
+                })();
+            </script>
+        </div>
+    </div>
+    {% endif %}
 </div>
 {% endblock %}

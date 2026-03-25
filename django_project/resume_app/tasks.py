@@ -1,55 +1,142 @@
-from huey.contrib.djhuey import db_task
+from django.core.cache import cache
+from django.utils import timezone
+from django.db import models
+from django.conf import settings
+from huey import crontab
+from huey.contrib.djhuey import db_task, db_periodic_task
 
-from .models import OptimizedResume, AgentLog, LLMProviderConfig
+from .models import (
+    AppAutomationSettings,
+    OptimizedResume,
+    AgentLog,
+    LLMProviderConfig,
+    UserResume,
+    JobSearchTask,
+    JobSearchTaskRun,
+    PipelineEntry,
+    JobListing,
+    JobListingAction,
+    Track,
+    JobListingTrackMetrics,
+    JobDescription,
+    OptimizerWorkflow,
+)
+from datetime import timedelta
+from .job_sources import DEFAULT_SITE_NAMES
+from .job_search_core import run_job_search_core, recompute_preferences_for_jobs
 from .agents import (
     create_workflow,
     get_llm,
     DEFAULT_WRITER_PROMPT,
     DEFAULT_ATS_JUDGE_PROMPT,
     DEFAULT_RECRUITER_JUDGE_PROMPT,
+    run_matching,
+    DEFAULT_MATCHING_PROMPT,
+    VALID_STEP_IDS,
 )
 try:
     from .agents import create_workflow_from_steps
 except ImportError:
     create_workflow_from_steps = None  # older agents.py without configurable workflow
+from .crypto import decrypt_api_key
 from .services import parse_pdf
 from .callbacks import TokenUsageCallback
 from .llm_services import is_auth_error
+from .llm_session import get_runtime_provider_candidates, get_active_llm_provider
+from .prompt_store import get_effective_prompts
 import time
+import logging
+
+logger = logging.getLogger(__name__)
+
+#
+# Vetting matching (resume vs job) evaluation
+#
+VETTING_MATCHING_LOCK_KEY = "vetting_matching_task_running"
+VETTING_MATCHING_LOCK_TIMEOUT = 3600  # 1 hour max
+RESUME_MATCHING_SNIPPET_CHARS = 8000
 
 
-@db_task()
-def run_optimize_resume_task(
-    resume_id,
-    job_description_id,
-    provider,
-    api_key,
-    model=None,
-    prompts=None,
-    debug=False,
-    rate_limit_delay=0,
-    max_iterations=3,
-    score_threshold=85,
-    workflow_steps=None,
-    loop_to=None,
-):
-    """Huey async task: enqueue and run optimize_resume_task in a worker."""
-    return optimize_resume_task(
-        resume_id=resume_id,
-        job_description_id=job_description_id,
-        provider=provider,
-        api_key=api_key,
-        model=model,
-        prompts=prompts,
-        debug=debug,
-        rate_limit_delay=rate_limit_delay,
-        max_iterations=max_iterations,
-        score_threshold=score_threshold,
-        workflow_steps=workflow_steps,
-        loop_to=loop_to,
+def apply_vetting_to_applying_promotions(entry_ids: list[int] | None = None) -> int:
+    """
+    Move VETTING entries to APPLYING when interview probability >= configured minimum.
+    If entry_ids is set, only those ids are considered (still must match stage/score rules).
+    """
+    cfg = AppAutomationSettings.get_solo()
+    if not cfg.vetting_to_applying_enabled:
+        return 0
+    y = int(cfg.vetting_interview_probability_min)
+    qs = PipelineEntry.objects.filter(
+        stage=PipelineEntry.Stage.VETTING,
+        removed_at__isnull=True,
+        vetting_interview_probability__isnull=False,
+        vetting_interview_probability__gte=y,
+    )
+    if entry_ids is not None:
+        qs = qs.filter(id__in=entry_ids)
+    n = 0
+    for entry in qs:
+        entry.move_to_applying(save=True)
+        n += 1
+        try:
+            enqueue_applying_resume_optimization_task([entry.id], force_new=False)
+        except Exception:
+            logger.exception(
+                "[apply_vetting_to_applying_promotions] enqueue resume optimization failed entry_id=%s",
+                entry.id,
+            )
+    return n
+
+
+def validate_cron(cron_string: str) -> None:
+    """Validate cron expression. Raises ValueError if invalid."""
+    if not cron_string or not isinstance(cron_string, str):
+        raise ValueError("Cron expression is required.")
+    try:
+        import croniter
+        croniter.croniter(cron_string)
+    except Exception as e:
+        raise ValueError(f"Invalid cron expression: expected 5 fields (minute hour day month weekday). {e}") from e
+
+
+def get_next_run_at(cron_string: str, from_time=None):
+    """Return next run datetime from cron string. from_time defaults to now (timezone-aware)."""
+    from datetime import datetime
+    import croniter
+    if from_time is None:
+        from_time = timezone.now()
+    if timezone.is_naive(from_time):
+        from_time = timezone.make_aware(from_time)
+    it = croniter.croniter(cron_string, from_time)
+    next_dt = it.get_next(datetime)
+    if timezone.is_naive(next_dt):
+        next_dt = timezone.make_aware(next_dt)
+    return next_dt
+
+
+# Lock key so only one job-search task runs at a time (avoids overlap)
+JOB_SEARCH_TASK_LOCK_KEY = "job_search_task_running"
+JOB_SEARCH_TASK_LOCK_TIMEOUT = 3600  # 1 hour max
+
+
+def _create_agent_log(optimized_resume, steps, prev_node, accumulated):
+    """Create one AgentLog for the completed node; resolve step_display from steps if step_*."""
+    step_display = prev_node
+    if steps and prev_node and prev_node.startswith("step_"):
+        try:
+            idx = int(prev_node.split("_", 1)[1])
+            if 0 <= idx < len(steps):
+                step_display = steps[idx]
+        except (ValueError, IndexError):
+            pass
+    AgentLog.objects.create(
+        optimized_resume=optimized_resume,
+        step_name=step_display,
+        thought=accumulated.get(prev_node) or {},
     )
 
 
+@db_task()
 def optimize_resume_task(
     resume_id,
     job_description_id,
@@ -65,7 +152,8 @@ def optimize_resume_task(
     loop_to=None,
 ):
     """
-    Runs in a plain thread (not Celery).
+    Huey async task: run the resume optimizer workflow for a single OptimizedResume.
+
     Fetches OptimizedResume once at top; on any failure sets status to failed.
     """
     try:
@@ -102,6 +190,7 @@ def optimize_resume_task(
         prompts = prompts or {}
         initial_state = {
             "resume_text": resume_text,
+            "source_resume_text": resume_text,
             "job_description": job_desc,
             "optimized_resume": "",
             "ats_score": 0,
@@ -138,19 +227,7 @@ def optimize_resume_task(
                 node_name = str(node_name) if not isinstance(node_name, str) else node_name
                 last_state.update(state_update)
                 if prev_node is not None and node_name != prev_node:
-                    step_display = prev_node
-                    if steps and prev_node.startswith("step_"):
-                        try:
-                            idx = int(prev_node.split("_", 1)[1])
-                            if 0 <= idx < len(steps):
-                                step_display = steps[idx]
-                        except (ValueError, IndexError):
-                            pass
-                    AgentLog.objects.create(
-                        optimized_resume=optimized_resume,
-                        step_name=step_display,
-                        thought=accumulated[prev_node],
-                    )
+                    _create_agent_log(optimized_resume, steps, prev_node, accumulated)
                 if node_name not in accumulated:
                     accumulated[node_name] = {}
                 accumulated[node_name].update(state_update)
@@ -166,19 +243,7 @@ def optimize_resume_task(
                 if rate_limit_delay and float(rate_limit_delay) > 0:
                     time.sleep(float(rate_limit_delay))
         if prev_node is not None:
-            step_display = prev_node
-            if steps and prev_node.startswith("step_"):
-                try:
-                    idx = int(prev_node.split("_", 1)[1])
-                    if 0 <= idx < len(steps):
-                        step_display = steps[idx]
-                except (ValueError, IndexError):
-                    pass
-            AgentLog.objects.create(
-                optimized_resume=optimized_resume,
-                step_name=step_display,
-                thought=accumulated[prev_node],
-            )
+            _create_agent_log(optimized_resume, steps, prev_node, accumulated)
 
         optimized_resume.refresh_from_db()
         if optimized_resume.status == OptimizedResume.STATUS_FAILED and (optimized_resume.error_message or "").strip() == CANCELLED_MESSAGE:
@@ -203,4 +268,809 @@ def optimize_resume_task(
         optimized_resume.status = OptimizedResume.STATUS_FAILED
         optimized_resume.error_message = str(e)
         optimized_resume.save()
+        return {"status": "error", "message": str(e)}
+
+
+PIPELINE_OPT_MIN_JD_CHARS = 50
+
+
+def _build_pipeline_job_description(job: JobListing) -> str:
+    title = (job.title or "").strip()
+    company = (job.company_name or "").strip()
+    loc = (job.location or "").strip()
+    header = "\n".join(
+        x
+        for x in (
+            f"Title: {title}" if title else "",
+            f"Company: {company}" if company else "",
+            f"Location: {loc}" if loc else "",
+        )
+        if x
+    )
+    desc = (job.description or "").strip()
+    url = (job.url or "").strip()
+    tail_parts = [p for p in (desc, f"URL: {url}" if url else "") if p]
+    tail = "\n\n".join(tail_parts)
+    if header and tail:
+        return f"{header}\n\n{tail}".strip()
+    return (header or tail).strip()
+
+
+def _resolve_user_resume_for_track(track_slug: str) -> UserResume | None:
+    track_slug = (track_slug or "").strip().lower()
+    latest_track = (
+        UserResume.objects.filter(track=track_slug).order_by("-uploaded_at").first()
+        if track_slug
+        else None
+    )
+    if latest_track and latest_track.file:
+        return latest_track
+    latest = UserResume.objects.order_by("-uploaded_at").first()
+    if latest and latest.file:
+        return latest
+    return None
+
+
+def _resolve_llm_for_pipeline_optimization() -> tuple[str | None, LLMProviderConfig | None]:
+    provider = get_active_llm_provider(None)
+    config = None
+    if provider:
+        config = (
+            LLMProviderConfig.objects.filter(provider=provider)
+            .exclude(encrypted_api_key="")
+            .first()
+        )
+    if not config:
+        cands = get_runtime_provider_candidates()
+        if cands:
+            cand = cands[0]
+            config = cand["config"]
+            provider = cand["provider"]
+    return provider, config
+
+
+def _enqueue_single_pipeline_resume_optimization(
+    pipeline_entry_id: int,
+    *,
+    force_new: bool,
+) -> dict:
+    """
+    Create JobDescription + OptimizedResume for a pipeline entry and enqueue optimize_resume_task.
+    When force_new is False, skip if another run for this entry is queued or running.
+    """
+    try:
+        entry = (
+            PipelineEntry.objects.filter(
+                id=pipeline_entry_id,
+                removed_at__isnull=True,
+            )
+            .select_related("job_listing")
+            .first()
+        )
+    except Exception:
+        entry = None
+    if not entry:
+        return {"status": "error", "message": "Pipeline entry not found", "entry_id": pipeline_entry_id}
+    if entry.stage != PipelineEntry.Stage.APPLYING:
+        return {
+            "status": "skipped",
+            "message": "Entry is not in Applying stage",
+            "entry_id": pipeline_entry_id,
+        }
+
+    if not force_new:
+        active = OptimizedResume.objects.filter(
+            pipeline_entry_id=entry.id,
+            status__in=(OptimizedResume.STATUS_QUEUED, OptimizedResume.STATUS_RUNNING),
+        ).exists()
+        if active:
+            return {
+                "status": "skipped",
+                "message": "Optimization already queued or running",
+                "entry_id": pipeline_entry_id,
+            }
+
+    job = entry.job_listing
+    jd_text = _build_pipeline_job_description(job)
+    if len(jd_text) < PIPELINE_OPT_MIN_JD_CHARS:
+        return {
+            "status": "error",
+            "message": f"Job description too short (min {PIPELINE_OPT_MIN_JD_CHARS} chars)",
+            "entry_id": pipeline_entry_id,
+        }
+
+    user_resume = _resolve_user_resume_for_track(entry.track)
+    if not user_resume or not user_resume.file:
+        return {
+            "status": "error",
+            "message": "No resume PDF for this track (upload in Optimizer)",
+            "entry_id": pipeline_entry_id,
+        }
+
+    provider, config = _resolve_llm_for_pipeline_optimization()
+    if not provider or not config:
+        return {
+            "status": "error",
+            "message": "No LLM configured with API key",
+            "entry_id": pipeline_entry_id,
+        }
+    api_key = decrypt_api_key(config.encrypted_api_key or "")
+    if not (api_key or "").strip():
+        return {
+            "status": "error",
+            "message": "No API key for active LLM provider",
+            "entry_id": pipeline_entry_id,
+        }
+    model = (config.default_model or "").strip() or None
+
+    pe = get_effective_prompts(None)
+    prompts = {
+        "writer": pe.get("writer"),
+        "ats_judge": pe.get("ats_judge"),
+        "recruiter_judge": pe.get("recruiter_judge"),
+    }
+
+    solo = AppAutomationSettings.get_solo()
+    workflow: OptimizerWorkflow | None = solo.applying_optimizer_workflow
+    workflow_steps = None
+    loop_to = None
+    max_iterations = 3
+    score_threshold = 85
+    if workflow:
+        if workflow.steps and isinstance(workflow.steps, list):
+            workflow_steps = [
+                s for s in workflow.steps if isinstance(s, str) and s in VALID_STEP_IDS
+            ]
+            if not workflow_steps:
+                workflow_steps = None
+        loop_to = (workflow.loop_to or "").strip() or None
+        if loop_to and loop_to not in VALID_STEP_IDS:
+            loop_to = None
+        if workflow.max_iterations:
+            max_iterations = max(1, min(int(workflow.max_iterations), 5))
+        if workflow.score_threshold is not None:
+            st = int(workflow.score_threshold)
+            score_threshold = max(0, min(100, st))
+
+    jd = JobDescription.objects.create(content=jd_text)
+    opt = OptimizedResume.objects.create(
+        original_resume=user_resume,
+        job_description=jd,
+        status=OptimizedResume.STATUS_QUEUED,
+        pipeline_entry=entry,
+        optimizer_workflow=workflow,
+    )
+
+    optimize_resume_task(
+        opt.id,
+        jd.id,
+        provider,
+        api_key or "",
+        model,
+        prompts=prompts,
+        debug=True,
+        workflow_steps=workflow_steps,
+        loop_to=loop_to,
+        max_iterations=max_iterations,
+        score_threshold=score_threshold,
+    )
+    return {
+        "status": "ok",
+        "entry_id": pipeline_entry_id,
+        "optimized_resume_id": opt.id,
+    }
+
+
+@db_task()
+def enqueue_applying_resume_optimization_task(
+    pipeline_entry_ids: list[int],
+    force_new: bool = False,
+):
+    """Huey: enqueue resume optimization for Applying-stage pipeline entries."""
+    if not pipeline_entry_ids:
+        return {"status": "skipped", "message": "No entry ids"}
+    results = []
+    for eid in pipeline_entry_ids:
+        try:
+            eid_int = int(eid)
+        except (TypeError, ValueError):
+            results.append({"status": "error", "message": "Invalid id", "entry_id": eid})
+            continue
+        results.append(_enqueue_single_pipeline_resume_optimization(eid_int, force_new=force_new))
+    return {"status": "success", "results": results}
+
+
+@db_task()
+def run_job_search_task(task_id):
+    """
+    Huey task: run one JobSearchTask (fetch, filter, rank, add to pipeline).
+    Uses a global lock so only one job-search task runs at a time.
+    """
+    if not cache.add(JOB_SEARCH_TASK_LOCK_KEY, 1, JOB_SEARCH_TASK_LOCK_TIMEOUT):
+        logger.warning("[run_job_search_task] Skipping task %s: another job search task is running", task_id)
+        return {"status": "skipped", "message": "Another job search task is running"}
+    try:
+        return _run_job_search_task_impl(task_id)
+    finally:
+        cache.delete(JOB_SEARCH_TASK_LOCK_KEY)
+
+
+def _run_job_search_task_impl(task_id):
+    try:
+        task = JobSearchTask.objects.get(id=task_id)
+    except JobSearchTask.DoesNotExist:
+        return {"status": "error", "message": "JobSearchTask not found"}
+    if not task.is_active:
+        return {"status": "skipped", "message": "Task is inactive"}
+
+    run = JobSearchTaskRun.objects.create(
+        task=task,
+        status=JobSearchTaskRun.STATUS_RUNNING,
+    )
+    try:
+        jobs_fetched, jobs_after_filter, jobs_out, _refs = run_job_search_core(
+            search_term=task.search_term,
+            location=task.location or None,
+            track=task.track or None,
+            results_wanted=task.jobs_to_fetch,
+            site_name=task.site_name if isinstance(task.site_name, list) else list(DEFAULT_SITE_NAMES),
+        )
+    except Exception as e:
+        logger.exception("[run_job_search_task] task_id=%s core failed: %s", task_id, e)
+        run.status = JobSearchTaskRun.STATUS_FAILED
+        run.finished_at = timezone.now()
+        run.error_message = str(e)
+        run.save()
+        return {"status": "error", "message": str(e)}
+
+    jobs_added_to_pipeline = 0
+    for payload in jobs_out:
+        job_id = payload.id
+        pe = PipelineEntry.objects.filter(job_listing_id=job_id, track=task.track).first()
+        if pe is None:
+            PipelineEntry.objects.create(
+                job_listing_id=job_id,
+                track=task.track,
+                stage=PipelineEntry.Stage.PIPELINE,
+            )
+            jobs_added_to_pipeline += 1
+        elif pe.removed_at is not None:
+            pass  # user soft-deleted; do not re-add
+
+    try:
+        from .job_dedupe import dedupe_pipeline_entries
+
+        dedupe_result = dedupe_pipeline_entries(
+            track_slug=task.track,
+            stage="pipeline",
+            include_done=False,
+        )
+        if dedupe_result.get("entries_removed"):
+            logger.info(
+                "[run_job_search_task] post-search dedupe track=%s removed=%s groups=%s",
+                task.track,
+                dedupe_result.get("entries_removed"),
+                dedupe_result.get("duplicate_groups"),
+            )
+    except Exception:
+        logger.exception("[run_job_search_task] post-search dedupe failed task_id=%s", task_id)
+
+    run.jobs_fetched = jobs_fetched
+    run.jobs_after_filter = jobs_after_filter
+    run.jobs_added_to_pipeline = jobs_added_to_pipeline
+    run.status = JobSearchTaskRun.STATUS_COMPLETED
+    run.finished_at = timezone.now()
+    run.save()
+    logger.info(
+        "[run_job_search_task] task_id=%s done: fetched=%d after_filter=%d added=%d",
+        task_id, jobs_fetched, jobs_after_filter, jobs_added_to_pipeline,
+    )
+    return {"status": "success", "task_id": task_id}
+
+
+@db_task()
+def evaluate_vetting_matching_task(
+    pipeline_entry_ids: list[int],
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
+    matching_prompt: str | None = None,
+):
+    """
+    Huey task: evaluate PipelineEntry rows in VETTING stage.
+
+    Uses:
+    - Matching prompt template (optional override)
+    - Resume text from the latest `UserResume` associated with the entry's `track`
+      (fallback: latest resume overall).
+    Writes:
+    - vetting_interview_probability
+    - vetting_interview_reasoning
+    - vetting_interview_resume_id (so we can skip if unchanged)
+    """
+    if not pipeline_entry_ids:
+        return {"status": "skipped", "message": "No pipeline_entry_ids provided"}
+
+    if not cache.add(VETTING_MATCHING_LOCK_KEY, 1, VETTING_MATCHING_LOCK_TIMEOUT):
+        logger.warning(
+            "[evaluate_vetting_matching_task] Skipping: another vetting matching task is running"
+        )
+        return {"status": "skipped", "message": "Another vetting matching task is running"}
+
+    try:
+        entries = list(
+            PipelineEntry.objects.filter(
+                id__in=pipeline_entry_ids,
+                stage=PipelineEntry.Stage.VETTING,
+                removed_at__isnull=True,
+            )
+            .select_related("job_listing")
+        )
+        if not entries:
+            return {"status": "skipped", "message": "No entries in VETTING stage"}
+
+        # Resolve LLM (provider/model) from args or DB-backed preference order.
+        resolved_provider = llm_provider
+        config = None
+        if resolved_provider:
+            config = (
+                LLMProviderConfig.objects.filter(provider=resolved_provider)
+                .exclude(encrypted_api_key="")
+                .first()
+            )
+        if not config:
+            cands = get_runtime_provider_candidates()
+            if cands:
+                cand = cands[0]
+                config = cand["config"]
+                resolved_provider = cand["provider"]
+                if not llm_model:
+                    llm_model = cand["model"]
+
+        if not resolved_provider or not config:
+            return {"status": "error", "message": "No LLM configured (LLMProviderConfig missing)"}  # noqa: E501
+
+        api_key = decrypt_api_key(config.encrypted_api_key or "")
+        chosen_model = llm_model or config.default_model or None
+        llm = get_llm(resolved_provider, api_key or None, chosen_model)
+
+        jd_max_chars = getattr(settings, "JOB_MATCHING_JD_MAX_CHARS", 12000)
+        now = timezone.now()
+        resume_snippet_map: dict[str, tuple[UserResume, str]] = {}
+
+        # Parse each track's resume once per task.
+        tracks = {e.track for e in entries if e.track}
+        latest_overall = UserResume.objects.order_by("-uploaded_at").first()
+        for track in tracks:
+            latest = UserResume.objects.filter(track=track).order_by("-uploaded_at").first() or latest_overall
+            if not latest or not latest.file:
+                continue
+            try:
+                resume_text = parse_pdf(latest.file.path)
+                resume_snippet_map[track] = (latest, resume_text[:RESUME_MATCHING_SNIPPET_CHARS])
+            except Exception as e:
+                logger.exception(
+                    "[evaluate_vetting_matching_task] Could not parse resume (track=%s, resume_id=%s): %s",
+                    track,
+                    getattr(latest, "id", None),
+                    e,
+                )
+                continue
+
+        updated = 0
+        skipped = 0
+        errors = []
+        for entry in entries:
+            track = entry.track
+            resolved = resume_snippet_map.get(track)
+            if not resolved:
+                skipped += 1
+                continue
+            resume_obj, resume_snippet = resolved
+
+            # Skip if we already evaluated using the same resume.
+            if (
+                entry.vetting_interview_probability is not None
+                and entry.vetting_interview_resume_id == resume_obj.id
+            ):
+                skipped += 1
+                continue
+
+            jd = (entry.job_listing.description or "").strip()
+            if not jd:
+                skipped += 1
+                continue
+            jd = jd[:jd_max_chars]
+
+            try:
+                # Retry a couple times: models sometimes omit interview_probability
+                # even when requested via schema.
+                result = None
+                for _attempt in range(3):
+                    result = run_matching(
+                        resume_snippet,
+                        jd,
+                        llm,
+                        prompt_template=matching_prompt,
+                    )
+                    if result.get("interview_probability") is not None:
+                        break
+
+                ip = (result or {}).get("interview_probability")
+                reasoning = ((result or {}).get("reasoning") or "").strip()
+                try:
+                    ip_int = int(ip) if ip is not None else None
+                    if ip_int is not None:
+                        ip_int = max(0, min(100, ip_int))
+                except (TypeError, ValueError):
+                    ip_int = None
+
+                entry.vetting_interview_probability = ip_int
+                entry.vetting_interview_reasoning = reasoning[:2000] if reasoning else ""
+                entry.vetting_interview_resume_id = resume_obj.id
+                entry.vetting_interview_scored_at = now
+                entry.save(
+                    update_fields=[
+                        "vetting_interview_probability",
+                        "vetting_interview_reasoning",
+                        "vetting_interview_resume_id",
+                        "vetting_interview_scored_at",
+                    ]
+                )
+                updated += 1
+                apply_vetting_to_applying_promotions([entry.id])
+            except Exception as e:
+                logger.exception("[evaluate_vetting_matching_task] entry_id=%s failed: %s", entry.id, e)
+                errors.append(f"Entry {entry.id}: {e}")
+
+        return {
+            "status": "success",
+            "updated": updated,
+            "skipped": skipped,
+            "errors": errors[:20],
+        }
+    finally:
+        cache.delete(VETTING_MATCHING_LOCK_KEY)
+
+
+def apply_pipeline_auto_promotions() -> int:
+    """
+    Promote PIPELINE (or legacy blank stage) entries to VETTING when per-track Pref margin
+    meets the configured minimum; enqueue vetting matching for promoted rows.
+    """
+    cfg = AppAutomationSettings.get_solo()
+    if not cfg.pipeline_to_vetting_enabled:
+        return 0
+    min_margin = cfg.pipeline_preference_margin_min
+    entries = (
+        PipelineEntry.objects.filter(removed_at__isnull=True)
+        .filter(models.Q(stage="") | models.Q(stage=PipelineEntry.Stage.PIPELINE))
+        .only("id", "job_listing_id", "track")
+    )
+    promoted: list[int] = []
+    for entry in entries:
+        m = (
+            JobListingTrackMetrics.objects.filter(
+                job_listing_id=entry.job_listing_id,
+                track=entry.track,
+            )
+            .only("preference_margin")
+            .first()
+        )
+        if not m or m.preference_margin is None:
+            continue
+        if m.preference_margin < min_margin:
+            continue
+        entry.move_to_vetting(save=True)
+        promoted.append(entry.id)
+    if promoted:
+        evaluate_vetting_matching_task(
+            promoted, llm_provider=None, llm_model=None, matching_prompt=None
+        )
+    return len(promoted)
+
+
+@db_periodic_task(crontab(minute="*/20"))
+def enqueue_due_vetting_matching_tasks():
+    """
+    Periodically backfill vetting interview probability for entries missing it.
+    Keeps existing rows correct when the "latest" resume changes per track.
+    """
+    # Limit work each tick; matching calls are expensive.
+    max_to_enqueue = 20
+    candidate_entries = (
+        PipelineEntry.objects.filter(
+            stage=PipelineEntry.Stage.VETTING,
+            removed_at__isnull=True,
+        )
+        .order_by("-added_at")[:200]
+        .only(
+            "id",
+            "track",
+            "vetting_interview_probability",
+            "vetting_interview_resume_id",
+        )
+    )
+
+    entries = list(candidate_entries)
+    if not entries:
+        return None
+
+    # Resolve latest resume id per track.
+    latest_overall = UserResume.objects.order_by("-uploaded_at").first()
+    latest_by_track: dict[str, UserResume | None] = {}
+    for track in {e.track for e in entries if e.track}:
+        latest_by_track[track] = UserResume.objects.filter(track=track).order_by("-uploaded_at").first() or latest_overall
+
+    to_enqueue: list[int] = []
+    for e in entries:
+        latest = latest_by_track.get(e.track)
+        if not latest:
+            continue
+        if (
+            e.vetting_interview_probability is None
+            or e.vetting_interview_resume_id != latest.id
+        ):
+            to_enqueue.append(e.id)
+        if len(to_enqueue) >= max_to_enqueue:
+            break
+
+    if to_enqueue:
+        evaluate_vetting_matching_task(to_enqueue, llm_provider=None, llm_model=None, matching_prompt=None)
+
+    apply_vetting_to_applying_promotions()
+
+    return None
+
+
+def _iter_track_job_ids(track: str, include_metrics: bool) -> list[int]:
+    """
+    Common helper to gather job ids for a track:
+    - All jobs in pipeline for the track
+    - All saved jobs (global)
+    - Optionally, all jobs that already have metrics for this track.
+    """
+    pipeline_job_ids = list(
+        PipelineEntry.objects.filter(track=track, removed_at__isnull=True)
+        .values_list("job_listing_id", flat=True)
+        .distinct()
+    )
+    saved_job_ids = list(
+        JobListingAction.objects.filter(action=JobListingAction.ActionType.SAVED)
+        .values_list("job_listing_id", flat=True)
+        .distinct()
+    )
+    job_ids = set(pipeline_job_ids) | set(saved_job_ids)
+    if include_metrics:
+        metrics_job_ids = list(
+            JobListingTrackMetrics.objects.filter(track=track)
+            .values_list("job_listing_id", flat=True)
+            .distinct()
+        )
+        job_ids |= set(metrics_job_ids)
+    return sorted(job_ids)
+
+
+@db_periodic_task(crontab(minute="*"))
+def enqueue_due_job_search_tasks():
+    """
+    Runs every minute: find JobSearchTasks where next_run_at <= now, enqueue one,
+    then update next_run_at to the next occurrence. Only one task enqueued per tick
+    to avoid overlap (run_job_search_task also uses a lock).
+    """
+    now = timezone.now()
+    due = (
+        JobSearchTask.objects.filter(is_active=True, next_run_at__isnull=False)
+        .filter(next_run_at__lte=now)
+        .order_by("next_run_at", "start_time")[:1]
+    )
+    for task in due:
+        try:
+            next_run = get_next_run_at(task.frequency, from_time=now)
+            task.next_run_at = next_run
+            task.save(update_fields=["next_run_at", "updated_at"])
+            run_job_search_task(task.id)
+            logger.info("[enqueue_due_job_search_tasks] enqueued task_id=%s next_run_at=%s", task.id, next_run)
+        except Exception as e:
+            logger.exception("[enqueue_due_job_search_tasks] task_id=%s failed: %s", task.id, e)
+    return None
+
+
+# Runs stuck in RUNNING longer than this are marked FAILED (worker likely died or fetch hung)
+JOB_SEARCH_RUN_STALE_MINUTES = 60
+
+
+@db_periodic_task(crontab(minute="*/15"))
+def mark_stale_job_search_runs_failed():
+    """
+    Mark JobSearchTaskRun rows that have been RUNNING longer than JOB_SEARCH_RUN_STALE_MINUTES
+    as FAILED. Jobs are only added when a run reaches COMPLETED; stuck RUNNING runs mean
+    the worker never finished (e.g. fetch hung or worker restarted).
+    """
+    threshold = timezone.now() - timedelta(minutes=JOB_SEARCH_RUN_STALE_MINUTES)
+    stale = JobSearchTaskRun.objects.filter(
+        status=JobSearchTaskRun.STATUS_RUNNING,
+        started_at__lt=threshold,
+    )
+    count = stale.update(
+        status=JobSearchTaskRun.STATUS_FAILED,
+        finished_at=timezone.now(),
+        error_message="Run timed out (marked stale after {} minutes). Worker may have died or job fetch hung.".format(
+            JOB_SEARCH_RUN_STALE_MINUTES
+        ),
+    )
+    if count:
+        logger.info("[mark_stale_job_search_runs_failed] marked %d run(s) as failed", count)
+    return None
+
+
+@db_periodic_task(crontab(minute="*/30"))
+def refresh_pipeline_preferences_delta():
+    """
+    Every 30 minutes: compute metrics only for jobs that don't yet have
+    JobListingTrackMetrics for their track (delta refresh).
+    """
+    track_slugs = list(Track.objects.values_list("slug", flat=True))
+    if not track_slugs:
+        return None
+    batch_size = 100
+
+    for track in track_slugs:
+        try:
+            job_ids = _iter_track_job_ids(track, include_metrics=False)
+            if not job_ids:
+                continue
+
+            existing_ids = set(
+                JobListingTrackMetrics.objects.filter(track=track, job_listing_id__in=job_ids)
+                .values_list("job_listing_id", flat=True)
+            )
+            missing_ids = [jid for jid in job_ids if jid not in existing_ids]
+            if not missing_ids:
+                continue
+
+            logger.info(
+                "[refresh_pipeline_preferences_delta] track=%s jobs_to_score=%d",
+                track,
+                len(missing_ids),
+            )
+
+            for i in range(0, len(missing_ids), batch_size):
+                batch_ids = missing_ids[i : i + batch_size]
+                jobs = list(JobListing.objects.filter(id__in=batch_ids))
+                if not jobs:
+                    continue
+                scores = recompute_preferences_for_jobs(jobs, track=track)
+                metrics_to_create = []
+                for job in jobs:
+                    data = scores.get(job.id) or {}
+                    metrics_to_create.append(
+                        JobListingTrackMetrics(
+                            job_listing=job,
+                            track=track,
+                            focus_percent=data.get("focus_percent"),
+                            focus_after_penalty=data.get("focus_after_penalty"),
+                            preference_margin=data.get("preference_margin"),
+                            last_scored_at=timezone.now(),
+                        )
+                    )
+                if metrics_to_create:
+                    JobListingTrackMetrics.objects.bulk_create(
+                        metrics_to_create, ignore_conflicts=True
+                    )
+        except Exception as e:
+            logger.exception(
+                "[refresh_pipeline_preferences_delta] track=%s failed: %s", track, e
+            )
+    try:
+        apply_pipeline_auto_promotions()
+    except Exception as e:
+        logger.exception("[refresh_pipeline_preferences_delta] apply_pipeline_auto_promotions failed: %s", e)
+    return None
+
+
+@db_periodic_task(crontab(minute=0, hour="0"))
+def refresh_pipeline_preferences_full():
+    """
+    Once per day: full recompute of metrics for all jobs that are in pipeline /
+    saved or already have metrics, and purge strongly negative jobs from pipeline.
+    """
+    from datetime import timedelta
+
+    track_slugs = list(Track.objects.values_list("slug", flat=True))
+    if not track_slugs:
+        return None
+    batch_size = 100
+    purge_threshold = -2  # preference_margin below this is auto-purged
+
+    for track in track_slugs:
+        try:
+            job_ids = _iter_track_job_ids(track, include_metrics=True)
+            if not job_ids:
+                continue
+
+            logger.info(
+                "[refresh_pipeline_preferences_full] track=%s jobs_to_score=%d",
+                track,
+                len(job_ids),
+            )
+
+            for i in range(0, len(job_ids), batch_size):
+                batch_ids = job_ids[i : i + batch_size]
+                jobs = list(JobListing.objects.filter(id__in=batch_ids))
+                if not jobs:
+                    continue
+                scores = recompute_preferences_for_jobs(jobs, track=track)
+
+                # Upsert metrics rows
+                for job in jobs:
+                    data = scores.get(job.id) or {}
+                    JobListingTrackMetrics.objects.update_or_create(
+                        job_listing=job,
+                        track=track,
+                        defaults={
+                            "focus_percent": data.get("focus_percent"),
+                            "focus_after_penalty": data.get("focus_after_penalty"),
+                            "preference_margin": data.get("preference_margin"),
+                            "last_scored_at": timezone.now(),
+                        },
+                    )
+
+            # After metrics are updated, purge strongly negative jobs from pipeline
+            now = timezone.now()
+            bad_ids = list(
+                JobListingTrackMetrics.objects.filter(
+                    track=track,
+                    preference_margin__lt=purge_threshold,
+                ).values_list("job_listing_id", flat=True)
+            )
+            if bad_ids:
+                entries = PipelineEntry.objects.filter(
+                    track=track,
+                    removed_at__isnull=True,
+                    job_listing_id__in=bad_ids,
+                ).filter(
+                    models.Q(stage="") | models.Q(stage=PipelineEntry.Stage.PIPELINE)
+                )
+                count = 0
+                for entry in entries:
+                    entry.mark_deleted(save=True)
+                    count += 1
+                if count:
+                    logger.info(
+                        "[refresh_pipeline_preferences_full] track=%s purged %d job(s) from pipeline",
+                        track,
+                        count,
+                    )
+        except Exception as e:
+            logger.exception(
+                "[refresh_pipeline_preferences_full] track=%s failed: %s", track, e
+            )
+    try:
+        apply_pipeline_auto_promotions()
+    except Exception as e:
+        logger.exception("[refresh_pipeline_preferences_full] apply_pipeline_auto_promotions failed: %s", e)
+    return None
+
+
+@db_task()
+def dedupe_pipeline_jobs_task(
+    track: str = "*",
+    stage: str = "all",
+    include_done: bool = False,
+):
+    """
+    Huey: remove duplicate pipeline rows (same title/company/description, different location).
+    track: '*' or 'all' for every track; else a single track slug.
+    stage: 'all' for pipeline+vetting+applying (+ done if include_done); or one of pipeline/vetting/applying/done.
+    """
+    from .job_dedupe import dedupe_pipeline_entries
+
+    try:
+        return dedupe_pipeline_entries(
+            track_slug=track,
+            stage=stage,
+            include_done=include_done,
+        )
+    except ValueError as e:
+        logger.warning("[dedupe_pipeline_jobs_task] invalid params: %s", e)
         return {"status": "error", "message": str(e)}

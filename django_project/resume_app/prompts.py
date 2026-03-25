@@ -6,8 +6,12 @@ Format your output using simple markdown so it can be exported to Word and PDF w
 - Use a single - or * at the start of a line for bullet points.
 - Use blank lines between paragraphs and sections.
 
-Resume:
-{resume_text}
+Resume you are tailoring or revising now ({resume_text}):
+- First Writer step in the workflow: this is the text extracted from the PDF (same as the source block below).
+- After a Writer has already run in this workflow: this is the latest tailored resume (the app updates stored resume text after each Writer; you are no longer shown the raw PDF here).
+
+Original upload — factual anchor only (unchanged across steps; do not invent experience beyond this):
+{source_resume_text}
 
 Job Description:
 {job_description}
@@ -65,7 +69,13 @@ DEFAULT_MATCHING_PROMPT = """You are an expert recruiter and ATS specialist. Ana
 
 Consider: hard requirements (years of experience, mandatory skills), keyword and semantic fit, evidence in experience bullets (not just skills list), and seniority alignment.
 
-Return a single match score from 0 to 100. 90+ = strong fit, 70–89 = good but gaps, <70 = significant gaps.
+Return ONLY a single JSON object (no markdown) with this exact schema:
+{
+  "score": <int 0-100>,
+  "interview_probability": <int 0-100>,
+  "reasoning": <string, 2-3 sentences covering match/seniority and why that maps to the interview probability. Include a sentence that starts with: Interview probability: and includes a numeric percent (e.g. 42%).>,
+  "thoughts": <string, key strengths and gaps vs the role (why/why not fit)>
+}
 
 Resume:
 {resume_text}

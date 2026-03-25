@@ -1,70 +1,53 @@
 {% extends "resume_app/base.html" %}
 
-{% block title %}{% if workflow %}Edit workflow{% else %}New workflow{% endif %}{% endblock %}
+{% block title %}{% if workflow %}Edit workflow{% else %}New workflow{% endif %} — ResumeElite{% endblock %}
 
 {% block content %}
-<div class="row mb-3">
-    <div class="col-12">
-        <h1 class="mb-3">{% if workflow %}Edit workflow{% else %}New workflow{% endif %}</h1>
-        <p class="text-muted">
-            Build a chain of steps using prompts from the Prompt Library. The workflow runs once in order with no iteration.
+<div class="mx-auto max-w-3xl">
+    <div class="mb-8">
+        <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">{% if workflow %}Edit workflow{% else %}New workflow{% endif %}</h1>
+        <p class="mt-1 text-sm text-slate-600">
+            Build a chain of steps using prompts from the Prompt Library. The workflow runs once in order.
         </p>
     </div>
-</div>
 
-{% if messages %}
-    <div class="row mb-3">
-        <div class="col-12">
-            {% for message in messages %}
-                <div class="alert alert-{{ message.tags|default:'info' }} mb-2" role="alert">
-                    {{ message }}
-                </div>
-            {% endfor %}
+    {% include "resume_app/_concierge_messages.html" %}
+
+    <form method="post" id="workflow-form" class="space-y-6">
+        {% csrf_token %}
+        <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 class="text-lg font-semibold text-concierge-slate">Details</h2>
+            <div class="mt-4">
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="workflow-name">Name</label>
+                <input type="text" id="workflow-name" name="name" required
+                       class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                       value="{{ workflow.name|default:'' }}" placeholder="e.g. Default loop">
+            </div>
         </div>
-    </div>
-{% endif %}
 
-<div class="row">
-    <div class="col-lg-8">
-        <form method="post" id="workflow-form">
-            {% csrf_token %}
-            <div class="card mb-3">
-                <div class="card-header">Details</div>
-                <div class="card-body">
-                    <div class="mb-3">
-                        <label class="form-label" for="workflow-name">Name</label>
-                        <input type="text" id="workflow-name" name="name" class="form-control" required
-                               value="{{ workflow.name|default:'' }}" placeholder="e.g. Default loop">
-                    </div>
-                </div>
+        <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 class="text-lg font-semibold text-concierge-slate">Chain (order of steps)</h2>
+            <p class="mt-1 text-sm text-slate-600">Add steps in order. Each uses the corresponding prompt from the library.</p>
+            <div class="mt-4 flex flex-wrap gap-2">
+                <button type="button" class="rounded-concierge border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-concierge-slate hover:bg-slate-100" data-add-step="writer">+ Writer</button>
+                <button type="button" class="rounded-concierge border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-concierge-slate hover:bg-slate-100" data-add-step="ats_judge">+ ATS Judge</button>
+                <button type="button" class="rounded-concierge border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-concierge-slate hover:bg-slate-100" data-add-step="recruiter_judge">+ Recruiter Judge</button>
             </div>
+            <ul id="workflow-steps-list" class="mt-4 divide-y divide-slate-100 rounded-concierge border border-slate-200 bg-slate-50/30"></ul>
+            <input type="hidden" name="workflow_steps" id="workflow-steps-input" value="" data-initial="{{ workflow_steps_json|force_escape }}">
+        </div>
 
-            <div class="card mb-3">
-                <div class="card-header">Chain (order of steps)</div>
-                <div class="card-body">
-                    <p class="small text-muted mb-2">Add steps in order. Each step uses the corresponding prompt from the Prompt Library.</p>
-                    <div class="mb-2">
-                        <button type="button" class="btn btn-sm btn-outline-secondary me-1" data-add-step="writer">+ Writer</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary me-1" data-add-step="ats_judge">+ ATS Judge</button>
-                        <button type="button" class="btn btn-sm btn-outline-secondary" data-add-step="recruiter_judge">+ Recruiter Judge</button>
-                    </div>
-                    <ul id="workflow-steps-list" class="list-group list-group-flush">
-                        <!-- Filled by JS; step ids in order -->
-                    </ul>
-                    <input type="hidden" name="workflow_steps" id="workflow-steps-input" value="" data-initial="{{ workflow_steps_json|force_escape }}">
-                </div>
-            </div>
+        <input type="hidden" name="loop_to" value="">
+        <input type="hidden" name="max_iterations" value="1">
+        <input type="hidden" name="score_threshold" value="85">
 
-            <input type="hidden" name="loop_to" value="">
-            <input type="hidden" name="max_iterations" value="1">
-            <input type="hidden" name="score_threshold" value="85">
-
-            <div class="mb-3">
-                <button type="submit" class="btn btn-primary">{% if workflow %}Save changes{% else %}Create workflow{% endif %}</button>
-                <a href="{% url 'workflow_list' %}" class="btn btn-outline-secondary">Cancel</a>
-            </div>
-        </form>
-    </div>
+        <div class="flex flex-wrap gap-3">
+            <button type="submit" class="rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+                {% if workflow %}Save changes{% else %}Create workflow{% endif %}
+            </button>
+            <a href="{% url 'workflow_list' %}" class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50">Cancel</a>
+        </div>
+    </form>
 </div>
 
 <script>
@@ -73,17 +56,19 @@
     var steps = [];
     var listEl = document.getElementById("workflow-steps-list");
     var inputEl = document.getElementById("workflow-steps-input");
+    var btnClass = "rounded-concierge border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-concierge-slate hover:bg-slate-50";
+    var btnDanger = "rounded-concierge border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50";
 
     function render() {
         listEl.innerHTML = "";
         steps.forEach(function (stepId, i) {
             var li = document.createElement("li");
-            li.className = "list-group-item d-flex justify-content-between align-items-center";
-            li.innerHTML = "<span>" + (stepLabels[stepId] || stepId) + "</span>" +
-                "<span>" +
-                "<button type=\"button\" class=\"btn btn-sm btn-outline-secondary me-1 move-up\" data-i=\"" + i + "\">↑</button>" +
-                "<button type=\"button\" class=\"btn btn-sm btn-outline-secondary me-1 move-down\" data-i=\"" + i + "\">↓</button>" +
-                "<button type=\"button\" class=\"btn btn-sm btn-outline-danger remove\" data-i=\"" + i + "\">Remove</button>" +
+            li.className = "flex items-center justify-between gap-2 px-3 py-2.5 text-sm";
+            li.innerHTML = "<span class=\"font-medium text-concierge-slate\">" + (stepLabels[stepId] || stepId) + "</span>" +
+                "<span class=\"flex shrink-0 gap-1\">" +
+                "<button type=\"button\" class=\"" + btnClass + " move-up\" data-i=\"" + i + "\">↑</button>" +
+                "<button type=\"button\" class=\"" + btnClass + " move-down\" data-i=\"" + i + "\">↓</button>" +
+                "<button type=\"button\" class=\"" + btnDanger + " remove\" data-i=\"" + i + "\">Remove</button>" +
                 "</span>";
             listEl.appendChild(li);
         });
@@ -129,7 +114,6 @@
         };
     });
 
-    // Load initial steps when editing
     var stepsJson = document.getElementById("workflow-steps-input").getAttribute("data-initial");
     if (stepsJson) {
         try {

@@ -13,7 +13,7 @@ from .parsers import (
     ScoreFeedback,
     FitCheckResult,
     parse_score_fallback as _parse_score_fallback,
-    parse_fit_check_fallback as _parse_fit_check_fallback,
+    parse_fit_check_fallback as _parse_fit_check_fallback_from_parsers,
     normalize_dict_keys as _normalize_dict_keys,
 )
 from .prompts import (
@@ -132,76 +132,6 @@ def _normalize_dict_keys(obj):
     return _inner(obj)
 
 
-def _parse_score_fallback(content: str, node_name: str) -> tuple["ScoreFeedback", Optional[dict]]:
-    """Fallback when structured output is not available or fails. Supports both simple
-    {score, feedback} and extended ATS schemas (e.g. ats_match_score, analysis, missing_keywords, actionable_feedback).
-    Builds a structured feedback string for the next step. Returns (ScoreFeedback, parsed_dict or None)."""
-    logger.debug("[%s] _parse_score_fallback content len=%s", node_name, len(content) if content else 0)
-    data = _extract_json_object(content)
-    if data is not None:
-        logger.warning("[%s] _parse_score_fallback extracted data keys=%s", node_name, list(data.keys()))
-        try:
-            # Score: support ats_match_score (custom ATS prompts) or score (use key-normalized lookup)
-            raw_score = _get_key(data, "ats_match_score", "score")
-            score = int(raw_score) if raw_score is not None else 70
-            score = max(0, min(100, score))
-            # Build structured feedback for the next step (clearly labeled so writer can use it)
-            feedback_sections = []
-            feedback_val = _get_key(data, "feedback")
-            if feedback_val:
-                feedback_sections.append(f"Summary: {feedback_val}")
-            analysis = _get_key(data, "analysis")
-            # If parser returned only the inner "analysis" object (no root), treat data as analysis
-            if not isinstance(analysis, dict) and (
-                _get_key(data, "dealbreakers_rationale") is not None
-                or _get_key(data, "contextual_evidence_quality") is not None
-                or _get_key(data, "dealbreakers_met") is not None
-            ):
-                analysis = data
-            if isinstance(analysis, dict):
-                dr = _get_key(analysis, "dealbreakers_rationale")
-                ce = _get_key(analysis, "contextual_evidence_quality")
-                if dr:
-                    feedback_sections.append(f"Dealbreakers: {dr}")
-                if ce:
-                    feedback_sections.append(f"Contextual evidence: {ce}")
-            missing = _get_key(data, "missing_keywords")
-            if isinstance(missing, list) and missing:
-                feedback_sections.append("Missing keywords: " + ", ".join(str(k) for k in missing))
-            elif missing and not isinstance(missing, (dict, list)):
-                feedback_sections.append(f"Missing keywords: {missing}")
-            action = _get_key(data, "actionable_feedback")
-            if isinstance(action, list) and action:
-                feedback_sections.append("Actionable feedback:\n- " + "\n- ".join(str(a) for a in action))
-            elif action and not isinstance(action, (dict, list)):
-                feedback_sections.append(f"Actionable feedback: {action}")
-            feedback = "\n".join(feedback_sections) if feedback_sections else "No feedback parsed."
-            return ScoreFeedback(score=score, feedback=feedback), data
-        except (ValueError, TypeError, KeyError) as e:
-            logger.warning("[%s] could not use parsed JSON: %s", node_name, e)
-            logger.debug("[%s] parsed data repr (first 500 chars)=%s", node_name, repr(str(data)[:500]))
-    # No JSON: try to extract score from plain text (e.g. "ATS Match Score: 65", "Resume Match Score (0-100): 88")
-    if content and isinstance(content, str):
-        score_match = re.search(
-            r"(?:Resume\s+Match\s+Score|ATS\s+Match\s+Score|Recruiter\s+Score|Match\s+Score|Score)"
-            r"\s*(?:\([^)]*\))?\s*:\s*(\d{1,3})",
-            content,
-            re.IGNORECASE,
-        )
-        if not score_match:
-            score_match = re.search(r"\bscore\s*[=:]\s*(\d{1,3})\b", content, re.IGNORECASE)
-        if score_match:
-            try:
-                score = max(0, min(100, int(score_match.group(1))))
-                feedback = content.strip()[:2000] + ("..." if len(content) > 2000 else "")
-                logger.warning("[%s] _parse_score_fallback extracted score from plain text: %s", node_name, score)
-                return ScoreFeedback(score=score, feedback=feedback), None
-            except (ValueError, TypeError):
-                pass
-    logger.warning("[%s] _parse_score_fallback returning default (no data or exception)", node_name)
-    return ScoreFeedback(score=70, feedback="Could not parse score. Defaulting."), None
-
-
 def _parse_fit_check_fallback(content: str) -> "FitCheckResult":
     text = (content or "").strip()
     if not text:
@@ -308,91 +238,19 @@ def run_fit_check(resume_text: str, job_description: str, llm, prompt_template: 
         result = _llm_invoke_with_retry(structured_llm, [HumanMessage(content=prompt)])
         if isinstance(result, FitCheckResult):
             return {"score": result.score, "reasoning": result.reasoning, "thoughts": result.thoughts}
-        parsed = _parse_fit_check_fallback(str(result))
+        parsed = _parse_fit_check_fallback_from_parsers(str(result))
         return {"score": parsed.score, "reasoning": parsed.reasoning, "thoughts": parsed.thoughts}
     except Exception as e:
         logger.warning("fit_check structured output failed: %s", e)
         raw = _llm_invoke_with_retry(llm, [HumanMessage(content=prompt)])
         content = raw.content if hasattr(raw, "content") else str(raw)
-        parsed = _parse_fit_check_fallback(content)
+        parsed = _parse_fit_check_fallback_from_parsers(content)
         return {"score": parsed.score, "reasoning": parsed.reasoning, "thoughts": parsed.thoughts}
-DEFAULT_WRITER_PROMPT = """You are an expert Resume Writer. Your task is to tailor the following resume to the job description provided.
-Ensure you highlight relevant skills and experiences without hallucinating any information.
-Format your output using simple markdown so it can be exported to Word and PDF with proper formatting:
-- Use ## for section headings (e.g. ## EXPERIENCE, ## EDUCATION).
-- Use **bold** for emphasis on key terms or job titles.
-- Use a single - or * at the start of a line for bullet points.
-- Use blank lines between paragraphs and sections.
-
-Resume:
-{resume_text}
-
-Job Description:
-{job_description}
-
-Previous Feedback:
-{feedback}
-
-Optimized Resume:
-"""
-
-DEFAULT_ATS_JUDGE_PROMPT = """You are an ATS (Applicant Tracking System) Judge. Score the following tailored resume against the job description.
-Focus on keywords and parseability. Return a score 0-100 and brief feedback.
-
-Tailored Resume:
-{optimized_resume}
-
-Job Description:
-{job_description}
-"""
-
-DEFAULT_RECRUITER_JUDGE_PROMPT = """You are a Senior Recruiter. Score the following tailored resume against the job description.
-Focus on metrics, impact, and action verbs. Return a score 0-100 and brief feedback.
-
-Tailored Resume:
-{optimized_resume}
-
-Job Description:
-{job_description}
-"""
-
-# --- Candidate-job fit check (run before optimization) ---
-DEFAULT_FIT_CHECK_PROMPT = """You are an expert recruiter. Assess whether this candidate is a reasonable fit for the job.
-
-Consider:
-1. **Match**: How well do the candidate's skills, experience, and background align with the role requirements?
-2. **Seniority**: Is the candidate's level (e.g. years of experience, scope) appropriate—not overqualified to the point of rejection, not underqualified?
-3. **Interview likelihood**: Based on typical hiring behavior, what is the probability (roughly 0-100%) that this candidate would be called in for an interview if they applied?
-
-Provide:
-- A single overall fit score from 0 to 100.
-- Brief reasoning (2-3 sentences) covering match, seniority, and interview likelihood.
-- Your thoughts on why or why not the candidate is a fit: call out key strengths that align with the role and any gaps or concerns. Be specific and constructive.
-
-Resume:
-{resume_text}
-
-Job Description:
-{job_description}
-"""
-
-# --- Matching (resume vs job → single score for search results) ---
-DEFAULT_MATCHING_PROMPT = """You are an expert recruiter and ATS specialist. Analyze how well the candidate's resume matches the job description. Be objective and strict. Do not inflate scores.
-
-Consider: hard requirements (years of experience, mandatory skills), keyword and semantic fit, evidence in experience bullets (not just skills list), and seniority alignment.
-
-Return a single match score from 0 to 100. 90+ = strong fit, 70–89 = good but gaps, <70 = significant gaps.
-
-Resume:
-{resume_text}
-
-Job Description:
-{job_description}
-"""
 
 
 def run_matching(resume_text: str, job_description: str, llm, prompt_template: str = None) -> dict:
-    """Returns { score: int, reasoning: str }. Score 0-100. Used after job search for independent LLM match score.
+    """Returns { score: int, reasoning: str, interview_probability: int|None }. Score 0-100.
+    Used after job search for independent LLM match score.
     Uses raw LLM call + parser (no structured output) so all providers return parseable text."""
     template = prompt_template or DEFAULT_MATCHING_PROMPT
     prompt = _format_prompt(template, resume_text=resume_text, job_description=job_description)
@@ -404,12 +262,17 @@ def run_matching(resume_text: str, job_description: str, llm, prompt_template: s
     if not isinstance(content, str):
         content = str(content)
     logger.info("[matching] raw response length=%s first_500=%r", len(content), (content or "")[:500])
-    parsed = _parse_fit_check_fallback(content or "")
-    return {"score": parsed.score, "reasoning": parsed.reasoning}
+    parsed = _parse_fit_check_fallback_from_parsers(content or "")
+    return {
+        "score": parsed.score,
+        "reasoning": parsed.reasoning,
+        "interview_probability": parsed.interview_probability,
+    }
 
 
 # --- State Definition ---
 class _AgentStateBase(TypedDict):
+    # Parsed PDF at workflow start; after each Writer completes, updated to that Writer's output (canonical body for later steps).
     resume_text: str
     job_description: str
     optimized_resume: str
@@ -428,12 +291,13 @@ class AgentState(_AgentStateBase, total=False):
     last_ats_json: dict  # Parsed ATS judge JSON when using custom prompts
     last_recruiter_json: dict  # Parsed recruiter judge JSON when available
     score_threshold: int  # Exit when avg(ats_score, recruiter_score) >= this (default 85)
+    source_resume_text: str  # PDF extraction; immutable fact anchor for Writer across steps
 
 # --- Agent Nodes ---
 
 # Known state keys so we never trigger KeyError on stray keys (e.g. from merged JSON/session).
 _STATE_KEYS = frozenset({
-    "resume_text", "job_description", "optimized_resume", "ats_score", "recruiter_score",
+    "resume_text", "job_description", "optimized_resume", "source_resume_text", "ats_score", "recruiter_score",
     "feedback", "iteration_count", "llm", "writer_prompt_template", "ats_judge_prompt_template",
     "recruiter_judge_prompt_template", "debug", "max_iterations", "score_threshold",
 })
@@ -450,13 +314,28 @@ def _state_get(state: dict, key: str, default=None):
 
 
 def writer_node(state: AgentState):
+    """
+    Writer prompt `{resume_text}` = document to edit this invocation: non-empty `optimized_resume` first
+    (e.g. step-mode revision with draft + PDF), else state `resume_text` (PDF text at workflow start, then the
+    last Writer output after each Writer step — LangGraph merges `resume_text` from our return dict).
+    `{source_resume_text}` stays the original PDF text for factual grounding.
+    """
     llm = _state_get(state, "llm")
     template = _state_get(state, "writer_prompt_template") or DEFAULT_WRITER_PROMPT
+    prior = (_state_get(state, "optimized_resume") or "").strip()
+    base = (_state_get(state, "resume_text") or "").strip()
+    src = (_state_get(state, "source_resume_text") or "").strip()
+    if not src:
+        src = base
+    # Same as state.resume_text whenever prior is empty; when prior is set without base synced (rare), prefer prior.
+    resume_body_this_step = prior if prior else base
     prompt = _format_prompt(
         template,
-        resume_text=_state_get(state, "resume_text") or "",
+        resume_text=resume_body_this_step,
         job_description=_state_get(state, "job_description") or "",
         feedback=", ".join(_state_get(state, "feedback") or []),
+        optimized_resume=prior,
+        source_resume_text=src,
     )
     logger.warning("[writer] prompts sent to LLM: no system prompt; single user message (length=%s):\n--- USER PROMPT ---\n%s\n--- END USER PROMPT ---", len(prompt), prompt)
     if _state_get(state, "debug"):
@@ -466,6 +345,7 @@ def writer_node(state: AgentState):
     response = _llm_invoke_with_retry(llm, [HumanMessage(content=prompt)])
     out.update({
         "optimized_resume": response.content,
+        "resume_text": response.content,
         "iteration_count": (_state_get(state, "iteration_count") or 0) + 1
     })
     usage = _normalize_token_usage(response, None, prompt)

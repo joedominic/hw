@@ -1,0 +1,19 @@
+{# Jobs workspace: Automation ↔ Tracks & resumes. Optional workspace_automation_track preserves ?track= on Automation link. #}
+{% with u=request.resolver_match.url_name %}
+{# Do not use request.GET.track in |default: — missing keys raise VariableDoesNotExist. #}
+<nav class="mb-6" aria-label="Jobs workspace">
+    <div class="flex flex-wrap items-center gap-2">
+        <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Workspace</span>
+        <div class="inline-flex rounded-concierge border border-slate-200 bg-slate-50/80 p-0.5 text-sm shadow-sm">
+                <a href="{% url 'job_automation' %}{% if workspace_automation_track %}?track={{ workspace_automation_track }}{% elif 'track' in request.GET %}?track={{ request.GET.track }}{% endif %}"
+                   class="rounded-concierge px-3 py-1.5 font-medium transition-colors {% if u == 'job_automation' or u == 'job_task_create' or u == 'job_task_edit' or u == 'job_task_run_now' or u == 'job_task_toggle_active' or u == 'huey_dashboard' or u == 'huey_periodic_revoke' or u == 'huey_periodic_restore' or u == 'huey_flush_queue' %}bg-white text-concierge-slate shadow-sm{% else %}text-slate-600 hover:bg-white/80{% endif %}">
+                    Automation
+                </a>
+                <a href="{% url 'track_list' %}"
+                   class="rounded-concierge px-3 py-1.5 font-medium transition-colors {% if u == 'track_list' or u == 'track_delete' %}bg-white text-concierge-slate shadow-sm{% else %}text-slate-600 hover:bg-white/80{% endif %}">
+                    Tracks &amp; resumes
+                </a>
+        </div>
+    </div>
+</nav>
+{% endwith %}

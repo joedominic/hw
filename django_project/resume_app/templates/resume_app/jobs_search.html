@@ -1,76 +1,49 @@
 {% extends "resume_app/base.html" %}
 
-{% block title %}Job search{% endblock %}
+{% block title %}Job search — ResumeElite{% endblock %}
 
 {% block content %}
-<div class="row mb-3">
-    <div class="col-12">
-        <h1 class="mb-3">Job search</h1>
-        <p class="text-muted">
+<div class="mx-auto max-w-7xl">
+<div class="mb-8">
+        <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Job search</h1>
+        <p class="mt-1 text-sm text-slate-600">
             Search for jobs, save favourites, run fit checks, and track matches.
         </p>
     </div>
-</div>
 
-{% if messages %}
-    <div class="row mb-3">
-        <div class="col-12">
-            {% for message in messages %}
-                <div class="alert alert-{{ message.tags|default:'info' }} mb-2" role="alert">
-                    {{ message }}
-                </div>
-            {% endfor %}
-        </div>
-    </div>
-{% endif %}
+{% include "resume_app/_concierge_messages.html" %}
 
 {% if disqualifier_prompt %}
-<div class="row mb-3">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header">
-                Add disqualifier from "{{ disqualifier_prompt.title }}" @ {{ disqualifier_prompt.company_name }}
-            </div>
-            <div class="card-body">
-                <p class="text-muted small mb-2">Add a word or phrase from the description below to your disqualifiers, or use the section above anytime.</p>
-                <details>
-                    <summary class="small text-muted">Show job description</summary>
-                    <pre class="small bg-light p-2 mt-1 mb-0" style="max-height:200px; overflow:auto;">{{ disqualifier_prompt.description }}</pre>
+<div class="mb-6 rounded-concierge border border-amber-200 bg-amber-50/30 p-4 shadow-sm">
+            <h2 class="text-sm font-semibold text-concierge-slate">Add disqualifier from "{{ disqualifier_prompt.title }}" @ {{ disqualifier_prompt.company_name }}</h2>
+                <p class="mt-2 text-xs text-slate-600">Add a phrase from the description, or use the section below anytime.</p>
+                <details class="mt-2">
+                    <summary class="cursor-pointer text-xs font-medium text-slate-500">Show job description</summary>
+                    <pre class="mt-2 max-h-48 overflow-auto rounded-concierge border border-slate-200 bg-slate-50 p-2 text-xs">{{ disqualifier_prompt.description }}</pre>
                 </details>
-            </div>
-        </div>
-    </div>
 </div>
 {% endif %}
 
-<div class="row mb-3" id="disqualifiers-section">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header py-2">
-                <span class="small fw-bold">Your disqualifiers</span>
-                <span class="small text-muted">(jobs containing any of these are hidden — add or remove anytime)</span>
-            </div>
-            <div class="card-body py-2">
-                <form id="disqualifier-add-form" class="d-flex flex-wrap align-items-end gap-2 mb-2">
-                    <div class="flex-grow-1" style="min-width:200px;">
-                        <label class="form-label small visually-hidden" for="disqualifier-phrase-input">Phrase to avoid</label>
-                        <input type="text" class="form-control form-control-sm" name="phrase" id="disqualifier-phrase-input" placeholder="e.g. no visa sponsorship" maxlength="500" autocomplete="off">
+<div class="mb-6 rounded-concierge border border-slate-200 bg-white p-4 shadow-sm" id="disqualifiers-section">
+            <div class="mb-1 text-sm font-semibold text-concierge-slate">Your disqualifiers</div>
+            <p class="mb-3 text-xs text-slate-500">Jobs containing any phrase below are hidden.</p>
+                <form id="disqualifier-add-form" class="mb-3 flex flex-wrap items-end gap-2">
+                    <div class="min-w-[200px] flex-1">
+                        <label class="sr-only" for="disqualifier-phrase-input">Phrase to avoid</label>
+                        <input type="text" class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm" name="phrase" id="disqualifier-phrase-input" placeholder="e.g. no visa sponsorship" maxlength="500" autocomplete="off">
                     </div>
-                    <button type="submit" class="btn btn-sm btn-primary">Add</button>
+                    <button type="submit" class="rounded-concierge bg-concierge-slate px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800">Add</button>
                 </form>
-                <div id="disqualifiers-list" class="d-flex flex-wrap gap-1">
+                <div id="disqualifiers-list" class="flex flex-wrap gap-2">
                     {% for d in current_disqualifiers %}
-                    <span class="badge bg-secondary d-inline-flex align-items-center gap-1 disqualifier-badge" data-id="{{ d.id }}">
+                    <span class="disqualifier-badge inline-flex items-center gap-1 rounded-full bg-slate-700 px-2 py-1 text-xs font-medium text-white" data-id="{{ d.id }}">
                         <span class="disqualifier-phrase">{{ d.phrase|truncatechars:50 }}</span>
-                        <button type="button" class="btn btn-link btn-sm p-0 text-white disqualifier-remove" style="font-size:0.85em;" title="Remove" aria-label="Remove">&times;</button>
+                        <button type="button" class="disqualifier-remove rounded px-1 text-white/90 hover:bg-white/20 hover:text-white" title="Remove" aria-label="Remove">&times;</button>
                     </span>
                     {% empty %}
-                    <span class="text-muted small" id="disqualifiers-empty">No disqualifiers yet.</span>
+                    <span class="text-sm text-slate-500" id="disqualifiers-empty">No disqualifiers yet.</span>
                     {% endfor %}
                 </div>
-            </div>
-        </div>
-    </div>
 </div>
 <script>
 (function() {
@@ -102,9 +75,9 @@
                 if (emptyEl) { emptyEl.remove(); emptyEl = null; }
                 var phraseText = data.phrase.length > 50 ? data.phrase.substring(0, 50) + '…' : data.phrase;
                 var badge = document.createElement('span');
-                badge.className = 'badge bg-secondary d-inline-flex align-items-center gap-1 disqualifier-badge';
+                badge.className = 'disqualifier-badge inline-flex items-center gap-1 rounded-full bg-slate-700 px-2 py-1 text-xs font-medium text-white';
                 badge.setAttribute('data-id', data.id);
-                badge.innerHTML = '<span class="disqualifier-phrase">' + phraseText.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</span> <button type="button" class="btn btn-link btn-sm p-0 text-white disqualifier-remove" style="font-size:0.85em;" title="Remove" aria-label="Remove">&times;</button>';
+                badge.innerHTML = '<span class="disqualifier-phrase">' + phraseText.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</span> <button type="button" class="disqualifier-remove rounded px-1 text-white/90 hover:bg-white/20" title="Remove" aria-label="Remove">&times;</button>';
                 listEl.appendChild(badge);
                 if (inputEl) inputEl.value = '';
                 badge.querySelector('.disqualifier-remove').addEventListener('click', removeHandler);
@@ -123,7 +96,7 @@
                 badge.remove();
                 if (listEl && listEl.querySelectorAll('.disqualifier-badge').length === 0) {
                     var span = document.createElement('span');
-                    span.className = 'text-muted small';
+                    span.className = 'text-sm text-slate-500';
                     span.id = 'disqualifiers-empty';
                     span.textContent = 'No disqualifiers yet.';
                     listEl.appendChild(span);
@@ -178,8 +151,7 @@
                     likeBtn.disabled = true;
                     handleAction(jobId, 'like')
                         .then(function() {
-                            likeBtn.classList.remove('btn-outline-primary');
-                            likeBtn.classList.add('btn-primary');
+                            likeBtn.className = 'rounded-concierge bg-concierge-slate px-2 py-1 text-xs font-medium text-white job-like-btn';
                             likeBtn.textContent = 'Liked';
                         })
                         .catch(function(err) {
@@ -216,54 +188,72 @@
 <meta name="csrf-token" content="{{ csrf_token }}">
 
 <!-- Primary search + filters -->
-<div class="row mb-3">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-body">
-                <form method="get" class="row g-2 align-items-end">
-                    <div class="col-md-6 col-lg-3">
-                        <label class="form-label" for="search-term-input">Search term</label>
-                        <input type="text" class="form-control" id="search-term-input" name="q"
+<div class="mb-6 rounded-concierge border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+                <form id="job-search-form" method="get" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-12 lg:items-end">
+                    <div class="sm:col-span-1 lg:col-span-3">
+                        <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="search-term-input">Search term</label>
+                        <input type="text" class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm" id="search-term-input" name="q"
                                value="{{ query }}" placeholder="e.g. Python developer">
                     </div>
-                    <div class="col-md-6 col-lg-3">
-                        <label class="form-label" for="location-input">Location (optional)</label>
-                        <input type="text" class="form-control" id="location-input" name="location"
+                    <div class="sm:col-span-1 lg:col-span-3">
+                        <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="location-input">Location (optional)</label>
+                        <input type="text" class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm" id="location-input" name="location"
                                value="{{ location }}" placeholder="e.g. Dallas, TX">
                     </div>
-                    <div class="col-md-6 col-lg-2">
-                        <label class="form-label" for="track-select">Target track</label>
-                        <select id="track-select" name="track" class="form-select">
-                            <option value="ic" {% if job_search_track == "ic" %}selected{% endif %}>IC (Principal / Staff / Distinguished)</option>
-                            <option value="mgmt" {% if job_search_track == "mgmt" %}selected{% endif %}>Management (Sr Manager / Director)</option>
+                    <div class="sm:col-span-1 lg:col-span-2">
+                        <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="track-select">Target track</label>
+                        <select id="track-select" name="track" class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm">
+                            {% for t in job_tracks %}
+                                <option value="{{ t.slug }}" {% if job_search_track == t.slug %}selected{% endif %}>{{ t.label }}</option>
+                            {% endfor %}
                         </select>
                     </div>
-                    <div class="col-md-6 col-lg-3">
-                        <label class="form-label" for="resume-select">Resume for match</label>
-                        <select id="resume-select" name="resume_id" class="form-select">
-                            <option value="">Latest</option>
+                    <div class="sm:col-span-1 lg:col-span-3">
+                        <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="resume-select">Resume for match</label>
+                        <select id="resume-select" name="resume_id" class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm">
+                            <option value="" data-track="">
+                                Latest
+                            </option>
                             {% for r in resumes %}
                                 <option value="{{ r.id }}"
-                                        {% if r.id == selected_resume_id %}selected{% endif %}>
+                                        {% if r.id == selected_resume_id %}selected{% endif %}
+                                        data-track="{{ r.track|default:'' }}">
                                     {{ r.label }}
                                 </option>
                             {% endfor %}
                         </select>
                     </div>
-                    <div class="col-md-6 col-lg-2">
-                        <label class="form-label" for="min-score-input">Min score</label>
+                    <div class="sm:col-span-1 lg:col-span-2">
+                        <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="min-score-input">Min score</label>
                         <input type="number" min="0" max="100" id="min-score-input" name="min_score"
-                               class="form-control" value="{{ min_score }}">
+                               class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm" value="{{ min_score }}">
                     </div>
-                    <div class="col-md-6 col-lg-2">
-                        <label class="form-label" for="results-wanted-input">Jobs to fetch</label>
+                    <div class="sm:col-span-1 lg:col-span-2">
+                        <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="results-wanted-input">Jobs to fetch</label>
                         <input type="number" min="10" max="200" id="results-wanted-input" name="results_wanted"
-                               class="form-control" value="{{ results_wanted }}" title="Number of jobs to fetch from job search (10–200)">
+                               class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm" value="{{ results_wanted }}" title="Number of jobs to fetch from job search (10–200)">
+                    </div>
+                    <div class="sm:col-span-2 lg:col-span-4">
+                        <div class="mb-1 flex flex-wrap items-center justify-between gap-2">
+                            <span class="text-xs font-semibold uppercase text-slate-500">Sites</span>
+                            <span class="flex flex-wrap gap-2 text-xs">
+                                <button type="button" id="job-sites-select-all" class="font-medium text-concierge-slate hover:underline">Select all</button>
+                                <span class="text-slate-300">·</span>
+                                <button type="button" id="job-sites-select-none" class="font-medium text-concierge-slate hover:underline">Select none</button>
+                            </span>
+                        </div>
+                        <div id="job-sites-checkboxes" class="flex flex-wrap gap-3 rounded-concierge border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+                            <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="indeed" class="job-site-cb h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" {% if "indeed" in selected_site_names %}checked{% endif %}> Indeed</label>
+                            <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="linkedin" class="job-site-cb h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" {% if "linkedin" in selected_site_names %}checked{% endif %}> LinkedIn</label>
+                            <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="glassdoor" class="job-site-cb h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" {% if "glassdoor" in selected_site_names %}checked{% endif %}> Glassdoor</label>
+                            <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="google" class="job-site-cb h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" {% if "google" in selected_site_names %}checked{% endif %}> Google</label>
+                            <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="zip_recruiter" class="job-site-cb h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" {% if "zip_recruiter" in selected_site_names %}checked{% endif %}> ZipRecruiter</label>
+                        </div>
                     </div>
                     {% if job_search_llm_provider %}
-                    <div class="col-md-6 col-lg-2">
-                        <label class="form-label" for="llm-model-select">Model ({{ job_search_llm_provider }})</label>
-                        <select id="llm-model-select" name="llm_model" class="form-select" title="Used for LLM match score (Matching prompt)">
+                    <div class="sm:col-span-1 lg:col-span-2">
+                        <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="llm-model-select">Model ({{ job_search_llm_provider }})</label>
+                        <select id="llm-model-select" name="llm_model" class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm" title="Used for LLM match score (Matching prompt)">
                             {% for m in job_search_llm_models %}
                                 <option value="{{ m }}" {% if m == job_search_llm_model %}selected{% endif %}>{{ m }}</option>
                             {% empty %}
@@ -272,108 +262,121 @@
                         </select>
                     </div>
                     {% else %}
-                    <div class="col-md-6 col-lg-2">
-                        <label class="form-label">Model (Match)</label>
-                        <div class="form-control text-muted">Configure provider in Settings</div>
+                    <div class="sm:col-span-1 lg:col-span-2">
+                        <label class="mb-1 block text-xs font-semibold uppercase text-slate-500">Model (Match)</label>
+                        <div class="rounded-concierge border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">Configure provider in Settings</div>
                     </div>
                     {% endif %}
-                    <div class="col-md-4 col-lg-1 text-md-end">
-                        <label class="form-label d-none d-md-block">&nbsp;</label>
-                        <button type="submit" class="btn btn-primary w-100">Search</button>
+                    <div class="flex items-end sm:col-span-2 lg:col-span-1">
+                        <button type="submit" class="w-full rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 lg:w-auto">Search</button>
                     </div>
                 </form>
-            </div>
-        </div>
-    </div>
+                <script>
+                (function() {
+                    var form = document.getElementById('job-search-form');
+                    var wrap = document.getElementById('job-sites-checkboxes');
+                    var btnAll = document.getElementById('job-sites-select-all');
+                    var btnNone = document.getElementById('job-sites-select-none');
+                    if (!form || !wrap) return;
+                    function siteBoxes() {
+                        return wrap.querySelectorAll('input.job-site-cb[type="checkbox"]');
+                    }
+                    if (btnAll) btnAll.addEventListener('click', function() {
+                        siteBoxes().forEach(function(cb) { cb.checked = true; });
+                    });
+                    if (btnNone) btnNone.addEventListener('click', function() {
+                        siteBoxes().forEach(function(cb) { cb.checked = false; });
+                    });
+                    form.addEventListener('submit', function(e) {
+                        var any = false;
+                        siteBoxes().forEach(function(cb) { if (cb.checked) any = true; });
+                        if (!any) {
+                            e.preventDefault();
+                            alert('Select at least one job site, or use Select all.');
+                        }
+                    });
+                })();
+                </script>
 </div>
 
-<div class="row">
-    <!-- Left: results / favourites / excluded -->
-    <div class="col-lg-8 mb-4">
-        <div class="card">
-            <div class="card-header border-bottom-0 pb-0">
-                <ul class="nav nav-tabs card-header-tabs">
-                    <li class="nav-item">
-                        <a class="nav-link {% if not show_favourites and not show_excluded %}active{% endif %}"
-                           href="{% url 'jobs_search' %}?view=results&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}">
+<div class="grid gap-6 lg:grid-cols-12">
+    <div class="lg:col-span-8">
+        <div class="rounded-concierge border border-slate-200 bg-white shadow-sm">
+            <div class="border-b border-slate-200 px-2 pt-2">
+                <nav class="flex flex-wrap gap-1" aria-label="Job list view">
+                        <a class="-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium {% if not show_favourites and not show_excluded %}border-concierge-slate text-concierge-slate{% else %}border-transparent text-slate-500 hover:border-slate-200 hover:text-slate-700{% endif %}"
+                           href="{% url 'jobs_search' %}?view=results&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}">
                             Results
                             {% if search_results and search_results.total %}
-                                <span class="badge rounded-pill bg-secondary ms-1">{{ search_results.total }}</span>
+                                <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{{ search_results.total }}</span>
                             {% endif %}
                         </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link {% if show_favourites %}active{% endif %}"
-                           href="{% url 'jobs_search' %}?view=favourites&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}">
+                        <a class="-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium {% if show_favourites %}border-concierge-slate text-concierge-slate{% else %}border-transparent text-slate-500 hover:border-slate-200 hover:text-slate-700{% endif %}"
+                           href="{% url 'jobs_search' %}?view=favourites&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}">
                             Favourites
                             {% if saved_results and saved_results.total %}
-                                <span class="badge rounded-pill bg-secondary ms-1">{{ saved_results.total }}</span>
+                                <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{{ saved_results.total }}</span>
                             {% endif %}
                         </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link {% if show_excluded %}active{% endif %}"
-                           href="{% url 'jobs_search' %}?view=excluded&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}">
+                        <a class="-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium {% if show_excluded %}border-concierge-slate text-concierge-slate{% else %}border-transparent text-slate-500 hover:border-slate-200 hover:text-slate-700{% endif %}"
+                           href="{% url 'jobs_search' %}?view=excluded&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}">
                             Excluded
                             {% if excluded_results and excluded_results.total %}
-                                <span class="badge rounded-pill bg-secondary ms-1">{{ excluded_results.total }}</span>
+                                <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{{ excluded_results.total }}</span>
                             {% endif %}
                         </a>
-                    </li>
-                </ul>
+                </nav>
                 {% if not show_favourites and not show_excluded and query and search_results %}
-                <div class="card-body pt-0 pb-1">
-                    <div class="d-flex flex-wrap align-items-center gap-3 mb-1">
-                        <span class="small text-muted">Sort by:</span>
-                        <a href="{% url 'jobs_search' %}?view=results&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}&sort=focus"
-                           class="small {% if sort_param == 'focus' %}fw-bold{% endif %}">Focus</a>
-                        <span class="small text-muted"> · </span>
-                        <a href="{% url 'jobs_search' %}?view=results&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}&refresh=1"
-                           class="small">Refresh results</a>
-                        <span class="small text-muted ms-2">|</span>
-                        <span class="small text-muted">Insights:</span>
-                        <a href="#" id="insights-select-all" class="small" title="Check all job rows">Select all</a>
-                        <a href="#" id="insights-deselect-all" class="small" title="Uncheck all">Deselect all</a>
-                        <button type="button" class="btn btn-sm btn-success" id="insights-btn" title="Get LLM insights across selected job descriptions">
+                <div class="border-b border-slate-100 px-4 py-2">
+                    <div class="flex flex-wrap items-center gap-3 text-xs">
+                        <span class="text-slate-500">Sort by:</span>
+                        <a href="{% url 'jobs_search' %}?view=results&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}&sort=focus{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}"
+                           class="font-semibold text-concierge-slate {% if sort_param != 'focus' %}font-normal text-slate-600{% endif %}">Focus</a>
+                        <span class="text-slate-300"> · </span>
+                        <a href="{% url 'jobs_search' %}?view=results&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}&refresh=1{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}"
+                           class="text-slate-600 hover:text-concierge-slate">Refresh</a>
+                        <span class="text-slate-300">|</span>
+                        <span class="text-slate-500">Insights:</span>
+                        <a href="#" id="insights-select-all" class="text-concierge-slate hover:underline" title="Check all job rows">Select all</a>
+                        <a href="#" id="insights-deselect-all" class="text-concierge-slate hover:underline" title="Uncheck all">Deselect all</a>
+                        <button type="button" class="inline-flex items-center gap-1.5 rounded-concierge bg-emerald-600 px-2 py-1 text-xs font-semibold text-white hover:bg-emerald-700" id="insights-btn" title="Get LLM insights across selected job descriptions">
                             <span id="insights-btn-text">Insights</span>
-                            <span id="insights-spinner" class="spinner-border spinner-border-sm ms-1 visually-hidden" role="status" aria-hidden="true"></span>
+                            <span id="insights-spinner" class="hidden h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-white/40 border-t-white" role="status" aria-hidden="true"></span>
                         </button>
-                        <span id="insights-status" class="ms-2" role="status" aria-live="polite"></span>
+                        <span id="insights-status" class="ml-2" role="status" aria-live="polite"></span>
                     </div>
                 </div>
                 {% endif %}
             </div>
-            <div class="card-body">
+            <div class="p-4 sm:p-5">
                 {% if show_favourites %}
                     {% if not saved_results or not saved_results.jobs %}
-                        <p class="text-muted mb-0">No saved jobs yet.</p>
+                        <p class="mb-0 text-sm text-slate-500">No saved jobs yet.</p>
                     {% else %}
-                        <p class="small text-muted">
+                        <p class="text-sm text-slate-500">
                             {{ saved_results.total }} saved job(s).
                         </p>
                         {% for j in saved_results.jobs %}
-                            <div class="border rounded p-2 mb-2">
-                                <div class="d-flex justify-content-between">
-                                    <div>
+                            <div class="mb-3 rounded-concierge border border-slate-200 bg-white p-3 shadow-sm">
+                                <div class="flex justify-between gap-3">
+                                    <div class="min-w-0">
                                         <strong>{{ j.title }}</strong><br>
-                                        <span class="text-muted small">
+                                        <span class="text-xs text-slate-500">
                                             {{ j.company_name }} · {{ j.location|default:"—" }}
                                         </span>
-                                        <div class="small text-muted mt-1">
-                                            {{ j.snippet }}
-                                        </div>
+                                        {% if j.snippet %}<div class="mt-1 text-xs text-slate-500">{{ j.snippet }}</div>{% endif %}
                                     </div>
-                                    <div class="text-end">
+                                    <div class="shrink-0 text-end">
                                         {% if j.url %}
                                             <a href="{{ j.url }}" target="_blank"
-                                               class="btn btn-sm btn-outline-secondary mb-1">View</a>
+                                               class="mb-1 rounded-concierge border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-concierge-slate hover:bg-slate-50">View</a>
                                         {% endif %}
-                                        <form method="post" class="d-inline">
+                                        <form method="post" class="inline">
                                             {% csrf_token %}
                                             <input type="hidden" name="action" value="unsave">
                                             <input type="hidden" name="job_id" value="{{ j.id }}">
                                             <input type="hidden" name="next" value="{{ request.get_full_path }}">
-                                            <button type="submit" class="btn btn-sm btn-outline-danger mb-1">
+                                            <button type="submit" class="mb-1 rounded-concierge border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-800 hover:bg-red-50">
                                                 Remove
                                             </button>
                                         </form>
@@ -384,43 +387,41 @@
                     {% endif %}
                 {% elif show_excluded %}
                     {% if not excluded_results or not excluded_results.jobs %}
-                        <p class="text-muted mb-0">
+                        <p class="mb-0 text-sm text-slate-500">
                             No excluded jobs. Dislike a job in Results to hide it from future searches.
                         </p>
                     {% else %}
-                        <p class="small text-muted">
+                        <p class="text-sm text-slate-500">
                             {{ excluded_results.total }} job(s) are currently excluded from search results.
                         </p>
                         {% for j in excluded_results.jobs %}
-                            <div class="border rounded p-2 mb-2">
-                                <div class="d-flex justify-content-between">
-                                    <div>
+                            <div class="mb-3 rounded-concierge border border-slate-200 bg-white p-3 shadow-sm">
+                                <div class="flex justify-between gap-3">
+                                    <div class="min-w-0">
                                         <strong>{{ j.title }}</strong>
                                         {% if j.focus_percent is not None %}
-                                            <span class="badge bg-info text-dark ms-1">Focus {{ j.focus_percent }}%</span>
+                                            <span class="ml-1 rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-900">Focus {{ j.focus_percent }}%</span>
                                         {% endif %}
                                         {% if j.matching_score is not None %}
-                                            <span class="badge bg-success ms-1">Match {{ j.matching_score }}</span>
+                                            <span class="ml-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">Match {{ j.matching_score }}</span>
                                         {% endif %}
                                         <br>
-                                        <span class="text-muted small">
+                                        <span class="text-xs text-slate-500">
                                             {{ j.company_name }} · {{ j.location|default:"—" }}
                                         </span>
-                                        <div class="small text-muted mt-1">
-                                            {{ j.snippet }}
-                                        </div>
+                                        {% if j.snippet %}<div class="mt-1 text-xs text-slate-500">{{ j.snippet }}</div>{% endif %}
                                     </div>
-                                    <div class="text-end">
+                                    <div class="shrink-0 text-end">
                                         {% if j.url %}
                                             <a href="{{ j.url }}" target="_blank"
-                                               class="btn btn-sm btn-outline-secondary mb-1">View</a>
+                                               class="mb-1 rounded-concierge border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-concierge-slate hover:bg-slate-50">View</a>
                                         {% endif %}
-                                        <form method="post" class="d-inline">
+                                        <form method="post" class="inline">
                                             {% csrf_token %}
                                             <input type="hidden" name="action" value="like">
                                             <input type="hidden" name="job_id" value="{{ j.id }}">
                                             <input type="hidden" name="next" value="{{ request.get_full_path }}">
-                                            <button type="submit" class="btn btn-sm btn-outline-primary mb-1">
+                                            <button type="submit" class="mb-1 rounded-concierge border border-sky-200 bg-white px-2 py-1 text-xs font-medium text-sky-900 hover:bg-sky-50">
                                                 Like (re-include)
                                             </button>
                                         </form>
@@ -431,7 +432,7 @@
                     {% endif %}
                 {% else %}
                     {% if not search_results or not search_results.jobs %}
-                        <p class="text-muted mb-0">
+                        <p class="mb-0 text-sm text-slate-500">
                             {% if query %}
                                 No jobs found. Try a different search or location.
                             {% else %}
@@ -439,81 +440,82 @@
                             {% endif %}
                         </p>
                     {% else %}
-                        <p class="small text-muted mb-2">
-                            {{ search_results.total }} job(s). <strong>Check</strong> jobs, then <strong>Insights</strong> above for themes across roles; <strong>Tailor</strong> opens the optimizer. Badges: <span class="badge bg-info text-dark">Fit</span> = match to liked jobs.
+                        <p class="mb-2 text-sm text-slate-500">
+                            {{ search_results.total }} job(s). <strong>Check</strong> jobs, then <strong>Insights</strong> above for themes across roles; <strong>Tailor</strong> opens the optimizer. Badges: <span class="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-900">Fit</span> = match to liked jobs.
                         </p>
                         {% for j in search_results.jobs %}
-                            <div class="border rounded p-2 mb-2 job-result-row" data-job-id="{{ j.id }}">
-                                <div class="d-flex justify-content-between">
-                                    <div class="d-flex align-items-start gap-2">
-                                        <div class="form-check mt-1">
-                                            <input class="form-check-input insights-job-cb" type="checkbox" value="{{ j.id }}" id="cb-{{ j.id }}" title="Select for Insights">
-                                            <label class="form-check-label visually-hidden" for="cb-{{ j.id }}">Select for Insights</label>
+                            <div class="job-result-row mb-3 rounded-concierge border border-slate-200 bg-white p-3 shadow-sm" data-job-id="{{ j.id }}">
+                                <div class="flex justify-between gap-3">
+                                    <div class="flex min-w-0 items-start gap-2">
+                                        <div class="mt-1 shrink-0">
+                                            <input class="insights-job-cb h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" type="checkbox" value="{{ j.id }}" id="cb-{{ j.id }}" title="Select for Insights">
+                                            <label class="sr-only" for="cb-{{ j.id }}">Select for Insights</label>
                                         </div>
-                                        <div>
+                                        <div class="min-w-0">
                                         <strong>{{ j.title }}</strong>
-                                        <span class="d-inline-flex flex-wrap align-items-center gap-1 mt-1 mt-md-0 ms-md-1">
+                                        <span class="mt-1 inline-flex flex-wrap items-center gap-1 md:ml-1 md:mt-0">
                                         {% if j.focus_percent is not None %}
-                                            <span class="badge bg-info text-dark" title="Fit to your liked jobs">Fit {{ j.focus_percent }}{% if j.focus_percent_after_penalty is not None %}→{{ j.focus_percent_after_penalty }}{% endif %}%</span>
-                                            <a href="{% url 'focus_breakdown' j.id %}?resume_id={{ selected_resume_id }}&track={{ job_search_track }}" class="btn btn-sm btn-outline-info py-0" title="See score breakdown and AI Match reasoning">Why?</a>
+                                            <span class="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-900" title="Fit to your liked jobs">Fit {{ j.focus_percent }}{% if j.focus_percent_after_penalty is not None %}→{{ j.focus_percent_after_penalty }}{% endif %}%</span>
+                                            <a href="{% url 'focus_breakdown' j.id %}?resume_id={{ selected_resume_id }}&track={{ job_search_track }}" class="rounded-concierge border border-sky-200 px-2 py-0.5 text-xs font-medium text-sky-900 hover:bg-sky-50" title="See score breakdown and AI Match reasoning">Why?</a>
                                         {% endif %}
                                         {% if j.preference_margin_percent is not None %}
                                             {% if j.preference_margin_percent < -3 %}
-                                                <span class="badge bg-danger text-light" title="Centroid-based margin: similarity to liked jobs minus similarity to disliked jobs (experimental metric)">Pref margin {{ j.preference_margin_percent }}%</span>
+                                                <span class="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-900" title="Centroid-based margin: similarity to liked jobs minus similarity to disliked jobs (experimental metric)">Pref margin {{ j.preference_margin_percent }}%</span>
                                             {% elif j.preference_margin_percent > 3 %}
-                                                <span class="badge bg-success text-light" title="Centroid-based margin: similarity to liked jobs minus similarity to disliked jobs (experimental metric)">Pref margin {{ j.preference_margin_percent }}%</span>
+                                                <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900" title="Centroid-based margin: similarity to liked jobs minus similarity to disliked jobs (experimental metric)">Pref margin {{ j.preference_margin_percent }}%</span>
                                             {% else %}
-                                                <span class="badge bg-secondary text-light" title="Centroid-based margin: similarity to liked jobs minus similarity to disliked jobs (experimental metric)">Pref margin {{ j.preference_margin_percent }}%</span>
+                                                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700" title="Centroid-based margin: similarity to liked jobs minus similarity to disliked jobs (experimental metric)">Pref margin {{ j.preference_margin_percent }}%</span>
                                             {% endif %}
                                         {% endif %}
                                         </span>
                                         <br>
-                                        <span class="text-muted small">
+                                        <span class="text-xs text-slate-500">
                                             {{ j.company_name }} · {{ j.location|default:"—" }}
                                         </span>
+                                        {% if j.fetched_at %}
+                                            <span class="block text-xs text-slate-500">Found {{ j.fetched_at|date:"M j, Y" }}</span>
+                                        {% endif %}
                                         {% if j.focus_reason %}
-                                            <div class="small mt-1">
-                                                <span class="text-muted" title="This job is similar to jobs you liked">Why shown: similar to</span>
-                                                <ul class="mb-0 ps-3 mt-0">
+                                            <div class="mt-1 text-xs">
+                                                <span class="text-slate-500" title="This job is similar to jobs you liked">Why shown: similar to</span>
+                                                <ul class="mb-0 mt-0 list-disc pl-5">
                                                     {% for r in j.focus_reason %}
                                                         <li>{{ r.title }} @ {{ r.company_name }} — {{ r.similarity_percent }}% match</li>
                                                     {% endfor %}
                                                 </ul>
                                             </div>
                                         {% endif %}
-                                        <div class="small text-muted mt-1">
-                                            {{ j.snippet }}
-                                        </div>
+                                        {% if j.snippet %}<div class="mt-1 text-xs text-slate-500">{{ j.snippet }}</div>{% endif %}
                                         </div>
                                     </div>
-                                    <div class="text-end d-flex flex-column flex-sm-row flex-wrap gap-1 align-items-sm-end justify-content-sm-end">
+                                    <div class="flex shrink-0 flex-col flex-wrap items-end justify-end gap-1 text-end sm:flex-row sm:items-end">
                                         <a href="{% url 'resume_optimizer' %}?job_id={{ j.id }}{% if selected_resume_id %}&resume_id={{ selected_resume_id }}{% endif %}"
-                                           class="btn btn-sm btn-primary" title="Open resume optimizer to tailor your resume for this job">Tailor</a>
+                                           class="rounded-concierge bg-concierge-slate px-2 py-1 text-xs font-semibold text-white hover:bg-slate-800" title="Open resume optimizer to tailor your resume for this job">Tailor</a>
                                         <button type="button"
-                                                class="btn btn-sm btn-outline-secondary job-assess-btn"
+                                                class="job-assess-btn rounded-concierge border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-concierge-slate hover:bg-slate-50"
                                                 data-job-id="{{ j.id }}"
                                                 title="Assess this job against your selected resume using the Matching prompt">
                                             Assess
                                         </button>
-                                        <div class="d-flex gap-1 flex-wrap justify-content-end">
-                                            <form method="post" class="d-inline">
+                                        <div class="flex flex-wrap justify-end gap-1">
+                                            <form method="post" class="inline">
                                                 {% csrf_token %}
                                                 <input type="hidden" name="action" value="save">
                                                 <input type="hidden" name="job_id" value="{{ j.id }}">
                                                 <input type="hidden" name="next" value="{{ request.get_full_path }}">
-                                                <button type="submit" class="btn btn-sm btn-outline-success" title="Save to favourites">Save</button>
+                                                <button type="submit" class="rounded-concierge border border-emerald-200 bg-white px-2 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-50" title="Save to favourites">Save</button>
                                             </form>
                                             {% if j.url %}
-                                                <a href="{{ j.url }}" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary" title="Open job posting">View</a>
+                                                <a href="{{ j.url }}" target="_blank" rel="noopener" class="rounded-concierge border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-concierge-slate hover:bg-slate-50" title="Open job posting">View</a>
                                             {% endif %}
                                             <button type="button"
-                                                    class="btn btn-sm btn-outline-primary job-like-btn"
+                                                    class="job-like-btn rounded-concierge border border-sky-200 bg-white px-2 py-1 text-xs font-medium text-sky-900 hover:bg-sky-50"
                                                     data-job-id="{{ j.id }}"
                                                     title="Like: similar jobs will rank higher">
                                                 Like
                                             </button>
                                             <button type="button"
-                                                    class="btn btn-sm btn-outline-danger job-dislike-btn"
+                                                    class="job-dislike-btn rounded-concierge border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-800 hover:bg-red-50"
                                                     data-job-id="{{ j.id }}"
                                                     title="Dislike: hide and rank similar jobs lower">
                                                 Dislike
@@ -529,55 +531,54 @@
         </div>
     </div>
 
-    <!-- Right: matches -->
-    <div class="col-lg-4 mb-4">
-        <div class="card mb-3">
-            <div class="card-header">
+    <div class="lg:col-span-4">
+        <div class="rounded-concierge border border-slate-200 bg-white shadow-sm">
+            <div class="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-concierge-slate">
                 My matches
             </div>
-            <div class="card-body">
+            <div class="p-4">
                 {% if not matches %}
-                    <p class="text-muted mb-0">
+                    <p class="mb-0 text-sm text-slate-500">
                         No matches yet. Run fit checks on jobs to see them here.
                     </p>
                 {% else %}
                     {% for m in matches %}
-                        <div class="border rounded p-2 mb-2">
+                        <div class="mb-3 rounded-concierge border border-slate-200 bg-white p-3 shadow-sm">
                             <strong>{{ m.title }}</strong><br>
-                            <span class="text-muted small">
+                            <span class="text-xs text-slate-500">
                                 {{ m.company_name }} · {{ m.location|default:"—" }}
                             </span>
                             <div class="mt-1">
                                 {% if m.fit_score %}
-                                    <span class="badge bg-primary">Score {{ m.fit_score }}</span>
+                                    <span class="rounded-full bg-concierge-slate px-2 py-0.5 text-xs font-medium text-white">Score {{ m.fit_score }}</span>
                                 {% else %}
-                                    <span class="badge bg-secondary">No score</span>
+                                    <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">No score</span>
                                 {% endif %}
                             </div>
-                            <p class="small text-muted mb-1">
+                            <p class="mb-1 text-xs text-slate-500">
                                 {{ m.reasoning|truncatechars:180 }}
                             </p>
-                            <div class="d-flex justify-content-between align-items-center">
+                            <div class="flex items-center justify-between">
                                 <div>
                                     {% if m.url %}
                                         <a href="{{ m.url }}" target="_blank"
-                                           class="btn btn-sm btn-outline-secondary mb-1">Open job</a>
+                                           class="mb-1 rounded-concierge border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-concierge-slate hover:bg-slate-50">Open job</a>
                                     {% endif %}
                                 </div>
                                 <div>
                                     {% if m.status != "applied" %}
-                                        <form method="post" class="d-inline">
+                                        <form method="post" class="inline">
                                             {% csrf_token %}
                                             <input type="hidden" name="action" value="mark_applied">
                                             <input type="hidden" name="job_id" value="{{ m.job_listing_id }}">
                                             <input type="hidden" name="resume_id" value="{{ m.resume_id }}">
                                             <input type="hidden" name="next" value="{{ request.get_full_path }}">
-                                            <button type="submit" class="btn btn-sm btn-outline-success mb-1">
+                                            <button type="submit" class="mb-1 rounded-concierge border border-emerald-200 bg-white px-2 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-50">
                                                 Mark as applied
                                             </button>
                                         </form>
                                     {% else %}
-                                        <span class="badge bg-success">Applied</span>
+                                        <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">Applied</span>
                                     {% endif %}
                                 </div>
                             </div>
@@ -588,25 +589,26 @@
         </div>
     </div>
 </div>
-
-<!-- LLM Assessment modal (per-job "Assess" button) -->
-<div class="modal fade" id="assessModal" tabindex="-1" aria-labelledby="assessModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-lg modal-dialog-scrollable">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="assessModalLabel">Job assessment</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body">
-                <div id="assess-modal-status" class="small text-muted mb-2"></div>
-                <div id="assessModalBody" class="assess-modal-markdown small mb-0"></div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-            </div>
-        </div>
-    </div>
 </div>
+
+<!-- LLM Assessment / Insights dialog -->
+<dialog id="assessModal" class="concierge-dialog w-[min(100vw-2rem,56rem)] max-h-[90vh] overflow-hidden p-0" aria-labelledby="assessModalLabel">
+    <div class="flex max-h-[90vh] flex-col rounded-concierge border border-slate-200 bg-white shadow-2xl">
+        <header class="flex shrink-0 items-center justify-between border-b border-slate-100 px-4 py-3">
+            <h2 id="assessModalLabel" class="text-lg font-semibold text-concierge-slate">Job assessment</h2>
+            <button type="button" id="assessModalCloseBtn" class="rounded-concierge p-2 text-slate-500 hover:bg-slate-100" aria-label="Close">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </header>
+        <div class="min-h-0 flex-1 overflow-y-auto p-4">
+            <div id="assess-modal-status" class="mb-2 text-sm text-slate-500"></div>
+            <div id="assessModalBody" class="assess-modal-markdown text-sm"></div>
+        </div>
+        <footer class="shrink-0 border-t border-slate-100 px-4 py-3 text-right">
+            <button type="button" id="assessModalFooterClose" class="rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50">Close</button>
+        </footer>
+    </div>
+</dialog>
 
 <style>
 .assess-modal-markdown { line-height: 1.5; }
@@ -617,10 +619,10 @@
 .assess-modal-markdown p { margin-bottom: 0.5rem; }
 .assess-modal-markdown ul, .assess-modal-markdown ol { margin-bottom: 0.5rem; padding-left: 1.5rem; }
 .assess-modal-markdown li { margin-bottom: 0.25rem; }
-.assess-modal-markdown code { background: var(--bs-light, #f8f9fa); padding: 0.15rem 0.35rem; border-radius: 0.25rem; font-size: 0.9em; }
-.assess-modal-markdown pre { background: var(--bs-light, #f8f9fa); padding: 0.75rem; border-radius: 0.25rem; overflow-x: auto; margin-bottom: 0.5rem; }
+.assess-modal-markdown code { background: #f1f5f9; padding: 0.15rem 0.35rem; border-radius: 0.25rem; font-size: 0.9em; }
+.assess-modal-markdown pre { background: #f1f5f9; padding: 0.75rem; border-radius: 0.25rem; overflow-x: auto; margin-bottom: 0.5rem; }
 .assess-modal-markdown pre code { padding: 0; background: none; }
-.assess-modal-markdown hr { margin: 1rem 0; border: 0; border-top: 1px solid var(--bs-border-color, #dee2e6); }
+.assess-modal-markdown hr { margin: 1rem 0; border: 0; border-top: 1px solid #e2e8f0; }
 .assess-modal-markdown strong { font-weight: 600; }
 </style>
 
@@ -654,7 +656,8 @@ document.addEventListener('DOMContentLoaded', function() {
     function setStatus(el, msg, isError) {
         if (!el) return;
         el.textContent = msg;
-        el.className = 'ms-2 ' + (isError ? 'text-danger fw-bold' : 'text-muted');
+        var prefix = el.id === 'insights-status' ? 'ml-2 ' : '';
+        el.className = prefix + 'text-sm ' + (isError ? 'font-semibold text-red-600' : 'text-slate-500');
     }
     function setInsightsLoading(loading) {
         var btn = document.getElementById('insights-btn');
@@ -662,7 +665,7 @@ document.addEventListener('DOMContentLoaded', function() {
         var spinner = document.getElementById('insights-spinner');
         if (btn) btn.disabled = loading;
         if (text) text.textContent = loading ? 'Running…' : 'Insights';
-        if (spinner) spinner.classList.toggle('visually-hidden', !loading);
+        if (spinner) spinner.classList.toggle('hidden', !loading);
     }
     var selectAll = document.getElementById('insights-select-all');
     var deselectAll = document.getElementById('insights-deselect-all');
@@ -672,7 +675,17 @@ document.addEventListener('DOMContentLoaded', function() {
     var assessBody = document.getElementById('assessModalBody');
     var assessModalEl = document.getElementById('assessModal');
     var assessModalTitle = document.getElementById('assessModalLabel');
-    var assessModal = (typeof bootstrap !== 'undefined' && assessModalEl) ? new bootstrap.Modal(assessModalEl) : null;
+    function openAssessDialog() {
+        if (!assessModalEl || typeof assessModalEl.showModal !== 'function') return;
+        try { assessModalEl.showModal(); } catch (e) {}
+    }
+    function closeAssessDialog() {
+        if (assessModalEl && assessModalEl.open) assessModalEl.close();
+    }
+    var assessCloseBtn = document.getElementById('assessModalCloseBtn');
+    var assessFooterClose = document.getElementById('assessModalFooterClose');
+    if (assessCloseBtn) assessCloseBtn.addEventListener('click', closeAssessDialog);
+    if (assessFooterClose) assessFooterClose.addEventListener('click', closeAssessDialog);
     if (selectAll) selectAll.addEventListener('click', function(e) { e.preventDefault(); document.querySelectorAll('.insights-job-cb').forEach(function(cb) { cb.checked = true; }); });
     if (deselectAll) deselectAll.addEventListener('click', function(e) { e.preventDefault(); document.querySelectorAll('.insights-job-cb').forEach(function(cb) { cb.checked = false; }); });
     if (insightsBtn) {
@@ -688,8 +701,8 @@ document.addEventListener('DOMContentLoaded', function() {
             setInsightsLoading(true);
             if (assessModalTitle) assessModalTitle.textContent = 'Insights';
             setStatus(assessStatus, 'Loading…', false);
-            assessBody.innerHTML = '<p class="text-muted mb-0"><span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Running Insights…</p>';
-            if (assessModal) assessModal.show();
+            assessBody.innerHTML = '<p class="mb-0 flex items-center gap-2 text-sm text-slate-500"><span class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-concierge-slate"></span>Running Insights…</p>';
+            openAssessDialog();
             fetch(apiBase + '/insights', {
                 method: 'POST',
                 credentials: 'same-origin',
@@ -718,13 +731,13 @@ document.addEventListener('DOMContentLoaded', function() {
                     var content = header + (data.content || '');
                     if (data.prompt) content += '\n\n--- Prompt ---\n' + data.prompt;
                     setModalContent(assessBody, content);
-                    if (assessModal) assessModal.show();
+                    openAssessDialog();
                 })
                 .catch(function(err) {
                     setStatus(insightsStatus, 'Error: ' + (err.message || 'Request failed'), true);
                     setStatus(assessStatus, 'Error: ' + (err.message || 'Request failed'), true);
                     assessBody.innerHTML = '';
-                    if (assessModal) assessModal.show();
+                    openAssessDialog();
                 })
                 .finally(function() { setInsightsLoading(false); });
         });
@@ -734,6 +747,8 @@ document.addEventListener('DOMContentLoaded', function() {
     function runAssess(jobId) {
         if (!jobId) {
             setStatus(assessStatus, 'Missing job id for assessment.', true);
+            assessBody.innerHTML = '';
+            openAssessDialog();
             return;
         }
         var resumeSelect = document.getElementById('resume-select');
@@ -746,7 +761,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         if (!resumeId || isNaN(resumeId)) {
             setStatus(assessStatus, 'No resume available. Upload a resume first (e.g. "Latest" or a specific resume).', true);
-            if (assessModal) assessModal.show();
+            openAssessDialog();
             return;
         }
         var modelSelect = document.getElementById('llm-model-select');
@@ -776,7 +791,7 @@ document.addEventListener('DOMContentLoaded', function() {
             var item = data.results && data.results.length ? data.results[0] : null;
             if (!item) {
                 setStatus(assessStatus, 'No assessment result returned.', true);
-                if (assessModal) assessModal.show();
+                openAssessDialog();
                 return;
             }
             var effectiveProvider = item.provider || ('{{ job_search_llm_provider|default_if_none:"" }}' || '');
@@ -791,11 +806,11 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             setModalContent(assessBody, content);
             setStatus(assessStatus, '', false);
-            if (assessModal) assessModal.show();
+            openAssessDialog();
         })
         .catch(function(err) {
             setStatus(assessStatus, 'Error: ' + (err.message || 'Request failed'), true);
-            if (assessModal) assessModal.show();
+            openAssessDialog();
         });
     }
 
@@ -809,5 +824,24 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 });
+</script>
+<script>
+(function() {
+    const resumeSelect = document.getElementById('resume-select');
+    const trackSelect = document.getElementById('track-select');
+    if (!resumeSelect || !trackSelect) return;
+
+    function syncTrackFromResume() {
+        const opt = resumeSelect.options[resumeSelect.selectedIndex];
+        const t = (opt && opt.getAttribute && opt.getAttribute('data-track')) ? opt.getAttribute('data-track') : '';
+        if (t && t !== trackSelect.value) {
+            trackSelect.value = t;
+        }
+    }
+
+    resumeSelect.addEventListener('change', syncTrackFromResume);
+    // Initial sync so the UI reflects the stored resume track.
+    syncTrackFromResume();
+})();
 </script>
 {% endblock %}

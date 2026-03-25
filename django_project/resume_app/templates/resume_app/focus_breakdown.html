@@ -3,139 +3,118 @@
 {% block title %}Why this score? — {{ breakdown.job.title }}{% endblock %}
 
 {% block content %}
-<div class="row mb-3">
-    <div class="col-12">
-        <h1 class="mb-2">Why this score?</h1>
-        <p class="text-muted mb-0">
-            How this job compares to your liked jobs. Focus = {{ breakdown.alpha }} × title + {{ role_weight }} × role.
+<div class="mx-auto max-w-4xl">
+    <div class="mb-8">
+        <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Why this score?</h1>
+        <p class="mt-1 text-sm text-slate-600">
+            Focus = {{ breakdown.alpha }} × title + {{ role_weight }} × role (vs liked jobs).
         </p>
     </div>
-</div>
 
-{% if llm_match %}
-<div class="card mb-4">
-    <div class="card-header">AI Match</div>
-    <div class="card-body">
-        <p class="mb-1"><strong>Score:</strong> <span class="badge bg-success">{{ llm_match.score }}</span> / 100</p>
+    {% if llm_match %}
+    <div class="mb-6 rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+        <h2 class="text-sm font-semibold text-concierge-slate">AI match</h2>
+        <p class="mt-2 text-sm text-slate-700">
+            <strong>Score:</strong> <span class="rounded-full bg-emerald-50 px-2 py-0.5 text-sm font-semibold text-emerald-800">{{ llm_match.score }}</span> / 100
+        </p>
         {% if llm_match.reasoning %}
-        <p class="small text-muted mb-0"><strong>Reasoning:</strong> {{ llm_match.reasoning }}</p>
+        <p class="mt-2 text-sm text-slate-600"><strong class="text-concierge-slate">Reasoning:</strong> {{ llm_match.reasoning }}</p>
         {% endif %}
     </div>
-</div>
-{% endif %}
+    {% endif %}
 
-<div class="card mb-4">
-    <div class="card-header"><strong>{{ breakdown.job.title }}</strong> @ {{ breakdown.job.company_name }}</div>
-    <div class="card-body">
-        <table class="table table-sm table-bordered mb-0">
-            <thead>
-                <tr><th>Component</th><th>%</th></tr>
-            </thead>
-            <tbody>
-                <tr><td>Title (vs liked jobs)</td><td>{{ breakdown.overall.title_percent }}%</td></tr>
-                <tr><td>Role (vs liked jobs)</td><td>{{ breakdown.overall.full_percent }}%</td></tr>
-                <tr><td><strong>Combined</strong></td><td><strong>{{ breakdown.overall.combined_percent }}%</strong></td></tr>
-            </tbody>
-        </table>
+    <div class="mb-6 rounded-concierge border border-slate-200 bg-white shadow-sm">
+        <div class="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-concierge-slate">{{ breakdown.job.title }} @ {{ breakdown.job.company_name }}</div>
+        <div class="overflow-x-auto p-4">
+            <table class="min-w-full text-sm">
+                <thead>
+                    <tr class="border-b border-slate-200 text-left text-xs font-semibold uppercase text-slate-500">
+                        <th class="pb-2 pr-3">Component</th>
+                        <th class="pb-2">%</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    <tr><td class="py-2 pr-3">Title (vs liked)</td><td class="font-medium">{{ breakdown.overall.title_percent }}%</td></tr>
+                    <tr><td class="py-2 pr-3">Role (vs liked)</td><td class="font-medium">{{ breakdown.overall.full_percent }}%</td></tr>
+                    <tr><td class="py-2 pr-3 font-semibold text-concierge-slate">Combined</td><td class="font-bold text-concierge-slate">{{ breakdown.overall.combined_percent }}%</td></tr>
+                </tbody>
+            </table>
+        </div>
     </div>
-</div>
 
-{% if breakdown.preference_margin %}
-<div class="card mb-4">
-    <div class="card-header">Preference margin (experimental)</div>
-    <div class="card-body">
-        <p class="small text-muted">
-            Centroid-based view: compares this job's full description to the average of all <strong>liked</strong>
-            jobs and the average of all <strong>disliked</strong> jobs.
+    {% if breakdown.preference_margin %}
+    <div class="mb-6 rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+        <h2 class="text-sm font-semibold text-concierge-slate">Preference margin (experimental)</h2>
+        <p class="mt-2 text-xs text-slate-600">
+            Centroid of liked vs disliked full descriptions.
         </p>
-        <table class="table table-sm table-bordered mb-0">
-            <thead>
-                <tr>
-                    <th>Component</th>
-                    <th>%</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr>
-                    <td>Similarity to liked centroid</td>
-                    <td>{{ breakdown.preference_margin.like_percent }}%</td>
-                </tr>
-                <tr>
-                    <td>Similarity to disliked centroid</td>
-                    <td>{{ breakdown.preference_margin.dislike_percent }}%</td>
-                </tr>
-                <tr>
-                    <td><strong>Margin (like − dislike)</strong></td>
-                    <td><strong>{{ breakdown.preference_margin.margin_percent }}%</strong></td>
-                </tr>
+        <table class="mt-4 min-w-full text-sm">
+            <tbody class="divide-y divide-slate-100">
+                <tr><td class="py-2 pr-3">Similarity to liked centroid</td><td>{{ breakdown.preference_margin.like_percent }}%</td></tr>
+                <tr><td class="py-2 pr-3">Similarity to disliked centroid</td><td>{{ breakdown.preference_margin.dislike_percent }}%</td></tr>
+                <tr><td class="py-2 pr-3 font-semibold">Margin (like − dislike)</td><td class="font-bold">{{ breakdown.preference_margin.margin_percent }}%</td></tr>
             </tbody>
         </table>
     </div>
-</div>
-{% endif %}
+    {% endif %}
 
-<div class="card mb-4">
-    <div class="card-header">Per liked job</div>
-    <div class="card-body">
-        <table class="table table-sm mb-0">
-            <thead>
-                <tr>
-                    <th>Liked job</th>
-                    <th>Title %</th>
-                    <th>Role %</th>
-                    <th>Combined %</th>
-                    <th></th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for row in breakdown.by_liked %}
-                <tr>
-                    <td>{{ row.title }} @ {{ row.company_name }}</td>
-                    <td>{{ row.title_percent }}%</td>
-                    <td>{{ row.full_percent }}%</td>
-                    <td><strong>{{ row.combined_percent }}%</strong></td>
-                    <td>
-                        <a href="{% url 'focus_alignment' breakdown.job.id row.id %}" class="btn btn-sm btn-outline-secondary">Details</a>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    <div class="mb-6 rounded-concierge border border-slate-200 bg-white shadow-sm">
+        <div class="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-concierge-slate">Per liked job</div>
+        <div class="overflow-x-auto p-4">
+            <table class="min-w-full text-sm">
+                <thead>
+                    <tr class="border-b border-slate-200 text-left text-xs font-semibold uppercase text-slate-500">
+                        <th class="pb-2 pr-3">Liked job</th>
+                        <th class="pb-2 pr-2">Title %</th>
+                        <th class="pb-2 pr-2">Role %</th>
+                        <th class="pb-2 pr-2">Comb.</th>
+                        <th class="pb-2"></th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for row in breakdown.by_liked %}
+                    <tr>
+                        <td class="py-2 pr-3">{{ row.title }} @ {{ row.company_name }}</td>
+                        <td class="py-2 pr-2">{{ row.title_percent }}%</td>
+                        <td class="py-2 pr-2">{{ row.full_percent }}%</td>
+                        <td class="py-2 pr-2 font-semibold">{{ row.combined_percent }}%</td>
+                        <td class="py-2"><a href="{% url 'focus_alignment' breakdown.job.id row.id %}" class="text-xs font-medium text-concierge-slate underline">Details</a></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     </div>
-</div>
 
-{% if breakdown.by_disliked %}
-<div class="card mb-4">
-    <div class="card-header">Per disliked job (penalty signal)</div>
-    <div class="card-body">
-        <p class="small text-muted">
-            These are jobs you <strong>disliked</strong>. Higher scores here mean this job looks more like something you said you don’t want, which is why its Fit can be penalized.
-        </p>
-        <table class="table table-sm mb-0">
-            <thead>
-                <tr>
-                    <th>Disliked job</th>
-                    <th>Title %</th>
-                    <th>Role %</th>
-                    <th>Combined %</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for row in breakdown.by_disliked %}
-                <tr>
-                    <td>{{ row.title }} @ {{ row.company_name }}</td>
-                    <td>{{ row.title_percent }}%</td>
-                    <td>{{ row.full_percent }}%</td>
-                    <td><strong>{{ row.combined_percent }}%</strong></td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    {% if breakdown.by_disliked %}
+    <div class="mb-6 rounded-concierge border border-slate-200 bg-white shadow-sm">
+        <div class="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-concierge-slate">Per disliked job (penalty)</div>
+        <div class="p-4">
+            <p class="mb-4 text-xs text-slate-600">Higher similarity here means the listing looks more like jobs you disliked.</p>
+            <table class="min-w-full text-sm">
+                <thead>
+                    <tr class="border-b border-slate-200 text-left text-xs font-semibold uppercase text-slate-500">
+                        <th class="pb-2 pr-3">Disliked job</th>
+                        <th class="pb-2">Title %</th>
+                        <th class="pb-2">Role %</th>
+                        <th class="pb-2">Comb.</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for row in breakdown.by_disliked %}
+                    <tr>
+                        <td class="py-2 pr-3">{{ row.title }} @ {{ row.company_name }}</td>
+                        <td class="py-2">{{ row.title_percent }}%</td>
+                        <td class="py-2">{{ row.full_percent }}%</td>
+                        <td class="py-2 font-semibold">{{ row.combined_percent }}%</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     </div>
-</div>
-{% endif %}
+    {% endif %}
 
-<div class="mt-3">
-    <a href="{% url 'jobs_search' %}" class="btn btn-outline-secondary">Back to job search</a>
+    <a href="{% url 'jobs_search' %}" class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50">← Job search</a>
 </div>
 {% endblock %}
