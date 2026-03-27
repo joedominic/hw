@@ -10,6 +10,7 @@ from datetime import timedelta
 from urllib.parse import urlencode
 
 from django.contrib import messages
+from django.core.cache import cache
 from django.http import JsonResponse, HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404, render, redirect
 from django.urls import reverse
@@ -1292,7 +1293,8 @@ def huey_dashboard_view(request):
                 "display_name": info["display_name"],
                 "cron_string": info["cron_string"],
                 "schedule_description": cron_to_short_description(info["cron_string"]),
-                "description": info["description"],
+                "basic": info.get("basic") or info.get("description") or "",
+                "advanced": info.get("advanced") or "",
                 "is_revoked": is_revoked,
                 "next_run_at": next_run_at,
             }
@@ -1302,6 +1304,8 @@ def huey_dashboard_view(request):
         JobSearchTaskRun.objects.select_related("task")
         .order_by("-started_at")[:10]
     )
+    from .tasks import CLEANUP_STATUS_CACHE_KEY
+    cleanup_status = cache.get(CLEANUP_STATUS_CACHE_KEY)
 
     context = {
         "immediate": immediate,
@@ -1309,6 +1313,7 @@ def huey_dashboard_view(request):
         "queue_stats_error": queue_stats_error,
         "periodic_tasks": periodic_rows,
         "recent_runs": recent_runs,
+        "cleanup_status": cleanup_status,
     }
     return render(request, "resume_app/huey_dashboard.html", context)
 
@@ -1405,6 +1410,23 @@ def huey_flush_queue_view(request):
         return redirect("huey_dashboard")
 
     messages.success(request, "Huey queue flushed (pending tasks removed).")
+    return redirect("huey_dashboard")
+
+
+def huey_run_cleanup_now_view(request):
+    """Enqueue the daily inactive+dedupe cleanup task immediately."""
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+
+    try:
+        from .tasks import cleanup_inactive_pipeline_entries_daily
+
+        cleanup_inactive_pipeline_entries_daily()
+    except Exception as e:
+        messages.error(request, f"Failed to queue cleanup task: {e}")
+        return redirect("huey_dashboard")
+
+    messages.success(request, "Cleanup job queued (inactive jobs + dedupe).")
     return redirect("huey_dashboard")
 
 

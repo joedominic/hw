@@ -61,6 +61,8 @@ def apply_vetting_to_applying_promotions(entry_ids: list[int] | None = None) -> 
     """
     Move VETTING entries to APPLYING when interview probability >= configured minimum.
     If entry_ids is set, only those ids are considered (still must match stage/score rules).
+
+    Does not enqueue resume optimization (manual Optimize on the Applying board only).
     """
     cfg = AppAutomationSettings.get_solo()
     if not cfg.vetting_to_applying_enabled:
@@ -78,13 +80,6 @@ def apply_vetting_to_applying_promotions(entry_ids: list[int] | None = None) -> 
     for entry in qs:
         entry.move_to_applying(save=True)
         n += 1
-        try:
-            enqueue_applying_resume_optimization_task([entry.id], force_new=False)
-        except Exception:
-            logger.exception(
-                "[apply_vetting_to_applying_promotions] enqueue resume optimization failed entry_id=%s",
-                entry.id,
-            )
     return n
 
 
@@ -117,6 +112,8 @@ def get_next_run_at(cron_string: str, from_time=None):
 # Lock key so only one job-search task runs at a time (avoids overlap)
 JOB_SEARCH_TASK_LOCK_KEY = "job_search_task_running"
 JOB_SEARCH_TASK_LOCK_TIMEOUT = 3600  # 1 hour max
+CLEANUP_STATUS_CACHE_KEY = "cleanup_inactive_pipeline_entries_last_status"
+CLEANUP_STATUS_CACHE_TTL_SECONDS = 60 * 60 * 24 * 7  # 7 days
 
 
 def _create_agent_log(optimized_resume, steps, prev_node, accumulated):
@@ -1049,6 +1046,67 @@ def refresh_pipeline_preferences_full():
         apply_pipeline_auto_promotions()
     except Exception as e:
         logger.exception("[refresh_pipeline_preferences_full] apply_pipeline_auto_promotions failed: %s", e)
+    return None
+
+
+@db_periodic_task(crontab(minute="30", hour="1"))
+def cleanup_inactive_pipeline_entries_daily():
+    """
+    Once daily: remove inactive/closed postings from active board stages, then run dedupe.
+    """
+    started_at = timezone.now()
+    purge_result = {"checked": 0, "removed_inactive": 0, "active": 0, "unknown": 0}
+    dedupe_result = {"entries_removed": 0, "duplicate_groups": 0}
+    status = "success"
+    errors: list[str] = []
+    try:
+        from .job_activity import purge_inactive_pipeline_entries
+
+        purge_result = purge_inactive_pipeline_entries(limit=800)
+        logger.info(
+            "[cleanup_inactive_pipeline_entries_daily] checked=%s removed_inactive=%s active=%s unknown=%s",
+            purge_result.get("checked"),
+            purge_result.get("removed_inactive"),
+            purge_result.get("active"),
+            purge_result.get("unknown"),
+        )
+    except Exception as e:
+        status = "partial_failure"
+        errors.append(f"inactive_cleanup: {e}")
+        logger.exception("[cleanup_inactive_pipeline_entries_daily] inactive cleanup failed: %s", e)
+
+    try:
+        from .job_dedupe import dedupe_pipeline_entries
+
+        dedupe_result = dedupe_pipeline_entries(
+            track_slug="*",
+            stage="all",
+            include_done=False,
+        )
+        logger.info(
+            "[cleanup_inactive_pipeline_entries_daily] dedupe removed=%s groups=%s",
+            dedupe_result.get("entries_removed"),
+            dedupe_result.get("duplicate_groups"),
+        )
+    except Exception as e:
+        status = "partial_failure"
+        errors.append(f"dedupe_cleanup: {e}")
+        logger.exception("[cleanup_inactive_pipeline_entries_daily] dedupe cleanup failed: %s", e)
+
+    finished_at = timezone.now()
+    payload = {
+        "status": status,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "checked": int(purge_result.get("checked") or 0),
+        "removed_inactive": int(purge_result.get("removed_inactive") or 0),
+        "active": int(purge_result.get("active") or 0),
+        "unknown": int(purge_result.get("unknown") or 0),
+        "dedupe_removed": int(dedupe_result.get("entries_removed") or 0),
+        "dedupe_groups": int(dedupe_result.get("duplicate_groups") or 0),
+        "errors": errors[:5],
+    }
+    cache.set(CLEANUP_STATUS_CACHE_KEY, payload, CLEANUP_STATUS_CACHE_TTL_SECONDS)
     return None
 
 

@@ -98,11 +98,13 @@
                         {% if j.url %}
                             <a href="{{ j.url }}" target="_blank" rel="noopener" class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-concierge-slate hover:bg-slate-50">View</a>
                         {% endif %}
-                        {% if stage_label == "applying" %}
+                        {% if stage_label == "applying" or stage_label == "done" %}
                             {% if j.optimized_resume_id %}
-                                <a href="{% url 'resume_optimizer' %}?opt_id={{ j.optimized_resume_id }}" class="inline-flex items-center rounded-concierge border border-violet-200 bg-violet-50 px-2 py-1 text-xs font-medium text-violet-900 hover:bg-violet-100">Optimization</a>
+                                <a href="{% url 'resume_optimizer' %}?opt_id={{ j.optimized_resume_id }}" class="inline-flex items-center rounded-concierge border border-violet-200 bg-violet-50 px-2 py-1 text-xs font-medium text-violet-900 hover:bg-violet-100" title="Open scores, judge feedback, and tailored draft">Results</a>
                             {% endif %}
+                            {% if stage_label == "applying" %}
                             <button type="submit" name="action" value="optimize_resume" class="rounded-concierge border border-violet-200 bg-white px-2 py-1 text-xs font-medium text-violet-900 hover:bg-violet-50" title="Queue a new optimization run">{% if j.optimized_resume_id %}Re-optimize{% else %}Optimize{% endif %}</button>
+                            {% endif %}
                         {% endif %}
                         <button type="submit" name="action" value="like" class="rounded-concierge border border-sky-200 bg-white px-2 py-1 text-xs font-medium text-sky-900 hover:bg-sky-50">Like</button>
                         <button type="submit" name="action" value="dislike" class="rounded-concierge border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-800 hover:bg-red-50">Dislike</button>

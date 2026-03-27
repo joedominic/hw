@@ -306,20 +306,18 @@ class PipelineStageViewTestCase(TestCase):
     def test_vetting_save_moves_to_applying(self):
         job, pe = self._create_job_and_entry()
         pe.move_to_vetting()
-        with patch("resume_app.tasks.enqueue_applying_resume_optimization_task") as mock_eq:
-            response = self.client.post(
-                "/jobs/vetting/?track=ic",
-                data={
-                    "action": "save",
-                    "job_id": job.id,
-                    "track": "ic",
-                    "next": "/jobs/vetting/?track=ic",
-                },
-            )
+        response = self.client.post(
+            "/jobs/vetting/?track=ic",
+            data={
+                "action": "save",
+                "job_id": job.id,
+                "track": "ic",
+                "next": "/jobs/vetting/?track=ic",
+            },
+        )
         self.assertIn(response.status_code, (302, 303))
         pe.refresh_from_db()
         self.assertEqual(pe.stage, PipelineEntry.Stage.APPLYING)
-        mock_eq.assert_called_once_with([pe.id], force_new=False)
 
     def test_applying_save_moves_to_done(self):
         job, pe = self._create_job_and_entry()
@@ -497,7 +495,7 @@ class PipelineAutomationTestCase(TestCase):
         self.assertEqual(n, 1)
         pe.refresh_from_db()
         self.assertEqual(pe.stage, PipelineEntry.Stage.APPLYING)
-        mock_eq.assert_called_once_with([pe.id], force_new=False)
+        mock_eq.assert_not_called()
 
     def test_vetting_auto_promotion_respects_threshold(self):
         cfg = AppAutomationSettings.get_solo()

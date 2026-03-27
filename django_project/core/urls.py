@@ -46,6 +46,11 @@ urlpatterns = [
         resume_views.huey_flush_queue_view,
         name="huey_flush_queue",
     ),
+    path(
+        "jobs/huey/run-cleanup/",
+        resume_views.huey_run_cleanup_now_view,
+        name="huey_run_cleanup_now",
+    ),
     path("jobs/tasks/new/", resume_views.job_task_create_view, name="job_task_create"),
     path("jobs/tasks/<int:task_id>/edit/", resume_views.job_task_edit_view, name="job_task_edit"),
     path("jobs/tasks/<int:task_id>/run/", resume_views.job_task_run_now_view, name="job_task_run_now"),

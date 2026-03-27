@@ -27,6 +27,33 @@ from .utils import format_job_source_label
 BOARD_STAGES = ("pipeline", "vetting", "applying", "done")
 
 
+def _attach_optimized_resume_ids_for_stage(pipeline_jobs, raw_track: str, stage: str) -> None:
+    """Set each payload's optimized_resume_id from the latest OptimizedResume for its pipeline entry."""
+    if not pipeline_jobs:
+        return
+    jids = [j.id for j in pipeline_jobs]
+    pe_rows = PipelineEntry.objects.filter(
+        track=raw_track,
+        stage=stage,
+        removed_at__isnull=True,
+        job_listing_id__in=jids,
+    )
+    pe_by_job = {e.job_listing_id: e.id for e in pe_rows}
+    entry_ids_list = list(pe_by_job.values())
+    latest_by_entry: dict[int, int] = {}
+    if entry_ids_list:
+        for orow in OptimizedResume.objects.filter(
+            pipeline_entry_id__in=entry_ids_list
+        ).order_by("-created_at"):
+            eid = orow.pipeline_entry_id
+            if eid is not None and eid not in latest_by_entry:
+                latest_by_entry[eid] = orow.id
+    for j in pipeline_jobs:
+        peid = pe_by_job.get(j.id)
+        if peid is not None and peid in latest_by_entry:
+            setattr(j, "optimized_resume_id", latest_by_entry[peid])
+
+
 def _bulk_delete_msg(board_stage: str, count: int) -> str:
     if board_stage == "pipeline":
         return (
@@ -95,12 +122,6 @@ def _apply_save_action(entry: PipelineEntry | None, board_stage: str, request) -
             pass
     elif board_stage == "vetting":
         entry.move_to_applying(save=True)
-        try:
-            from .tasks import enqueue_applying_resume_optimization_task
-
-            enqueue_applying_resume_optimization_task([entry.id], force_new=False)
-        except Exception:
-            pass
     elif board_stage == "applying":
         entry.mark_done(save=True)
     # done: favourites only; stage unchanged
@@ -110,7 +131,7 @@ def _save_success_message(board_stage: str) -> str:
     if board_stage == "pipeline":
         return "Job saved to favourites."
     if board_stage == "vetting":
-        return "Job moved to Applying."
+        return "Job moved to Applying. Use Optimize on the Applying board when you are ready to tailor your resume."
     if board_stage == "applying":
         return "Job moved to Done."
     return "Job saved to favourites."
@@ -166,7 +187,7 @@ def pipeline_board_view(request, board_stage: str):
                     enqueue_applying_resume_optimization_task(entry_ids, force_new=True)
                     messages.success(
                         request,
-                        f"Queued resume optimization for {len(entry_ids)} job(s). Open each job’s Optimization link to track progress.",
+                        f"Queued resume optimization for {len(entry_ids)} job(s). Open each job’s Results link to track progress.",
                     )
                 except Exception as exc:
                     messages.error(request, str(exc))
@@ -384,28 +405,14 @@ def pipeline_board_view(request, board_stage: str):
         search_q or source_filter or pref_min_raw != "" or pref_max_raw != ""
     )
 
-    if board_stage == "applying" and pipeline_jobs:
-        jids = [j.id for j in pipeline_jobs]
-        pe_rows = PipelineEntry.objects.filter(
-            track=raw_track,
-            stage=PipelineEntry.Stage.APPLYING,
-            removed_at__isnull=True,
-            job_listing_id__in=jids,
+    if board_stage == "applying":
+        _attach_optimized_resume_ids_for_stage(
+            pipeline_jobs, raw_track, PipelineEntry.Stage.APPLYING
         )
-        pe_by_job = {e.job_listing_id: e.id for e in pe_rows}
-        entry_ids_list = list(pe_by_job.values())
-        latest_by_entry: dict[int, int] = {}
-        if entry_ids_list:
-            for orow in OptimizedResume.objects.filter(
-                pipeline_entry_id__in=entry_ids_list
-            ).order_by("-created_at"):
-                eid = orow.pipeline_entry_id
-                if eid is not None and eid not in latest_by_entry:
-                    latest_by_entry[eid] = orow.id
-        for j in pipeline_jobs:
-            peid = pe_by_job.get(j.id)
-            if peid is not None and peid in latest_by_entry:
-                j.optimized_resume_id = latest_by_entry[peid]
+    elif board_stage == "done":
+        _attach_optimized_resume_ids_for_stage(
+            pipeline_jobs, raw_track, PipelineEntry.Stage.DONE
+        )
 
     job_tasks_url = reverse("job_automation")
     board_titles = {
@@ -417,7 +424,7 @@ def pipeline_board_view(request, board_stage: str):
     board_subtitles = {
         "pipeline": "Jobs from scheduled tasks. Focus % is computed when you open this page. Like, Dislike, Save, and Delete behave like Job Search.",
         "vetting": "Saved from Pipeline for detailed review. Save here when you are ready to apply.",
-        "applying": "Active applications. Saving here marks a job done after you submit.",
+        "applying": "Active applications. Optimize runs only when you click it—moving a job here does not auto-start LLM tailoring. Saving marks a job done after you submit.",
         "done": "Completed applications.",
     }
     empty_messages = {

@@ -51,39 +51,46 @@
             </div>
         </div>
         <nav class="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-4 text-sm">
-            <p class="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Resume</p>
-            <a href="{% url 'resume_optimizer' %}"
-               class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'resume_optimizer' or url_name == 'home' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
-                Optimizer
-            </a>
-            <a href="{% url 'prompt_library' %}"
-               class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'prompt_library' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
-                Prompt library
-            </a>
-
-            <p class="mt-4 px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Jobs</p>
+            <p class="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Jobs</p>
             <a href="{% url 'jobs_search' %}"
                class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'jobs_search' or url_name == 'focus_breakdown' or url_name == 'focus_alignment' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
                 Search
             </a>
             <a href="{% url 'pipeline' %}"
                class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'pipeline' or url_name == 'vetting' or url_name == 'applying' or url_name == 'done' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
-                Pipeline
+                Pipeline board
             </a>
-            <p class="mt-3 px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Workspace</p>
+
+            <p class="mt-4 px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Resume &amp; AI</p>
             <div class="ml-2 space-y-0.5 border-l border-slate-200 pl-2">
-                <a href="{% url 'job_automation' %}"
-                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'job_automation' or url_name == 'job_task_create' or url_name == 'job_task_edit' or url_name == 'job_task_run_now' or url_name == 'job_task_toggle_active' or url_name == 'huey_dashboard' or url_name == 'huey_periodic_revoke' or url_name == 'huey_periodic_restore' or url_name == 'huey_flush_queue' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
-                    Automation
+                <a href="{% url 'resume_optimizer' %}"
+                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'resume_optimizer' or url_name == 'home' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
+                    Optimizer
                 </a>
-                <a href="{% url 'track_list' %}"
-                   title="Tracks and resume PDFs"
-                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'track_list' or url_name == 'track_delete' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
-                    Tracks &amp; resumes
+                <a href="{% url 'prompt_library' %}"
+                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'prompt_library' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
+                    Prompt library
                 </a>
                 <a href="{% url 'workflow_list' %}"
                    class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'workflow_list' or url_name == 'workflow_create' or url_name == 'workflow_edit' or url_name == 'workflow_delete' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
                     Workflows
+                </a>
+                <a href="{% url 'track_list' %}"
+                   title="Tracks and resume PDFs"
+                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'track_list' or url_name == 'track_delete' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
+                    Resumes &amp; tracks
+                </a>
+            </div>
+
+            <p class="mt-4 px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Operations</p>
+            <div class="ml-2 space-y-0.5 border-l border-slate-200 pl-2">
+                <a href="{% url 'job_automation' %}"
+                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'job_automation' or url_name == 'job_task_create' or url_name == 'job_task_edit' or url_name == 'job_task_run_now' or url_name == 'job_task_toggle_active' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
+                    Job automation
+                </a>
+                <a href="{% url 'huey_dashboard' %}"
+                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'huey_dashboard' or url_name == 'huey_periodic_revoke' or url_name == 'huey_periodic_restore' or url_name == 'huey_flush_queue' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
+                    Background jobs
                 </a>
             </div>
 
@@ -96,10 +103,10 @@
             <div class="mt-auto border-t border-slate-100 pt-4">
                 <div class="mx-1 rounded-concierge bg-concierge-slate px-3 py-3 text-white">
                     <p class="text-xs font-medium text-slate-300">Workspace</p>
-                    <p class="mt-1 text-sm font-semibold">Tracks &amp; automation</p>
+                    <p class="mt-1 text-sm font-semibold">Jobs &amp; operations</p>
                     <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
                         <a href="{% url 'job_automation' %}" class="text-emerald-300 hover:text-emerald-200">Automation →</a>
-                        <a href="{% url 'track_list' %}" class="text-emerald-300 hover:text-emerald-200">Tracks →</a>
+                        <a href="{% url 'huey_dashboard' %}" class="text-emerald-300 hover:text-emerald-200">Background jobs →</a>
                     </div>
                 </div>
             </div>
