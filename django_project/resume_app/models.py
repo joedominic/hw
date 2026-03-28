@@ -336,6 +336,22 @@ class AppAutomationSettings(models.Model):
         default=False,
         help_text="When set, the app will not send any LLM API requests (kill switch).",
     )
+    cleanup_pipeline_retention_days = models.PositiveSmallIntegerField(
+        default=2,
+        help_text="Cleanup Manager: remove Pipeline-stage rows older than this many days (0 = off).",
+    )
+    cleanup_vetting_retention_days = models.PositiveSmallIntegerField(
+        default=6,
+        help_text="Cleanup Manager: remove Vetting-stage rows older than this many days (0 = off).",
+    )
+    cleanup_applying_retention_days = models.PositiveSmallIntegerField(
+        default=10,
+        help_text="Cleanup Manager: remove Applying-stage rows older than this many days (0 = off).",
+    )
+    cleanup_done_retention_days = models.PositiveSmallIntegerField(
+        default=0,
+        help_text="Cleanup Manager: remove Done-stage rows older than this many days (0 = off).",
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -355,6 +371,10 @@ class AppAutomationSettings(models.Model):
                 "vetting_to_applying_enabled": False,
                 "vetting_interview_probability_min": 70,
                 "stop_llm_requests": False,
+                "cleanup_pipeline_retention_days": 2,
+                "cleanup_vetting_retention_days": 6,
+                "cleanup_applying_retention_days": 10,
+                "cleanup_done_retention_days": 0,
             },
         )
         return obj

@@ -523,6 +523,32 @@ def settings_view(request):
                     return redirect(reverse("settings") + "?tab=app")
             else:
                 automation.applying_optimizer_workflow = None
+
+            def _cleanup_days(field: str):
+                raw = (request.POST.get(field) or "").strip()
+                try:
+                    v = int(raw)
+                except ValueError:
+                    return None
+                if v < 0 or v > 365:
+                    return None
+                return v
+
+            cp = _cleanup_days("cleanup_pipeline_retention_days")
+            cv = _cleanup_days("cleanup_vetting_retention_days")
+            ca = _cleanup_days("cleanup_applying_retention_days")
+            cd = _cleanup_days("cleanup_done_retention_days")
+            if cp is None or cv is None or ca is None or cd is None:
+                messages.error(
+                    request,
+                    "Cleanup retention days must be whole numbers from 0 (off) through 365.",
+                )
+                return redirect(reverse("settings") + "?tab=app")
+            automation.cleanup_pipeline_retention_days = cp
+            automation.cleanup_vetting_retention_days = cv
+            automation.cleanup_applying_retention_days = ca
+            automation.cleanup_done_retention_days = cd
+
             automation.save(
                 update_fields=[
                     "pipeline_to_vetting_enabled",
@@ -530,6 +556,10 @@ def settings_view(request):
                     "vetting_to_applying_enabled",
                     "vetting_interview_probability_min",
                     "applying_optimizer_workflow",
+                    "cleanup_pipeline_retention_days",
+                    "cleanup_vetting_retention_days",
+                    "cleanup_applying_retention_days",
+                    "cleanup_done_retention_days",
                     "updated_at",
                 ]
             )
@@ -1637,19 +1667,19 @@ def huey_flush_queue_view(request):
 
 
 def huey_run_cleanup_now_view(request):
-    """Enqueue the daily inactive+dedupe cleanup task immediately."""
+    """Enqueue Cleanup Manager (dedupe + retention + inactive check) immediately."""
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
 
     try:
-        from .tasks import cleanup_inactive_pipeline_entries_daily
+        from .tasks import cleanup_manager
 
-        cleanup_inactive_pipeline_entries_daily()
+        cleanup_manager()
     except Exception as e:
         messages.error(request, f"Failed to queue cleanup task: {e}")
         return redirect("huey_dashboard")
 
-    messages.success(request, "Cleanup job queued (inactive jobs + dedupe).")
+    messages.success(request, "Cleanup Manager queued (dedupe, retention purge, inactive Applying check).")
     return redirect("huey_dashboard")
 
 

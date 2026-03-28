@@ -60,7 +60,7 @@
                         Run cleanup now
                     </button>
                 </form>
-                <span class="text-xs text-slate-500">Checks active jobs for closed postings and runs dedupe.</span>
+                <span class="text-xs text-slate-500">Cleanup Manager: dedupe active stages, age purge (Settings), then Applying inactive URL check.</span>
             </div>
             <div class="mt-4 rounded-concierge border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
                 <div class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Last cleanup</div>
@@ -77,7 +77,9 @@
                         {% if cleanup_status.finished_at %}
                             <span>Finished: <strong>{{ cleanup_status.finished_at|date:"M j H:i" }}</strong></span>
                         {% endif %}
-                        <span>Checked: <strong>{{ cleanup_status.checked|default:0 }}</strong></span>
+                        <span>Dedupe removed: <strong>{{ cleanup_status.dedupe_removed|default:0 }}</strong></span>
+                        <span>Retention removed: <strong>{{ cleanup_status.retention_removed|default:0 }}</strong></span>
+                        <span>Checked URLs: <strong>{{ cleanup_status.checked|default:0 }}</strong></span>
                         <span>Removed inactive: <strong>{{ cleanup_status.removed_inactive|default:0 }}</strong></span>
                         <span>Unknown: <strong>{{ cleanup_status.unknown|default:0 }}</strong></span>
                     </div>

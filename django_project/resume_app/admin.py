@@ -24,6 +24,10 @@ class AppAutomationSettingsAdmin(admin.ModelAdmin):
         "vetting_to_applying_enabled",
         "vetting_interview_probability_min",
         "applying_optimizer_workflow",
+        "cleanup_pipeline_retention_days",
+        "cleanup_vetting_retention_days",
+        "cleanup_applying_retention_days",
+        "cleanup_done_retention_days",
         "stop_llm_requests",
         "updated_at",
     )

@@ -826,6 +826,58 @@ def _pipeline_stage_filter() -> models.Q:
     return models.Q(stage="") | models.Q(stage=PipelineEntry.Stage.PIPELINE)
 
 
+def _cleanup_retention_stage_q(stage_key: str) -> models.Q:
+    """Single pipeline board stage for retention purge (not 'all')."""
+    s = (stage_key or "").strip().lower()
+    if s == "pipeline":
+        return models.Q(stage="") | models.Q(stage=PipelineEntry.Stage.PIPELINE)
+    if s == "vetting":
+        return models.Q(stage=PipelineEntry.Stage.VETTING)
+    if s == "applying":
+        return models.Q(stage=PipelineEntry.Stage.APPLYING)
+    if s == "done":
+        return models.Q(stage=PipelineEntry.Stage.DONE)
+    raise ValueError(f"Invalid retention stage: {stage_key!r}")
+
+
+def apply_cleanup_retention_purge(cfg: AppAutomationSettings) -> int:
+    """
+    Remove pipeline rows past per-stage age (Settings). 0 days = skip that stage.
+    Same removal policy as pipeline_manager had: hard-delete unless liked/disliked.
+    """
+    rules: list[tuple[str, int]] = [
+        ("pipeline", int(cfg.cleanup_pipeline_retention_days or 0)),
+        ("vetting", int(cfg.cleanup_vetting_retention_days or 0)),
+        ("applying", int(cfg.cleanup_applying_retention_days or 0)),
+        ("done", int(cfg.cleanup_done_retention_days or 0)),
+    ]
+    now = timezone.now()
+    track_slugs = list(Track.objects.values_list("slug", flat=True))
+    if not track_slugs:
+        return 0
+    removed = 0
+    for tslug in track_slugs:
+        for stage_key, days in rules:
+            if days < 1:
+                continue
+            cutoff = now - timedelta(days=days)
+            try:
+                st_q = _cleanup_retention_stage_q(stage_key)
+            except ValueError:
+                continue
+            for entry in PipelineEntry.objects.filter(
+                track=tslug,
+                removed_at__isnull=True,
+                added_at__lt=cutoff,
+            ).filter(st_q):
+                _pipeline_entry_remove_for_cleanup(entry)
+                removed += 1
+    if removed:
+        logger.info("[cleanup_manager] retention purge removed=%d row(s)", removed)
+        huey_logger.info("[cleanup_manager] retention purge removed=%d row(s)", removed)
+    return removed
+
+
 def _iter_pipeline_stage_job_listing_ids(track: str) -> list[int]:
     return sorted(
         set(
@@ -854,7 +906,6 @@ def _pipeline_entry_remove_for_cleanup(entry: PipelineEntry) -> None:
 
 
 PIPELINE_MANAGER_STATS_MAX_AGE_DAYS = 2
-PIPELINE_MANAGER_ENTRY_MAX_AGE_DAYS = 5
 PIPELINE_MANAGER_PURGE_MARGIN_MAX = -2
 PIPELINE_MANAGER_BATCH_SIZE = 100
 
@@ -862,27 +913,20 @@ PIPELINE_MANAGER_BATCH_SIZE = 100
 @db_periodic_task(crontab(minute="*/30"))
 def pipeline_manager():
     """
-    Every 30 minutes: maintain Pipeline-stage entries only—age purge, refresh stale/missing
+    Every 30 minutes: maintain Pipeline-stage entries only—refresh stale/missing
     fit metrics, purge low preference_margin rows, then auto-promote to Vetting when enabled.
+
+    Age-based removal for all stages is handled by Cleanup Manager (Settings retention days).
     """
     track_slugs = list(Track.objects.values_list("slug", flat=True))
     if not track_slugs:
         return None
     now = timezone.now()
     stats_cutoff = now - timedelta(days=PIPELINE_MANAGER_STATS_MAX_AGE_DAYS)
-    entry_age_cutoff = now - timedelta(days=PIPELINE_MANAGER_ENTRY_MAX_AGE_DAYS)
     stage_q = _pipeline_stage_filter()
 
     for track in track_slugs:
         try:
-            old_entries = PipelineEntry.objects.filter(
-                track=track,
-                removed_at__isnull=True,
-                added_at__lt=entry_age_cutoff,
-            ).filter(stage_q)
-            for entry in old_entries:
-                _pipeline_entry_remove_for_cleanup(entry)
-
             job_ids = _iter_pipeline_stage_job_listing_ids(track)
             if not job_ids:
                 continue
@@ -1008,37 +1052,18 @@ def mark_stale_job_search_runs_failed():
 
 
 @db_periodic_task(crontab(minute="30", hour="1"))
-def cleanup_inactive_pipeline_entries_daily():
+def cleanup_manager():
     """
-    Once daily: remove inactive/closed postings from Applying stage, then run dedupe.
+    Once daily (01:30): dedupe pipeline rows across Pipeline/Vetting/Applying; age purge
+    per stage (Settings); best-effort inactive URL check for Applying listings.
     """
     started_at = timezone.now()
+    cfg = AppAutomationSettings.get_solo()
+    retention_removed = 0
     purge_result = {"checked": 0, "removed_inactive": 0, "active": 0, "unknown": 0}
     dedupe_result = {"entries_removed": 0, "duplicate_groups": 0}
     status = "success"
     errors: list[str] = []
-    try:
-        from .job_activity import purge_inactive_pipeline_entries
-
-        purge_result = purge_inactive_pipeline_entries(limit=400)
-        huey_logger.info(
-            "[cleanup_inactive_pipeline_entries_daily] inactive-check done checked=%s removed_inactive=%s active=%s unknown=%s",
-            purge_result.get("checked"),
-            purge_result.get("removed_inactive"),
-            purge_result.get("active"),
-            purge_result.get("unknown"),
-        )
-        logger.info(
-            "[cleanup_inactive_pipeline_entries_daily] checked=%s removed_inactive=%s active=%s unknown=%s",
-            purge_result.get("checked"),
-            purge_result.get("removed_inactive"),
-            purge_result.get("active"),
-            purge_result.get("unknown"),
-        )
-    except Exception as e:
-        status = "partial_failure"
-        errors.append(f"inactive_cleanup: {e}")
-        logger.exception("[cleanup_inactive_pipeline_entries_daily] inactive cleanup failed: %s", e)
 
     try:
         from .job_dedupe import dedupe_pipeline_entries
@@ -1049,25 +1074,56 @@ def cleanup_inactive_pipeline_entries_daily():
             include_done=False,
         )
         huey_logger.info(
-            "[cleanup_inactive_pipeline_entries_daily] dedupe done removed=%s groups=%s",
+            "[cleanup_manager] dedupe removed=%s groups=%s",
             dedupe_result.get("entries_removed"),
             dedupe_result.get("duplicate_groups"),
         )
         logger.info(
-            "[cleanup_inactive_pipeline_entries_daily] dedupe removed=%s groups=%s",
+            "[cleanup_manager] dedupe removed=%s groups=%s",
             dedupe_result.get("entries_removed"),
             dedupe_result.get("duplicate_groups"),
         )
     except Exception as e:
         status = "partial_failure"
         errors.append(f"dedupe_cleanup: {e}")
-        logger.exception("[cleanup_inactive_pipeline_entries_daily] dedupe cleanup failed: %s", e)
+        logger.exception("[cleanup_manager] dedupe failed: %s", e)
+
+    try:
+        retention_removed = apply_cleanup_retention_purge(cfg)
+    except Exception as e:
+        status = "partial_failure"
+        errors.append(f"retention_cleanup: {e}")
+        logger.exception("[cleanup_manager] retention purge failed: %s", e)
+
+    try:
+        from .job_activity import purge_inactive_pipeline_entries
+
+        purge_result = purge_inactive_pipeline_entries(limit=400)
+        huey_logger.info(
+            "[cleanup_manager] inactive-check checked=%s removed_inactive=%s active=%s unknown=%s",
+            purge_result.get("checked"),
+            purge_result.get("removed_inactive"),
+            purge_result.get("active"),
+            purge_result.get("unknown"),
+        )
+        logger.info(
+            "[cleanup_manager] inactive-check checked=%s removed_inactive=%s active=%s unknown=%s",
+            purge_result.get("checked"),
+            purge_result.get("removed_inactive"),
+            purge_result.get("active"),
+            purge_result.get("unknown"),
+        )
+    except Exception as e:
+        status = "partial_failure"
+        errors.append(f"inactive_cleanup: {e}")
+        logger.exception("[cleanup_manager] inactive cleanup failed: %s", e)
 
     finished_at = timezone.now()
     payload = {
         "status": status,
         "started_at": started_at,
         "finished_at": finished_at,
+        "retention_removed": int(retention_removed),
         "checked": int(purge_result.get("checked") or 0),
         "removed_inactive": int(purge_result.get("removed_inactive") or 0),
         "active": int(purge_result.get("active") or 0),
@@ -1078,6 +1134,10 @@ def cleanup_inactive_pipeline_entries_daily():
     }
     cache.set(CLEANUP_STATUS_CACHE_KEY, payload, CLEANUP_STATUS_CACHE_TTL_SECONDS)
     return None
+
+
+# Backward-compatible alias (imports, docs, manual enqueue).
+cleanup_inactive_pipeline_entries_daily = cleanup_manager
 
 
 @db_task()

@@ -130,9 +130,9 @@ def _llm_invoke_with_retry(
     job_cache_key: str | None = None,
     usage_query_kind: str | None = None,
 ):
-    from .llm_gateway import invoke_llm_messages
+    from .llm_gateway import call_invoke_llm_messages
 
-    return invoke_llm_messages(
+    return call_invoke_llm_messages(
         messages,
         job_cache_key=job_cache_key,
         structured_schema=structured_schema,

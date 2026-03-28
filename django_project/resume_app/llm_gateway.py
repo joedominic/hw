@@ -4,6 +4,7 @@ Central LLM invoke path: kill switch, preference order, job pinning, cooldowns, 
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import logging
 from typing import Any
@@ -461,6 +462,16 @@ def invoke_llm_messages(
     raise RuntimeError("All LLM candidates exhausted.")
 
 
+def call_invoke_llm_messages(messages, /, **kwargs) -> Any:
+    """
+    Call invoke_llm_messages, omitting keyword args the loaded implementation does not accept.
+    Avoids TypeError when a Huey/runner process still has an older gateway signature (e.g. missing usage_query_kind).
+    """
+    sig = inspect.signature(invoke_llm_messages)
+    allowed = {k: v for k, v in kwargs.items() if k in sig.parameters}
+    return invoke_llm_messages(messages, **allowed)
+
+
 def _invoke_single_llm(
     llm,
     messages,
@@ -521,7 +532,7 @@ def invoke_llm_messages_with_retry(
     usage_query_kind: str | None = None,
 ) -> Any:
     """Same as invoke_llm_messages; retry wrapper reserved for future use."""
-    return invoke_llm_messages(
+    return call_invoke_llm_messages(
         messages,
         job_cache_key=job_cache_key,
         structured_schema=structured_schema,

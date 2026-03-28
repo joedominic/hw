@@ -197,6 +197,39 @@
                 </div>
 
                 <div class="rounded-concierge border border-slate-100 bg-slate-50/50 p-4">
+                    <h3 class="text-sm font-semibold text-concierge-slate">Cleanup Manager (scheduled daily)</h3>
+                    <p class="mt-1 text-sm text-slate-600">
+                        The nightly Huey task removes duplicate rows across Pipeline, Vetting, and Applying, drops rows past the age you set below (per stage, by <strong>added date</strong>), then checks Applying URLs for closed postings. Use <strong>0</strong> to skip age cleanup for a stage.
+                    </p>
+                    <div class="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="cleanup-pipeline-days">Pipeline retention (days)</label>
+                            <input type="number" id="cleanup-pipeline-days" name="cleanup_pipeline_retention_days" min="0" max="365"
+                                   value="{{ app_automation.cleanup_pipeline_retention_days }}"
+                                   class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="cleanup-vetting-days">Vetting retention (days)</label>
+                            <input type="number" id="cleanup-vetting-days" name="cleanup_vetting_retention_days" min="0" max="365"
+                                   value="{{ app_automation.cleanup_vetting_retention_days }}"
+                                   class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="cleanup-applying-days">Applying retention (days)</label>
+                            <input type="number" id="cleanup-applying-days" name="cleanup_applying_retention_days" min="0" max="365"
+                                   value="{{ app_automation.cleanup_applying_retention_days }}"
+                                   class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="cleanup-done-days">Done retention (days)</label>
+                            <input type="number" id="cleanup-done-days" name="cleanup_done_retention_days" min="0" max="365"
+                                   value="{{ app_automation.cleanup_done_retention_days }}"
+                                   class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="rounded-concierge border border-slate-100 bg-slate-50/50 p-4">
                     <h3 class="text-sm font-semibold text-concierge-slate">Applying → resume optimization</h3>
                     <p class="mt-1 text-sm text-slate-600">
                         When jobs enter Applying (manual save from Vetting, auto-promotion, or bulk optimize), the default workflow below is used. Leave empty for the built-in Writer → ATS → Recruiter sequence.

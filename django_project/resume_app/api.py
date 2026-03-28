@@ -28,7 +28,7 @@ from .agents import (
     recruiter_judge_node,
 )
 from .llm_gateway import (
-    invoke_llm_messages,
+    call_invoke_llm_messages,
     LLMRequestsDisabled,
     USAGE_QUERY_API_LLM_COMPLETE,
     USAGE_QUERY_API_RESUME_FIT,
@@ -181,7 +181,7 @@ def llm_complete(request, payload: LlmCompleteRequest):
         model = payload.llm_model or config.default_model or None
         llm_override = get_llm(prov, api_key, model)
     try:
-        raw = invoke_llm_messages(
+        raw = call_invoke_llm_messages(
             messages,
             job_cache_key=(payload.job_cache_key or "").strip() or None,
             llm_override=llm_override,

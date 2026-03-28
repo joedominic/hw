@@ -272,19 +272,19 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 - Every 30 minutes.
 
 **Purpose:**
-- Maintain **Pipeline-stage** (`""` or `pipeline`) entries only: age cleanup, preference/focus metrics refresh, purge weak fits, then optional auto-promote to Vetting.
+- Maintain **Pipeline-stage** (`""` or `pipeline`) entries only: preference/focus metrics refresh, purge weak fits, then optional auto-promote to Vetting.
+
+**Per-stage age cleanup** (Pipeline, Vetting, Applying, Done by `PipelineEntry.added_at`) is handled by **`cleanup_manager()`** using **Settings → App automation → Cleanup Manager retention days** (`0` = skip that stage).
 
 **Configuration (module constants in `tasks.py`):**
 - `PIPELINE_MANAGER_STATS_MAX_AGE_DAYS` (default `2`) — rescale when metrics missing or `last_scored_at` older than this.
-- `PIPELINE_MANAGER_ENTRY_MAX_AGE_DAYS` (default `5`) — remove pipeline rows with `added_at` older than this.
 - `PIPELINE_MANAGER_PURGE_MARGIN_MAX` (default `-2`) — remove pipeline rows whose `preference_margin` for that track is **strictly less** than this (requires a metrics row with a non-null margin; NULL margins are not purged by this rule).
 - `PIPELINE_MANAGER_BATCH_SIZE` (default `100`).
 
 **What it does (per track, errors isolated per track):**
-1. **Age removal:** active Pipeline-stage rows past `PIPELINE_MANAGER_ENTRY_MAX_AGE_DAYS` → `PipelineEntry.delete()` **unless** the `JobListing` has any `JobListingAction` with `liked` or `disliked`; then `mark_deleted()` (keeps search suppression for training-tagged jobs).
-2. **Metrics:** gathers `job_listing_id` from active Pipeline-stage rows only (not saved-only listings), selects jobs needing scores, batches `recompute_preferences_for_jobs`, `JobListingTrackMetrics.update_or_create(...)`.
-3. **Margin purge:** same stage filter; for job ids with `preference_margin < PIPELINE_MANAGER_PURGE_MARGIN_MAX`, removes entries via the same hard/soft rule as age removal.
-4. **Promotion:** `apply_pipeline_auto_promotions()` (may enqueue `evaluate_vetting_matching_task` for newly promoted ids).
+1. **Metrics:** gathers `job_listing_id` from active Pipeline-stage rows only (not saved-only listings), selects jobs needing scores, batches `recompute_preferences_for_jobs`, `JobListingTrackMetrics.update_or_create(...)`.
+2. **Margin purge:** same stage filter; for job ids with `preference_margin < PIPELINE_MANAGER_PURGE_MARGIN_MAX`, removes entries via hard-delete unless the job has liked/disliked actions (then `mark_deleted()`).
+3. **Promotion:** `apply_pipeline_auto_promotions()` (may enqueue `evaluate_vetting_matching_task` for newly promoted ids).
 
 **Note:** Saved jobs that never appear on the Pipeline board are **not** refreshed by this task.
 
@@ -331,26 +331,32 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 
 ---
 
-## 10. `cleanup_inactive_pipeline_entries_daily()`
+## 10. `cleanup_manager()`
 
 **Defined:** `resume_app/tasks.py` — `@db_periodic_task(crontab(minute="30", hour="1"))`
+
+**Also exported as:** `cleanup_inactive_pipeline_entries_daily` (alias to the same function) for older imports.
 
 **When it runs:**
 - Once per day at 01:30 (server time).
 
 **Purpose:**
-- Remove clearly inactive/closed jobs from active board stages, then clean duplicates.
+- Board hygiene: dedupe across active stages, age-based purge per stage (Settings), then best-effort inactive posting check for Applying.
 
-**What it does:**
-- Calls `purge_inactive_pipeline_entries(...)` from `resume_app.job_activity`:
-  - checks active entries in Applying only (Pipeline and Vetting excluded)
-  - limits checks to 400 entries per run
-  - visits each job URL (best effort)
-  - soft-deletes rows that have clear “closed” signals
-    - e.g. HTTP 404/410/451
-    - or page text like “no longer accepting applications”
-  - keeps rows when status is unknown (network errors/timeouts)
-- Then calls `dedupe_pipeline_entries(track_slug="*", stage="all", include_done=False)`.
+**Configuration (`AppAutomationSettings`, Settings → App automation):**
+- `cleanup_pipeline_retention_days`, `cleanup_vetting_retention_days`, `cleanup_applying_retention_days`, `cleanup_done_retention_days` — remove rows in that stage with `added_at` older than N days; **`0` skips that stage**. Defaults for the first three are **`2` / `6` / `10`**; Done defaults to **`0`** (off) until you set it.
+
+**What it does (in order):**
+1. `dedupe_pipeline_entries(track_slug="*", stage="all", include_done=False)` — duplicate detection across Pipeline, Vetting, and Applying.
+2. `apply_cleanup_retention_purge(cfg)` — per track and per stage, removes entries past retention (same hard/soft rule as other cleanups when liked/disliked).
+3. `purge_inactive_pipeline_entries(limit=400)` from `resume_app.job_activity`:
+   - checks active entries in **Applying** only (Pipeline and Vetting excluded)
+   - visits each job URL (best effort)
+   - soft-deletes rows that have clear “closed” signals (e.g. 404/410/451 or closed-apply wording)
+   - keeps rows when status is unknown
+
+**Status cache:**
+- Writes `CLEANUP_STATUS_CACHE_KEY` with `dedupe_removed`, `dedupe_groups`, `retention_removed`, inactive-check counters, and `errors` (Huey monitor “Last cleanup”).
 
 **Returns:**
 - `None` (periodic maintenance task).

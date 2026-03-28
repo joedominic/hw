@@ -50,26 +50,27 @@ PERIODIC_TASKS: list[dict[str, str]] = [
         "task_fn_name": "pipeline_manager",
         "display_name": "Pipeline Manager",
         "cron_string": "*/30 * * * *",
-        "basic": "Every 30 minutes, maintains Pipeline-stage rows: scores, age and margin cleanup, auto-promote to Vetting.",
+        "basic": "Every 30 minutes, maintains Pipeline-stage rows: refresh fit metrics, margin purge, auto-promote to Vetting.",
         "advanced": (
-            "For each track, only active Pipeline (or legacy blank) stage entries: removes rows older than "
-            "PIPELINE_MANAGER_ENTRY_MAX_AGE_DAYS; recomputes JobListingTrackMetrics when missing or older than "
-            "PIPELINE_MANAGER_STATS_MAX_AGE_DAYS; removes entries whose preference_margin is below "
-            "PIPELINE_MANAGER_PURGE_MARGIN_MAX (hard-deletes PipelineEntry unless the job has liked/disliked "
-            "actions—then mark_deleted). Finally apply_pipeline_auto_promotions() may move rows to Vetting "
-            "and enqueue vetting matching. Saved-only listings are not scored by this task."
+            "For each track, only active Pipeline (or legacy blank) stage entries: recomputes "
+            "JobListingTrackMetrics when missing or older than PIPELINE_MANAGER_STATS_MAX_AGE_DAYS; removes entries "
+            "whose preference_margin is below PIPELINE_MANAGER_PURGE_MARGIN_MAX (hard-deletes PipelineEntry unless "
+            "the job has liked/disliked actions—then mark_deleted). Age-based removal for every stage is handled by "
+            "Cleanup Manager (Settings → retention days). Finally apply_pipeline_auto_promotions() may move rows to "
+            "Vetting and enqueue vetting matching. Saved-only listings are not scored by this task."
         ),
     },
     {
-        "task_fn_name": "cleanup_inactive_pipeline_entries_daily",
-        "display_name": "Clean inactive jobs (closed + duplicates)",
+        "task_fn_name": "cleanup_manager",
+        "display_name": "Cleanup Manager",
         "cron_string": "30 1 * * *",
-        "basic": "Once daily, checks Applying-stage jobs (up to 400) and removes listings that appear closed or no longer accepting applications.",
+        "basic": "Once daily: dedupe Pipeline/Vetting/Applying rows, purge rows past per-stage age (Settings), then check Applying listings for closed postings.",
         "advanced": (
-            "Runs a best-effort URL check for active Applying rows only (Pipeline and Vetting excluded), "
-            "limited to 400 checks per run. "
-            "Rows with explicit closed signals (404/410 or clear closed text) are soft-deleted. "
-            "Then it runs all-track dedupe to remove location duplicates in active stages."
+            "Order: (1) dedupe_pipeline_entries(track_slug=\"*\", stage=\"all\", include_done=False) across active "
+            "stages; (2) apply_cleanup_retention_purge() using AppAutomationSettings cleanup_*_retention_days "
+            "(0 = skip that stage; uses PipelineEntry.added_at); (3) purge_inactive_pipeline_entries(limit=400) — "
+            "URL checks for Applying-stage rows only. Liked/disliked jobs are soft-deleted on purge instead of "
+            "hard-deleted."
         ),
     },
 ]
