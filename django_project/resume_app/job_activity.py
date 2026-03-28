@@ -7,9 +7,12 @@ from dataclasses import dataclass
 
 import requests
 from django.db import models
+import logging
 
 from .models import JobListing, PipelineEntry
 
+# Use Huey's logger so progress lines appear in run_huey output consistently.
+logger = logging.getLogger("huey")
 
 _CLOSED_HINTS = (
     "no longer accepting applications",
@@ -89,16 +92,11 @@ def purge_inactive_pipeline_entries(
     limit: int = 500,
 ) -> dict[str, int]:
     """
-    Check active pipeline/vetting/applying rows and soft-delete ones that are clearly inactive.
+    Check active applying rows and soft-delete ones that are clearly inactive.
     """
     qs = (
         PipelineEntry.objects.filter(removed_at__isnull=True)
-        .filter(
-            models.Q(stage="")
-            | models.Q(stage=PipelineEntry.Stage.PIPELINE)
-            | models.Q(stage=PipelineEntry.Stage.VETTING)
-            | models.Q(stage=PipelineEntry.Stage.APPLYING)
-        )
+        .filter(stage=PipelineEntry.Stage.APPLYING)
         .select_related("job_listing")
         .order_by("-added_at")
     )
@@ -108,6 +106,7 @@ def purge_inactive_pipeline_entries(
     removed = 0
     unknown = 0
     active = 0
+    progress_every = 25
     for entry in entries:
         checked += 1
         result = check_job_listing_active(entry.job_listing)
@@ -118,6 +117,15 @@ def purge_inactive_pipeline_entries(
             active += 1
         else:
             unknown += 1
+        if checked % progress_every == 0:
+            logger.info(
+                "[purge_inactive_pipeline_entries] progress checked=%d/%d removed_inactive=%d active=%d unknown=%d",
+                checked,
+                len(entries),
+                removed,
+                active,
+                unknown,
+            )
 
     return {
         "checked": checked,

@@ -25,13 +25,15 @@ PERIODIC_TASKS: list[dict[str, str]] = [
     },
     {
         "task_fn_name": "enqueue_due_vetting_matching_tasks",
-        "display_name": "Backfill Vetting interview scores (LLM)",
+        "display_name": "Vetting Manager",
         "cron_string": "*/20 * * * *",
-        "basic": "Every 20 minutes, scores some Vetting jobs with an interview probability using your configured LLM.",
+        "basic": "Every 20 minutes, scores some Vetting jobs with interview probability via your configured LLM (job description must be at least 2000 characters).",
         "advanced": (
             "Looks at recent Vetting-stage PipelineEntry rows and enqueues evaluate_vetting_matching_task "
             "for entries missing vetting_interview_probability or scored with an older resume for that track "
-            "(limited per tick). This is the main periodic LLM consumer for the Vetting stage."
+            "(limited per tick). Skips LLM when JobListing.description is under VETTING_MATCHING_JD_MIN_CHARS. "
+            "LLM is the active LLMProviderConfig or first entry from get_runtime_provider_candidates() unless "
+            "the task is called with explicit provider/model overrides."
         ),
     },
     {
@@ -45,34 +47,27 @@ PERIODIC_TASKS: list[dict[str, str]] = [
         ),
     },
     {
-        "task_fn_name": "refresh_pipeline_preferences_delta",
-        "display_name": "Refresh pipeline fit scores (incremental)",
+        "task_fn_name": "pipeline_manager",
+        "display_name": "Pipeline Manager",
         "cron_string": "*/30 * * * *",
-        "basic": "Every 30 minutes, computes fit/preference scores for new jobs that haven’t been scored yet.",
+        "basic": "Every 30 minutes, maintains Pipeline-stage rows: scores, age and margin cleanup, auto-promote to Vetting.",
         "advanced": (
-            "For each track, gathers job ids from pipeline + saved jobs and computes JobListingTrackMetrics "
-            "for missing rows only (batching). After scoring, it may auto-promote Pipeline → Vetting "
-            "depending on your App settings, which can indirectly trigger Vetting matching."
-        ),
-    },
-    {
-        "task_fn_name": "refresh_pipeline_preferences_full",
-        "display_name": "Refresh pipeline fit scores (full + cleanup)",
-        "cron_string": "0 0 * * *",
-        "basic": "Once per day, recomputes fit/preference scores for all pipeline/saved jobs and cleans up low-signal jobs.",
-        "advanced": (
-            "For each track, recomputes JobListingTrackMetrics for pipeline + saved + already-scored jobs "
-            "and upserts results. Also purges strongly negative jobs from the Pipeline stage. "
-            "May auto-promote Pipeline → Vetting depending on App settings."
+            "For each track, only active Pipeline (or legacy blank) stage entries: removes rows older than "
+            "PIPELINE_MANAGER_ENTRY_MAX_AGE_DAYS; recomputes JobListingTrackMetrics when missing or older than "
+            "PIPELINE_MANAGER_STATS_MAX_AGE_DAYS; removes entries whose preference_margin is below "
+            "PIPELINE_MANAGER_PURGE_MARGIN_MAX (hard-deletes PipelineEntry unless the job has liked/disliked "
+            "actions—then mark_deleted). Finally apply_pipeline_auto_promotions() may move rows to Vetting "
+            "and enqueue vetting matching. Saved-only listings are not scored by this task."
         ),
     },
     {
         "task_fn_name": "cleanup_inactive_pipeline_entries_daily",
         "display_name": "Clean inactive jobs (closed + duplicates)",
         "cron_string": "30 1 * * *",
-        "basic": "Once daily, checks active pipeline-stage listings and removes jobs that appear closed or no longer accepting applications.",
+        "basic": "Once daily, checks Applying-stage jobs (up to 400) and removes listings that appear closed or no longer accepting applications.",
         "advanced": (
-            "Runs a best-effort URL check for active Pipeline/Vetting/Applying rows. "
+            "Runs a best-effort URL check for active Applying rows only (Pipeline and Vetting excluded), "
+            "limited to 400 checks per run. "
             "Rows with explicit closed signals (404/410 or clear closed text) are soft-deleted. "
             "Then it runs all-track dedupe to remove location duplicates in active stages."
         ),

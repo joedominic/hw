@@ -26,12 +26,10 @@ from .job_sources import DEFAULT_SITE_NAMES
 from .job_search_core import run_job_search_core, recompute_preferences_for_jobs
 from .agents import (
     create_workflow,
-    get_llm,
     DEFAULT_WRITER_PROMPT,
     DEFAULT_ATS_JUDGE_PROMPT,
     DEFAULT_RECRUITER_JUDGE_PROMPT,
     run_matching,
-    DEFAULT_MATCHING_PROMPT,
     VALID_STEP_IDS,
 )
 try:
@@ -41,13 +39,20 @@ except ImportError:
 from .crypto import decrypt_api_key
 from .services import parse_pdf
 from .callbacks import TokenUsageCallback
+from .llm_gateway import USAGE_QUERY_PIPELINE_VETTING
 from .llm_services import is_auth_error
 from .llm_session import get_runtime_provider_candidates, get_active_llm_provider
-from .prompt_store import get_effective_prompts
+from .prompt_store import (
+    build_optimizer_graph_prompt_state,
+    profile_for_llm,
+    resolve_prompt_parts,
+)
 import time
 import logging
 
 logger = logging.getLogger(__name__)
+huey_logger = logging.getLogger("huey")
+
 
 #
 # Vetting matching (resume vs job) evaluation
@@ -55,6 +60,7 @@ logger = logging.getLogger(__name__)
 VETTING_MATCHING_LOCK_KEY = "vetting_matching_task_running"
 VETTING_MATCHING_LOCK_TIMEOUT = 3600  # 1 hour max
 RESUME_MATCHING_SNIPPET_CHARS = 8000
+VETTING_MATCHING_JD_MIN_CHARS = 2000
 
 
 def apply_vetting_to_applying_promotions(entry_ids: list[int] | None = None) -> int:
@@ -164,9 +170,6 @@ def optimize_resume_task(
         # Parse PDF
         resume_text = parse_pdf(optimized_resume.original_resume.file.path)
 
-        # Initialize LLM (may raise if key invalid)
-        llm = get_llm(provider, api_key or None, model)
-
         # Setup Graph: configurable steps or default Writer -> ATS -> Recruiter
         steps = workflow_steps if workflow_steps else ["writer", "ats_judge", "recruiter_judge"]
         if workflow_steps:
@@ -183,8 +186,8 @@ def optimize_resume_task(
         else:
             app = create_workflow()
 
-        # Initial State
-        prompts = prompts or {}
+        # Initial State (prompts from profile + optional API override)
+        _pb = build_optimizer_graph_prompt_state(prompts or None)
         initial_state = {
             "resume_text": resume_text,
             "source_resume_text": resume_text,
@@ -194,10 +197,20 @@ def optimize_resume_task(
             "recruiter_score": 0,
             "feedback": [],
             "iteration_count": 0,
-            "llm": llm,
-            "writer_prompt_template": prompts.get("writer") or DEFAULT_WRITER_PROMPT,
-            "ats_judge_prompt_template": prompts.get("ats_judge") or DEFAULT_ATS_JUDGE_PROMPT,
-            "recruiter_judge_prompt_template": prompts.get("recruiter_judge") or DEFAULT_RECRUITER_JUDGE_PROMPT,
+            "llm": None,
+            "job_cache_key": str(resume_id),
+            "writer_prompt_template": _pb["writer_prompt_template"],
+            "writer_prompt_system": _pb["writer_prompt_system"],
+            "writer_prompt_user": _pb["writer_prompt_user"],
+            "writer_prompt_legacy": _pb["writer_prompt_legacy"],
+            "ats_judge_prompt_template": _pb["ats_judge_prompt_template"],
+            "ats_judge_prompt_system": _pb["ats_judge_prompt_system"],
+            "ats_judge_prompt_user": _pb["ats_judge_prompt_user"],
+            "ats_judge_prompt_legacy": _pb["ats_judge_prompt_legacy"],
+            "recruiter_judge_prompt_template": _pb["recruiter_judge_prompt_template"],
+            "recruiter_judge_prompt_system": _pb["recruiter_judge_prompt_system"],
+            "recruiter_judge_prompt_user": _pb["recruiter_judge_prompt_user"],
+            "recruiter_judge_prompt_legacy": _pb["recruiter_judge_prompt_legacy"],
             "debug": bool(debug),
         }
 
@@ -400,13 +413,6 @@ def _enqueue_single_pipeline_resume_optimization(
         }
     model = (config.default_model or "").strip() or None
 
-    pe = get_effective_prompts(None)
-    prompts = {
-        "writer": pe.get("writer"),
-        "ats_judge": pe.get("ats_judge"),
-        "recruiter_judge": pe.get("recruiter_judge"),
-    }
-
     solo = AppAutomationSettings.get_solo()
     workflow: OptimizerWorkflow | None = solo.applying_optimizer_workflow
     workflow_steps = None
@@ -444,7 +450,7 @@ def _enqueue_single_pipeline_resume_optimization(
         provider,
         api_key or "",
         model,
-        prompts=prompts,
+        prompts=None,
         debug=True,
         workflow_steps=workflow_steps,
         loop_to=loop_to,
@@ -583,6 +589,8 @@ def evaluate_vetting_matching_task(
     - vetting_interview_probability
     - vetting_interview_reasoning
     - vetting_interview_resume_id (so we can skip if unchanged)
+
+    Skips LLM when job description is shorter than VETTING_MATCHING_JD_MIN_CHARS (too little signal).
     """
     if not pipeline_entry_ids:
         return {"status": "skipped", "message": "No pipeline_entry_ids provided"}
@@ -605,30 +613,10 @@ def evaluate_vetting_matching_task(
         if not entries:
             return {"status": "skipped", "message": "No entries in VETTING stage"}
 
-        # Resolve LLM (provider/model) from args or DB-backed preference order.
-        resolved_provider = llm_provider
-        config = None
-        if resolved_provider:
-            config = (
-                LLMProviderConfig.objects.filter(provider=resolved_provider)
-                .exclude(encrypted_api_key="")
-                .first()
-            )
-        if not config:
-            cands = get_runtime_provider_candidates()
-            if cands:
-                cand = cands[0]
-                config = cand["config"]
-                resolved_provider = cand["provider"]
-                if not llm_model:
-                    llm_model = cand["model"]
+        from .llm_gateway import preference_candidates_available
 
-        if not resolved_provider or not config:
-            return {"status": "error", "message": "No LLM configured (LLMProviderConfig missing)"}  # noqa: E501
-
-        api_key = decrypt_api_key(config.encrypted_api_key or "")
-        chosen_model = llm_model or config.default_model or None
-        llm = get_llm(resolved_provider, api_key or None, chosen_model)
+        if not preference_candidates_available():
+            return {"status": "error", "message": "No LLM configured (add provider keys and preference rows)."}
 
         jd_max_chars = getattr(settings, "JOB_MATCHING_JD_MAX_CHARS", 12000)
         now = timezone.now()
@@ -656,6 +644,7 @@ def evaluate_vetting_matching_task(
         updated = 0
         skipped = 0
         errors = []
+        ms, mu, ml = resolve_prompt_parts(profile_for_llm(None), "matching")
         for entry in entries:
             track = entry.track
             resolved = resume_snippet_map.get(track)
@@ -673,7 +662,7 @@ def evaluate_vetting_matching_task(
                 continue
 
             jd = (entry.job_listing.description or "").strip()
-            if not jd:
+            if not jd or len(jd) < VETTING_MATCHING_JD_MIN_CHARS:
                 skipped += 1
                 continue
             jd = jd[:jd_max_chars]
@@ -683,12 +672,26 @@ def evaluate_vetting_matching_task(
                 # even when requested via schema.
                 result = None
                 for _attempt in range(3):
-                    result = run_matching(
-                        resume_snippet,
-                        jd,
-                        llm,
-                        prompt_template=matching_prompt,
-                    )
+                    if matching_prompt and str(matching_prompt).strip():
+                        result = run_matching(
+                            resume_snippet,
+                            jd,
+                            None,
+                            prompt_template=matching_prompt,
+                            job_cache_key=f"vetting:{entry.id}",
+                            usage_query_kind=USAGE_QUERY_PIPELINE_VETTING,
+                        )
+                    else:
+                        result = run_matching(
+                            resume_snippet,
+                            jd,
+                            None,
+                            prompt_system=ms,
+                            prompt_user=mu,
+                            prompt_legacy=ml or None,
+                            job_cache_key=f"vetting:{entry.id}",
+                            usage_query_kind=USAGE_QUERY_PIPELINE_VETTING,
+                        )
                     if result.get("interview_probability") is not None:
                         break
 
@@ -819,32 +822,136 @@ def enqueue_due_vetting_matching_tasks():
     return None
 
 
-def _iter_track_job_ids(track: str, include_metrics: bool) -> list[int]:
-    """
-    Common helper to gather job ids for a track:
-    - All jobs in pipeline for the track
-    - All saved jobs (global)
-    - Optionally, all jobs that already have metrics for this track.
-    """
-    pipeline_job_ids = list(
-        PipelineEntry.objects.filter(track=track, removed_at__isnull=True)
-        .values_list("job_listing_id", flat=True)
-        .distinct()
-    )
-    saved_job_ids = list(
-        JobListingAction.objects.filter(action=JobListingAction.ActionType.SAVED)
-        .values_list("job_listing_id", flat=True)
-        .distinct()
-    )
-    job_ids = set(pipeline_job_ids) | set(saved_job_ids)
-    if include_metrics:
-        metrics_job_ids = list(
-            JobListingTrackMetrics.objects.filter(track=track)
+def _pipeline_stage_filter() -> models.Q:
+    return models.Q(stage="") | models.Q(stage=PipelineEntry.Stage.PIPELINE)
+
+
+def _iter_pipeline_stage_job_listing_ids(track: str) -> list[int]:
+    return sorted(
+        set(
+            PipelineEntry.objects.filter(track=track, removed_at__isnull=True)
+            .filter(_pipeline_stage_filter())
             .values_list("job_listing_id", flat=True)
-            .distinct()
         )
-        job_ids |= set(metrics_job_ids)
-    return sorted(job_ids)
+    )
+
+
+def _job_listing_has_like_or_dislike(job_listing_id: int) -> bool:
+    return JobListingAction.objects.filter(
+        job_listing_id=job_listing_id,
+        action__in=[
+            JobListingAction.ActionType.LIKED,
+            JobListingAction.ActionType.DISLIKED,
+        ],
+    ).exists()
+
+
+def _pipeline_entry_remove_for_cleanup(entry: PipelineEntry) -> None:
+    if _job_listing_has_like_or_dislike(entry.job_listing_id):
+        entry.mark_deleted(save=True)
+    else:
+        entry.delete()
+
+
+PIPELINE_MANAGER_STATS_MAX_AGE_DAYS = 2
+PIPELINE_MANAGER_ENTRY_MAX_AGE_DAYS = 5
+PIPELINE_MANAGER_PURGE_MARGIN_MAX = -2
+PIPELINE_MANAGER_BATCH_SIZE = 100
+
+
+@db_periodic_task(crontab(minute="*/30"))
+def pipeline_manager():
+    """
+    Every 30 minutes: maintain Pipeline-stage entries only—age purge, refresh stale/missing
+    fit metrics, purge low preference_margin rows, then auto-promote to Vetting when enabled.
+    """
+    track_slugs = list(Track.objects.values_list("slug", flat=True))
+    if not track_slugs:
+        return None
+    now = timezone.now()
+    stats_cutoff = now - timedelta(days=PIPELINE_MANAGER_STATS_MAX_AGE_DAYS)
+    entry_age_cutoff = now - timedelta(days=PIPELINE_MANAGER_ENTRY_MAX_AGE_DAYS)
+    stage_q = _pipeline_stage_filter()
+
+    for track in track_slugs:
+        try:
+            old_entries = PipelineEntry.objects.filter(
+                track=track,
+                removed_at__isnull=True,
+                added_at__lt=entry_age_cutoff,
+            ).filter(stage_q)
+            for entry in old_entries:
+                _pipeline_entry_remove_for_cleanup(entry)
+
+            job_ids = _iter_pipeline_stage_job_listing_ids(track)
+            if not job_ids:
+                continue
+
+            existing_metrics = {
+                m.job_listing_id: m.last_scored_at
+                for m in JobListingTrackMetrics.objects.filter(
+                    track=track, job_listing_id__in=job_ids
+                ).only("job_listing_id", "last_scored_at")
+            }
+            needs_scoring = [
+                jid
+                for jid in job_ids
+                if existing_metrics.get(jid) is None or existing_metrics[jid] < stats_cutoff
+            ]
+            if needs_scoring:
+                logger.info(
+                    "[pipeline_manager] track=%s jobs_to_score=%d",
+                    track,
+                    len(needs_scoring),
+                )
+            for i in range(0, len(needs_scoring), PIPELINE_MANAGER_BATCH_SIZE):
+                batch_ids = needs_scoring[i : i + PIPELINE_MANAGER_BATCH_SIZE]
+                jobs = list(JobListing.objects.filter(id__in=batch_ids))
+                if not jobs:
+                    continue
+                scores = recompute_preferences_for_jobs(jobs, track=track)
+                for job in jobs:
+                    data = scores.get(job.id) or {}
+                    JobListingTrackMetrics.objects.update_or_create(
+                        job_listing=job,
+                        track=track,
+                        defaults={
+                            "focus_percent": data.get("focus_percent"),
+                            "focus_after_penalty": data.get("focus_after_penalty"),
+                            "preference_margin": data.get("preference_margin"),
+                            "last_scored_at": timezone.now(),
+                        },
+                    )
+
+            bad_ids = list(
+                JobListingTrackMetrics.objects.filter(
+                    track=track,
+                    preference_margin__lt=PIPELINE_MANAGER_PURGE_MARGIN_MAX,
+                ).values_list("job_listing_id", flat=True)
+            )
+            if bad_ids:
+                margin_entries = PipelineEntry.objects.filter(
+                    track=track,
+                    removed_at__isnull=True,
+                    job_listing_id__in=bad_ids,
+                ).filter(stage_q)
+                removed_n = 0
+                for entry in margin_entries:
+                    _pipeline_entry_remove_for_cleanup(entry)
+                    removed_n += 1
+                if removed_n:
+                    logger.info(
+                        "[pipeline_manager] track=%s purged %d job(s) from pipeline (margin)",
+                        track,
+                        removed_n,
+                    )
+        except Exception as e:
+            logger.exception("[pipeline_manager] track=%s failed: %s", track, e)
+    try:
+        apply_pipeline_auto_promotions()
+    except Exception as e:
+        logger.exception("[pipeline_manager] apply_pipeline_auto_promotions failed: %s", e)
+    return None
 
 
 @db_periodic_task(crontab(minute="*"))
@@ -900,159 +1007,10 @@ def mark_stale_job_search_runs_failed():
     return None
 
 
-@db_periodic_task(crontab(minute="*/30"))
-def refresh_pipeline_preferences_delta():
-    """
-    Every 30 minutes: compute metrics only for jobs that don't yet have
-    JobListingTrackMetrics for their track (delta refresh).
-    """
-    track_slugs = list(Track.objects.values_list("slug", flat=True))
-    if not track_slugs:
-        return None
-    batch_size = 100
-
-    for track in track_slugs:
-        try:
-            job_ids = _iter_track_job_ids(track, include_metrics=False)
-            if not job_ids:
-                continue
-
-            existing_ids = set(
-                JobListingTrackMetrics.objects.filter(track=track, job_listing_id__in=job_ids)
-                .values_list("job_listing_id", flat=True)
-            )
-            missing_ids = [jid for jid in job_ids if jid not in existing_ids]
-            if not missing_ids:
-                continue
-
-            logger.info(
-                "[refresh_pipeline_preferences_delta] track=%s jobs_to_score=%d",
-                track,
-                len(missing_ids),
-            )
-
-            for i in range(0, len(missing_ids), batch_size):
-                batch_ids = missing_ids[i : i + batch_size]
-                jobs = list(JobListing.objects.filter(id__in=batch_ids))
-                if not jobs:
-                    continue
-                scores = recompute_preferences_for_jobs(jobs, track=track)
-                metrics_to_create = []
-                for job in jobs:
-                    data = scores.get(job.id) or {}
-                    metrics_to_create.append(
-                        JobListingTrackMetrics(
-                            job_listing=job,
-                            track=track,
-                            focus_percent=data.get("focus_percent"),
-                            focus_after_penalty=data.get("focus_after_penalty"),
-                            preference_margin=data.get("preference_margin"),
-                            last_scored_at=timezone.now(),
-                        )
-                    )
-                if metrics_to_create:
-                    JobListingTrackMetrics.objects.bulk_create(
-                        metrics_to_create, ignore_conflicts=True
-                    )
-        except Exception as e:
-            logger.exception(
-                "[refresh_pipeline_preferences_delta] track=%s failed: %s", track, e
-            )
-    try:
-        apply_pipeline_auto_promotions()
-    except Exception as e:
-        logger.exception("[refresh_pipeline_preferences_delta] apply_pipeline_auto_promotions failed: %s", e)
-    return None
-
-
-@db_periodic_task(crontab(minute=0, hour="0"))
-def refresh_pipeline_preferences_full():
-    """
-    Once per day: full recompute of metrics for all jobs that are in pipeline /
-    saved or already have metrics, and purge strongly negative jobs from pipeline.
-    """
-    from datetime import timedelta
-
-    track_slugs = list(Track.objects.values_list("slug", flat=True))
-    if not track_slugs:
-        return None
-    batch_size = 100
-    purge_threshold = -2  # preference_margin below this is auto-purged
-
-    for track in track_slugs:
-        try:
-            job_ids = _iter_track_job_ids(track, include_metrics=True)
-            if not job_ids:
-                continue
-
-            logger.info(
-                "[refresh_pipeline_preferences_full] track=%s jobs_to_score=%d",
-                track,
-                len(job_ids),
-            )
-
-            for i in range(0, len(job_ids), batch_size):
-                batch_ids = job_ids[i : i + batch_size]
-                jobs = list(JobListing.objects.filter(id__in=batch_ids))
-                if not jobs:
-                    continue
-                scores = recompute_preferences_for_jobs(jobs, track=track)
-
-                # Upsert metrics rows
-                for job in jobs:
-                    data = scores.get(job.id) or {}
-                    JobListingTrackMetrics.objects.update_or_create(
-                        job_listing=job,
-                        track=track,
-                        defaults={
-                            "focus_percent": data.get("focus_percent"),
-                            "focus_after_penalty": data.get("focus_after_penalty"),
-                            "preference_margin": data.get("preference_margin"),
-                            "last_scored_at": timezone.now(),
-                        },
-                    )
-
-            # After metrics are updated, purge strongly negative jobs from pipeline
-            now = timezone.now()
-            bad_ids = list(
-                JobListingTrackMetrics.objects.filter(
-                    track=track,
-                    preference_margin__lt=purge_threshold,
-                ).values_list("job_listing_id", flat=True)
-            )
-            if bad_ids:
-                entries = PipelineEntry.objects.filter(
-                    track=track,
-                    removed_at__isnull=True,
-                    job_listing_id__in=bad_ids,
-                ).filter(
-                    models.Q(stage="") | models.Q(stage=PipelineEntry.Stage.PIPELINE)
-                )
-                count = 0
-                for entry in entries:
-                    entry.mark_deleted(save=True)
-                    count += 1
-                if count:
-                    logger.info(
-                        "[refresh_pipeline_preferences_full] track=%s purged %d job(s) from pipeline",
-                        track,
-                        count,
-                    )
-        except Exception as e:
-            logger.exception(
-                "[refresh_pipeline_preferences_full] track=%s failed: %s", track, e
-            )
-    try:
-        apply_pipeline_auto_promotions()
-    except Exception as e:
-        logger.exception("[refresh_pipeline_preferences_full] apply_pipeline_auto_promotions failed: %s", e)
-    return None
-
-
 @db_periodic_task(crontab(minute="30", hour="1"))
 def cleanup_inactive_pipeline_entries_daily():
     """
-    Once daily: remove inactive/closed postings from active board stages, then run dedupe.
+    Once daily: remove inactive/closed postings from Applying stage, then run dedupe.
     """
     started_at = timezone.now()
     purge_result = {"checked": 0, "removed_inactive": 0, "active": 0, "unknown": 0}
@@ -1062,7 +1020,14 @@ def cleanup_inactive_pipeline_entries_daily():
     try:
         from .job_activity import purge_inactive_pipeline_entries
 
-        purge_result = purge_inactive_pipeline_entries(limit=800)
+        purge_result = purge_inactive_pipeline_entries(limit=400)
+        huey_logger.info(
+            "[cleanup_inactive_pipeline_entries_daily] inactive-check done checked=%s removed_inactive=%s active=%s unknown=%s",
+            purge_result.get("checked"),
+            purge_result.get("removed_inactive"),
+            purge_result.get("active"),
+            purge_result.get("unknown"),
+        )
         logger.info(
             "[cleanup_inactive_pipeline_entries_daily] checked=%s removed_inactive=%s active=%s unknown=%s",
             purge_result.get("checked"),
@@ -1082,6 +1047,11 @@ def cleanup_inactive_pipeline_entries_daily():
             track_slug="*",
             stage="all",
             include_done=False,
+        )
+        huey_logger.info(
+            "[cleanup_inactive_pipeline_entries_daily] dedupe done removed=%s groups=%s",
+            dedupe_result.get("entries_removed"),
+            dedupe_result.get("duplicate_groups"),
         )
         logger.info(
             "[cleanup_inactive_pipeline_entries_daily] dedupe removed=%s groups=%s",

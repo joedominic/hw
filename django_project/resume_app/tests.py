@@ -167,17 +167,15 @@ class APITestCase(TestCase):
 
 
 class TaskTestCase(TestCase):
-    @patch("resume_app.tasks.get_llm")
     @patch("resume_app.tasks.parse_pdf")
     @patch("resume_app.tasks.create_workflow")
     def test_optimize_resume_task_updates_status_on_success(
-        self, mock_create_workflow, mock_parse_pdf, mock_get_llm
+        self, mock_create_workflow, mock_parse_pdf
     ):
         from .tasks import optimize_resume_task
         from .models import AgentLog
 
         mock_parse_pdf.return_value = "Resume text"
-        mock_get_llm.return_value = MagicMock()
         graph = MagicMock()
         graph.stream.return_value = [
             {"writer": {"optimized_resume": "Optimized", "iteration_count": 1}},
@@ -209,9 +207,8 @@ class WriterNodePromptTestCase(TestCase):
 
         captured = {}
 
-        def fake_llm_invoke(llm, messages, max_attempts=3, config=None):
-            msg = messages[0]
-            captured["prompt"] = getattr(msg, "content", str(msg))
+        def fake_llm_invoke(llm, messages, max_attempts=3, config=None, structured_schema=None, job_cache_key=None, **kwargs):
+            captured["prompt"] = "\n".join(getattr(m, "content", str(m)) for m in messages)
             r = MagicMock()
             r.content = "NEW RESUME OUT"
             r.usage_metadata = None
@@ -222,12 +219,16 @@ class WriterNodePromptTestCase(TestCase):
         )
         state = {
             "resume_text": "ORIGINAL BODY",
+            "source_resume_text": "ORIGINAL BODY",
             "job_description": "JD HERE",
             "optimized_resume": "PREVIOUS DRAFT LINE",
             "feedback": ["ATS: fix keywords"],
             "iteration_count": 0,
             "llm": MagicMock(),
             "writer_prompt_template": template,
+            "writer_prompt_system": "",
+            "writer_prompt_user": "",
+            "writer_prompt_legacy": "",
             "debug": False,
         }
 
@@ -243,9 +244,8 @@ class WriterNodePromptTestCase(TestCase):
 
         captured = {}
 
-        def fake_llm_invoke(llm, messages, max_attempts=3, config=None):
-            msg = messages[0]
-            captured["prompt"] = getattr(msg, "content", str(msg))
+        def fake_llm_invoke(llm, messages, max_attempts=3, config=None, structured_schema=None, job_cache_key=None, **kwargs):
+            captured["prompt"] = "\n".join(getattr(m, "content", str(m)) for m in messages)
             r = MagicMock()
             r.content = "OUT"
             r.usage_metadata = None
@@ -261,6 +261,9 @@ class WriterNodePromptTestCase(TestCase):
             "iteration_count": 0,
             "llm": MagicMock(),
             "writer_prompt_template": template,
+            "writer_prompt_system": "",
+            "writer_prompt_user": "",
+            "writer_prompt_legacy": "",
             "debug": False,
         }
 
@@ -613,3 +616,38 @@ class JobDedupeTestCase(TestCase):
         self.assertEqual(r0["entries_removed"], 0)
         r1 = dedupe_pipeline_entries(track_slug="ic", stage="vetting", include_done=False)
         self.assertEqual(r1["entries_removed"], 1)
+
+
+class PromptStoreResolveTestCase(TestCase):
+    def test_resolve_matching_uses_code_defaults_when_profile_empty(self):
+        from resume_app.prompt_store import resolve_prompt_parts
+        from resume_app.models import UserPromptProfile
+
+        UserPromptProfile.objects.filter(pk=1).delete()
+        UserPromptProfile.objects.create(pk=1)
+        prof = UserPromptProfile.objects.get(pk=1)
+        s, u, leg = resolve_prompt_parts(prof, "matching")
+        self.assertIsNone(leg)
+        self.assertIn("JSON", s)
+        self.assertIn("{resume_text}", u)
+
+
+class LlmRateLimitTestCase(TestCase):
+    def test_acquire_when_disabled_returns_noop(self):
+        from resume_app.llm_rate_limit import acquire_llm_slot
+
+        with patch("resume_app.llm_rate_limit._get_limits", return_value=None):
+            rec, rel = acquire_llm_slot("Groq", "llama", 42)
+        rec(10)
+        rel()
+
+
+class BuildOptimizerPromptStateTestCase(TestCase):
+    def test_build_state_includes_split_writer_keys(self):
+        from resume_app.prompt_store import build_optimizer_graph_prompt_state
+
+        st = build_optimizer_graph_prompt_state(None, None)
+        self.assertIn("writer_prompt_system", st)
+        self.assertIn("writer_prompt_user", st)
+        self.assertIn("writer_prompt_legacy", st)
+        self.assertTrue(st["writer_prompt_system"] or st["writer_prompt_user"] or st["writer_prompt_legacy"])

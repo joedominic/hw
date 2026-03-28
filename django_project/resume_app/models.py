@@ -142,13 +142,26 @@ class UserPromptProfile(models.Model):
     """
     Singleton-style profile (use id=1) for edited Writer / Judge / Matching / Insights prompts.
     Empty string for a field means fall back to the code default in prompts.py.
+
+    When *_system / *_user are both empty but the legacy single field (e.g. writer) is set,
+    the app uses one HumanMessage with that legacy template (backward compatible).
     """
 
     writer = models.TextField(blank=True)
+    writer_system = models.TextField(blank=True)
+    writer_user = models.TextField(blank=True)
     ats_judge = models.TextField(blank=True)
+    ats_judge_system = models.TextField(blank=True)
+    ats_judge_user = models.TextField(blank=True)
     recruiter_judge = models.TextField(blank=True)
+    recruiter_judge_system = models.TextField(blank=True)
+    recruiter_judge_user = models.TextField(blank=True)
     matching = models.TextField(blank=True)
+    matching_system = models.TextField(blank=True)
+    matching_user = models.TextField(blank=True)
     insights = models.TextField(blank=True)
+    insights_system = models.TextField(blank=True)
+    insights_user = models.TextField(blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -197,6 +210,21 @@ class LLMProviderPreference(models.Model):
     )
     model = models.CharField(max_length=128, blank=True)
     priority = models.PositiveSmallIntegerField(default=100)
+    rate_limit_rpm = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Optional max requests per minute for this provider+model row. Empty = use env/provider defaults or no limit.",
+    )
+    rate_limit_tpm = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Optional max input tokens per minute (estimated) for this row. Empty = use env/provider defaults or no limit.",
+    )
+    rate_limit_cooldown_seconds = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="After rate limit or 429, skip this provider+model for this many seconds (empty = 300).",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -205,6 +233,80 @@ class LLMProviderPreference(models.Model):
 
     def __str__(self):
         return f"{self.provider_config.provider} / {self.model or '(default)'} @ {self.priority}"
+
+
+class LLMAppUsageTotals(models.Model):
+    """Singleton (pk=1): aggregate LLM token usage across the app."""
+
+    total_input_tokens = models.BigIntegerField(default=0)
+    total_output_tokens = models.BigIntegerField(default=0)
+    total_requests = models.PositiveIntegerField(default=0)
+    total_estimated_invokes = models.PositiveIntegerField(
+        default=0,
+        help_text="Calls where tokens were heuristic (provider did not report usage).",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "LLM app usage totals"
+        verbose_name_plural = "LLM app usage totals"
+
+    def __str__(self):
+        return "LLM usage totals"
+
+    @classmethod
+    def get_solo(cls):
+        obj, _created = cls.objects.get_or_create(pk=1)
+        return obj
+
+
+class LLMUsageByModel(models.Model):
+    """Per provider + model usage counters (normalized model key)."""
+
+    provider = models.CharField(max_length=64, db_index=True)
+    model = models.CharField(
+        max_length=128,
+        db_index=True,
+        help_text="Resolved model name, or __default__ when empty.",
+    )
+    request_count = models.PositiveIntegerField(default=0)
+    sum_input_tokens = models.BigIntegerField(default=0)
+    sum_output_tokens = models.BigIntegerField(default=0)
+    sum_cached_tokens = models.BigIntegerField(default=0)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "LLM usage by model"
+        verbose_name_plural = "LLM usage by model"
+        unique_together = [("provider", "model")]
+
+    def __str__(self):
+        return f"{self.provider} / {self.model}"
+
+
+class LLMUsageByQuery(models.Model):
+    """Per logical LLM use-case, provider, and model (gateway-recorded only)."""
+
+    query_kind = models.CharField(max_length=64, db_index=True)
+    provider = models.CharField(max_length=64, db_index=True)
+    model = models.CharField(
+        max_length=128,
+        db_index=True,
+        help_text="Resolved model name, or __default__ when empty.",
+    )
+    request_count = models.PositiveIntegerField(default=0)
+    sum_input_tokens = models.BigIntegerField(default=0)
+    sum_output_tokens = models.BigIntegerField(default=0)
+    sum_cached_tokens = models.BigIntegerField(default=0)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "LLM usage by query"
+        verbose_name_plural = "LLM usage by query"
+        unique_together = [("query_kind", "provider", "model")]
+
+    def __str__(self):
+        return f"{self.query_kind} / {self.provider} / {self.model}"
 
 
 class AppAutomationSettings(models.Model):
@@ -230,6 +332,10 @@ class AppAutomationSettings(models.Model):
         related_name="+",
         help_text="Default Resume Optimizer workflow for Applying-stage runs (auto + bulk).",
     )
+    stop_llm_requests = models.BooleanField(
+        default=False,
+        help_text="When set, the app will not send any LLM API requests (kill switch).",
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -248,6 +354,7 @@ class AppAutomationSettings(models.Model):
                 "pipeline_preference_margin_min": 0,
                 "vetting_to_applying_enabled": False,
                 "vetting_interview_probability_min": 70,
+                "stop_llm_requests": False,
             },
         )
         return obj

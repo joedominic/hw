@@ -1,10 +1,9 @@
 from typing import TypedDict, List, Annotated, Optional
 import operator
 import logging
-import time
 import re
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage
 from langgraph.graph import StateGraph, END
 
 from .callbacks import TokenUsageCallback
@@ -18,10 +17,20 @@ from .parsers import (
 )
 from .prompts import (
     DEFAULT_WRITER_PROMPT,
+    DEFAULT_WRITER_SYSTEM,
+    DEFAULT_WRITER_USER,
     DEFAULT_ATS_JUDGE_PROMPT,
+    DEFAULT_ATS_JUDGE_SYSTEM,
+    DEFAULT_ATS_JUDGE_USER,
     DEFAULT_RECRUITER_JUDGE_PROMPT,
+    DEFAULT_RECRUITER_JUDGE_SYSTEM,
+    DEFAULT_RECRUITER_JUDGE_USER,
     DEFAULT_FIT_CHECK_PROMPT,
+    DEFAULT_FIT_CHECK_SYSTEM,
+    DEFAULT_FIT_CHECK_USER,
     DEFAULT_MATCHING_PROMPT,
+    DEFAULT_MATCHING_SYSTEM,
+    DEFAULT_MATCHING_USER,
 )
 
 logger = logging.getLogger(__name__)
@@ -31,19 +40,32 @@ _CHARS_PER_TOKEN_ESTIMATE = 4
 
 
 def _normalize_token_usage(response, llm_output=None, prompt_text=None, response_content=None):
-    """Extract (input_tokens, output_tokens, estimated) from LLM response. Uses provider metadata first, then estimates from text length."""
+    """Extract (input_tokens, output_tokens, estimated, cached_tokens) from LLM response."""
     in_tok, out_tok, estimated = 0, 0, False
+    cached_tok = 0
     usage = None
     if response is not None:
         usage = getattr(response, "usage_metadata", None)
     if isinstance(usage, dict):
         in_tok = int(usage.get("input_tokens") or usage.get("input") or usage.get("prompt_tokens") or 0)
         out_tok = int(usage.get("output_tokens") or usage.get("output") or usage.get("completion_tokens") or 0)
+        details = usage.get("prompt_tokens_details") or {}
+        if isinstance(details, dict):
+            try:
+                cached_tok = int(details.get("cached_tokens") or 0)
+            except (TypeError, ValueError):
+                cached_tok = 0
     if in_tok == 0 and out_tok == 0 and llm_output:
         tu = (llm_output or {}).get("token_usage") or (llm_output or {}).get("usage") or {}
         if isinstance(tu, dict):
             in_tok = int(tu.get("input_tokens") or tu.get("prompt_tokens") or 0)
             out_tok = int(tu.get("output_tokens") or tu.get("completion_tokens") or 0)
+            ptd = tu.get("prompt_tokens_details")
+            if isinstance(ptd, dict) and cached_tok == 0:
+                try:
+                    cached_tok = int(ptd.get("cached_tokens") or 0)
+                except (TypeError, ValueError):
+                    pass
     if in_tok == 0 and out_tok == 0 and (prompt_text is not None or response is not None or response_content is not None):
         content = response_content
         if content is None and response is not None:
@@ -54,7 +76,12 @@ def _normalize_token_usage(response, llm_output=None, prompt_text=None, response
         in_tok = max(0, len(str(prompt_text or "")) // _CHARS_PER_TOKEN_ESTIMATE)
         out_tok = max(0, len(content) // _CHARS_PER_TOKEN_ESTIMATE)
         estimated = True
-    return {"input_tokens": in_tok, "output_tokens": out_tok, "tokens_estimated": estimated}
+    return {
+        "input_tokens": in_tok,
+        "output_tokens": out_tok,
+        "tokens_estimated": estimated,
+        "cached_tokens": cached_tok,
+    }
 
 
 def _format_prompt(template: str, **kwargs) -> str:
@@ -68,43 +95,52 @@ def _format_prompt(template: str, **kwargs) -> str:
     return escaped.format(**kwargs)
 
 
-def _extract_429_retry_seconds(exc: Exception):
-    """Parse 'Please retry in X seconds' or retry_delay from 429/ResourceExhausted errors. Returns seconds or None."""
+def build_llm_messages_for_prompt(
+    *,
+    legacy_combined: str | None,
+    system_template: str | None,
+    user_template: str | None,
+    format_kwargs: dict,
+) -> list[BaseMessage]:
+    """System + user messages (cache-friendly prefix), or one HumanMessage for legacy templates."""
+    leg = (legacy_combined or "").strip()
+    if leg:
+        return [HumanMessage(content=_format_prompt(leg, **format_kwargs))]
+    sys_t = (system_template or "").strip()
+    usr_t = (user_template or "").strip()
+    out: list[BaseMessage] = []
+    if sys_t:
+        out.append(SystemMessage(content=_format_prompt(sys_t, **format_kwargs)))
+    if usr_t:
+        out.append(HumanMessage(content=_format_prompt(usr_t, **format_kwargs)))
+    return out
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
     msg = str(exc)
-    # "Please retry in 58.659962366s." or similar
-    m = re.search(r"retry\s+in\s+([\d.]+)\s*s", msg, re.I)
-    if m:
-        try:
-            return max(1, min(300, int(float(m.group(1)))))  # clamp 1–300s
-        except (ValueError, TypeError):
-            pass
-    # retry_delay { seconds: 58 }
-    m = re.search(r"retry_delay[\s\S]*?seconds[\"']?\s*:\s*(\d+)", msg, re.I)
-    if m:
-        try:
-            return max(1, min(300, int(m.group(1))))
-        except (ValueError, TypeError):
-            pass
-    return None
+    return "429" in msg or "ResourceExhausted" in type(exc).__name__ or "quota" in msg.lower()
 
 
-def _llm_invoke_with_retry(llm, messages, max_attempts=3, config=None):
-    last_exc = None
-    for attempt in range(max_attempts):
-        try:
-            if config is not None:
-                return llm.invoke(messages, config=config)
-            return llm.invoke(messages)
-        except Exception as e:
-            last_exc = e
-            is_429 = "429" in str(e) or "ResourceExhausted" in type(e).__name__ or "quota" in str(e).lower()
-            if is_429 and attempt < max_attempts - 1:
-                delay = _extract_429_retry_seconds(e) or 60
-                logger.warning("429/quota error, waiting %s seconds before retry (attempt %s): %s", delay, attempt + 1, e)
-                time.sleep(delay)
-            else:
-                raise
-    raise last_exc
+def _llm_invoke_with_retry(
+    llm,
+    messages,
+    max_attempts=2,
+    config=None,
+    structured_schema=None,
+    job_cache_key: str | None = None,
+    usage_query_kind: str | None = None,
+):
+    from .llm_gateway import invoke_llm_messages
+
+    return invoke_llm_messages(
+        messages,
+        job_cache_key=job_cache_key,
+        structured_schema=structured_schema,
+        config=config,
+        llm_override=llm,
+        max_attempts_per_model=max_attempts,
+        usage_query_kind=usage_query_kind,
+    )
 
 
 def _extract_json_object(content: str) -> Optional[dict]:
@@ -229,33 +265,108 @@ def _parse_fit_check_fallback(content: str) -> "FitCheckResult":
     )
 
 
-def run_fit_check(resume_text: str, job_description: str, llm, prompt_template: str = None) -> dict:
+def run_fit_check(
+    resume_text: str,
+    job_description: str,
+    llm,
+    prompt_template: str = None,
+    prompt_system: str = None,
+    prompt_user: str = None,
+    prompt_legacy: str = None,
+    job_cache_key: str | None = None,
+    usage_query_kind: str | None = None,
+) -> dict:
     """Returns { score: int, reasoning: str, thoughts: str }. Score 0-100; if < 50 caller may ask user to confirm."""
-    template = prompt_template or DEFAULT_FIT_CHECK_PROMPT
-    prompt = _format_prompt(template, resume_text=resume_text, job_description=job_description)
+    fmt = dict(resume_text=resume_text, job_description=job_description)
+    if prompt_template and str(prompt_template).strip():
+        messages = [HumanMessage(content=_format_prompt(str(prompt_template).strip(), **fmt))]
+    else:
+        leg = (prompt_legacy or "").strip()
+        st = (prompt_system or "").strip()
+        ut = (prompt_user or "").strip()
+        if not leg and not st and not ut:
+            messages = build_llm_messages_for_prompt(
+                legacy_combined=None,
+                system_template=DEFAULT_FIT_CHECK_SYSTEM,
+                user_template=DEFAULT_FIT_CHECK_USER,
+                format_kwargs=fmt,
+            )
+        else:
+            messages = build_llm_messages_for_prompt(
+                legacy_combined=leg or None,
+                system_template=st or None,
+                user_template=ut or None,
+                format_kwargs=fmt,
+            )
+    from .llm_gateway import USAGE_QUERY_FIT_CHECK
+
+    _qk = usage_query_kind or USAGE_QUERY_FIT_CHECK
+    dbg = "\n\n---\n\n".join(f"{type(m).__name__}:{getattr(m, 'content', '')}" for m in messages)
     try:
-        structured_llm = llm.with_structured_output(FitCheckResult)
-        result = _llm_invoke_with_retry(structured_llm, [HumanMessage(content=prompt)])
+        result = _llm_invoke_with_retry(
+            llm,
+            messages,
+            structured_schema=FitCheckResult,
+            job_cache_key=job_cache_key,
+            usage_query_kind=_qk,
+        )
         if isinstance(result, FitCheckResult):
             return {"score": result.score, "reasoning": result.reasoning, "thoughts": result.thoughts}
         parsed = _parse_fit_check_fallback_from_parsers(str(result))
         return {"score": parsed.score, "reasoning": parsed.reasoning, "thoughts": parsed.thoughts}
     except Exception as e:
         logger.warning("fit_check structured output failed: %s", e)
-        raw = _llm_invoke_with_retry(llm, [HumanMessage(content=prompt)])
+        raw = _llm_invoke_with_retry(
+            llm, messages, job_cache_key=job_cache_key, usage_query_kind=_qk
+        )
         content = raw.content if hasattr(raw, "content") else str(raw)
         parsed = _parse_fit_check_fallback_from_parsers(content)
         return {"score": parsed.score, "reasoning": parsed.reasoning, "thoughts": parsed.thoughts}
 
 
-def run_matching(resume_text: str, job_description: str, llm, prompt_template: str = None) -> dict:
+def run_matching(
+    resume_text: str,
+    job_description: str,
+    llm,
+    prompt_template: str = None,
+    prompt_system: str = None,
+    prompt_user: str = None,
+    prompt_legacy: str = None,
+    job_cache_key: str | None = None,
+    usage_query_kind: str | None = None,
+) -> dict:
     """Returns { score: int, reasoning: str, interview_probability: int|None }. Score 0-100.
     Used after job search for independent LLM match score.
     Uses raw LLM call + parser (no structured output) so all providers return parseable text."""
-    template = prompt_template or DEFAULT_MATCHING_PROMPT
-    prompt = _format_prompt(template, resume_text=resume_text, job_description=job_description)
-    logger.info("[matching] prompt length=%s", len(prompt))
-    raw = _llm_invoke_with_retry(llm, [HumanMessage(content=prompt)])
+    fmt = dict(resume_text=resume_text, job_description=job_description)
+    if prompt_template and str(prompt_template).strip():
+        messages = [HumanMessage(content=_format_prompt(str(prompt_template).strip(), **fmt))]
+    else:
+        leg = (prompt_legacy or "").strip()
+        st = (prompt_system or "").strip()
+        ut = (prompt_user or "").strip()
+        if not leg and not st and not ut:
+            messages = build_llm_messages_for_prompt(
+                legacy_combined=None,
+                system_template=DEFAULT_MATCHING_SYSTEM,
+                user_template=DEFAULT_MATCHING_USER,
+                format_kwargs=fmt,
+            )
+        else:
+            messages = build_llm_messages_for_prompt(
+                legacy_combined=leg or None,
+                system_template=st or None,
+                user_template=ut or None,
+                format_kwargs=fmt,
+            )
+    from .llm_gateway import USAGE_QUERY_MATCHING
+
+    _qk = usage_query_kind or USAGE_QUERY_MATCHING
+    dbg = "\n\n---\n\n".join(f"{type(m).__name__}:{getattr(m, 'content', '')}" for m in messages)
+    logger.info("[matching] messages=%s total_chars=%s", len(messages), len(dbg))
+    raw = _llm_invoke_with_retry(
+        llm, messages, job_cache_key=job_cache_key, usage_query_kind=_qk
+    )
     content = getattr(raw, "content", None)
     if content is None:
         content = str(raw) if raw is not None else ""
@@ -291,7 +402,17 @@ class AgentState(_AgentStateBase, total=False):
     last_ats_json: dict  # Parsed ATS judge JSON when using custom prompts
     last_recruiter_json: dict  # Parsed recruiter judge JSON when available
     score_threshold: int  # Exit when avg(ats_score, recruiter_score) >= this (default 85)
+    job_cache_key: str  # Stable id for LLM gateway pinning (e.g. optimized resume id)
     source_resume_text: str  # PDF extraction; immutable fact anchor for Writer across steps
+    writer_prompt_system: str
+    writer_prompt_user: str
+    writer_prompt_legacy: str
+    ats_judge_prompt_system: str
+    ats_judge_prompt_user: str
+    ats_judge_prompt_legacy: str
+    recruiter_judge_prompt_system: str
+    recruiter_judge_prompt_user: str
+    recruiter_judge_prompt_legacy: str
 
 # --- Agent Nodes ---
 
@@ -299,7 +420,11 @@ class AgentState(_AgentStateBase, total=False):
 _STATE_KEYS = frozenset({
     "resume_text", "job_description", "optimized_resume", "source_resume_text", "ats_score", "recruiter_score",
     "feedback", "iteration_count", "llm", "writer_prompt_template", "ats_judge_prompt_template",
-    "recruiter_judge_prompt_template", "debug", "max_iterations", "score_threshold",
+    "recruiter_judge_prompt_template",
+    "writer_prompt_system", "writer_prompt_user", "writer_prompt_legacy",
+    "ats_judge_prompt_system", "ats_judge_prompt_user", "ats_judge_prompt_legacy",
+    "recruiter_judge_prompt_system", "recruiter_judge_prompt_user", "recruiter_judge_prompt_legacy",
+    "debug", "max_iterations", "score_threshold", "job_cache_key",
 })
 
 
@@ -321,7 +446,6 @@ def writer_node(state: AgentState):
     `{source_resume_text}` stays the original PDF text for factual grounding.
     """
     llm = _state_get(state, "llm")
-    template = _state_get(state, "writer_prompt_template") or DEFAULT_WRITER_PROMPT
     prior = (_state_get(state, "optimized_resume") or "").strip()
     base = (_state_get(state, "resume_text") or "").strip()
     src = (_state_get(state, "source_resume_text") or "").strip()
@@ -329,26 +453,58 @@ def writer_node(state: AgentState):
         src = base
     # Same as state.resume_text whenever prior is empty; when prior is set without base synced (rare), prefer prior.
     resume_body_this_step = prior if prior else base
-    prompt = _format_prompt(
-        template,
+    fmt = dict(
         resume_text=resume_body_this_step,
         job_description=_state_get(state, "job_description") or "",
         feedback=", ".join(_state_get(state, "feedback") or []),
         optimized_resume=prior,
         source_resume_text=src,
     )
-    logger.warning("[writer] prompts sent to LLM: no system prompt; single user message (length=%s):\n--- USER PROMPT ---\n%s\n--- END USER PROMPT ---", len(prompt), prompt)
+    legacy = (_state_get(state, "writer_prompt_legacy") or "").strip()
+    sys_t = (_state_get(state, "writer_prompt_system") or "").strip()
+    usr_t = (_state_get(state, "writer_prompt_user") or "").strip()
+    if not legacy and not sys_t and not usr_t:
+        legacy = (_state_get(state, "writer_prompt_template") or DEFAULT_WRITER_PROMPT).strip()
+
+    messages = build_llm_messages_for_prompt(
+        legacy_combined=legacy or None,
+        system_template=sys_t or None,
+        user_template=usr_t or None,
+        format_kwargs=fmt,
+    )
+    dbg_prompt = "\n\n---\n\n".join(
+        f"{m.__class__.__name__}:\n{getattr(m, 'content', '')}" for m in messages
+    )
+    logger.warning(
+        "[writer] prompts sent to LLM (%s message(s), total_chars=%s):\n%s",
+        len(messages),
+        len(dbg_prompt),
+        dbg_prompt[:8000] + ("..." if len(dbg_prompt) > 8000 else ""),
+    )
     if _state_get(state, "debug"):
-        out = {"debug_prompt": prompt, "debug_messages": [{"role": "user", "content": prompt}]}
+        dm = []
+        for m in messages:
+            role = "user"
+            if isinstance(m, SystemMessage):
+                role = "system"
+            dm.append({"role": role, "content": getattr(m, "content", "")})
+        out = {"debug_prompt": dbg_prompt, "debug_messages": dm}
     else:
         out = {}
-    response = _llm_invoke_with_retry(llm, [HumanMessage(content=prompt)])
+    from .llm_gateway import USAGE_QUERY_OPTIMIZER_WRITER
+
+    response = _llm_invoke_with_retry(
+        llm,
+        messages,
+        job_cache_key=_state_get(state, "job_cache_key"),
+        usage_query_kind=USAGE_QUERY_OPTIMIZER_WRITER,
+    )
     out.update({
         "optimized_resume": response.content,
         "resume_text": response.content,
         "iteration_count": (_state_get(state, "iteration_count") or 0) + 1
     })
-    usage = _normalize_token_usage(response, None, prompt)
+    usage = _normalize_token_usage(response, None, dbg_prompt)
     out["input_tokens"] = usage["input_tokens"]
     out["output_tokens"] = usage["output_tokens"]
     if usage.get("tokens_estimated"):
@@ -361,31 +517,75 @@ def _judge_node(
     *,
     label: str,
     template_state_key: str,
+    system_state_key: str,
+    user_state_key: str,
+    legacy_state_key: str,
     default_template: str,
+    default_system: str,
+    default_user: str,
     score_key: str,
     feedback_prefix: str,
     last_json_state_key: str,
 ):
     llm = _state_get(state, "llm")
-    template = _state_get(state, template_state_key) or default_template
     draft = (_state_get(state, "optimized_resume") or "").strip() or (_state_get(state, "resume_text") or "").strip()
-    prompt = _format_prompt(
-        template,
+    fmt = dict(
         optimized_resume=draft,
         job_description=_state_get(state, "job_description") or "",
     )
-    logger.warning("[%s] prompts sent to LLM: no system prompt; single user message (length=%s):\n--- USER PROMPT ---\n%s\n--- END USER PROMPT ---", label, len(prompt), prompt)
+    legacy = (_state_get(state, legacy_state_key) or "").strip()
+    sys_t = (_state_get(state, system_state_key) or "").strip()
+    usr_t = (_state_get(state, user_state_key) or "").strip()
+    if not legacy and not sys_t and not usr_t:
+        legacy = (_state_get(state, template_state_key) or default_template).strip()
+
+    messages = build_llm_messages_for_prompt(
+        legacy_combined=legacy or None,
+        system_template=sys_t or None,
+        user_template=usr_t or None,
+        format_kwargs=fmt,
+    )
+    dbg_prompt = "\n\n---\n\n".join(
+        f"{m.__class__.__name__}:\n{getattr(m, 'content', '')}" for m in messages
+    )
+    logger.warning(
+        "[%s] prompts sent to LLM (%s message(s), chars=%s):\n%s",
+        label,
+        len(messages),
+        len(dbg_prompt),
+        dbg_prompt[:8000] + ("..." if len(dbg_prompt) > 8000 else ""),
+    )
     if _state_get(state, "debug"):
-        out = {"debug_prompt": prompt, "debug_messages": [{"role": "user", "content": prompt}]}
+        dm = []
+        for m in messages:
+            role = "user"
+            if isinstance(m, SystemMessage):
+                role = "system"
+            dm.append({"role": role, "content": getattr(m, "content", "")})
+        out = {"debug_prompt": dbg_prompt, "debug_messages": dm}
     else:
         out = {}
+    from .llm_gateway import (
+        USAGE_QUERY_OPTIMIZER_ATS_JUDGE,
+        USAGE_QUERY_OPTIMIZER_RECRUITER_JUDGE,
+    )
+
+    _usage_qk = (
+        USAGE_QUERY_OPTIMIZER_ATS_JUDGE
+        if label == "ats_judge"
+        else USAGE_QUERY_OPTIMIZER_RECRUITER_JUDGE
+    )
     last_json = None
     raw = None
     usage_callback = TokenUsageCallback()
     try:
-        structured_llm = llm.with_structured_output(ScoreFeedback)
         result = _llm_invoke_with_retry(
-            structured_llm, [HumanMessage(content=prompt)], config={"callbacks": [usage_callback]}
+            llm,
+            messages,
+            config={"callbacks": [usage_callback]},
+            structured_schema=ScoreFeedback,
+            job_cache_key=_state_get(state, "job_cache_key"),
+            usage_query_kind=_usage_qk,
         )
         if isinstance(result, ScoreFeedback):
             data = result
@@ -395,7 +595,12 @@ def _judge_node(
             data, last_json = _parse_score_fallback(content, label)
     except Exception as e:
         logger.warning("%s structured output failed: %s", label, e)
-        raw = _llm_invoke_with_retry(llm, [HumanMessage(content=prompt)])
+        raw = _llm_invoke_with_retry(
+            llm,
+            messages,
+            job_cache_key=_state_get(state, "job_cache_key"),
+            usage_query_kind=_usage_qk,
+        )
         content = raw.content if hasattr(raw, "content") else str(raw)
         logger.warning("[%s] raw LLM output (before parse), length=%s:\n---\n%s\n---", label, len(content), content)
         data, last_json = _parse_score_fallback(content, label)
@@ -407,7 +612,7 @@ def _judge_node(
     if last_json is not None:
         out[last_json_state_key] = _normalize_dict_keys(last_json)
     if raw is not None:
-        usage = _normalize_token_usage(raw, getattr(raw, "llm_output", None), prompt)
+        usage = _normalize_token_usage(raw, getattr(raw, "llm_output", None), dbg_prompt)
         out["input_tokens"] = usage["input_tokens"]
         out["output_tokens"] = usage["output_tokens"]
         if usage.get("tokens_estimated"):
@@ -416,7 +621,7 @@ def _judge_node(
         out["input_tokens"] = usage_callback.total_input_tokens
         out["output_tokens"] = usage_callback.total_output_tokens
     else:
-        usage = _normalize_token_usage(None, None, prompt, str(data.feedback) if data else None)
+        usage = _normalize_token_usage(None, None, dbg_prompt, str(data.feedback) if data else None)
         out["input_tokens"] = usage["input_tokens"]
         out["output_tokens"] = usage["output_tokens"]
         if usage.get("tokens_estimated"):
@@ -429,7 +634,12 @@ def ats_judge_node(state: AgentState):
         state,
         label="ats_judge",
         template_state_key="ats_judge_prompt_template",
+        system_state_key="ats_judge_prompt_system",
+        user_state_key="ats_judge_prompt_user",
+        legacy_state_key="ats_judge_prompt_legacy",
         default_template=DEFAULT_ATS_JUDGE_PROMPT,
+        default_system=DEFAULT_ATS_JUDGE_SYSTEM,
+        default_user=DEFAULT_ATS_JUDGE_USER,
         score_key="ats_score",
         feedback_prefix="ATS: ",
         last_json_state_key="last_ats_json",
@@ -441,7 +651,12 @@ def recruiter_judge_node(state: AgentState):
         state,
         label="recruiter_judge",
         template_state_key="recruiter_judge_prompt_template",
+        system_state_key="recruiter_judge_prompt_system",
+        user_state_key="recruiter_judge_prompt_user",
+        legacy_state_key="recruiter_judge_prompt_legacy",
         default_template=DEFAULT_RECRUITER_JUDGE_PROMPT,
+        default_system=DEFAULT_RECRUITER_JUDGE_SYSTEM,
+        default_user=DEFAULT_RECRUITER_JUDGE_USER,
         score_key="recruiter_score",
         feedback_prefix="Recruiter: ",
         last_json_state_key="last_recruiter_json",

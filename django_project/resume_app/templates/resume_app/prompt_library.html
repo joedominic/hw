@@ -9,6 +9,12 @@
         <p class="mt-1 text-sm text-slate-600">
             Templates for the optimizer, matching, and job insights. Saved prompts apply on the next run.
         </p>
+        <p class="mt-2 rounded-md border border-amber-100 bg-amber-50/80 px-3 py-2 text-xs text-amber-900">
+            <strong>Prompt caching tip:</strong> Put stable rules in <strong>System</strong> and variable resume/JD data in <strong>User</strong>.
+            Avoid timestamps or session IDs in System. On Groq, similar prefixes can reuse cached tokens (see
+            <a href="https://console.groq.com/docs/prompt-caching" class="underline font-medium" target="_blank" rel="noopener">Groq prompt caching</a>).
+            Optional <strong>Combined (legacy)</strong> overrides split when filled.
+        </p>
     </div>
 
     {% include "resume_app/_concierge_messages.html" %}
@@ -35,39 +41,81 @@
                     </div>
                     <div class="rounded-b border border-t-0 border-slate-200 bg-slate-50/30 p-4" id="prompt-tab-content">
                         <div id="prompt-writer-pane" role="tabpanel" aria-labelledby="prompt-writer-tab">
-                            <label class="sr-only" for="prompt-writer-input">Writer prompt</label>
-                            <textarea id="prompt-writer-input" name="prompt_writer" rows="18"
-                                      class="w-full min-h-[22rem] rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
-                                      placeholder="Writer prompt template">{{ prompts.writer }}</textarea>
-                            <p class="mt-2 text-xs text-slate-500">Placeholders: <code class="rounded bg-slate-100 px-1">{resume_text}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code>, <code class="rounded bg-slate-100 px-1">{feedback}</code></p>
+                            <p class="mb-2 text-xs font-medium text-slate-600">System — role, output format, rules (keep stable across runs)</p>
+                            <label class="sr-only" for="prompt-writer-system">Writer system prompt</label>
+                            <textarea id="prompt-writer-system" name="prompt_writer_system" rows="8"
+                                      class="mb-3 w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="System instructions">{{ prompts.writer_system }}</textarea>
+                            <p class="mb-2 text-xs font-medium text-slate-600">User — resume/JD/feedback placeholders (dynamic per run)</p>
+                            <label class="sr-only" for="prompt-writer-user">Writer user prompt</label>
+                            <textarea id="prompt-writer-user" name="prompt_writer_user" rows="12"
+                                      class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="User prompt with placeholders">{{ prompts.writer_user }}</textarea>
+                            <p class="mt-2 text-xs text-slate-500">Placeholders: <code class="rounded bg-slate-100 px-1">{resume_text}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code>, <code class="rounded bg-slate-100 px-1">{feedback}</code>, <code class="rounded bg-slate-100 px-1">{source_resume_text}</code>, <code class="rounded bg-slate-100 px-1">{optimized_resume}</code></p>
+                            <p class="mt-3 text-xs font-medium text-slate-600">Combined (legacy, optional — clears split for Writer when non-empty)</p>
+                            <textarea name="prompt_writer_combined" rows="3"
+                                      class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs text-slate-600"
+                                      placeholder="Leave empty to use System + User above">{{ prompts.writer_legacy_combined }}</textarea>
                         </div>
                         <div id="prompt-ats-pane" role="tabpanel" aria-labelledby="prompt-ats-tab" class="hidden">
-                            <label class="sr-only" for="prompt-ats-input">ATS judge prompt</label>
-                            <textarea id="prompt-ats-input" name="prompt_ats_judge" rows="18"
-                                      class="w-full min-h-[22rem] rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
-                                      placeholder="ATS judge prompt template">{{ prompts.ats_judge }}</textarea>
+                            <p class="mb-2 text-xs font-medium text-slate-600">System</p>
+                            <textarea name="prompt_ats_system" rows="6"
+                                      class="mb-3 w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="ATS judge system">{{ prompts.ats_judge_system }}</textarea>
+                            <p class="mb-2 text-xs font-medium text-slate-600">User</p>
+                            <textarea name="prompt_ats_user" rows="12"
+                                      class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="ATS judge user">{{ prompts.ats_judge_user }}</textarea>
                             <p class="mt-2 text-xs text-slate-500">Placeholders: <code class="rounded bg-slate-100 px-1">{optimized_resume}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code></p>
+                            <p class="mt-3 text-xs font-medium text-slate-600">Combined (legacy, optional)</p>
+                            <textarea name="prompt_ats_combined" rows="3"
+                                      class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs"
+                                      placeholder="Optional single template">{{ prompts.ats_judge_legacy_combined }}</textarea>
                         </div>
                         <div id="prompt-recruiter-pane" role="tabpanel" aria-labelledby="prompt-recruiter-tab" class="hidden">
-                            <label class="sr-only" for="prompt-recruiter-input">Recruiter judge prompt</label>
-                            <textarea id="prompt-recruiter-input" name="prompt_recruiter_judge" rows="18"
-                                      class="w-full min-h-[22rem] rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
-                                      placeholder="Recruiter judge prompt template">{{ prompts.recruiter_judge }}</textarea>
+                            <p class="mb-2 text-xs font-medium text-slate-600">System</p>
+                            <textarea name="prompt_recruiter_system" rows="6"
+                                      class="mb-3 w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="Recruiter judge system">{{ prompts.recruiter_judge_system }}</textarea>
+                            <p class="mb-2 text-xs font-medium text-slate-600">User</p>
+                            <textarea name="prompt_recruiter_user" rows="12"
+                                      class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="Recruiter judge user">{{ prompts.recruiter_judge_user }}</textarea>
                             <p class="mt-2 text-xs text-slate-500">Placeholders: <code class="rounded bg-slate-100 px-1">{optimized_resume}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code></p>
+                            <p class="mt-3 text-xs font-medium text-slate-600">Combined (legacy, optional)</p>
+                            <textarea name="prompt_recruiter_combined" rows="3"
+                                      class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs"
+                                      placeholder="Optional single template">{{ prompts.recruiter_judge_legacy_combined }}</textarea>
                         </div>
                         <div id="prompt-matching-pane" role="tabpanel" aria-labelledby="prompt-matching-tab" class="hidden">
-                            <label class="sr-only" for="prompt-matching-input">Matching prompt</label>
-                            <textarea id="prompt-matching-input" name="prompt_matching" rows="18"
-                                      class="w-full min-h-[22rem] rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
-                                      placeholder="Matching prompt template">{{ prompts.matching|default:"" }}</textarea>
-                            <p class="mt-2 text-xs text-slate-500">LLM match per job. <code class="rounded bg-slate-100 px-1">{resume_text}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code></p>
+                            <p class="mb-2 text-xs font-medium text-slate-600">System (JSON schema — keep identical across calls for cache hits)</p>
+                            <textarea name="prompt_matching_system" rows="14"
+                                      class="mb-3 w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="Matching system">{{ prompts.matching_system }}</textarea>
+                            <p class="mb-2 text-xs font-medium text-slate-600">User</p>
+                            <textarea name="prompt_matching_user" rows="6"
+                                      class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="Matching user">{{ prompts.matching_user }}</textarea>
+                            <p class="mt-2 text-xs text-slate-500"><code class="rounded bg-slate-100 px-1">{resume_text}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code></p>
+                            <p class="mt-3 text-xs font-medium text-slate-600">Combined (legacy, optional)</p>
+                            <textarea name="prompt_matching_combined" rows="3"
+                                      class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs"
+                                      placeholder="Optional single template">{{ prompts.matching_legacy_combined }}</textarea>
                         </div>
                         <div id="prompt-insights-pane" role="tabpanel" aria-labelledby="prompt-insights-tab" class="hidden">
-                            <label class="sr-only" for="prompt-insights-input">Insights prompt</label>
-                            <textarea id="prompt-insights-input" name="prompt_insights" rows="18"
-                                      class="w-full min-h-[22rem] rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
-                                      placeholder="Insights prompt template">{{ prompts.insights|default:"" }}</textarea>
-                            <p class="mt-2 text-xs text-slate-500">Job Search Insights. Placeholder: <code class="rounded bg-slate-100 px-1">{job_descriptions}</code></p>
+                            <p class="mb-2 text-xs font-medium text-slate-600">System</p>
+                            <textarea name="prompt_insights_system" rows="6"
+                                      class="mb-3 w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="Insights system">{{ prompts.insights_system }}</textarea>
+                            <p class="mb-2 text-xs font-medium text-slate-600">User</p>
+                            <textarea name="prompt_insights_user" rows="10"
+                                      class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="Insights user">{{ prompts.insights_user }}</textarea>
+                            <p class="mt-2 text-xs text-slate-500">Placeholder: <code class="rounded bg-slate-100 px-1">{job_descriptions}</code></p>
+                            <p class="mt-3 text-xs font-medium text-slate-600">Combined (legacy, optional)</p>
+                            <textarea name="prompt_insights_combined" rows="3"
+                                      class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs"
+                                      placeholder="Optional single template">{{ prompts.insights_legacy_combined }}</textarea>
                         </div>
                     </div>
                 </div>

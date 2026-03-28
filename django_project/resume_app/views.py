@@ -60,7 +60,7 @@ from .job_sources import DEFAULT_SITE_NAMES
 from .tasks import run_job_search_task, get_next_run_at, validate_cron
 from .utils import cron_to_short_description
 from .huey_dashboard import PERIODIC_TASKS, get_periodic_task_info, get_periodic_task_wrapper
-from .prompt_store import get_effective_prompts, save_prompts_to_profile
+from .prompt_store import get_effective_prompts, save_prompts_to_profile, clear_all_prompts_in_profile
 from .llm_session import (
     get_active_llm_provider as _get_active_llm_provider,
     get_provider_preferences as _get_provider_preferences,
@@ -190,21 +190,12 @@ def optimizer_view(request):
 
         if action == "reset_prompts":
             try:
-                prompts_obj = api_get_prompts(request)
-                save_prompts_to_profile(
-                    request,
-                    {
-                        "writer": prompts_obj["writer"],
-                        "ats_judge": prompts_obj["ats_judge"],
-                        "recruiter_judge": prompts_obj["recruiter_judge"],
-                        "matching": prompts_obj.get("matching", ""),
-                        "insights": prompts_obj.get("insights", ""),
-                    },
-                )
+                clear_all_prompts_in_profile(request)
+                full_prompts = get_effective_prompts(request)
                 prompts = {
-                    "writer": prompts_obj["writer"],
-                    "ats_judge": prompts_obj["ats_judge"],
-                    "recruiter_judge": prompts_obj["recruiter_judge"],
+                    "writer": full_prompts["writer"],
+                    "ats_judge": full_prompts["ats_judge"],
+                    "recruiter_judge": full_prompts["recruiter_judge"],
                 }
                 messages.success(request, "Prompts reset to server defaults.")
             except Exception as e:
@@ -217,6 +208,12 @@ def optimizer_view(request):
                     "writer": request.POST.get("prompt_writer") or merged.get("writer", ""),
                     "ats_judge": request.POST.get("prompt_ats_judge") or merged.get("ats_judge", ""),
                     "recruiter_judge": request.POST.get("prompt_recruiter_judge") or merged.get("recruiter_judge", ""),
+                    "writer_system": "",
+                    "writer_user": "",
+                    "ats_judge_system": "",
+                    "ats_judge_user": "",
+                    "recruiter_judge_system": "",
+                    "recruiter_judge_user": "",
                 }
             )
             save_prompts_to_profile(request, merged)
@@ -277,6 +274,12 @@ def optimizer_view(request):
                     "writer": request.POST.get("prompt_writer") or merged.get("writer", ""),
                     "ats_judge": request.POST.get("prompt_ats_judge") or merged.get("ats_judge", ""),
                     "recruiter_judge": request.POST.get("prompt_recruiter_judge") or merged.get("recruiter_judge", ""),
+                    "writer_system": "",
+                    "writer_user": "",
+                    "ats_judge_system": "",
+                    "ats_judge_user": "",
+                    "recruiter_judge_system": "",
+                    "recruiter_judge_user": "",
                 }
             )
             save_prompts_to_profile(request, merged)
@@ -417,9 +420,14 @@ def settings_view(request):
         AppAutomationSettings,
         LLMProviderConfig,
         LLMProviderPreference,
+        LLMAppUsageTotals,
+        LLMUsageByModel,
+        LLMUsageByQuery,
         OptimizerWorkflow,
         Track,
     )
+    from .llm_gateway import USAGE_QUERY_LABELS
+    from .llm_rate_limit import get_llm_cooldown_ttl
     from .crypto import decrypt_api_key
     from .llm_factory import get_llm
     from .llm_services import list_models_for_provider
@@ -458,6 +466,27 @@ def settings_view(request):
                 request,
                 "Loaded model lists from providers. If a provider timed out, try again.",
             )
+            return redirect(reverse("settings") + "?tab=llm")
+        if action == "reset_llm_usage_stats":
+            solo = LLMAppUsageTotals.get_solo()
+            LLMAppUsageTotals.objects.filter(pk=solo.pk).update(
+                total_input_tokens=0,
+                total_output_tokens=0,
+                total_requests=0,
+                total_estimated_invokes=0,
+            )
+            LLMUsageByModel.objects.all().delete()
+            LLMUsageByQuery.objects.all().delete()
+            messages.success(
+                request,
+                "LLM usage totals and per-model / per-query counters were reset.",
+            )
+            return redirect(reverse("settings") + "?tab=usage")
+        if action == "save_stop_llm_requests":
+            automation = AppAutomationSettings.get_solo()
+            automation.stop_llm_requests = bool(request.POST.get("stop_llm_requests"))
+            automation.save(update_fields=["stop_llm_requests", "updated_at"])
+            messages.success(request, "LLM safety settings saved.")
             return redirect(reverse("settings") + "?tab=llm")
         if action == "save_app_automation":
             automation = AppAutomationSettings.get_solo()
@@ -546,19 +575,49 @@ def settings_view(request):
             pref_providers = request.POST.getlist("pref_provider")
             pref_models = request.POST.getlist("pref_model")
             pref_priorities = request.POST.getlist("pref_priority")
+            pref_rpms = request.POST.getlist("pref_rate_limit_rpm")
+            pref_tpms = request.POST.getlist("pref_rate_limit_tpm")
+            pref_cooldowns = request.POST.getlist("pref_rate_limit_cooldown")
             row_count = max(
                 len(pref_ids),
                 len(pref_providers),
                 len(pref_models),
                 len(pref_priorities),
+                len(pref_rpms),
+                len(pref_tpms),
+                len(pref_cooldowns),
             )
 
+            def _parse_rate_limit_field(raw: str):
+                v = (raw or "").strip()
+                if not v:
+                    return None
+                try:
+                    n = int(v)
+                    return n if n > 0 else None
+                except ValueError:
+                    return None
+
+            def _parse_cooldown_field(raw: str):
+                v = (raw or "").strip()
+                if not v:
+                    return None
+                try:
+                    n = int(v)
+                    return n if n > 0 else None
+                except ValueError:
+                    return None
+
             saved_rows = []
+            rate_limit_partial_rows: list[str] = []
             for i in range(row_count):
                 raw_id = pref_ids[i].strip() if i < len(pref_ids) else ""
                 provider = pref_providers[i].strip() if i < len(pref_providers) else ""
                 model = pref_models[i].strip() if i < len(pref_models) else ""
                 raw_priority = pref_priorities[i].strip() if i < len(pref_priorities) else "100"
+                rl_rpm = _parse_rate_limit_field(pref_rpms[i] if i < len(pref_rpms) else "")
+                rl_tpm = _parse_rate_limit_field(pref_tpms[i] if i < len(pref_tpms) else "")
+                rl_cd = _parse_cooldown_field(pref_cooldowns[i] if i < len(pref_cooldowns) else "")
                 if not provider:
                     continue
                 try:
@@ -588,16 +647,29 @@ def settings_view(request):
                 pref_obj.provider_config = cfg
                 pref_obj.model = model
                 pref_obj.priority = priority
+                if rl_rpm is not None and rl_tpm is not None:
+                    pref_obj.rate_limit_rpm = rl_rpm
+                    pref_obj.rate_limit_tpm = rl_tpm
+                elif rl_rpm is not None or rl_tpm is not None:
+                    rate_limit_partial_rows.append(provider)
+                    pref_obj.rate_limit_rpm = None
+                    pref_obj.rate_limit_tpm = None
+                else:
+                    pref_obj.rate_limit_rpm = None
+                    pref_obj.rate_limit_tpm = None
+                pref_obj.rate_limit_cooldown_seconds = rl_cd
                 pref_obj.save()
                 saved_rows.append(pref_obj)
 
             if remove_ids:
                 LLMProviderPreference.objects.filter(id__in=remove_ids).delete()
 
+            if AppAutomationSettings.get_solo().stop_llm_requests:
+                messages.info(request, "Skipped connectivity ping while Stop LLM requests is enabled.")
             for row in saved_rows:
                 cfg = row.provider_config
                 model = (row.model or cfg.default_model or "").strip()
-                if cfg.encrypted_api_key and model:
+                if cfg.encrypted_api_key and model and not AppAutomationSettings.get_solo().stop_llm_requests:
                     try:
                         api_key_decrypted = decrypt_api_key(cfg.encrypted_api_key)
                         llm = get_llm(cfg.provider, api_key_decrypted, model=model)
@@ -610,6 +682,12 @@ def settings_view(request):
                     except Exception as e:
                         ping_results.append(f"{cfg.provider}/{model}: failed ({e})")
             messages.success(request, "LLM provider preference list saved.")
+            if rate_limit_partial_rows:
+                messages.warning(
+                    request,
+                    "Rate limits require both RPM and TPM, or both blank. Cleared limits for: "
+                    + ", ".join(sorted(set(rate_limit_partial_rows))),
+                )
             for line in ping_results:
                 if line.endswith(": OK"):
                     messages.success(request, f"Connectivity check passed — {line}")
@@ -652,7 +730,7 @@ def settings_view(request):
                 return redirect(reverse("settings") + "?tab=llm")
 
     tab = (request.GET.get("tab") or "llm").strip().lower()
-    if tab not in ("llm", "app"):
+    if tab not in ("llm", "app", "usage"):
         tab = "llm"
     provider_preference_list = list(_get_provider_preferences())
     connected_provider_names = [cfg.provider for cfg in provider_preference_list]
@@ -665,21 +743,121 @@ def settings_view(request):
                 priority=cfg.priority,
             )
         pref_rows = list(_get_provider_preference_rows().order_by("priority", "id"))
-    session_models = request.session.get("settings_provider_models_map")
-    if not isinstance(session_models, dict):
-        session_models = {}
+    raw_session_models = request.session.get("settings_provider_models_map")
+    if not isinstance(raw_session_models, dict):
+        models_cache: dict[str, list] = {}
+    else:
+        models_cache = {k: list(v or []) for k, v in raw_session_models.items()}
+
+    def _models_for_settings_preferences(provider: str, cfg: LLMProviderConfig) -> list:
+        """
+        Model dropdowns use only the session cache populated by
+        "Refresh model lists from providers" (no live provider calls on page load).
+        """
+        return list(models_cache.get(provider) or [])
+
     provider_preference_rows = []
     provider_models_map: dict[str, list] = {}
     for pref in pref_rows:
         cfg = pref.provider_config
-        models = list(session_models.get(cfg.provider) or [])
+        models = _models_for_settings_preferences(cfg.provider, cfg)
         provider_models_map[cfg.provider] = models
         provider_preference_rows.append({"pref": pref, "cfg": cfg, "models": models})
     for cfg in provider_preference_list:
         if cfg.provider not in provider_models_map:
-            provider_models_map[cfg.provider] = list(session_models.get(cfg.provider) or [])
+            provider_models_map[cfg.provider] = _models_for_settings_preferences(cfg.provider, cfg)
 
     tracks_for_dedupe = list(Track.ensure_baseline())
+    usage_totals = LLMAppUsageTotals.get_solo()
+    stats_map = {(r.provider, r.model): r for r in LLMUsageByModel.objects.all()}
+    usage_rows = []
+    usage_cooldown_error = False
+    pref_keys_seen = set()
+    for item in provider_preference_rows:
+        pref = item["pref"]
+        cfg = item["cfg"]
+        prov = cfg.provider
+        mkey = (pref.model or cfg.default_model or "").strip() or "__default__"
+        m_gl = (pref.model or cfg.default_model or "").strip() or None
+        pref_keys_seen.add((prov, mkey))
+        ttl = None
+        try:
+            ttl = get_llm_cooldown_ttl(prov, m_gl)
+        except Exception:
+            usage_cooldown_error = True
+        st = stats_map.get((prov, mkey))
+        sin = int(st.sum_input_tokens) if st else 0
+        sout = int(st.sum_output_tokens) if st else 0
+        rc = int(st.request_count) if st else 0
+        avg = (sin + sout) // rc if rc else 0
+        usage_rows.append(
+            {
+                "provider": prov,
+                "model_display": mkey if mkey != "__default__" else "(default)",
+                "priority": pref.priority,
+                "on_ice": ttl is not None and ttl > 0,
+                "cooldown_seconds": ttl,
+                "connected": bool(cfg.encrypted_api_key),
+                "request_count": rc,
+                "sum_in": sin,
+                "sum_out": sout,
+                "sum_cached": int(st.sum_cached_tokens) if st else 0,
+                "last_used": st.last_used_at if st else None,
+                "avg_tokens": avg,
+            }
+        )
+    for st in LLMUsageByModel.objects.all().order_by("-last_used_at", "provider"):
+        if (st.provider, st.model) in pref_keys_seen:
+            continue
+        ttl = None
+        m_gl = None if st.model == "__default__" else st.model
+        try:
+            ttl = get_llm_cooldown_ttl(st.provider, m_gl)
+        except Exception:
+            usage_cooldown_error = True
+        rc = int(st.request_count)
+        sin, sout = int(st.sum_input_tokens), int(st.sum_output_tokens)
+        usage_rows.append(
+            {
+                "provider": st.provider,
+                "model_display": st.model if st.model != "__default__" else "(default)",
+                "priority": None,
+                "on_ice": ttl is not None and ttl > 0,
+                "cooldown_seconds": ttl,
+                "connected": True,
+                "request_count": rc,
+                "sum_in": sin,
+                "sum_out": sout,
+                "sum_cached": int(st.sum_cached_tokens),
+                "last_used": st.last_used_at,
+                "avg_tokens": (sin + sout) // rc if rc else 0,
+            }
+        )
+    est_pct = 0.0
+    if usage_totals.total_requests:
+        est_pct = 100.0 * float(usage_totals.total_estimated_invokes) / float(
+            usage_totals.total_requests
+        )
+
+    usage_by_query_rows = []
+    for r in LLMUsageByQuery.objects.all().order_by("query_kind", "provider", "model"):
+        qk = r.query_kind or ""
+        usage_by_query_rows.append(
+            {
+                "query_kind": qk,
+                "query_label": USAGE_QUERY_LABELS.get(
+                    qk, qk.replace("_", " ").title() if qk else "—"
+                ),
+                "provider": r.provider,
+                "model_display": r.model if r.model != "__default__" else "(default)",
+                "request_count": int(r.request_count),
+                "sum_in": int(r.sum_input_tokens),
+                "sum_out": int(r.sum_output_tokens),
+                "sum_cached": int(r.sum_cached_tokens),
+                "last_used": r.last_used_at,
+            }
+        )
+
     context = {
         "provider_infos": provider_infos,
         "provider_preference_list": provider_preference_list,
@@ -691,6 +869,11 @@ def settings_view(request):
         "app_automation": AppAutomationSettings.get_solo(),
         "optimizer_workflows": list(OptimizerWorkflow.objects.all().order_by("name")),
         "dedupe_tracks": tracks_for_dedupe,
+        "usage_totals": usage_totals,
+        "usage_rows": usage_rows,
+        "usage_estimated_pct": est_pct,
+        "usage_cooldown_error": usage_cooldown_error,
+        "usage_by_query_rows": usage_by_query_rows,
     }
     return render(request, "resume_app/settings.html", context)
 
@@ -701,11 +884,13 @@ def llm_test_view(request):
 
     Uses stored `LLMProviderConfig` keys where possible (including Ollama Local host/IP).
     """
-    from .models import LLMProviderConfig
+    from .models import LLMProviderConfig, AppAutomationSettings
     from .crypto import decrypt_api_key
     from .llm_factory import get_llm
     from langchain_core.messages import HumanMessage
     from .llm_services import list_models_for_provider, DEFAULT_MODELS
+
+    stop_llm = AppAutomationSettings.get_solo().stop_llm_requests
 
     provider = (request.GET.get("provider") or "").strip()
     if not provider:
@@ -763,6 +948,7 @@ def llm_test_view(request):
                             "prompt": prompt,
                             "response_text": response_text,
                             "error": None,
+                            "stop_llm_requests": stop_llm,
                         },
                     )
                 except Exception as e:
@@ -779,6 +965,7 @@ def llm_test_view(request):
             "prompt": "",
             "response_text": None,
             "error": error,
+            "stop_llm_requests": stop_llm,
         },
     )
 
@@ -791,39 +978,75 @@ def prompt_library_view(request):
     try:
         prompts = get_effective_prompts(request)
     except Exception:
-        prompts = {
-            "writer": "",
-            "ats_judge": "",
-            "recruiter_judge": "",
-            "matching": "",
-            "insights": "",
-        }
+        prompts = get_effective_prompts(None)
 
     if request.method == "POST":
         action = request.POST.get("action")
         if action == "save_prompts":
-            base = get_effective_prompts(request)
+            w_sys = (request.POST.get("prompt_writer_system") or "").strip()
+            w_usr = (request.POST.get("prompt_writer_user") or "").strip()
+            w_combined = (request.POST.get("prompt_writer_combined") or "").strip()
+            if w_combined:
+                writer_leg, writer_sys, writer_usr = w_combined, "", ""
+            else:
+                writer_leg, writer_sys, writer_usr = "", w_sys, w_usr
+
+            a_sys = (request.POST.get("prompt_ats_system") or "").strip()
+            a_usr = (request.POST.get("prompt_ats_user") or "").strip()
+            a_combined = (request.POST.get("prompt_ats_combined") or "").strip()
+            if a_combined:
+                ats_leg, ats_sys, ats_usr = a_combined, "", ""
+            else:
+                ats_leg, ats_sys, ats_usr = "", a_sys, a_usr
+
+            r_sys = (request.POST.get("prompt_recruiter_system") or "").strip()
+            r_usr = (request.POST.get("prompt_recruiter_user") or "").strip()
+            r_combined = (request.POST.get("prompt_recruiter_combined") or "").strip()
+            if r_combined:
+                rec_leg, rec_sys, rec_usr = r_combined, "", ""
+            else:
+                rec_leg, rec_sys, rec_usr = "", r_sys, r_usr
+
+            m_sys = (request.POST.get("prompt_matching_system") or "").strip()
+            m_usr = (request.POST.get("prompt_matching_user") or "").strip()
+            m_combined = (request.POST.get("prompt_matching_combined") or "").strip()
+            if m_combined:
+                match_leg, match_sys, match_usr = m_combined, "", ""
+            else:
+                match_leg, match_sys, match_usr = "", m_sys, m_usr
+
+            i_sys = (request.POST.get("prompt_insights_system") or "").strip()
+            i_usr = (request.POST.get("prompt_insights_user") or "").strip()
+            i_combined = (request.POST.get("prompt_insights_combined") or "").strip()
+            if i_combined:
+                ins_leg, ins_sys, ins_usr = i_combined, "", ""
+            else:
+                ins_leg, ins_sys, ins_usr = "", i_sys, i_usr
+
             prompts = {
-                "writer": request.POST.get("prompt_writer") or base.get("writer", ""),
-                "ats_judge": request.POST.get("prompt_ats_judge") or base.get("ats_judge", ""),
-                "recruiter_judge": request.POST.get("prompt_recruiter_judge") or base.get("recruiter_judge", ""),
-                "matching": request.POST.get("prompt_matching") or base.get("matching", ""),
-                "insights": request.POST.get("prompt_insights") or base.get("insights", ""),
+                "writer": writer_leg,
+                "writer_system": writer_sys,
+                "writer_user": writer_usr,
+                "ats_judge": ats_leg,
+                "ats_judge_system": ats_sys,
+                "ats_judge_user": ats_usr,
+                "recruiter_judge": rec_leg,
+                "recruiter_judge_system": rec_sys,
+                "recruiter_judge_user": rec_usr,
+                "matching": match_leg,
+                "matching_system": match_sys,
+                "matching_user": match_usr,
+                "insights": ins_leg,
+                "insights_system": ins_sys,
+                "insights_user": ins_usr,
             }
             save_prompts_to_profile(request, prompts)
+            prompts = get_effective_prompts(request)
             messages.success(request, "Prompts saved. They will be used by the Resume Optimizer and Job Search.")
             return redirect(reverse("prompt_library"))
         if action == "reset_prompts":
             try:
-                prompts_obj = api_get_prompts(request)
-                prompts = {
-                    "writer": prompts_obj["writer"],
-                    "ats_judge": prompts_obj["ats_judge"],
-                    "recruiter_judge": prompts_obj["recruiter_judge"],
-                    "matching": prompts_obj.get("matching", ""),
-                    "insights": prompts_obj.get("insights", ""),
-                }
-                save_prompts_to_profile(request, prompts)
+                clear_all_prompts_in_profile(request)
                 messages.success(request, "Prompts reset to server defaults.")
                 return redirect(reverse("prompt_library"))
             except Exception as e:

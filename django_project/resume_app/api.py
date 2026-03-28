@@ -13,6 +13,8 @@ from .models import UserResume, JobDescription, OptimizedResume, AgentLog, LLMPr
 from .jobs_api import router as jobs_router
 from .tasks import optimize_resume_task
 from .prompts import DEFAULT_MATCHING_PROMPT
+from langchain_core.messages import HumanMessage, SystemMessage
+
 from .agents import (
     DEFAULT_WRITER_PROMPT,
     DEFAULT_ATS_JUDGE_PROMPT,
@@ -24,6 +26,12 @@ from .agents import (
     writer_node,
     ats_judge_node,
     recruiter_judge_node,
+)
+from .llm_gateway import (
+    invoke_llm_messages,
+    LLMRequestsDisabled,
+    USAGE_QUERY_API_LLM_COMPLETE,
+    USAGE_QUERY_API_RESUME_FIT,
 )
 from .services import parse_pdf
 from .crypto import encrypt_api_key, decrypt_api_key
@@ -86,10 +94,20 @@ class StatusResponse(Schema):
 
 class PromptsResponse(Schema):
     writer: str
+    writer_system: str = ""
+    writer_user: str = ""
     ats_judge: str
+    ats_judge_system: str = ""
+    ats_judge_user: str = ""
     recruiter_judge: str
+    recruiter_judge_system: str = ""
+    recruiter_judge_user: str = ""
     matching: str
+    matching_system: str = ""
+    matching_user: str = ""
     insights: str
+    insights_system: str = ""
+    insights_user: str = ""
 
 class FitCheckRequest(Schema):
     job_description: str
@@ -116,6 +134,7 @@ class RunStepRequest(Schema):
     llm_provider: str
     llm_model: Optional[str] = None
     debug: Optional[bool] = None
+    job_cache_key: Optional[str] = None
 
 
 class RunStepResponse(Schema):
@@ -123,6 +142,65 @@ class RunStepResponse(Schema):
     step: str  # "writer" | "ats_judge" | "recruiter_judge"
     output: dict  # writer: {optimized_resume, ...}; ats/recruiter: {scores, feedback, ...}; judges accept draft or PDF via same file/use_resume_id as Writer when draft empty
     error: Optional[str] = None  # when set, step failed; frontend should show step name + error
+
+
+class LlmCompleteRequest(Schema):
+    user: str
+    system: Optional[str] = None
+    job_cache_key: Optional[str] = None
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
+
+
+class LlmCompleteResponse(Schema):
+    content: str
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+
+
+@router.post("/llm/complete", response=LlmCompleteResponse)
+def llm_complete(request, payload: LlmCompleteRequest):
+    """Invoke the central LLM gateway with system + user strings (optional provider override)."""
+    _require_api_auth(request)
+    u_text = (payload.user or "").strip()
+    if not u_text:
+        raise HttpError(400, "user is required")
+    messages = []
+    if (payload.system or "").strip():
+        messages.append(SystemMessage(content=payload.system.strip()))
+    messages.append(HumanMessage(content=u_text))
+    llm_override = None
+    if payload.llm_provider:
+        prov = payload.llm_provider.strip()
+        if prov not in LLM_PROVIDERS:
+            raise HttpError(400, f"llm_provider must be one of: {', '.join(sorted(LLM_PROVIDERS))}")
+        config = LLMProviderConfig.objects.filter(provider=prov).first()
+        if not config or not config.encrypted_api_key:
+            raise HttpError(400, f"API key required for {prov}.")
+        api_key = decrypt_api_key(config.encrypted_api_key)
+        model = payload.llm_model or config.default_model or None
+        llm_override = get_llm(prov, api_key, model)
+    try:
+        raw = invoke_llm_messages(
+            messages,
+            job_cache_key=(payload.job_cache_key or "").strip() or None,
+            llm_override=llm_override,
+            usage_query_kind=USAGE_QUERY_API_LLM_COMPLETE,
+        )
+    except LLMRequestsDisabled as e:
+        raise HttpError(503, str(e)) from e
+    from .agents import _normalize_token_usage
+
+    content = getattr(raw, "content", None) if raw is not None else None
+    if content is None and raw is not None:
+        content = str(raw)
+    content = content or ""
+    u = _normalize_token_usage(raw, getattr(raw, "llm_output", None), None) if raw is not None else {}
+    return LlmCompleteResponse(
+        content=content if isinstance(content, str) else str(content),
+        input_tokens=u.get("input_tokens"),
+        output_tokens=u.get("output_tokens"),
+    )
 
 
 @router.post("/run-step", response=RunStepResponse)
@@ -151,17 +229,20 @@ def run_step(
     model = payload.llm_model or (config.default_model if config else None) or None
     llm = get_llm(payload.llm_provider, api_key, model)
 
-    prompts = {
-        "writer": payload.prompt_writer or DEFAULT_WRITER_PROMPT,
-        "ats_judge": payload.prompt_ats_judge or DEFAULT_ATS_JUDGE_PROMPT,
-        "recruiter_judge": payload.prompt_recruiter_judge or DEFAULT_RECRUITER_JUDGE_PROMPT,
-    }
+    from .prompt_store import build_optimizer_graph_prompt_state, get_effective_prompts, save_prompts_to_profile
+
+    _ov = {}
+    if payload.prompt_writer and str(payload.prompt_writer).strip():
+        _ov["writer"] = payload.prompt_writer.strip()
+    if payload.prompt_ats_judge and str(payload.prompt_ats_judge).strip():
+        _ov["ats_judge"] = payload.prompt_ats_judge.strip()
+    if payload.prompt_recruiter_judge and str(payload.prompt_recruiter_judge).strip():
+        _ov["recruiter_judge"] = payload.prompt_recruiter_judge.strip()
+    _graph_prompts = build_optimizer_graph_prompt_state(_ov if _ov else None, request)
     # Step-by-step always runs in debug mode
     debug = True
     # Persist edited prompts to UserPromptProfile
     if hasattr(request, "session"):
-        from .prompt_store import get_effective_prompts, save_prompts_to_profile
-
         merged = get_effective_prompts(request)
         merged.update(
             {
@@ -189,6 +270,7 @@ def run_step(
             return parse_pdf(ur.file.path)
         return None
 
+    jkey = (payload.job_cache_key or "").strip() or None
     try:
         if step == "writer":
             resume_text = _get_resume_text()
@@ -205,9 +287,19 @@ def run_step(
                 "feedback": feedback,
                 "iteration_count": 0,
                 "llm": llm,
-                "writer_prompt_template": prompts["writer"],
-                "ats_judge_prompt_template": prompts["ats_judge"],
-                "recruiter_judge_prompt_template": prompts["recruiter_judge"],
+                "job_cache_key": jkey,
+                "writer_prompt_template": _graph_prompts["writer_prompt_template"],
+                "writer_prompt_system": _graph_prompts["writer_prompt_system"],
+                "writer_prompt_user": _graph_prompts["writer_prompt_user"],
+                "writer_prompt_legacy": _graph_prompts["writer_prompt_legacy"],
+                "ats_judge_prompt_template": _graph_prompts["ats_judge_prompt_template"],
+                "ats_judge_prompt_system": _graph_prompts["ats_judge_prompt_system"],
+                "ats_judge_prompt_user": _graph_prompts["ats_judge_prompt_user"],
+                "ats_judge_prompt_legacy": _graph_prompts["ats_judge_prompt_legacy"],
+                "recruiter_judge_prompt_template": _graph_prompts["recruiter_judge_prompt_template"],
+                "recruiter_judge_prompt_system": _graph_prompts["recruiter_judge_prompt_system"],
+                "recruiter_judge_prompt_user": _graph_prompts["recruiter_judge_prompt_user"],
+                "recruiter_judge_prompt_legacy": _graph_prompts["recruiter_judge_prompt_legacy"],
                 "debug": debug,
                 "max_iterations": 3,
             }
@@ -236,9 +328,19 @@ def run_step(
                 "feedback": [],
                 "iteration_count": 0,
                 "llm": llm,
-                "writer_prompt_template": prompts["writer"],
-                "ats_judge_prompt_template": prompts["ats_judge"],
-                "recruiter_judge_prompt_template": prompts["recruiter_judge"],
+                "job_cache_key": jkey,
+                "writer_prompt_template": _graph_prompts["writer_prompt_template"],
+                "writer_prompt_system": _graph_prompts["writer_prompt_system"],
+                "writer_prompt_user": _graph_prompts["writer_prompt_user"],
+                "writer_prompt_legacy": _graph_prompts["writer_prompt_legacy"],
+                "ats_judge_prompt_template": _graph_prompts["ats_judge_prompt_template"],
+                "ats_judge_prompt_system": _graph_prompts["ats_judge_prompt_system"],
+                "ats_judge_prompt_user": _graph_prompts["ats_judge_prompt_user"],
+                "ats_judge_prompt_legacy": _graph_prompts["ats_judge_prompt_legacy"],
+                "recruiter_judge_prompt_template": _graph_prompts["recruiter_judge_prompt_template"],
+                "recruiter_judge_prompt_system": _graph_prompts["recruiter_judge_prompt_system"],
+                "recruiter_judge_prompt_user": _graph_prompts["recruiter_judge_prompt_user"],
+                "recruiter_judge_prompt_legacy": _graph_prompts["recruiter_judge_prompt_legacy"],
                 "debug": debug,
                 "max_iterations": 3,
             }
@@ -266,6 +368,8 @@ def run_step(
                 return RunStepResponse(step="recruiter_judge", output=output)
     except HttpError:
         raise
+    except LLMRequestsDisabled as e:
+        return RunStepResponse(step=step, output={}, error=str(e))
     except Exception as e:
         err_msg = str(e).strip().replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
         if len(err_msg) > 400:
@@ -319,19 +423,50 @@ def fit_check(request, payload: FitCheckRequest = Form(...), file: UploadedFile 
     except Exception as e:
         raise HttpError(400, f"Could not read PDF: {e}") from e
 
-    result = run_fit_check(resume_text, payload.job_description, llm, prompt_template)
+    try:
+        result = run_fit_check(
+            resume_text,
+            payload.job_description,
+            llm,
+            prompt_template,
+            usage_query_kind=USAGE_QUERY_API_RESUME_FIT,
+        )
+    except LLMRequestsDisabled as e:
+        raise HttpError(503, str(e)) from e
     return result
 
 @router.get("/prompts", response=PromptsResponse)
 def get_prompts(request):
     """Return default LLM prompt templates. Writer: {source_resume_text}, {resume_text}, {optimized_resume}, {job_description}, {feedback}."""
-    from .prompts import DEFAULT_INSIGHTS_PROMPT
+    from .prompts import (
+        DEFAULT_INSIGHTS_PROMPT,
+        DEFAULT_INSIGHTS_SYSTEM,
+        DEFAULT_INSIGHTS_USER,
+        DEFAULT_MATCHING_SYSTEM,
+        DEFAULT_MATCHING_USER,
+        DEFAULT_WRITER_SYSTEM,
+        DEFAULT_WRITER_USER,
+        DEFAULT_ATS_JUDGE_SYSTEM,
+        DEFAULT_ATS_JUDGE_USER,
+        DEFAULT_RECRUITER_JUDGE_SYSTEM,
+        DEFAULT_RECRUITER_JUDGE_USER,
+    )
     return {
         "writer": DEFAULT_WRITER_PROMPT,
+        "writer_system": DEFAULT_WRITER_SYSTEM,
+        "writer_user": DEFAULT_WRITER_USER,
         "ats_judge": DEFAULT_ATS_JUDGE_PROMPT,
+        "ats_judge_system": DEFAULT_ATS_JUDGE_SYSTEM,
+        "ats_judge_user": DEFAULT_ATS_JUDGE_USER,
         "recruiter_judge": DEFAULT_RECRUITER_JUDGE_PROMPT,
+        "recruiter_judge_system": DEFAULT_RECRUITER_JUDGE_SYSTEM,
+        "recruiter_judge_user": DEFAULT_RECRUITER_JUDGE_USER,
         "matching": DEFAULT_MATCHING_PROMPT,
+        "matching_system": DEFAULT_MATCHING_SYSTEM,
+        "matching_user": DEFAULT_MATCHING_USER,
         "insights": DEFAULT_INSIGHTS_PROMPT,
+        "insights_system": DEFAULT_INSIGHTS_SYSTEM,
+        "insights_user": DEFAULT_INSIGHTS_USER,
     }
 
 @router.post("/optimize")

@@ -1,6 +1,9 @@
 from django.contrib import admin
 from .models import (
     AppAutomationSettings,
+    LLMAppUsageTotals,
+    LLMUsageByModel,
+    LLMUsageByQuery,
     LLMProviderPreference,
     LLMProviderConfig,
     JobListing,
@@ -21,6 +24,7 @@ class AppAutomationSettingsAdmin(admin.ModelAdmin):
         "vetting_to_applying_enabled",
         "vetting_interview_probability_min",
         "applying_optimizer_workflow",
+        "stop_llm_requests",
         "updated_at",
     )
 
@@ -40,8 +44,55 @@ class LLMProviderConfigAdmin(admin.ModelAdmin):
 
 @admin.register(LLMProviderPreference)
 class LLMProviderPreferenceAdmin(admin.ModelAdmin):
-    list_display = ("provider_config", "model", "priority", "updated_at")
+    list_display = (
+        "provider_config",
+        "model",
+        "priority",
+        "rate_limit_rpm",
+        "rate_limit_tpm",
+        "rate_limit_cooldown_seconds",
+        "updated_at",
+    )
     list_filter = ("provider_config__provider",)
+
+
+@admin.register(LLMAppUsageTotals)
+class LLMAppUsageTotalsAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "total_requests",
+        "total_input_tokens",
+        "total_output_tokens",
+        "total_estimated_invokes",
+        "updated_at",
+    )
+
+
+@admin.register(LLMUsageByModel)
+class LLMUsageByModelAdmin(admin.ModelAdmin):
+    list_display = (
+        "provider",
+        "model",
+        "request_count",
+        "sum_input_tokens",
+        "sum_output_tokens",
+        "last_used_at",
+    )
+    list_filter = ("provider",)
+
+
+@admin.register(LLMUsageByQuery)
+class LLMUsageByQueryAdmin(admin.ModelAdmin):
+    list_display = (
+        "query_kind",
+        "provider",
+        "model",
+        "request_count",
+        "sum_input_tokens",
+        "sum_output_tokens",
+        "last_used_at",
+    )
+    list_filter = ("query_kind", "provider")
 
 
 @admin.register(JobListing)

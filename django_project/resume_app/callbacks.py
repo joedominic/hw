@@ -10,6 +10,7 @@ class TokenUsageCallback(BaseCallbackHandler):
     def __init__(self) -> None:
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
+        self.total_cached_prompt_tokens: int = 0
 
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
         if not response:
@@ -24,6 +25,12 @@ class TokenUsageCallback(BaseCallbackHandler):
                 if isinstance(usage, dict):
                     added_in += int(usage.get("input_tokens") or usage.get("input") or usage.get("prompt_tokens") or 0)
                     added_out += int(usage.get("output_tokens") or usage.get("output") or usage.get("completion_tokens") or 0)
+                    det = usage.get("prompt_tokens_details") or {}
+                    if isinstance(det, dict):
+                        try:
+                            self.total_cached_prompt_tokens += int(det.get("cached_tokens") or 0)
+                        except (TypeError, ValueError):
+                            pass
         self.total_input_tokens += added_in
         self.total_output_tokens += added_out
         if added_in == 0 and added_out == 0 and getattr(response, "llm_output", None):

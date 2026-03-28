@@ -32,7 +32,7 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 **What it does:**
 - Loads the `OptimizedResume` by `resume_id`.
 - Parses the resume PDF text via `parse_pdf(...)`.
-- Instantiates an LLM (`get_llm(...)`).
+- Runs LLM calls through **`resume_app.llm_gateway.invoke_llm_messages`**: preference order, job pinning (`job_cache_key=str(optimized_resume.id)`), rate-limit cooldowns, and **`AppAutomationSettings.stop_llm_requests`** (kill switch).
 - Builds a LangGraph workflow:
   - default is `writer` → `ats_judge` → `recruiter_judge`
   - or uses `workflow_steps` if provided (requires support in `agents.py`)
@@ -147,9 +147,8 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
   - `stage = PipelineEntry.Stage.VETTING`
   - `removed_at__isnull=True`
   - ids limited to `pipeline_entry_ids`
-- Resolves an LLM provider:
-  - uses args if provided
-  - else picks the top runtime provider candidate (`get_runtime_provider_candidates()`)
+- Requires at least one row in `LLMProviderPreference` with a connected API key (same pool as the central LLM gateway).
+- Calls `run_matching(..., llm=None, job_cache_key="vetting:<entry_id>")` so selection, pinning, and cooldowns go through **`resume_app.llm_gateway`**.
 - Parses resumes:
   - for each `track` present, loads the latest `UserResume` for that track (fallback to latest overall)
   - uses only a snippet (capped by `RESUME_MATCHING_SNIPPET_CHARS`)
@@ -186,7 +185,7 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 - Every 20 minutes.
 
 **Purpose:**
-- Backfills vetting interview probability only for vetting entries missing it or evaluated against an outdated “latest resume” per track.
+- **Vetting Manager** (Huey dashboard name): backfills vetting interview probability for entries missing it or evaluated against an outdated “latest resume” per track. Rows with short job descriptions are skipped inside `evaluate_vetting_matching_task`.
 
 **What it does:**
 - Limits work per tick:
@@ -262,7 +261,7 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 
 ---
 
-## 8. `refresh_pipeline_preferences_delta()`
+## 8. `pipeline_manager()`
 
 **Defined:** `resume_app/tasks.py` — `@db_periodic_task(crontab(minute="*/30"))`
 
@@ -273,64 +272,28 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 - Every 30 minutes.
 
 **Purpose:**
-- Computes preference/focus metrics only for jobs that do not yet have `JobListingTrackMetrics` for a given track.
+- Maintain **Pipeline-stage** (`""` or `pipeline`) entries only: age cleanup, preference/focus metrics refresh, purge weak fits, then optional auto-promote to Vetting.
 
-**What it does:**
-- For each `Track.slug`:
-  - gathers job ids across:
-    - pipeline entries in that track
-    - saved jobs (saved `JobListingAction`)
-  - filters to those missing metrics rows for that track
-  - batches by 100
-  - runs `recompute_preferences_for_jobs(jobs, track=track)`
-  - creates `JobListingTrackMetrics` rows with:
-    - `focus_percent`
-    - `focus_after_penalty`
-    - `preference_margin`
-    - `last_scored_at`
-  - (uses `bulk_create(..., ignore_conflicts=True)` so it doesn’t duplicate rows)
-- Calls `apply_pipeline_auto_promotions()` at the end:
-  - if enabled, promotes Pipeline → Vetting based on the refreshed preference margin
+**Configuration (module constants in `tasks.py`):**
+- `PIPELINE_MANAGER_STATS_MAX_AGE_DAYS` (default `2`) — rescale when metrics missing or `last_scored_at` older than this.
+- `PIPELINE_MANAGER_ENTRY_MAX_AGE_DAYS` (default `5`) — remove pipeline rows with `added_at` older than this.
+- `PIPELINE_MANAGER_PURGE_MARGIN_MAX` (default `-2`) — remove pipeline rows whose `preference_margin` for that track is **strictly less** than this (requires a metrics row with a non-null margin; NULL margins are not purged by this rule).
+- `PIPELINE_MANAGER_BATCH_SIZE` (default `100`).
+
+**What it does (per track, errors isolated per track):**
+1. **Age removal:** active Pipeline-stage rows past `PIPELINE_MANAGER_ENTRY_MAX_AGE_DAYS` → `PipelineEntry.delete()` **unless** the `JobListing` has any `JobListingAction` with `liked` or `disliked`; then `mark_deleted()` (keeps search suppression for training-tagged jobs).
+2. **Metrics:** gathers `job_listing_id` from active Pipeline-stage rows only (not saved-only listings), selects jobs needing scores, batches `recompute_preferences_for_jobs`, `JobListingTrackMetrics.update_or_create(...)`.
+3. **Margin purge:** same stage filter; for job ids with `preference_margin < PIPELINE_MANAGER_PURGE_MARGIN_MAX`, removes entries via the same hard/soft rule as age removal.
+4. **Promotion:** `apply_pipeline_auto_promotions()` (may enqueue `evaluate_vetting_matching_task` for newly promoted ids).
+
+**Note:** Saved jobs that never appear on the Pipeline board are **not** refreshed by this task.
 
 **Returns:**
 - `None`
 
 ---
 
-## 9. `refresh_pipeline_preferences_full()`
-
-**Defined:** `resume_app/tasks.py` — `@db_periodic_task(crontab(minute=0, hour="0"))`
-
-**Signature:**
-- none
-
-**When it runs:**
-- Once per day at 00:00 (server time; Huey cron interpretation).
-
-**Purpose:**
-- Full recompute of metrics for all track jobs (pipeline + saved + anything that already has metrics),
-  plus a purge pass for strongly negative jobs.
-
-**What it does:**
-- For each track:
-  - gathers job ids via `_iter_track_job_ids(track, include_metrics=True)`
-  - batches by 100
-  - recomputes:
-    - `focus_percent`
-    - `focus_after_penalty`
-    - `preference_margin`
-  - upserts using `JobListingTrackMetrics.update_or_create(...)`
-  - purges job listings whose `preference_margin < -2`:
-    - finds active PipelineEntry rows in Pipeline (blank stage or Pipeline stage)
-    - calls `entry.mark_deleted(save=True)`
-- Calls `apply_pipeline_auto_promotions()` at the end.
-
-**Returns:**
-- `None`
-
----
-
-## 10. `dedupe_pipeline_jobs_task(track="*", stage="all", include_done=False)`
+## 9. `dedupe_pipeline_jobs_task(track="*", stage="all", include_done=False)`
 
 **Defined:** `resume_app/tasks.py` — `@db_task()`
 
@@ -368,7 +331,7 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 
 ---
 
-## 11. `cleanup_inactive_pipeline_entries_daily()`
+## 10. `cleanup_inactive_pipeline_entries_daily()`
 
 **Defined:** `resume_app/tasks.py` — `@db_periodic_task(crontab(minute="30", hour="1"))`
 
@@ -380,7 +343,8 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 
 **What it does:**
 - Calls `purge_inactive_pipeline_entries(...)` from `resume_app.job_activity`:
-  - checks active entries in Pipeline/Vetting/Applying
+  - checks active entries in Applying only (Pipeline and Vetting excluded)
+  - limits checks to 400 entries per run
   - visits each job URL (best effort)
   - soft-deletes rows that have clear “closed” signals
     - e.g. HTTP 404/410/451
@@ -401,4 +365,23 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 - Manual “resume tailoring” load is:
   - `optimize_resume_task`
 - Job search ingestion is non-LLM (it fetches/filter/ranks jobs), but it can trigger vetting and metrics refresh later depending on enabled automations.
+
+### Redis-backed RPM / TPM limits
+
+- Implementation: `resume_app/llm_rate_limit.py`, enforced in `resume_app/agents._llm_invoke_with_retry` (all paths that use it, including Job Search Insights).
+- **Configuration (env / `core/settings.py`):**
+  - `LLM_RATE_LIMIT_ENABLED` (default: `True`)
+  - `LLM_RATE_LIMIT_FAIL_OPEN` (default: `True` — if Redis is down or the wait budget is exceeded, the call is still allowed; watch logs)
+  - `LLM_RATE_LIMIT_MAX_WAIT_SECONDS` (default: `120`)
+  - `LLM_RATE_LIMIT_REDIS_URL` (optional; defaults to Huey Redis host/port/db)
+  - `LLM_RATE_LIMIT_REDIS_DB` (default: same as `HUEY_REDIS_DB`)
+  - Per-provider window limits: `LLM_RATE_LIMIT_BY_PROVIDER` — default includes **Groq** via `LLM_RATE_LIMIT_GROQ_RPM` (default `30`) and `LLM_RATE_LIMIT_GROQ_TPM` (default `6000`). Add other providers by extending the dict in settings.
+  - **Integrations UI:** On Settings → Integrations, each preference row can set optional **Rate limit RPM** and **Rate limit TPM** (set **both** or leave **both** blank). Limits apply to that provider + **Preferred model** when they match the live LLM call; if no row matches the model, a row with an **empty** Preferred model is used as a provider-wide fallback, then env defaults.
+- Token usage for limiting is estimated before the call (chars/4) and reconciled from provider usage metadata when available.
+
+### Prompt caching (Groq and similar)
+
+- Prompts are split into **system** vs **user** templates where possible (see Prompt library / `prompts.py`) so static instructions stay in a stable prefix.
+- For Groq, caching behavior is described in [Groq Prompt Caching](https://console.groq.com/docs/prompt-caching). Check logs for `llm_usage` lines reporting `cached_tokens` and approximate cache hit percentage when the provider returns usage details.
+- **Troubleshooting:** If `cached_tokens` stays zero, verify the system block is identical across calls, avoid putting timestamps or unique IDs in the system prompt, and keep tool/schema ordering stable when using tools.
 

@@ -46,14 +46,9 @@ This document catalogs redundancies and simplification opportunities in the job 
 - These are superseded by `JobListingTrackMetrics` (per `(job_listing, track)` row) introduced by migration `0021`.
 - **Refactor:** Add a migration to drop the six legacy columns from `JobListing` and remove any remaining code that references them.
 
-### 7. Duplicate periodic task bodies in `tasks.py`
+### 7. Duplicate periodic task bodies in `tasks.py` (resolved)
 
-- `refresh_pipeline_preferences_delta` and `refresh_pipeline_preferences_full` share the same logic to:
-  - Gather job IDs from pipeline entries and saved jobs for each track.
-  - Batch them.
-  - Call `recompute_preferences_for_jobs`.
-- They differ only in their upsert strategy and whether they purge strongly negative jobs.
-- **Refactor:** Extract a shared helper (e.g. `_refresh_pipeline_preferences(full: bool = False)`) that handles the common querying and batching, with flags or callbacks for the few behavioural differences.
+- Replaced by a single `pipeline_manager` periodic task (`resume_app/tasks.py`) scoped to Pipeline-stage rows only; see `docs/HUEY_TASKS.md`.
 
 ### 8. Duplicate `AgentLog` creation block in `optimize_resume_task`
 

@@ -204,6 +204,21 @@ HUEY = {
     },
 }
 
+# --- LLM rate limits (Redis, shared across workers). Only providers listed in
+# LLM_RATE_LIMIT_BY_PROVIDER are throttled; tune via env vars.
+LLM_RATE_LIMIT_ENABLED = env.bool("LLM_RATE_LIMIT_ENABLED", default=True)
+LLM_RATE_LIMIT_FAIL_OPEN = env.bool("LLM_RATE_LIMIT_FAIL_OPEN", default=True)
+LLM_RATE_LIMIT_MAX_WAIT_SECONDS = env.int("LLM_RATE_LIMIT_MAX_WAIT_SECONDS", default=120)
+LLM_RATE_LIMIT_REDIS_URL = env("LLM_RATE_LIMIT_REDIS_URL", default="")
+LLM_RATE_LIMIT_REDIS_DB = env.int("LLM_RATE_LIMIT_REDIS_DB", default=HUEY_REDIS_DB)
+LLM_RATE_LIMIT_GROQ_RPM = env.int("LLM_RATE_LIMIT_GROQ_RPM", default=30)
+LLM_RATE_LIMIT_GROQ_TPM = env.int("LLM_RATE_LIMIT_GROQ_TPM", default=6000)
+
+LLM_RATE_LIMIT_BY_PROVIDER = {
+    "Groq": (LLM_RATE_LIMIT_GROQ_RPM, LLM_RATE_LIMIT_GROQ_TPM),
+}
+# Optional: set LLM_RATE_LIMIT_OPENAI_RPM / TPM in future by extending this dict in code or env-driven wiring.
+
 # python-jobspy logs Glassdoor API hiccups at ERROR even when the HTTP request succeeds.
 # Downgrade so runserver output stays readable; other JobSpy:* loggers unchanged.
 LOGGING = {

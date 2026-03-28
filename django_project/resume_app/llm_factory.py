@@ -204,28 +204,37 @@ def get_llm(provider: str, api_key: str = None, model: str = None):
             )
     chosen = model or DEFAULT_MODELS.get(provider, "")
     if provider == "OpenAI":
-        return ChatOpenAI(model=chosen, api_key=key)
-    if provider == "Anthropic":
-        return ChatAnthropic(model=chosen, api_key=key)
-    if provider == "Groq":
-        return ChatGroq(model=chosen, api_key=key)
-    if provider == "Google AI Studio":
-        return _ChatGoogleGenAINoMaxRetries(model=chosen, google_api_key=key)
-    if provider == "Ollama Cloud":
-        return _OllamaCloudChatModel(model=chosen, api_key=key)
-    if provider == "Ollama Local":
+        llm = ChatOpenAI(model=chosen, api_key=key)
+    elif provider == "Anthropic":
+        llm = ChatAnthropic(model=chosen, api_key=key)
+    elif provider == "Groq":
+        llm = ChatGroq(model=chosen, api_key=key)
+    elif provider == "Google AI Studio":
+        llm = _ChatGoogleGenAINoMaxRetries(model=chosen, google_api_key=key)
+    elif provider == "Ollama Cloud":
+        llm = _OllamaCloudChatModel(model=chosen, api_key=key)
+    elif provider == "Ollama Local":
         host = _normalize_ollama_local_host(key)
-        return _OllamaLocalChatModel(model=chosen, host=host)
-    if provider == "OpenRouter":
+        llm = _OllamaLocalChatModel(model=chosen, host=host)
+    elif provider == "OpenRouter":
         ref = (getattr(settings, "OPENROUTER_HTTP_REFERER", None) or "").strip()
         headers = {"X-Title": "ResumeElite"}
         if ref:
             headers["HTTP-Referer"] = ref
-        return ChatOpenAI(
+        llm = ChatOpenAI(
             model=chosen,
             api_key=key,
             base_url="https://openrouter.ai/api/v1",
             default_headers=headers,
         )
-    raise ValueError(f"Unsupported provider: {provider}")
+    else:
+        raise ValueError(f"Unsupported provider: {provider}")
+
+    # Attach lightweight metadata for runtime failover logic.
+    try:
+        setattr(llm, "_resume_provider", provider)
+        setattr(llm, "_resume_model", chosen or None)
+    except Exception:
+        pass
+    return llm
 

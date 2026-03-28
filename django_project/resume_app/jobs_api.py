@@ -28,8 +28,20 @@ from .job_sources import DEFAULT_SITE_NAMES, fetch_jobs
 from .job_search_core import rank_and_filter_jobs, run_job_search_core, pipeline_jobs_to_payloads
 from .services import parse_pdf
 from .crypto import decrypt_api_key
-from langchain_core.messages import HumanMessage
-from .agents import get_llm, run_fit_check, run_matching, _format_prompt as _agent_format_prompt
+from .agents import (
+    get_llm,
+    run_fit_check,
+    run_matching,
+    _llm_invoke_with_retry,
+    build_llm_messages_for_prompt,
+)
+from .llm_gateway import (
+    LLMRequestsDisabled,
+    USAGE_QUERY_JOB_INSIGHTS,
+    USAGE_QUERY_JOBS_AI_MATCH,
+    USAGE_QUERY_JOBS_MATCH_API,
+    USAGE_QUERY_KEYWORD_SEARCH_FIT,
+)
 from . import embeddings as embedding_module
 from .preference import (
     get_preference_vectors,
@@ -37,7 +49,7 @@ from .preference import (
     invalidate_preference_cache,
     invalidate_disliked_embeddings_cache,
 )
-from .prompt_store import get_effective_prompts
+from .prompt_store import profile_for_llm, resolve_prompt_parts
 from .schemas import (
     JobSearchRequest,
     JobPayload,
@@ -322,7 +334,8 @@ def jobs_ai_match(request, payload: AiMatchRequest):
         raise
     except Exception as e:
         raise HttpError(400, str(e)) from e
-    matching_prompt = get_effective_prompts(request)["matching"]
+    prof = profile_for_llm(request)
+    ms, mu, ml = resolve_prompt_parts(prof, "matching")
     from django.conf import settings
     max_jd_chars = getattr(settings, "JOB_MATCHING_JD_MAX_CHARS", 12000)
     resume_snippet = resume_text[:8000]
@@ -338,13 +351,28 @@ def jobs_ai_match(request, payload: AiMatchRequest):
             continue
         try:
             jd = (job.description or "")[:max_jd_chars]
-            # Build the exact prompt text used for this Matching call so UI can display it.
+            fmt_kw = {"resume_text": resume_snippet, "job_description": jd}
             try:
-                prompt_text = _agent_format_prompt(matching_prompt, resume_text=resume_snippet, job_description=jd)
+                pm = build_llm_messages_for_prompt(
+                    legacy_combined=ml or None,
+                    system_template=ms or None,
+                    user_template=mu or None,
+                    format_kwargs=fmt_kw,
+                )
+                prompt_text = "\n\n---\n\n".join(
+                    f"{type(m).__name__}:\n{getattr(m, 'content', '')}" for m in pm
+                )
             except Exception:
-                # Fallback: if formatting fails for any reason, omit prompt rather than failing the whole request.
                 prompt_text = None
-            result = run_matching(resume_snippet, jd, llm, matching_prompt)
+            result = run_matching(
+                resume_snippet,
+                jd,
+                llm,
+                prompt_system=ms,
+                prompt_user=mu,
+                prompt_legacy=ml or None,
+                job_cache_key=f"ai-match:{jid}:{payload.resume_id}",
+            )
             score = result.get("score")
             reasoning = result.get("reasoning") or ""
             results.append(
@@ -390,7 +418,8 @@ def jobs_insights(request, payload: InsightsRequest):
         raise
     except Exception as e:
         raise HttpError(400, str(e)) from e
-    insights_prompt = get_effective_prompts(request)["insights"]
+    prof = profile_for_llm(request)
+    is_sys, is_user, is_leg = resolve_prompt_parts(prof, "insights")
     job_map = {j.id: j for j in JobListing.objects.filter(id__in=payload.job_listing_ids)}
     parts = []
     total = 0
@@ -412,16 +441,31 @@ def jobs_insights(request, payload: InsightsRequest):
     if not job_descriptions:
         raise HttpError(400, "No job descriptions found for the selected jobs.")
     try:
-        prompt_text = _agent_format_prompt(insights_prompt, job_descriptions=job_descriptions)
+        messages = build_llm_messages_for_prompt(
+            legacy_combined=is_leg or None,
+            system_template=is_sys or None,
+            user_template=is_user or None,
+            format_kwargs={"job_descriptions": job_descriptions},
+        )
+        prompt_text = "\n\n---\n\n".join(
+            f"{type(m).__name__}:\n{getattr(m, 'content', '')}" for m in messages
+        )
     except Exception as e:
         logger.warning("Insights prompt format failed: %s", e)
         raise HttpError(400, str(e)) from e
     logger.info("[insights] Sending prompt to LLM (length=%d chars). First 300 chars: %s", len(prompt_text), (prompt_text[:300] + "..." if len(prompt_text) > 300 else prompt_text))
     try:
-        raw = llm.invoke([HumanMessage(content=prompt_text)])
+        raw = _llm_invoke_with_retry(
+            llm,
+            messages,
+            job_cache_key="insights:" + ",".join(str(i) for i in payload.job_listing_ids),
+            usage_query_kind=USAGE_QUERY_JOB_INSIGHTS,
+        )
         content = raw.content if hasattr(raw, "content") else str(raw)
         if not isinstance(content, str):
             content = str(content)
+    except LLMRequestsDisabled as e:
+        raise HttpError(503, str(e)) from e
     except Exception as e:
         logger.warning("Insights LLM invoke failed: %s", e)
         raise HttpError(502, str(e)) from e
@@ -470,7 +514,6 @@ def jobs_run_keyword_search(request, payload: RunKeywordSearchRequest):
     """For each (keyword, resume_id): fetch jobs, then for each job without existing JobMatchResult run fit check and save."""
     if not payload.entries:
         raise HttpError(400, "entries is required (list of { keyword, resume_id })")
-    llm = _get_llm_from_request(None, None)
     location = (payload.location or "").strip() or None
     site_name = payload.site_name or list(DEFAULT_SITE_NAMES)
     results_wanted = payload.results_wanted or 50
@@ -553,7 +596,18 @@ def jobs_run_keyword_search(request, payload: RunKeywordSearchRequest):
             if resume_text is None:
                 errors.append(f"Skipped job {job.id} (resume unreadable)")
                 continue
-            result = run_fit_check(resume_text, job.description or "", llm, None)
+            try:
+                result = run_fit_check(
+                    resume_text,
+                    job.description or "",
+                    None,
+                    None,
+                    job_cache_key=f"keyword-fit:{job.id}:{res.id}",
+                    usage_query_kind=USAGE_QUERY_KEYWORD_SEARCH_FIT,
+                )
+            except LLMRequestsDisabled as e:
+                errors.append(f"Job {job.id}: {e}")
+                continue
             match_result, _ = JobMatchResult.objects.update_or_create(
                 job_listing=job,
                 resume=res,
@@ -680,7 +734,17 @@ def jobs_match(request, job_listing_id: int, payload: MatchRequest):
     except Exception as e:
         raise HttpError(400, f"Could not read resume PDF: {e}") from e
 
-    result = run_fit_check(resume_text, job.description or "", llm, None)
+    try:
+        result = run_fit_check(
+            resume_text,
+            job.description or "",
+            llm,
+            None,
+            job_cache_key=f"match:{job.id}:{resume.id}",
+            usage_query_kind=USAGE_QUERY_JOBS_MATCH_API,
+        )
+    except LLMRequestsDisabled as e:
+        raise HttpError(503, str(e)) from e
     score = result.get("score", 0)
     reasoning = result.get("reasoning", "")
 
