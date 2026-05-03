@@ -334,6 +334,8 @@ def run_matching(
     prompt_legacy: str = None,
     job_cache_key: str | None = None,
     usage_query_kind: str | None = None,
+    *,
+    return_debug: bool = False,
 ) -> dict:
     """Returns { score: int, reasoning: str, interview_probability: int|None }. Score 0-100.
     Used after job search for independent LLM match score.
@@ -374,11 +376,14 @@ def run_matching(
         content = str(content)
     logger.info("[matching] raw response length=%s first_500=%r", len(content), (content or "")[:500])
     parsed = _parse_fit_check_fallback_from_parsers(content or "")
-    return {
+    out = {
         "score": parsed.score,
         "reasoning": parsed.reasoning,
         "interview_probability": parsed.interview_probability,
     }
+    if return_debug:
+        out["raw_llm_content"] = content or ""
+    return out
 
 
 # --- State Definition ---

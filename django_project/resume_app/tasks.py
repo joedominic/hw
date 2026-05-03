@@ -61,6 +61,9 @@ VETTING_MATCHING_LOCK_KEY = "vetting_matching_task_running"
 VETTING_MATCHING_LOCK_TIMEOUT = 3600  # 1 hour max
 RESUME_MATCHING_SNIPPET_CHARS = 8000
 VETTING_MATCHING_JD_MIN_CHARS = 2000
+# When interview_probability stays None (parse/model failure), do not enqueue again until this many hours pass
+# unless the track's latest resume changed (handled separately).
+VETTING_MATCHING_RETRY_COOLDOWN_HOURS = 6
 
 
 def apply_vetting_to_applying_promotions(entry_ids: list[int] | None = None) -> int:
@@ -732,6 +735,89 @@ def evaluate_vetting_matching_task(
         cache.delete(VETTING_MATCHING_LOCK_KEY)
 
 
+def try_vetting_match_debug(
+    entry: PipelineEntry | int,
+    *,
+    matching_prompt: str | None = None,
+) -> dict:
+    """
+    Run exactly one vetting matching LLM call and return parsed fields plus raw model text.
+    Does not update PipelineEntry. Used by the Vetting "Match debug" UI.
+
+    Still records token usage under Pipeline — vetting match (same as automation).
+    """
+    if isinstance(entry, int):
+        q = (
+            PipelineEntry.objects.filter(pk=entry, removed_at__isnull=True)
+            .select_related("job_listing")
+            .first()
+        )
+        if not q:
+            return {"ok": False, "skip_reason": "entry_not_found"}
+        entry = q
+    if entry.stage != PipelineEntry.Stage.VETTING:
+        return {"ok": False, "skip_reason": "not_vetting_stage", "stage": entry.stage or ""}
+    track = entry.track
+    latest_overall = UserResume.objects.order_by("-uploaded_at").first()
+    latest = (
+        UserResume.objects.filter(track=track).order_by("-uploaded_at").first() or latest_overall
+    )
+    if not latest or not latest.file:
+        return {"ok": False, "skip_reason": "no_resume"}
+    try:
+        resume_text = parse_pdf(latest.file.path)
+    except Exception as e:
+        logger.exception("try_vetting_match_debug resume parse entry_id=%s", entry.id)
+        return {"ok": False, "skip_reason": "resume_parse_error", "error": str(e)}
+    resume_snippet = resume_text[:RESUME_MATCHING_SNIPPET_CHARS]
+    jd = (entry.job_listing.description or "").strip()
+    jd_len = len(jd)
+    if not jd or jd_len < VETTING_MATCHING_JD_MIN_CHARS:
+        return {
+            "ok": False,
+            "skip_reason": "jd_too_short",
+            "jd_len": jd_len,
+            "jd_min": VETTING_MATCHING_JD_MIN_CHARS,
+        }
+    jd_max_chars = getattr(settings, "JOB_MATCHING_JD_MAX_CHARS", 12000)
+    jd_use = jd[:jd_max_chars]
+    ms, mu, ml = resolve_prompt_parts(profile_for_llm(None), "matching")
+    try:
+        if matching_prompt and str(matching_prompt).strip():
+            result = run_matching(
+                resume_snippet,
+                jd_use,
+                None,
+                prompt_template=matching_prompt,
+                job_cache_key=f"vetting:debug:{entry.id}",
+                usage_query_kind=USAGE_QUERY_PIPELINE_VETTING,
+                return_debug=True,
+            )
+        else:
+            result = run_matching(
+                resume_snippet,
+                jd_use,
+                None,
+                prompt_system=ms,
+                prompt_user=mu,
+                prompt_legacy=ml or None,
+                job_cache_key=f"vetting:debug:{entry.id}",
+                usage_query_kind=USAGE_QUERY_PIPELINE_VETTING,
+                return_debug=True,
+            )
+    except Exception as e:
+        logger.exception("try_vetting_match_debug LLM entry_id=%s", entry.id)
+        return {"ok": False, "skip_reason": "llm_error", "error": str(e)}
+    return {
+        "ok": True,
+        "skip_reason": None,
+        "jd_len": jd_len,
+        "resume_snippet_len": len(resume_snippet),
+        "resume_id": latest.id,
+        "result": result,
+    }
+
+
 def apply_pipeline_auto_promotions() -> int:
     """
     Promote PIPELINE (or legacy blank stage) entries to VETTING when per-track Pref margin
@@ -788,6 +874,7 @@ def enqueue_due_vetting_matching_tasks():
             "track",
             "vetting_interview_probability",
             "vetting_interview_resume_id",
+            "vetting_interview_scored_at",
         )
     )
 
@@ -801,16 +888,23 @@ def enqueue_due_vetting_matching_tasks():
     for track in {e.track for e in entries if e.track}:
         latest_by_track[track] = UserResume.objects.filter(track=track).order_by("-uploaded_at").first() or latest_overall
 
+    cooldown_before = timezone.now() - timedelta(hours=VETTING_MATCHING_RETRY_COOLDOWN_HOURS)
     to_enqueue: list[int] = []
     for e in entries:
         latest = latest_by_track.get(e.track)
         if not latest:
             continue
-        if (
-            e.vetting_interview_probability is None
-            or e.vetting_interview_resume_id != latest.id
-        ):
-            to_enqueue.append(e.id)
+        resume_outdated = e.vetting_interview_resume_id != latest.id
+        missing_prob = e.vetting_interview_probability is None
+        if not missing_prob and not resume_outdated:
+            continue
+        # Avoid hammering the LLM when probability stays unparsed: retry after cooldown,
+        # unless the user uploaded a newer resume for this track.
+        if missing_prob and not resume_outdated:
+            scored_at = e.vetting_interview_scored_at
+            if scored_at and scored_at > cooldown_before:
+                continue
+        to_enqueue.append(e.id)
         if len(to_enqueue) >= max_to_enqueue:
             break
 
@@ -1162,3 +1256,63 @@ def dedupe_pipeline_jobs_task(
     except ValueError as e:
         logger.warning("[dedupe_pipeline_jobs_task] invalid params: %s", e)
         return {"status": "error", "message": str(e)}
+
+
+@db_task()
+def pipeline_resume_llm_extract_task(run_dir_str: str):
+    """
+    Huey: batched OpenAI skill extraction for pipeline resume summary (see pipeline_llm_skill_extract).
+    """
+    from pathlib import Path
+
+    from django.conf import settings
+
+    from .pipeline_llm_skill_extract import (
+        effective_pipeline_batch_size,
+        fetch_jobs_ordered,
+        load_run_meta,
+        resolve_provider_api_key,
+        run_pipeline_llm_extraction,
+        write_run_error,
+    )
+
+    run_dir = Path(run_dir_str)
+    try:
+        meta = load_run_meta(run_dir)
+    except Exception as e:
+        logger.exception("[pipeline_resume_llm_extract_task] invalid run dir %s", run_dir_str)
+        return {"status": "error", "message": str(e)}
+
+    provider = (meta.get("provider") or "OpenAI").strip()
+    api_key = resolve_provider_api_key(provider)
+    if not api_key:
+        write_run_error(
+            run_dir,
+            f"No API key available for provider {provider!r}. Connect in LLM settings or configure env.",
+        )
+        return {"status": "error", "message": "missing_api_key"}
+
+    jobs = fetch_jobs_ordered(meta["entry_ids"])
+    model = (meta.get("model") or "").strip()
+    if not model:
+        write_run_error(run_dir, "Run metadata missing model.")
+        return {"status": "error", "message": "missing_model"}
+
+    try:
+        run_pipeline_llm_extraction(
+            run_dir,
+            provider=provider,
+            api_key=api_key,
+            jobs=jobs,
+            model=model,
+            batch_size=effective_pipeline_batch_size(provider),
+            max_tokens_per_minute=max(0, int(getattr(settings, "PIPELINE_LLM_MAX_TOKENS_PER_MINUTE", 90000))),
+            requests_per_minute=max(0, int(getattr(settings, "PIPELINE_LLM_REQUESTS_PER_MINUTE", 60))),
+            http_max_attempts=max(1, int(getattr(settings, "PIPELINE_LLM_HTTP_MAX_ATTEMPTS", 3))),
+        )
+    except Exception as e:
+        logger.exception("[pipeline_resume_llm_extract_task] failed: %s", e)
+        write_run_error(run_dir, str(e))
+        return {"status": "error", "message": str(e)}
+
+    return {"status": "ok", "run_dir": run_dir_str}

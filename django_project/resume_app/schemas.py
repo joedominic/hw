@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from ninja import Schema
 
@@ -44,8 +44,12 @@ class JobDetailPayload(Schema):
     company_name: str
     location: str
     description: str
+    description_char_count: int = 0
     url: str
     source: str
+    external_id: str = ""
+    fetched_at: Optional[datetime] = None
+    raw_json: Optional[Any] = None
 
 
 class JobSearchResponse(Schema):
@@ -80,6 +84,7 @@ class RunKeywordSearchRequest(Schema):
     location: Optional[str] = None
     site_name: Optional[List[str]] = None
     results_wanted: Optional[int] = 50
+    track: Optional[str] = None
 
 
 class JobMatchPayload(Schema):
@@ -133,6 +138,46 @@ class InsightsResponse(Schema):
     provider: Optional[str] = None
     model: Optional[str] = None
     prompt: Optional[str] = None
+
+
+class PipelineResumeSummaryAggregate(Schema):
+    hard_skills: List[str]
+    methodologies: List[str]
+    soft_skills: List[str]
+    business_outcomes: List[str] = []
+    domain_scale: List[str] = []
+    action_verbs: List[str] = []
+
+
+class PipelineResumeSummaryStartRequest(Schema):
+    track: str
+    llm_provider: str
+    model: str
+    max_jobs: Optional[int] = None
+
+
+class PipelineResumeSummaryStartResponse(Schema):
+    run_id: str
+    total_jobs: int
+    track: str
+
+
+class PipelineResumeSummaryStatusResponse(Schema):
+    track: str
+    run_id: str
+    provider: str = ""
+    model: str
+    phase: str
+    processed_count: int
+    total_jobs: int
+    message: Optional[str] = None
+    error: Optional[str] = None
+    aggregated: Optional[PipelineResumeSummaryAggregate] = None
+
+
+class PipelineResumeSummaryStopRequest(Schema):
+    track: str
+    run_id: str
 
 
 class ResumeOption(Schema):

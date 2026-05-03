@@ -9,7 +9,9 @@ from .models import (
     OptimizedResume,
     JobListing,
     PipelineEntry,
+    Track,
 )
+from .resume_keyword_miner import mine_keywords_from_jobs
 from .tasks import (
     apply_pipeline_auto_promotions,
     apply_vetting_to_applying_promotions,
@@ -18,6 +20,7 @@ from .tasks import (
 from .services import parse_pdf, PDFParseError
 from .llm_services import LLM_PROVIDERS
 from .job_sources import _row_to_dict
+import json
 import os
 
 class ModelsTestCase(TestCase):
@@ -275,6 +278,175 @@ class WriterNodePromptTestCase(TestCase):
         self.assertIn("TAILORED_V1", p)
         self.assertGreater(p.index("TAILORED_V1"), p.index("RAW_PDF_TEXT"))
         self.assertIn("DOC:\nTAILORED_V1", p)
+
+
+class ResumeKeywordMinerTestCase(TestCase):
+    def test_mine_keywords_empty_jobs(self):
+        self.assertEqual(mine_keywords_from_jobs([]), [])
+
+    def test_mine_keywords_finds_repeated_terms(self):
+        jd_common = (
+            "Requirements: Python, Kubernetes, and distributed systems. "
+            "You will build APIs with PostgreSQL."
+        )
+        jobs = [
+            ("Senior Backend Engineer", jd_common),
+            ("Staff Software Engineer", jd_common.replace("PostgreSQL", "Postgres")),
+        ]
+        out = mine_keywords_from_jobs(jobs)
+        phrases = [x["phrase"] for x in out]
+        self.assertTrue(any("python" == p or p.startswith("python ") for p in phrases))
+        self.assertTrue(any("kubernetes" in p for p in phrases))
+        self.assertTrue(any("distributed systems" in p for p in phrases))
+        for row in out:
+            self.assertGreaterEqual(row["doc_count"], 1)
+            self.assertLessEqual(row["job_fraction"], 1.0)
+
+    def test_mine_keywords_prefers_phrases_and_drops_filler(self):
+        jd = (
+            "We work across teams at high scale. Requirements: machine learning and data pipelines. "
+            "Collaborate with engineers on distributed systems."
+        )
+        jobs = [("Engineer", jd), ("Engineer", jd)]
+        out = mine_keywords_from_jobs(jobs)
+        phrases = [x["phrase"] for x in out]
+        self.assertNotIn("across", phrases)
+        self.assertNotIn("teams", phrases)
+        self.assertNotIn("high", phrases)
+        self.assertIn("machine learning", phrases)
+        if phrases:
+            self.assertGreaterEqual(len(phrases[0].split()), 2)
+
+    def test_mine_keywords_excludes_job_titles_and_subsumes_redundant_ngrams(self):
+        jd = (
+            "Principal Software Engineers and Distinguished Engineers work cross-functionally. "
+            "We use software defined networking sdn and kubernetes. "
+            "Long term we invest in machine learning and distributed systems."
+        )
+        jobs = [("Distinguished Engineer", jd), ("Principal Engineer", jd)]
+        out = mine_keywords_from_jobs(jobs)
+        phrases = [x["phrase"] for x in out]
+        for bad in (
+            "principal software",
+            "distinguished software",
+            "distinguished engineers",
+            "principal engineer",
+            "software engineer",
+            "long term",
+        ):
+            self.assertNotIn(bad, phrases)
+        self.assertTrue(any("software defined networking" in p for p in phrases))
+        self.assertNotIn("software defined", phrases)
+        self.assertTrue(any("machine learning" in p for p in phrases))
+
+
+@patch(
+    "resume_app.pipeline_llm_skill_extract.resolve_provider_api_key",
+    return_value="sk-test-placeholder",
+)
+class PipelineResumeSummaryAPITestCase(TestCase):
+    def setUp(self):
+        self.client = Client()
+        Track.ensure_baseline()
+
+    def test_pipeline_resume_summary_start_unknown_track(self):
+        response = self.client.post(
+            "/api/resume/jobs/pipeline-resume-summary/start",
+            data=json.dumps(
+                {
+                    "track": "not-a-real-track-slug-xyz",
+                    "llm_provider": "OpenAI",
+                    "model": "gpt-4o-mini",
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_pipeline_resume_summary_start_empty_pipeline(self):
+        response = self.client.post(
+            "/api/resume/jobs/pipeline-resume-summary/start",
+            data=json.dumps({"track": "ic", "llm_provider": "OpenAI", "model": "gpt-4o-mini"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+
+    @patch("resume_app.tasks.pipeline_resume_llm_extract_task")
+    def test_pipeline_resume_summary_start_enqueues(self, mock_task):
+        jd = "Requirements: Python and Kubernetes."
+        job = JobListing.objects.create(
+            source="test",
+            external_id="sum-1",
+            title="Platform Engineer",
+            company_name="Co",
+            description=jd,
+        )
+        PipelineEntry.objects.create(
+            job_listing=job,
+            track="ic",
+            stage=PipelineEntry.Stage.VETTING,
+        )
+        response = self.client.post(
+            "/api/resume/jobs/pipeline-resume-summary/start",
+            data=json.dumps(
+                {"track": "ic", "llm_provider": "OpenAI", "model": "gpt-4o-mini", "max_jobs": 1}
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["total_jobs"], 1)
+        self.assertTrue(data.get("run_id"))
+        self.assertEqual(data["track"], "ic")
+        mock_task.assert_called_once()
+
+    def test_pipeline_resume_summary_status_not_found(self):
+        response = self.client.get(
+            "/api/resume/jobs/pipeline-resume-summary/status",
+            {"track": "ic", "run_id": "00000000-0000-0000-0000-000000000000"},
+        )
+        self.assertEqual(response.status_code, 404)
+
+    @patch("resume_app.tasks.pipeline_resume_llm_extract_task")
+    def test_pipeline_resume_summary_stop_idempotent(self, mock_task):
+        jd = "Requirements: Python."
+        job = JobListing.objects.create(
+            source="test",
+            external_id="sum-stop",
+            title="Engineer",
+            company_name="Co",
+            description=jd,
+        )
+        PipelineEntry.objects.create(
+            job_listing=job,
+            track="ic",
+            stage=PipelineEntry.Stage.VETTING,
+        )
+        start = self.client.post(
+            "/api/resume/jobs/pipeline-resume-summary/start",
+            data=json.dumps({"track": "ic", "llm_provider": "OpenAI", "model": "gpt-4o-mini"}),
+            content_type="application/json",
+        )
+        self.assertEqual(start.status_code, 200)
+        run_id = start.json()["run_id"]
+        stop = self.client.post(
+            "/api/resume/jobs/pipeline-resume-summary/stop",
+            data=json.dumps({"track": "ic", "run_id": run_id}),
+            content_type="application/json",
+        )
+        self.assertEqual(stop.status_code, 200)
+        self.assertTrue(stop.json().get("ok"))
+        from django.conf import settings
+        from pathlib import Path
+
+        flag = (
+            Path(settings.MEDIA_ROOT)
+            / "pipeline_llm_extract"
+            / "ic"
+            / run_id
+            / "stop_signal.flag"
+        )
+        self.assertTrue(flag.is_file())
 
 
 class PipelineStageViewTestCase(TestCase):

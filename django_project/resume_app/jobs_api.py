@@ -4,6 +4,7 @@ Job search, fit-check match, embeddings, and pipeline/saved-job actions (JSON).
 Mounted under `/api/resume/jobs/…` via `api.router`. Consumed by job search UI and pipeline partials.
 """
 import logging
+import uuid
 import re
 from typing import List, Optional
 
@@ -26,6 +27,14 @@ from .models import (
 )
 from .job_sources import DEFAULT_SITE_NAMES, fetch_jobs
 from .job_search_core import rank_and_filter_jobs, run_job_search_core, pipeline_jobs_to_payloads
+from .track_actions import (
+    disliked_listing_id_set,
+    normalize_track_slug,
+    q_clear_on_sentiment_change,
+    q_disliked_rows_for_search,
+    q_saved_rows_for_track,
+    saved_listing_id_set,
+)
 from .services import parse_pdf
 from .crypto import decrypt_api_key
 from .agents import (
@@ -67,6 +76,11 @@ from .schemas import (
     AiMatchResponse,
     InsightsRequest,
     InsightsResponse,
+    PipelineResumeSummaryStartRequest,
+    PipelineResumeSummaryStartResponse,
+    PipelineResumeSummaryStatusResponse,
+    PipelineResumeSummaryAggregate,
+    PipelineResumeSummaryStopRequest,
     ResumeOption,
     DisqualifierAddRequest,
     DisqualifierPayload,
@@ -167,12 +181,8 @@ def jobs_list_resumes(request):
 @router.get("/pipeline", response=JobSearchResponse)
 def pipeline_list(request, track: str = "ic"):
     """List pipeline jobs for a track (focus % computed at view time). Excludes saved jobs."""
-    saved_ids = set(
-        JobListingAction.objects.filter(action=JobListingAction.ActionType.SAVED).values_list(
-            "job_listing_id", flat=True
-        )
-    )
     track = (track or "").strip().lower() or Track.get_default_slug()
+    saved_ids = saved_listing_id_set(track)
     entries = (
         PipelineEntry.objects.filter(track=track, removed_at__isnull=True)
         .exclude(job_listing_id__in=saved_ids)
@@ -212,6 +222,7 @@ def _jobs_search_cache_key(payload: JobSearchRequest) -> tuple:
         (payload.location or "").strip(),
         payload.results_wanted or 50,
         _jobs_search_site_key(payload.site_name),
+        normalize_track_slug(payload.track),
     )
 
 
@@ -228,11 +239,8 @@ def jobs_search(request, payload: JobSearchRequest):
         raise HttpError(400, "search_term is required")
 
     resume_id = payload.resume_id
-    disliked_listing_ids = set(
-        JobListingAction.objects.filter(action=JobListingAction.ActionType.DISLIKED).values_list(
-            "job_listing_id", flat=True
-        )
-    )
+    search_track = normalize_track_slug(payload.track)
+    disliked_listing_ids = disliked_listing_id_set(search_track)
     disqualifier_pattern = build_disqualifier_pattern(get_disqualifier_phrases())
     jobs_with_meta = []  # (job, JobPayload)
 
@@ -290,7 +298,7 @@ def jobs_search(request, payload: JobSearchRequest):
         return JobSearchResponse(jobs=jobs_out, total=len(jobs_out))
 
     # Cache path: single ranking pipeline from job_search_core (preference + auto-dislike + penalty + sort)
-    jobs_out = rank_and_filter_jobs(jobs_with_meta, payload.track or None)
+    jobs_out = rank_and_filter_jobs(jobs_with_meta, search_track)
 
     # Keep resume_id_for_match for AI Match step later
     resume_id_for_match = payload.resume_id
@@ -477,6 +485,126 @@ def jobs_insights(request, payload: InsightsRequest):
     )
 
 
+@router.post("/pipeline-resume-summary/start", response=PipelineResumeSummaryStartResponse)
+def pipeline_resume_summary_start(request, payload: PipelineResumeSummaryStartRequest):
+    """
+    Start async LLM batch extraction over Vetting + Applying job descriptions for a track.
+    """
+    from .pipeline_llm_skill_extract import resolve_provider_api_key, run_directory, write_initial_run_files
+    from .tasks import pipeline_resume_llm_extract_task
+
+    llm_provider = (payload.llm_provider or "").strip()
+    if not llm_provider:
+        raise HttpError(400, "llm_provider is required.")
+    if llm_provider not in LLM_PROVIDERS:
+        raise HttpError(400, f"llm_provider must be one of: {', '.join(sorted(LLM_PROVIDERS))}")
+    if not resolve_provider_api_key(llm_provider):
+        raise HttpError(
+            400,
+            f"No API key available for {llm_provider!r}. Connect that provider in LLM settings or env.",
+        )
+
+    model = (payload.model or "").strip()
+    if not model:
+        raise HttpError(400, "model is required.")
+
+    Track.ensure_baseline()
+    norm_track = normalize_track_slug(payload.track)
+    valid_slugs = set(Track.objects.values_list("slug", flat=True))
+    if norm_track not in valid_slugs:
+        raise HttpError(400, f"Unknown track: {payload.track!r}.")
+
+    entries = list(
+        PipelineEntry.objects.filter(
+            track=norm_track,
+            removed_at__isnull=True,
+            stage__in=(PipelineEntry.Stage.VETTING, PipelineEntry.Stage.APPLYING),
+        )
+        .select_related("job_listing")
+        .order_by("-added_at")
+    )
+    if payload.max_jobs is not None:
+        cap = max(1, int(payload.max_jobs))
+        entries = entries[: min(cap, len(entries))]
+    if not entries:
+        raise HttpError(400, "No pipeline jobs to analyze (Vetting + Applying).")
+
+    entry_ids = [e.id for e in entries]
+    jobs_tuples = [
+        (_safe_display_str(e.job_listing.title) or "", e.job_listing.description or "") for e in entries
+    ]
+
+    run_id = str(uuid.uuid4())
+    run_dir = run_directory(norm_track, run_id)
+    write_initial_run_files(
+        run_dir,
+        track=norm_track,
+        provider=llm_provider,
+        model=model,
+        max_jobs=payload.max_jobs,
+        entry_ids=entry_ids,
+        jobs=jobs_tuples,
+    )
+    pipeline_resume_llm_extract_task(str(run_dir))
+    return PipelineResumeSummaryStartResponse(run_id=run_id, total_jobs=len(entry_ids), track=norm_track)
+
+
+@router.get("/pipeline-resume-summary/status", response=PipelineResumeSummaryStatusResponse)
+def pipeline_resume_summary_status(request, track: str, run_id: str):
+    """Poll extraction progress and aggregated skills (partial while running)."""
+    from .pipeline_llm_skill_extract import read_run_status
+
+    Track.ensure_baseline()
+    norm_track = normalize_track_slug(track)
+    rid = (run_id or "").strip()
+    if not rid:
+        raise HttpError(400, "run_id is required.")
+    st = read_run_status(norm_track, rid)
+    if not st:
+        raise HttpError(404, "Run not found.")
+
+    agg = st.get("aggregated")
+    aggregated = None
+    if agg:
+        aggregated = PipelineResumeSummaryAggregate(
+            hard_skills=agg.get("hard_skills") or [],
+            methodologies=agg.get("methodologies") or [],
+            soft_skills=agg.get("soft_skills") or [],
+            business_outcomes=agg.get("business_outcomes") or [],
+            domain_scale=agg.get("domain_scale") or [],
+            action_verbs=agg.get("action_verbs") or [],
+        )
+    return PipelineResumeSummaryStatusResponse(
+        track=st["track"],
+        run_id=st["run_id"],
+        provider=st.get("provider") or "",
+        model=st["model"],
+        phase=st["phase"],
+        processed_count=st["processed_count"],
+        total_jobs=st["total_jobs"],
+        message=st.get("message"),
+        error=st.get("error"),
+        aggregated=aggregated,
+    )
+
+
+@router.post("/pipeline-resume-summary/stop")
+def pipeline_resume_summary_stop(request, payload: PipelineResumeSummaryStopRequest):
+    """Request graceful stop (worker observes stop_signal.flag before each batch)."""
+    from .pipeline_llm_skill_extract import run_directory, touch_stop_signal
+
+    Track.ensure_baseline()
+    norm_track = normalize_track_slug(payload.track)
+    rid = (payload.run_id or "").strip()
+    if not rid:
+        raise HttpError(400, "run_id is required.")
+    run_dir = run_directory(norm_track, rid)
+    if not run_dir.is_dir():
+        raise HttpError(404, "Run not found.")
+    touch_stop_signal(run_dir)
+    return {"ok": True}
+
+
 @router.get("/matches", response=List[JobMatchPayload])
 def jobs_matches(request, resume_id: Optional[int] = None, min_score: Optional[int] = None, status: Optional[str] = None):
     """List analyzed jobs (JobMatchResult) with optional filters."""
@@ -545,11 +673,8 @@ def jobs_run_keyword_search(request, payload: RunKeywordSearchRequest):
         existing = set(
             JobMatchResult.objects.filter(resume_id=resume_id).values_list("job_listing_id", flat=True)
         )
-        disliked_ids = set(
-            JobListingAction.objects.filter(action=JobListingAction.ActionType.DISLIKED).values_list(
-                "job_listing_id", flat=True
-            )
-        )
+        eff_track = normalize_track_slug(payload.track or resume.track or None)
+        disliked_ids = disliked_listing_id_set(eff_track)
         disqualifier_pattern = build_disqualifier_pattern(get_disqualifier_phrases())
         candidates = []  # (job, resume, keyword)
         for r in raw:
@@ -571,12 +696,11 @@ def jobs_run_keyword_search(request, payload: RunKeywordSearchRequest):
             candidates.append((job, resume, keyword))
             existing.add(job.id)
 
-        # Reorder by hybrid focus score (title + role) using IC track by default.
-        prefs = get_preference_vectors(track="ic")
+        prefs = get_preference_vectors(track=eff_track)
         if prefs and candidates:
             try:
                 jobs_for_rank = [j for j, _, _ in candidates]
-                result = rank_jobs_by_preference(jobs_for_rank, track="ic")
+                result = rank_jobs_by_preference(jobs_for_rank, track=eff_track)
                 if result is None:
                     raise RuntimeError("rank_jobs_by_preference returned None")
                 scores, _title_vecs, _role_vecs = result
@@ -638,11 +762,20 @@ def jobs_run_keyword_search(request, payload: RunKeywordSearchRequest):
 
 
 @router.get("/saved", response=JobSearchResponse)
-def jobs_saved(request):
-    """List saved (favourite) job listings."""
-    saved = JobListingAction.objects.filter(
-        action=JobListingAction.ActionType.SAVED
-    ).select_related("job_listing").order_by("-created_at")
+def jobs_saved(request, track: Optional[str] = None):
+    """List saved (favourite) job listings for the active track (session or query param)."""
+    session_track = (
+        getattr(getattr(request, "session", None), "get", lambda *_: None)("job_search_track")
+        if hasattr(getattr(request, "session", None), "get")
+        else None
+    )
+    slug = normalize_track_slug(_resolve_track(track, session_track))
+    saved = (
+        JobListingAction.objects.filter(action=JobListingAction.ActionType.SAVED)
+        .filter(q_saved_rows_for_track(slug))
+        .select_related("job_listing")
+        .order_by("-created_at")
+    )
     jobs_out = []
     for s in saved:
         job = s.job_listing
@@ -652,11 +785,20 @@ def jobs_saved(request):
 
 
 @router.get("/disliked", response=JobSearchResponse)
-def jobs_disliked(request):
-    """List disliked job listings (excluded from search results)."""
-    disliked = JobListingAction.objects.filter(
-        action=JobListingAction.ActionType.DISLIKED
-    ).select_related("job_listing").order_by("-created_at")
+def jobs_disliked(request, track: Optional[str] = None):
+    """List disliked job listings for the active track (session or query param)."""
+    session_track = (
+        getattr(getattr(request, "session", None), "get", lambda *_: None)("job_search_track")
+        if hasattr(getattr(request, "session", None), "get")
+        else None
+    )
+    slug = normalize_track_slug(_resolve_track(track, session_track))
+    disliked = (
+        JobListingAction.objects.filter(action=JobListingAction.ActionType.DISLIKED)
+        .filter(q_disliked_rows_for_search(slug))
+        .select_related("job_listing")
+        .order_by("-created_at")
+    )
     jobs_out = []
     for d in disliked:
         job = d.job_listing
@@ -693,9 +835,15 @@ def disqualifiers_list(request):
 
 
 @router.get("/focus-breakdown/{job_listing_id}")
-def jobs_focus_breakdown(request, job_listing_id: int):
+def jobs_focus_breakdown(request, job_listing_id: int, track: Optional[str] = None):
     """Return detailed focus score breakdown (title vs role) for debugging why a job matched."""
-    data = get_focus_breakdown(job_listing_id)
+    session_track = (
+        getattr(getattr(request, "session", None), "get", lambda *_: None)("job_search_track")
+        if hasattr(getattr(request, "session", None), "get")
+        else None
+    )
+    slug = normalize_track_slug(_resolve_track(track, session_track))
+    data = get_focus_breakdown(job_listing_id, track=slug)
     if data is None:
         raise HttpError(404, "Job not found or no preference data (like some jobs first).")
     return data
@@ -703,16 +851,21 @@ def jobs_focus_breakdown(request, job_listing_id: int):
 
 @router.get("/{job_listing_id}", response=JobDetailPayload)
 def jobs_get(request, job_listing_id: int):
-    """Get a single job listing (e.g. for pre-filling optimizer with job description)."""
+    """Get a single job listing (full stored description + metadata; e.g. optimizer pre-fill, Local desc)."""
     job = get_object_or_404(JobListing, id=job_listing_id)
+    desc = job.description or ""
     return JobDetailPayload(
         id=job.id,
         title=job.title,
         company_name=job.company_name,
         location=job.location or "",
-        description=job.description or "",
+        description=desc,
+        description_char_count=len(desc),
         url=job.url or "",
         source=job.source,
+        external_id=job.external_id or "",
+        fetched_at=job.fetched_at,
+        raw_json=job.raw_json,
     )
 
 
@@ -792,14 +945,14 @@ def jobs_like(request, job_listing_id: int, track: Optional[str] = None):
     JobListingAction.objects.get_or_create(
         job_listing=job,
         action=JobListingAction.ActionType.LIKED,
-        defaults={"track": raw_track},
+        track=raw_track,
     )
     JobListingAction.objects.filter(
         job_listing=job, action=JobListingAction.ActionType.DISLIKED
-    ).delete()
+    ).filter(q_clear_on_sentiment_change(raw_track)).delete()
     JobListingEmbedding.objects.filter(
         job_listing=job, embedding_type=JobListingEmbedding.EmbeddingType.DISLIKED
-    ).delete()
+    ).filter(q_clear_on_sentiment_change(raw_track)).delete()
     vec = embedding_module.embed_job_text(job.title or "", job.description or "")
     if vec is not None:
         JobListingEmbedding.objects.update_or_create(
@@ -822,22 +975,27 @@ def jobs_save(request, job_listing_id: int, track: Optional[str] = None):
         if hasattr(getattr(request, "session", None), "get")
         else None
     )
-    raw_track = (track or session_track or "").strip().lower() or ""
+    raw_track = _resolve_track(track, session_track)
     JobListingAction.objects.get_or_create(
         job_listing=job,
         action=JobListingAction.ActionType.SAVED,
         track=raw_track,
-        defaults={"track": raw_track},
     )
     return {"success": True}
 
 
 @router.post("/{job_listing_id}/unsave")
-def jobs_unsave(request, job_listing_id: int):
-    """Remove job from saved (favourites) list."""
+def jobs_unsave(request, job_listing_id: int, track: Optional[str] = None):
+    """Remove job from saved list for this track (session or param), including legacy global saved rows."""
+    session_track = (
+        getattr(getattr(request, "session", None), "get", lambda *_: None)("job_search_track")
+        if hasattr(getattr(request, "session", None), "get")
+        else None
+    )
+    slug = normalize_track_slug(_resolve_track(track, session_track))
     JobListingAction.objects.filter(
         job_listing_id=job_listing_id, action=JobListingAction.ActionType.SAVED
-    ).delete()
+    ).filter(q_saved_rows_for_track(slug)).delete()
     return {"success": True}
 
 
@@ -854,12 +1012,12 @@ def jobs_dislike(request, job_listing_id: int, track: Optional[str] = None):
     JobListingAction.objects.get_or_create(
         job_listing=job,
         action=JobListingAction.ActionType.DISLIKED,
-        defaults={"track": raw_track},
+        track=raw_track,
     )
     JobListingAction.objects.filter(
         job_listing=job, action__in=[JobListingAction.ActionType.LIKED, JobListingAction.ActionType.SAVED]
-    ).delete()
-    JobListingEmbedding.objects.filter(job_listing=job).delete()
+    ).filter(q_clear_on_sentiment_change(raw_track)).delete()
+    JobListingEmbedding.objects.filter(job_listing=job).filter(q_clear_on_sentiment_change(raw_track)).delete()
     vec = embedding_module.embed_full(job.title or "", job.description or "")
     if vec is not None:
         JobListingEmbedding.objects.update_or_create(

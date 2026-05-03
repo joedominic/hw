@@ -129,12 +129,45 @@ class _OllamaLocalChatModel(BaseChatModel):
         run_manager=None,
         **kwargs,
     ) -> ChatResult:
+        import time
+
         from ollama import Client
 
         client = Client(host=self.host)
         ollama_messages = self._convert_messages(messages)
-        response = client.chat(model=self.model, messages=ollama_messages, stream=False)
+        total_chars = sum(len(str(m.get("content") or "")) for m in ollama_messages)
+        logger.info(
+            "[ollama_local] POST /api/chat host=%s model=%s messages=%s total_content_chars=%s",
+            self.host,
+            self.model,
+            len(ollama_messages),
+            total_chars,
+        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "[ollama_local] payload preview: %s",
+                [(m.get("role"), str(m.get("content") or "")[:240]) for m in ollama_messages],
+            )
+        t0 = time.monotonic()
+        try:
+            response = client.chat(model=self.model, messages=ollama_messages, stream=False)
+        except Exception:
+            logger.exception(
+                "[ollama_local] client.chat failed after %.2fs host=%s model=%s",
+                time.monotonic() - t0,
+                self.host,
+                self.model,
+            )
+            raise
+        elapsed = time.monotonic() - t0
         content = (response.get("message") or {}).get("content") or ""
+        logger.info(
+            "[ollama_local] client.chat ok in %.2fs response_chars=%s eval_count=%r prompt_eval=%r",
+            elapsed,
+            len(content),
+            response.get("eval_count"),
+            response.get("prompt_eval_count"),
+        )
         prompt_eval = response.get("prompt_eval_count")
         eval_count = response.get("eval_count")
         usage_metadata = None

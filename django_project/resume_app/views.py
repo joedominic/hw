@@ -6,6 +6,7 @@ JSON/HTMX/async actions use Django Ninja in `resume_app.api` (optimizer, LLM, wo
 `resume_app.jobs_api` (job search, pipeline, preferences). See `resume_app/docs/ARCHITECTURE_UI.md`.
 """
 import json
+import logging
 from datetime import timedelta
 from urllib.parse import urlencode
 
@@ -57,7 +58,7 @@ from .models import (
 )
 from .preference import invalidate_preference_cache, invalidate_disliked_embeddings_cache
 from .job_sources import DEFAULT_SITE_NAMES
-from .tasks import run_job_search_task, get_next_run_at, validate_cron
+from .tasks import run_job_search_task, get_next_run_at, validate_cron, try_vetting_match_debug, VETTING_MATCHING_JD_MIN_CHARS
 from .utils import cron_to_short_description
 from .huey_dashboard import PERIODIC_TASKS, get_periodic_task_info, get_periodic_task_wrapper
 from .prompt_store import get_effective_prompts, save_prompts_to_profile, clear_all_prompts_in_profile
@@ -69,6 +70,8 @@ from .llm_session import (
 )
 from django.utils import timezone
 from django.core.exceptions import ValidationError
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_task_form(request, default_track: str, valid_track_slugs: set):
@@ -963,10 +966,33 @@ def llm_test_view(request):
             else:
                 api_key_decrypted = decrypt_api_key(config.encrypted_api_key)
                 try:
+                    if provider == "Ollama Local":
+                        from .llm_factory import _normalize_ollama_local_host
+
+                        try:
+                            base = _normalize_ollama_local_host(api_key_decrypted)
+                            logger.info(
+                                "[llm_test] Ollama Local start base_url=%s model=%r prompt_chars=%s",
+                                base,
+                                model,
+                                len(prompt),
+                            )
+                        except Exception as ex:
+                            logger.warning(
+                                "[llm_test] Ollama Local host normalize failed (raw len=%s): %s",
+                                len(api_key_decrypted or ""),
+                                ex,
+                            )
                     llm = get_llm(provider, api_key_decrypted, model=model or None)
                     resp = llm.invoke([HumanMessage(content=prompt)])
                     # LangChain chat models typically expose `content`
                     response_text = getattr(resp, "content", None) or str(resp)
+                    if provider == "Ollama Local":
+                        logger.info(
+                            "[llm_test] Ollama Local done model=%r response_chars=%s",
+                            model,
+                            len(response_text or ""),
+                        )
                     return render(
                         request,
                         "resume_app/llm_test.html",
@@ -982,6 +1008,12 @@ def llm_test_view(request):
                         },
                     )
                 except Exception as e:
+                    if provider == "Ollama Local":
+                        logger.exception(
+                            "[llm_test] Ollama Local invoke failed model=%r: %s",
+                            model,
+                            e,
+                        )
                     error = str(e)
 
     return render(
@@ -1968,6 +2000,64 @@ def track_delete_view(request, slug: str):
 
     messages.success(request, f"Track \"{label}\" and its associated tasks/pipeline/actions were deleted.")
     return redirect("track_list")
+
+
+def vetting_match_debug_view(request, job_listing_id: int):
+    """
+    One-shot vetting LLM match with full raw response for troubleshooting.
+    Same prompt path as automation; does not update PipelineEntry fields.
+    """
+    tracks_qs = Track.ensure_baseline()
+    available_slugs = list(tracks_qs.values_list("slug", flat=True))
+    raw_track = (request.GET.get("track") or request.session.get("job_search_track") or "").strip().lower()
+    if not raw_track or raw_track not in available_slugs:
+        raw_track = Track.get_default_slug()
+    request.session["job_search_track"] = raw_track
+    request.session.modified = True
+
+    entry = (
+        PipelineEntry.objects.filter(
+            job_listing_id=job_listing_id,
+            track=raw_track,
+            stage=PipelineEntry.Stage.VETTING,
+            removed_at__isnull=True,
+        )
+        .select_related("job_listing")
+        .first()
+    )
+    if not entry:
+        messages.error(request, "No vetting row found for this job and track.")
+        return redirect(reverse("vetting") + f"?track={raw_track}")
+
+    debug_result = None
+    if request.method == "POST":
+        prompts = get_effective_prompts(request)
+        matching_prompt = prompts.get("matching")
+        debug_result = try_vetting_match_debug(entry, matching_prompt=matching_prompt or None)
+        if debug_result.get("ok"):
+            ip = (debug_result.get("result") or {}).get("interview_probability")
+            if ip is None:
+                messages.warning(
+                    request,
+                    "LLM returned a response but interview probability was not parsed — the Vetting board will not show an Interview % badge until parsing succeeds. See raw output below.",
+                )
+            else:
+                messages.success(request, "Match debug run finished. See parsed fields and raw response below.")
+        else:
+            messages.error(
+                request,
+                "Match debug did not complete: {}.".format(debug_result.get("skip_reason", "unknown")),
+            )
+
+    context = {
+        "entry": entry,
+        "job": entry.job_listing,
+        "track": raw_track,
+        "jd_min": VETTING_MATCHING_JD_MIN_CHARS,
+        "debug_result": debug_result,
+        "vetting_url": reverse("vetting") + f"?track={raw_track}",
+    }
+    return render(request, "resume_app/vetting_match_debug.html", context)
 
 
 def focus_breakdown_view(request, job_listing_id: int):

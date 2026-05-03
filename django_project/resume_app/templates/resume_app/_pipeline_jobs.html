@@ -68,6 +68,8 @@
                                 <span class="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900" title="{{ j.interview_reasoning|default:''|truncatechars:180 }}">
                                     Interview {{ j.interview_probability }}%
                                 </span>
+                            {% elif stage_label == "vetting" %}
+                                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600" title="Automation could not parse a numeric interview % from the model. Use Match debug to see the raw reply.">Interview n/a</span>
                             {% endif %}
                             {% if j.preference_margin_percent is not None %}
                                 <span class="rounded-full px-2 py-0.5 text-xs font-medium {% if j.preference_margin_percent < -3 %}bg-red-100 text-red-900{% elif j.preference_margin_percent > 3 %}bg-emerald-100 text-emerald-900{% else %}bg-slate-100 text-slate-700{% endif %}">Pref {{ j.preference_margin_percent }}%</span>
@@ -98,6 +100,10 @@
                         {% if j.url %}
                             <a href="{{ j.url }}" target="_blank" rel="noopener" class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-concierge-slate hover:bg-slate-50">View</a>
                         {% endif %}
+                        <button type="button" class="pipeline-job-local-desc-btn inline-flex items-center rounded-concierge border border-teal-200 bg-teal-50 px-2 py-1 text-xs font-medium text-teal-900 hover:bg-teal-100" data-job-id="{{ j.id }}" title="Show full text and fields stored in the database for this job">Local desc</button>
+                        {% if stage_label == "vetting" %}
+                            <a href="{% url 'vetting_match_debug' j.id %}?track={{ pipeline_track }}" class="inline-flex items-center rounded-concierge border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100" title="Run one LLM match and inspect raw output">Match debug</a>
+                        {% endif %}
                         {% if stage_label == "applying" or stage_label == "done" %}
                             {% if j.optimized_resume_id %}
                                 <a href="{% url 'resume_optimizer' %}?opt_id={{ j.optimized_resume_id }}" class="inline-flex items-center rounded-concierge border border-violet-200 bg-violet-50 px-2 py-1 text-xs font-medium text-violet-900 hover:bg-violet-100" title="Open scores, judge feedback, and tailored draft">Results</a>
@@ -115,6 +121,26 @@
         </div>
     {% endfor %}
 
+    <dialog id="pipelineJobLocalDescDialog" class="concierge-dialog w-[min(100vw-2rem,52rem)] max-h-[90vh] overflow-hidden p-0" aria-labelledby="pipelineJobLocalDescTitle">
+        <div class="flex max-h-[90vh] flex-col rounded-concierge border border-slate-200 bg-white shadow-2xl">
+            <header class="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
+                <h2 id="pipelineJobLocalDescTitle" class="m-0 text-base font-semibold text-concierge-slate">Stored job data</h2>
+                <button type="button" id="pipelineJobLocalDescClose" class="rounded-concierge px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100">Close</button>
+            </header>
+            <div class="min-h-0 flex-1 overflow-y-auto bg-white px-4 py-3">
+                <p id="local-desc-heading" class="mb-1 text-sm font-semibold text-concierge-slate"></p>
+                <p id="local-desc-meta" class="mb-2 text-xs leading-relaxed text-slate-600"></p>
+                <p class="mb-2 rounded-concierge border border-sky-100 bg-sky-50/80 px-2 py-1.5 text-xs text-sky-950">
+                    The database stores the full <strong>description</strong> below. The Resume summary miner uses only a <strong>role-focused slice</strong> of that text for keywords—not the whole file for every algorithm step.
+                </p>
+                <h3 class="mb-1 mt-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Description (JobListing.description)</h3>
+                <pre id="local-desc-body" class="mb-4 max-h-[min(40vh,20rem)] overflow-auto whitespace-pre-wrap rounded-concierge border border-slate-200 bg-slate-50 p-3 text-xs text-slate-800"></pre>
+                <h3 class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">raw_json (JobSpy / source payload, if saved)</h3>
+                <pre id="local-desc-raw" class="max-h-[min(35vh,16rem)] overflow-auto whitespace-pre-wrap rounded-concierge border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] text-slate-800"></pre>
+            </div>
+        </div>
+    </dialog>
+
     <script>
         (function() {
             const selectAll = document.getElementById('select-all-jobs');
@@ -124,6 +150,54 @@
                 for (let i = 0; i < checkboxes.length; i++) {
                     checkboxes[i].checked = selectAll.checked;
                 }
+            });
+        })();
+        (function() {
+            var dlg = document.getElementById('pipelineJobLocalDescDialog');
+            var closeBtn = document.getElementById('pipelineJobLocalDescClose');
+            var heading = document.getElementById('local-desc-heading');
+            var meta = document.getElementById('local-desc-meta');
+            var bodyEl = document.getElementById('local-desc-body');
+            var rawEl = document.getElementById('local-desc-raw');
+            if (!dlg || !closeBtn) return;
+            function closeDlg() { if (dlg.open) dlg.close(); }
+            closeBtn.addEventListener('click', closeDlg);
+            document.querySelectorAll('.pipeline-job-local-desc-btn').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    var id = btn.getAttribute('data-job-id');
+                    if (!id) return;
+                    heading.textContent = 'Loading…';
+                    meta.textContent = '';
+                    bodyEl.textContent = '';
+                    rawEl.textContent = '';
+                    try { dlg.showModal(); } catch (e) {}
+                    fetch('/api/resume/jobs/' + id, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+                        .then(function(r) {
+                            if (!r.ok) return r.json().then(function(j) { throw new Error(j.detail || j.message || ('HTTP ' + r.status)); });
+                            return r.json();
+                        })
+                        .then(function(data) {
+                            heading.textContent = (data.title || 'Job') + ' @ ' + (data.company_name || '—');
+                            var fa = data.fetched_at ? String(data.fetched_at) : '—';
+                            meta.textContent = 'id=' + data.id + ' · external_id=' + (data.external_id || '—') + ' · source=' + (data.source || '—') + ' · description length=' + (data.description_char_count != null ? data.description_char_count : (data.description || '').length) + ' chars · fetched_at=' + fa;
+                            bodyEl.textContent = (data.description && data.description.length) ? data.description : '(empty — nothing stored in description for this row)';
+                            if (data.raw_json != null && data.raw_json !== '') {
+                                try {
+                                    rawEl.textContent = JSON.stringify(data.raw_json, null, 2);
+                                } catch (e) {
+                                    rawEl.textContent = String(data.raw_json);
+                                }
+                            } else {
+                                rawEl.textContent = '(null — no raw_json saved for this job)';
+                            }
+                        })
+                        .catch(function(err) {
+                            heading.textContent = 'Error';
+                            meta.textContent = err.message || 'Request failed';
+                            bodyEl.textContent = '';
+                            rawEl.textContent = '';
+                        });
+                });
             });
         })();
     </script>

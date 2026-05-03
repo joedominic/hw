@@ -37,6 +37,7 @@ USAGE_QUERY_JOBS_AI_MATCH = "jobs_ai_match"
 USAGE_QUERY_KEYWORD_SEARCH_FIT = "keyword_search_fit"
 USAGE_QUERY_JOBS_MATCH_API = "jobs_match_api"
 USAGE_QUERY_PIPELINE_VETTING = "pipeline_vetting_matching"
+USAGE_QUERY_PIPELINE_RESUME_REFINE = "pipeline_resume_refine"
 USAGE_QUERY_API_LLM_COMPLETE = "api_llm_complete"
 USAGE_QUERY_API_RESUME_FIT = "api_resume_fit"
 USAGE_QUERY_UNSPECIFIED = "unspecified"
@@ -53,6 +54,7 @@ USAGE_QUERY_LABELS: dict[str, str] = {
     USAGE_QUERY_KEYWORD_SEARCH_FIT: "Job search — keyword search fit",
     USAGE_QUERY_JOBS_MATCH_API: "Job search — single job fit (API)",
     USAGE_QUERY_PIPELINE_VETTING: "Pipeline — vetting match",
+    USAGE_QUERY_PIPELINE_RESUME_REFINE: "Pipeline — resume keyword refine",
     USAGE_QUERY_API_LLM_COMPLETE: "HTTP API — LLM complete",
     USAGE_QUERY_API_RESUME_FIT: "HTTP API — resume fit (multipart)",
 }

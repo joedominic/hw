@@ -95,6 +95,23 @@ DEFAULT_INSIGHTS_USER = """Job descriptions:
 {job_descriptions}
 """
 
+DEFAULT_PIPELINE_RESUME_REFINE_SYSTEM = """You are an expert resume and ATS keyword coach. The user only provides a locally extracted list of phrases ranked by how many shortlisted jobs mention each phrase—not full job descriptions. Group and polish that list: do not invent requirements that are not implied by the phrases given."""
+
+DEFAULT_PIPELINE_RESUME_REFINE_USER = """The user is optimizing a base resume against roles they already shortlisted (Vetting + Applying).
+
+Job titles (one per line):
+{job_titles}
+
+Ranked keywords and phrases (phrase — mentioned in doc_count of {job_count} jobs):
+{ranked_keywords}
+
+Respond in Markdown with these sections:
+## Must-have themes
+## Tools and stack
+## Nice-to-have
+## Suggested resume bullet stems (2–3 bullets, using only themes supported by the list above)
+
+Keep bullets concise and truthful to the phrase list."""
 
 # Legacy single-template strings (system + user) for backward compatibility and APIs that expect one blob.
 DEFAULT_WRITER_PROMPT = DEFAULT_WRITER_SYSTEM + "\n\n" + DEFAULT_WRITER_USER
@@ -103,3 +120,6 @@ DEFAULT_RECRUITER_JUDGE_PROMPT = DEFAULT_RECRUITER_JUDGE_SYSTEM + "\n\n" + DEFAU
 DEFAULT_FIT_CHECK_PROMPT = DEFAULT_FIT_CHECK_SYSTEM + "\n\n" + DEFAULT_FIT_CHECK_USER
 DEFAULT_MATCHING_PROMPT = DEFAULT_MATCHING_SYSTEM + "\n\n" + DEFAULT_MATCHING_USER
 DEFAULT_INSIGHTS_PROMPT = DEFAULT_INSIGHTS_SYSTEM + "\n\n" + DEFAULT_INSIGHTS_USER
+DEFAULT_PIPELINE_RESUME_REFINE_PROMPT = (
+    DEFAULT_PIPELINE_RESUME_REFINE_SYSTEM + "\n\n" + DEFAULT_PIPELINE_RESUME_REFINE_USER
+)

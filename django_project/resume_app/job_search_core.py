@@ -9,6 +9,7 @@ from typing import List, Optional, Tuple, Dict
 from django.conf import settings
 
 from .models import JobListing, JobListingAction, JobListingTrackMetrics, PipelineEntry
+from .track_actions import disliked_listing_id_set, normalize_track_slug
 from .job_sources import DEFAULT_SITE_NAMES, fetch_jobs
 from .schemas import JobPayload
 from .preference import (
@@ -84,11 +85,8 @@ def run_job_search_core(
 
     results_wanted = results_wanted or getattr(settings, "JOB_SEARCH_DEFAULT_RESULTS", 50)
     site_name = site_name or list(DEFAULT_SITE_NAMES)
-    disliked_listing_ids = set(
-        JobListingAction.objects.filter(action=JobListingAction.ActionType.DISLIKED).values_list(
-            "job_listing_id", flat=True
-        )
-    )
+    norm_track = normalize_track_slug(track)
+    disliked_listing_ids = disliked_listing_id_set(norm_track)
     disqualifier_pattern = build_disqualifier_pattern(get_disqualifier_phrases())
     jobs_with_meta: List[Tuple[JobListing, JobPayload]] = []
 
@@ -141,7 +139,7 @@ def run_job_search_core(
     jobs_after_filter = len(jobs_with_meta)
     logger.info("[job_search_core] After filter: %d jobs", jobs_after_filter)
 
-    jobs_out = rank_and_filter_jobs(jobs_with_meta, track)
+    jobs_out = rank_and_filter_jobs(jobs_with_meta, norm_track)
     return (jobs_fetched, jobs_after_filter, jobs_out, refs_for_cache)
 
 
@@ -279,8 +277,9 @@ def _rank_jobs_with_meta(
     return jobs_out
 
 
-def _apply_auto_dislike(ranked: List[JobPayload]) -> List[JobPayload]:
+def _apply_auto_dislike(ranked: List[JobPayload], track: Optional[str]) -> List[JobPayload]:
     """Apply auto-dislike for margin < -5; mutate DB and return filtered list (read-only ranking stays pure)."""
+    slug = normalize_track_slug(track)
     out: List[JobPayload] = []
     for payload_obj in ranked:
         margin = getattr(payload_obj, "preference_margin_percent", None)
@@ -291,6 +290,7 @@ def _apply_auto_dislike(ranked: List[JobPayload]) -> List[JobPayload]:
                     JobListingAction.objects.get_or_create(
                         job_listing=job_obj,
                         action=JobListingAction.ActionType.DISLIKED,
+                        track=slug,
                     )
                     invalidate_preference_cache()
                     invalidate_disliked_embeddings_cache()
@@ -380,7 +380,7 @@ def rank_and_filter_jobs(
     jobs_search cache path. Preserves preference_margin_percent as primary sort.
     """
     ranked = _rank_jobs_with_meta(jobs_with_meta, track)
-    jobs_out = _apply_auto_dislike(ranked)
+    jobs_out = _apply_auto_dislike(ranked, track)
     return _apply_disliked_penalty_and_final_sort(jobs_out, track)
 
 

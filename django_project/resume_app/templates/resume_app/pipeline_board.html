@@ -2,6 +2,50 @@
 
 {% block title %}{{ board_page_title }} — ResumeElite{% endblock %}
 
+{% block extra_head %}
+{% if show_pipeline_resume_summary %}
+<meta name="csrf-token" content="{{ csrf_token }}">
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
+<style>
+/* Inner panel is opaque; dialog.concierge-dialog in base.html forces transparent on <dialog>. */
+#pipelineResumeSummaryDialog .pipeline-summary-panel {
+    background-color: #ffffff;
+    color: #0f172a;
+}
+.pipeline-summary-table {
+    width: 100%;
+    border-collapse: collapse;
+    line-height: 1.5;
+    font-size: 0.875rem;
+}
+.pipeline-summary-table th,
+.pipeline-summary-table td {
+    padding: 0.625rem 0.75rem;
+    vertical-align: top;
+    text-align: left;
+    border-bottom: 1px solid #e2e8f0;
+    background-color: #ffffff;
+}
+.pipeline-summary-table thead th {
+    background-color: #f8fafc;
+    font-weight: 600;
+    font-size: 0.7rem;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: #64748b;
+}
+.pipeline-summary-table tbody tr:hover td {
+    background-color: #f8fafc;
+}
+.pipeline-summary-markdown { line-height: 1.5; }
+.pipeline-summary-markdown p { margin-bottom: 0.5rem; }
+.pipeline-summary-markdown ul, .pipeline-summary-markdown ol { margin-bottom: 0.5rem; padding-left: 1.25rem; }
+.pipeline-summary-markdown h2 { font-size: 1.05rem; font-weight: 600; margin: 1rem 0 0.5rem; color: #0f172a; }
+</style>
+{% endif %}
+{% endblock %}
+
 {% block content %}
 <div class="mx-auto max-w-6xl">
     <div class="mb-6">
@@ -21,6 +65,101 @@
 
     {% include "resume_app/_concierge_messages.html" %}
     {% include "resume_app/_pipeline_stage_tabs.html" %}
+
+    {% if show_pipeline_resume_summary %}
+    <div class="mb-4 flex flex-col gap-3 rounded-concierge border border-slate-200 bg-white p-3 shadow-sm">
+        <div class="flex flex-wrap items-center gap-2">
+            <button type="button" id="pipeline-resume-summary-btn"
+                    class="inline-flex items-center gap-2 rounded-concierge bg-concierge-slate px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    {% if pipeline_resume_summary_eligible_count == 0 or not pipeline_resume_llm_configured %}disabled{% endif %}
+                    title="Extract resume keywords from job descriptions (LLM)">
+                <span id="pipeline-resume-summary-btn-label">Resume summary</span>
+                <span id="pipeline-resume-summary-spinner" class="hidden h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-white/40 border-t-white" role="status" aria-hidden="true"></span>
+            </button>
+            <button type="button" id="pipeline-resume-summary-stop-btn"
+                    class="hidden inline-flex items-center gap-2 rounded-concierge border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-800 hover:bg-red-100">
+                Stop
+            </button>
+            <label class="flex items-center gap-2 text-sm text-slate-600">
+                <span class="whitespace-nowrap text-xs font-medium text-slate-500">Provider</span>
+                <select id="pipeline-resume-llm-provider" class="rounded-concierge border border-slate-200 bg-white px-2 py-1.5 text-sm min-w-[8rem] max-w-[12rem]">
+                    {% for p in pipeline_resume_llm_providers %}
+                    <option value="{{ p }}" {% if p == pipeline_resume_llm_provider %}selected{% endif %}>{{ p }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label class="flex items-center gap-2 text-sm text-slate-600">
+                <span class="whitespace-nowrap text-xs font-medium text-slate-500">Model</span>
+                <select id="pipeline-resume-summary-model" class="rounded-concierge border border-slate-200 bg-white px-2 py-1.5 text-sm min-w-[10rem] max-w-[16rem]">
+                </select>
+            </label>
+            <fieldset class="flex flex-wrap items-center gap-3 border-0 p-0 m-0">
+                <legend class="sr-only">Job scope</legend>
+                <label class="inline-flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+                    <input type="radio" name="prs-scope" value="all" class="text-concierge-slate focus:ring-concierge-slate" checked>
+                    All eligible jobs
+                </label>
+                <label class="inline-flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+                    <input type="radio" name="prs-scope" value="cap" class="text-concierge-slate focus:ring-concierge-slate">
+                    First
+                    <input type="number" id="prs-max-jobs" min="1" step="1" value="10"
+                           class="w-16 rounded-concierge border border-slate-200 px-2 py-1 text-sm"
+                           aria-label="Maximum jobs to include">
+                    jobs
+                </label>
+            </fieldset>
+        </div>
+        <p id="pipeline-resume-summary-status" class="text-sm text-slate-500" role="status"></p>
+        {% if pipeline_resume_summary_eligible_count == 0 %}
+        <p class="mb-0 text-xs text-slate-500">Add jobs to Vetting or Applying to run a summary.</p>
+        {% elif not pipeline_resume_llm_configured %}
+        <p class="mb-0 text-xs text-slate-500">Connect at least one LLM provider in <a href="{% url 'settings' %}" class="text-concierge-slate underline">Settings</a> (or set env API keys, e.g. <code class="rounded bg-slate-100 px-1">OPENAI_API_KEY</code>).</p>
+        {% endif %}
+    </div>
+
+    <dialog id="pipelineResumeSummaryDialog" class="concierge-dialog w-[min(100vw-2rem,48rem)] max-h-[90vh] overflow-hidden p-0" aria-labelledby="pipelineResumeSummaryTitle">
+        <div class="pipeline-summary-panel flex max-h-[90vh] flex-col rounded-concierge border border-slate-200 shadow-2xl">
+            <header class="flex shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
+                <div>
+                    <h2 id="pipelineResumeSummaryTitle" class="m-0 text-lg font-semibold text-concierge-slate">Resume summary</h2>
+                    <p id="pipelineResumeSummaryMeta" class="mt-1 mb-0 text-xs text-slate-500"></p>
+                </div>
+                <button type="button" id="pipelineResumeSummaryClose" class="rounded-concierge px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100">Close</button>
+            </header>
+            <div class="min-h-0 flex-1 overflow-y-auto bg-white px-4 py-4">
+                <p class="mb-3 text-sm leading-relaxed text-slate-600">Keywords extracted from <strong id="pipelineResumeSummaryJobCount" class="text-concierge-slate">0</strong> job description(s) on this track (Vetting + Applying).</p>
+                <div id="pipelineResumeSummaryProgress" class="mb-4 hidden whitespace-pre-line text-sm text-slate-600"></div>
+                <div id="pipelineResumeSummarySkills" class="grid gap-6 sm:grid-cols-1">
+                    <section>
+                        <h3 class="mb-2 text-sm font-semibold text-concierge-slate">Hard skills</h3>
+                        <ul id="pipelineResumeHardSkills" class="m-0 list-disc space-y-1 pl-5 text-sm text-slate-700"></ul>
+                    </section>
+                    <section>
+                        <h3 class="mb-2 text-sm font-semibold text-concierge-slate">Methodologies</h3>
+                        <ul id="pipelineResumeMethodologies" class="m-0 list-disc space-y-1 pl-5 text-sm text-slate-700"></ul>
+                    </section>
+                    <section>
+                        <h3 class="mb-2 text-sm font-semibold text-concierge-slate">Soft skills</h3>
+                        <ul id="pipelineResumeSoftSkills" class="m-0 list-disc space-y-1 pl-5 text-sm text-slate-700"></ul>
+                    </section>
+                    <section>
+                        <h3 class="mb-2 text-sm font-semibold text-concierge-slate">Business outcomes</h3>
+                        <ul id="pipelineResumeBusinessOutcomes" class="m-0 list-disc space-y-1 pl-5 text-sm text-slate-700"></ul>
+                    </section>
+                    <section>
+                        <h3 class="mb-2 text-sm font-semibold text-concierge-slate">Domain &amp; scale</h3>
+                        <ul id="pipelineResumeDomainScale" class="m-0 list-disc space-y-1 pl-5 text-sm text-slate-700"></ul>
+                    </section>
+                    <section>
+                        <h3 class="mb-2 text-sm font-semibold text-concierge-slate">Action verbs</h3>
+                        <ul id="pipelineResumeActionVerbs" class="m-0 list-disc space-y-1 pl-5 text-sm text-slate-700"></ul>
+                    </section>
+                </div>
+                <div id="pipelineResumeSummaryError" class="mt-4 hidden text-sm font-medium text-red-600"></div>
+            </div>
+        </div>
+    </dialog>
+    {% endif %}
 
     <form method="get" class="mb-6 space-y-4">
         <input type="hidden" name="track" value="{{ pipeline_track }}">
@@ -61,4 +200,298 @@
         {% include "resume_app/_pipeline_jobs.html" with stage_label=board_stage empty_message=board_empty_message empty_help_list=board_empty_help_list empty_clear_url=board_clear_url %}
     </div>
 </div>
+{% if show_pipeline_resume_summary %}
+<script>
+(function() {
+    function csrfHeaders() {
+        var csrf = document.querySelector('meta[name="csrf-token"]') && document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+        if (!csrf) {
+            var inp = document.querySelector('input[name="csrfmiddlewaretoken"]');
+            if (inp) csrf = inp.value;
+        }
+        var h = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+        if (csrf) h['X-CSRFToken'] = csrf;
+        return h;
+    }
+    function fillList(ul, items) {
+        if (!ul) return;
+        ul.innerHTML = '';
+        if (!items || !items.length) {
+            ul.innerHTML = '<li class="list-none text-slate-500">—</li>';
+            return;
+        }
+        items.forEach(function(x) {
+            var li = document.createElement('li');
+            li.textContent = x;
+            ul.appendChild(li);
+        });
+    }
+    var btn = document.getElementById('pipeline-resume-summary-btn');
+    var stopBtn = document.getElementById('pipeline-resume-summary-stop-btn');
+    var provSel = document.getElementById('pipeline-resume-llm-provider');
+    var modelSel = document.getElementById('pipeline-resume-summary-model');
+    var statusEl = document.getElementById('pipeline-resume-summary-status');
+    var dlg = document.getElementById('pipelineResumeSummaryDialog');
+    var closeBtn = document.getElementById('pipelineResumeSummaryClose');
+    var jobCountEl = document.getElementById('pipelineResumeSummaryJobCount');
+    var metaEl = document.getElementById('pipelineResumeSummaryMeta');
+    var progressEl = document.getElementById('pipelineResumeSummaryProgress');
+    var errEl = document.getElementById('pipelineResumeSummaryError');
+    var ulHard = document.getElementById('pipelineResumeHardSkills');
+    var ulMeth = document.getElementById('pipelineResumeMethodologies');
+    var ulSoft = document.getElementById('pipelineResumeSoftSkills');
+    var ulBiz = document.getElementById('pipelineResumeBusinessOutcomes');
+    var ulDom = document.getElementById('pipelineResumeDomainScale');
+    var ulAct = document.getElementById('pipelineResumeActionVerbs');
+    var spinner = document.getElementById('pipeline-resume-summary-spinner');
+    var btnLabel = document.getElementById('pipeline-resume-summary-btn-label');
+    var maxJobsInput = document.getElementById('prs-max-jobs');
+    var pollTimer = null;
+    var currentRunId = null;
+    /** Wall-clock limit: background tabs throttle setInterval, so tick counts are unreliable. */
+    var pollWallStartedAt = null;
+    var MAX_POLL_WALL_MS = 45 * 60 * 1000;
+    /** If phase stays running with the same processed_count this long, stop (Huey down / LLM hung). */
+    var stallBaselineCount = null;
+    var stallBaselineAt = null;
+    var STALL_NO_PROGRESS_MS = 20 * 60 * 1000;
+    var eligible = parseInt('{{ pipeline_resume_summary_eligible_count|default:0 }}', 10);
+    var llmConfigured = {{ pipeline_resume_llm_configured|yesno:"true,false" }};
+    if (!btn || !dlg) return;
+
+    function loadModelsForProvider(provider) {
+        if (!modelSel || !provider) return;
+        modelSel.innerHTML = '<option value="">Loading…</option>';
+        fetch('/api/resume/llm/models?provider=' + encodeURIComponent(provider), {
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json' },
+        })
+            .then(function(r) {
+                return r.json().then(function(j) {
+                    if (!r.ok) throw new Error(j.detail || j.message || ('HTTP ' + r.status));
+                    return j;
+                });
+            })
+            .then(function(data) {
+                var models = data.models || [];
+                var def = data.default_model || '';
+                modelSel.innerHTML = '';
+                if (!models.length) {
+                    modelSel.innerHTML = '<option value="">(no models)</option>';
+                    return;
+                }
+                models.forEach(function(m) {
+                    var o = document.createElement('option');
+                    o.value = m;
+                    o.textContent = m;
+                    if (def && m === def) o.selected = true;
+                    modelSel.appendChild(o);
+                });
+                if (!modelSel.value && models.length) modelSel.selectedIndex = 0;
+            })
+            .catch(function(err) {
+                modelSel.innerHTML = '<option value="">(error)</option>';
+                if (statusEl) {
+                    statusEl.textContent = 'Could not load models: ' + (err.message || err);
+                    statusEl.className = 'text-sm font-semibold text-red-600';
+                }
+            });
+    }
+
+    if (provSel && provSel.value) loadModelsForProvider(provSel.value);
+    if (provSel) provSel.addEventListener('change', function() {
+        loadModelsForProvider(provSel.value);
+    });
+
+    function setLoading(on) {
+        var block = on || (eligible === 0) || !llmConfigured;
+        btn.disabled = block;
+        if (spinner) spinner.classList.toggle('hidden', !on);
+        if (btnLabel) btnLabel.textContent = on ? 'Starting…' : 'Resume summary';
+        if (stopBtn) stopBtn.classList.toggle('hidden', !on);
+    }
+    function openDlg() { try { dlg.showModal(); } catch (e) {} }
+    function closeDlg() {
+        if (dlg.open) dlg.close();
+    }
+    function clearPoll() {
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        currentRunId = null;
+        pollWallStartedAt = null;
+        stallBaselineCount = null;
+        stallBaselineAt = null;
+    }
+
+    if (closeBtn) closeBtn.addEventListener('click', closeDlg);
+    dlg.addEventListener('close', function() {
+        clearPoll();
+        setLoading(false);
+    });
+
+    function applyStatusPayload(data) {
+        var phaseRaw = data.phase;
+        var phase = typeof phaseRaw === 'string' ? phaseRaw.toLowerCase() : String(phaseRaw || '').toLowerCase();
+        var terminal = phase === 'completed' || phase === 'stopped' || phase === 'error';
+        if (terminal) {
+            clearPoll();
+            setLoading(false);
+        } else if (phase === 'consolidating') {
+            stallBaselineCount = null;
+            stallBaselineAt = null;
+            if (btnLabel) btnLabel.textContent = 'Consolidating…';
+        } else if (phase === 'running') {
+            var pc = Number(data.processed_count) || 0;
+            if (stallBaselineCount === null || pc !== stallBaselineCount) {
+                stallBaselineCount = pc;
+                stallBaselineAt = Date.now();
+            } else if (stallBaselineAt && (Date.now() - stallBaselineAt > STALL_NO_PROGRESS_MS)) {
+                clearPoll();
+                setLoading(false);
+                if (statusEl) {
+                    statusEl.textContent = 'No progress for 20+ min (Huey not running or LLM stuck). Stopped polling.';
+                    statusEl.className = 'text-sm font-semibold text-amber-700';
+                }
+                return;
+            }
+        }
+        if (jobCountEl) jobCountEl.textContent = String(data.total_jobs || 0);
+        if (metaEl) {
+            var parts = [];
+            if (data.provider) parts.push(data.provider);
+            if (data.model) parts.push(data.model);
+            metaEl.textContent = parts.length ? ('Provider / model: ' + parts.join(' · ')) : '';
+        }
+        if (progressEl) {
+            if (phase === 'running' || phase === 'consolidating') {
+                progressEl.classList.remove('hidden');
+                var line1 = phase === 'consolidating'
+                    ? ('All ' + (data.total_jobs || 0) + ' job descriptions processed.')
+                    : ('Progress: ' + (data.processed_count || 0) + ' / ' + (data.total_jobs || 0) + ' job descriptions…');
+                var line2 = data.message ? String(data.message) : '';
+                progressEl.textContent = line2 ? (line1 + '\n' + line2) : line1;
+            } else {
+                progressEl.classList.add('hidden');
+            }
+        }
+        if (errEl) {
+            errEl.classList.toggle('hidden', phase !== 'error');
+            errEl.textContent = phase === 'error' ? (data.error || data.message || 'Error') : '';
+        }
+        var agg = data.aggregated;
+        if (agg) {
+            fillList(ulHard, agg.hard_skills);
+            fillList(ulMeth, agg.methodologies);
+            fillList(ulSoft, agg.soft_skills);
+            fillList(ulBiz, agg.business_outcomes);
+            fillList(ulDom, agg.domain_scale);
+            fillList(ulAct, agg.action_verbs);
+        }
+        if (!terminal && phase === 'consolidating' && statusEl) {
+            statusEl.textContent = data.message || 'Consolidating keywords…';
+            statusEl.className = 'text-sm text-slate-600';
+        } else if (terminal && statusEl) {
+            if (phase === 'completed') { statusEl.textContent = 'Done.'; statusEl.className = 'text-sm text-slate-500'; }
+            else if (phase === 'stopped') { statusEl.textContent = data.message || 'Stopped.'; statusEl.className = 'text-sm text-amber-700'; }
+            else if (phase === 'error') { statusEl.textContent = data.error || data.message || 'Error'; statusEl.className = 'text-sm font-semibold text-red-600'; }
+        }
+    }
+
+    function pollOnce(track, runId) {
+        if (pollWallStartedAt != null && (Date.now() - pollWallStartedAt > MAX_POLL_WALL_MS)) {
+            clearPoll();
+            setLoading(false);
+            if (statusEl) {
+                statusEl.textContent = 'Stopped polling after 45 min. Check Huey / LLM; the run may still finish on the server.';
+                statusEl.className = 'text-sm font-semibold text-amber-700';
+            }
+            return;
+        }
+        var url = '/api/resume/jobs/pipeline-resume-summary/status?track=' + encodeURIComponent(track) + '&run_id=' + encodeURIComponent(runId);
+        fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+            .then(function(r) { return r.json().then(function(j) { if (!r.ok) throw new Error(j.detail || j.message || ('HTTP ' + r.status)); return j; }); })
+            .then(applyStatusPayload)
+            .catch(function(err) {
+                if (statusEl) { statusEl.textContent = 'Error: ' + err.message; statusEl.className = 'text-sm font-semibold text-red-600'; }
+                clearPoll();
+                setLoading(false);
+            });
+    }
+
+    if (stopBtn) stopBtn.addEventListener('click', function() {
+        var track = '{{ pipeline_track|escapejs }}';
+        if (!currentRunId) return;
+        fetch('/api/resume/jobs/pipeline-resume-summary/stop', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: csrfHeaders(),
+            body: JSON.stringify({ track: track, run_id: currentRunId })
+        }).catch(function() {});
+    });
+
+    btn.addEventListener('click', function() {
+        var track = '{{ pipeline_track|escapejs }}';
+        var scopeAll = document.querySelector('input[name="prs-scope"][value="all"]');
+        var cap = scopeAll && !scopeAll.checked;
+        var maxJobs = null;
+        if (cap && maxJobsInput) {
+            var n = parseInt(maxJobsInput.value, 10);
+            if (!isFinite(n) || n < 1) {
+                if (statusEl) { statusEl.textContent = 'Enter a positive number for job limit.'; statusEl.className = 'text-sm font-semibold text-amber-700'; }
+                return;
+            }
+            maxJobs = n;
+        }
+        var llmProv = provSel && provSel.value ? provSel.value : null;
+        if (!llmProv) {
+            if (statusEl) { statusEl.textContent = 'Select an LLM provider.'; statusEl.className = 'text-sm font-semibold text-amber-700'; }
+            return;
+        }
+        var llmModel = modelSel && modelSel.value ? modelSel.value : null;
+        if (!llmModel) {
+            if (statusEl) { statusEl.textContent = 'Select a model (wait if models are loading).'; statusEl.className = 'text-sm font-semibold text-amber-700'; }
+            return;
+        }
+        if (statusEl) { statusEl.textContent = 'Starting extraction…'; statusEl.className = 'text-sm text-slate-500'; }
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+        pollWallStartedAt = null;
+        stallBaselineCount = null;
+        stallBaselineAt = null;
+        setLoading(true);
+        openDlg();
+        fillList(ulHard, []);
+        fillList(ulMeth, []);
+        fillList(ulSoft, []);
+        fillList(ulBiz, []);
+        fillList(ulDom, []);
+        fillList(ulAct, []);
+        if (errEl) errEl.classList.add('hidden');
+
+        var body = { track: track, llm_provider: llmProv, model: llmModel };
+        if (maxJobs !== null) body.max_jobs = maxJobs;
+
+        fetch('/api/resume/jobs/pipeline-resume-summary/start', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: csrfHeaders(),
+            body: JSON.stringify(body)
+        }).then(function(r) {
+            return r.json().then(function(j) {
+                if (!r.ok) throw new Error(j.detail || j.message || ('HTTP ' + r.status));
+                return j;
+            });
+        }).then(function(data) {
+            currentRunId = data.run_id;
+            pollWallStartedAt = Date.now();
+            if (jobCountEl) jobCountEl.textContent = String(data.total_jobs || 0);
+            if (btnLabel) btnLabel.textContent = 'Running…';
+            pollOnce(track, data.run_id);
+            pollTimer = setInterval(function() { pollOnce(track, data.run_id); }, 1500);
+        }).catch(function(err) {
+            if (statusEl) { statusEl.textContent = 'Error: ' + (err.message || 'Request failed'); statusEl.className = 'text-sm font-semibold text-red-600'; }
+            setLoading(false);
+        });
+    });
+})();
+</script>
+{% endif %}
 {% endblock %}

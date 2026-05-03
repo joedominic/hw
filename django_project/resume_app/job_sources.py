@@ -8,14 +8,21 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-# Default sites: all JobSpy boards (concurrent per-site scrape). Matches jobspy.model.Site string values.
+# Default sites: JobSpy boards (concurrent per-site scrape). Matches jobspy.model.Site string values.
+# Glassdoor is omitted by default: its location API often returns 400 / fails to parse US cities,
+# which can abort the whole multi-site scrape. Enable per-task via the site checkboxes if needed.
 DEFAULT_SITE_NAMES = [
     "indeed",
     "linkedin",
     "zip_recruiter",
-    "glassdoor",
     "google",
 ]
+
+# Passed to JobSpy scrapers; stale defaults are often blocked (especially Glassdoor).
+DEFAULT_JOBSPY_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
 DEFAULT_RESULTS_WANTED = 20
 DEFAULT_COUNTRY_INDEED = "USA"
 
@@ -128,6 +135,7 @@ def fetch_jobs(
         "country_indeed": country_indeed,
         # Forward timeout to JobSpy/requests so calls don't hang forever when remote APIs stall.
         "request_timeout": timeout_seconds,
+        "user_agent": DEFAULT_JOBSPY_USER_AGENT,
     }
     # LinkedIn returns truncated/no description unless this is explicitly enabled.
     if any(str(s).strip().lower() == "linkedin" for s in sites):
@@ -142,6 +150,7 @@ def fetch_jobs(
     # Retry with simple exponential backoff. Detect ReadTimeout from Indeed and allow
     # the caller to distinguish partial results vs complete failure.
     last_err: Optional[Exception] = None
+    glassdoor_stripped = False
     for attempt in range(max_retries):
         try:
             df = scrape_jobs(**kwargs)
@@ -150,6 +159,20 @@ def fetch_jobs(
             last_err = e
             msg = str(e)
             logger.warning("JobSpy scrape_jobs failed (attempt %s/%s): %s", attempt + 1, max_retries, msg)
+            # One-shot: Glassdoor location/API failures can abort the entire concurrent scrape.
+            if not glassdoor_stripped:
+                cur = kwargs.get("site_name") or []
+                if isinstance(cur, str):
+                    cur = [cur]
+                non_gd = [s for s in cur if str(s).strip().lower() != "glassdoor"]
+                if len(non_gd) < len(cur) and non_gd:
+                    glassdoor_stripped = True
+                    kwargs["site_name"] = non_gd
+                    sites = non_gd
+                    logger.warning(
+                        "Retrying JobSpy without Glassdoor after error (Glassdoor often breaks multi-site runs)."
+                    )
+                    continue
             # ReadTimeout from Indeed: let caller know specifically
             if "apis.indeed.com" in msg and "Read timed out" in msg:
                 # If there are non-Indeed sites configured, fall back to those instead.

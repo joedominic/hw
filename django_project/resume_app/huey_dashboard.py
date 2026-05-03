@@ -31,7 +31,8 @@ PERIODIC_TASKS: list[dict[str, str]] = [
         "advanced": (
             "Looks at recent Vetting-stage PipelineEntry rows and enqueues evaluate_vetting_matching_task "
             "for entries missing vetting_interview_probability or scored with an older resume for that track "
-            "(limited per tick). Skips LLM when JobListing.description is under VETTING_MATCHING_JD_MIN_CHARS. "
+            "(limited per tick; rows that still have null probability after a run wait several hours before retry). "
+            "Skips LLM when JobListing.description is under VETTING_MATCHING_JD_MIN_CHARS. "
             "LLM is the active LLMProviderConfig or first entry from get_runtime_provider_candidates() unless "
             "the task is called with explicit provider/model overrides."
         ),

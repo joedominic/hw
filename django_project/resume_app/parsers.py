@@ -67,7 +67,38 @@ def _normalize_dict_keys(obj):
     return obj
 
 
-def _extract_json_object(content: str) -> Optional[dict]:
+# Pipeline resume-summary LLM output (must not be filtered out by ATS-only heuristics).
+_PIPELINE_RESUME_SUMMARY_KEYS = frozenset(
+    {
+        "hard_skills",
+        "methodologies",
+        "soft_skills",
+        "business_outcomes",
+        "domain_scale",
+        "action_verbs",
+    }
+)
+
+
+def _try_json_dict_lenient(text: str) -> Optional[dict]:
+    """Best-effort json.loads for sloppy model output (e.g. trailing commas)."""
+    if not text or not isinstance(text, str):
+        return None
+    t = text.strip()
+    candidates = [t, re.sub(r",(\s*[}\]])", r"\1", t)]
+    for c in candidates:
+        try:
+            obj = json.loads(c)
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def _extract_json_object(
+    content: str, *, accept_pipeline_skill_keys: bool = False
+) -> Optional[dict]:
     """Extract a single JSON object from LLM output."""
     logger.debug("[ATS/Recruiter] _extract_json_object input length=%s", len(content) if content else 0)
     if not content or not isinstance(content, str):
@@ -120,6 +151,12 @@ def _extract_json_object(content: str) -> Optional[dict]:
                             }
                             if norm_keys & root_keys:
                                 return obj
+                            if accept_pipeline_skill_keys and (
+                                norm_keys & _PIPELINE_RESUME_SUMMARY_KEYS
+                            ):
+                                return obj
+                            break
+                        break
                     except json.JSONDecodeError as je:
                         logger.debug(
                             "[ATS/Recruiter] JSONDecodeError at start=%s: %s",
@@ -166,14 +203,14 @@ def _extract_json_object(content: str) -> Optional[dict]:
 
 
 # Match score lines like "Resume Match Score (0-100): 78" or markdown
-# "**Resume Match Score (0-100):** **78**" (models often bold the label and number).
-# Value may be markdown-wrapped multiple times, e.g. "(0-100):** **78**"
+# "**Resume Match Score (0-100):** **78**" / "**Overall Fit Score:** **78 / 100**"
+# (models often bold the label and number). Value may be wrapped in ** and "/ 100".
 _PLAIN_SCORE_LINE_RE = re.compile(
     r"(?:\*+\s*)?"
-    r"(?:Resume\s+Match\s+Score|ATS\s+Match\s+Score|Recruiter\s+Score|Match\s+Score|Fit\s+Score|Score)"
+    r"(?:Resume\s+Match\s+Score|ATS\s+Match\s+Score|Recruiter\s+Score|Match\s+Score|Overall\s+Fit\s+Score|Fit\s+Score|Score)"
     r"\s*(?:\([^)]*\))?"
     r"\s*(?:\*+\s*)?"
-    r":\s*(?:\*+\s*)*(\d{1,3})\b",
+    r":\s*(?:\*+\s*)*(\d{1,3})(?:\s*/\s*100)?(?:\s*\*+)?\b",
     re.IGNORECASE,
 )
 
@@ -194,6 +231,166 @@ def _extract_plain_text_score(content: str) -> Optional[int]:
             return max(0, min(100, int(m2.group(1))))
         except (ValueError, TypeError):
             pass
+    return None
+
+
+# Markdown reports often use "**Header**" on its own line; score may appear inline on the first line.
+_MARKDOWN_SECTION_SPLIT_RE = re.compile(r"(?m)^\s*\*\*([^*\n]+)\*\*\s*$")
+
+# Reasoning / assessment headers with optional "(...)" — colon optional (LLMs vary).
+_REASONING_HEADER_RE = re.compile(
+    r"(?is)"
+    r"(?:\*\*\s*)?"
+    r"(?:Reasoning|Overall\s+Strategic\s+Assessment|Summary|Assessment)"
+    r"\s*(?:\([^)]*\))?\s*"
+    r"(?:\*\*\s*)?"
+    r":?\s*\n+\s*"
+    r"(.*?)"
+    r"(?=\n\s*(?:\*{1,2}\s*)?(?:Fit\s+Assessment|Overall\s+Verdict|Interview|Strengths|Gaps)\b|\Z)",
+)
+
+_REASONING_COLON_RE = re.compile(
+    r"(?is)(?:Reasoning|Overall\s+Strategic\s+Assessment|Summary|Assessment)\s*(?:\([^)]*\))?\s*:\s*(.+?)"
+    r"(?=\n\s*(?:\*{1,2}\s*)?(?:Fit\s+Assessment|Overall\s+Verdict|Interview|Strengths|Gaps)\b|\n[A-Z][^\n]{0,80}:\s|\Z)",
+)
+
+_THOUGHTS_HEADER_RE = re.compile(
+    r"(?is)(?:Thoughts|Feedback|Why|Analysis|Fit\s+Assessment)\s*(?:\([^)]*\))?\s*:\s*(.+?)"
+    r"(?=\n\s*(?:\*{1,2}\s*)?(?:Overall\s+Verdict|Interview|Verdict)\b|\Z)",
+)
+
+_INTERVIEW_PLAIN_RES = (
+    re.compile(
+        r"(?:Interview\s+(?:probability|likelihood)|Likelihood\s+of\s+(?:an\s+)?interview)\s*[:=-]?\s*(\d{1,3})\s*(?:%|/100)?",
+        re.I,
+    ),
+    re.compile(r"(?:Interview\s+(?:probability|likelihood))\s+is\s+(?:about\s+)?(\d{1,3})\s*%", re.I),
+    re.compile(
+        r"Interview\s+probability\s*:\s*(?:\*+\s*)*(\d{1,3})\s*(?:%|/100)?",
+        re.I,
+    ),
+    re.compile(r"(?:^|\n)\s*(\d{1,3})\s*%\s*(?:chance|likelihood)\s+of\s+(?:an\s+)?interview", re.I | re.M),
+)
+
+
+def _line_looks_like_score_line(line: str) -> bool:
+    if _PLAIN_SCORE_LINE_RE.search(line):
+        return True
+    s = line.strip().lower()
+    if "overall fit score" in s and re.search(r"\d{1,3}", s):
+        return True
+    if re.search(r"\bfit\s+score\b", s) and re.search(r"\d{1,3}\s*/\s*100", s):
+        return True
+    return False
+
+
+def _strip_leading_score_lines(text: str) -> str:
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").splitlines()
+    i = 0
+    while i < len(lines):
+        raw = lines[i]
+        if not raw.strip():
+            i += 1
+            continue
+        if _line_looks_like_score_line(raw):
+            i += 1
+            continue
+        break
+    return "\n".join(lines[i:]).strip()
+
+
+def _markdown_sections_dict(text: str) -> dict[str, str]:
+    """Split on '**Title**' lines (title alone on line). Values are body until next header."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        return {}
+    parts = _MARKDOWN_SECTION_SPLIT_RE.split(text)
+    out: dict[str, str] = {}
+    if parts and parts[0].strip():
+        out["_preamble"] = parts[0].strip()
+    rest = parts[1:]
+    for j in range(0, len(rest) - 1, 2):
+        title_key = rest[j].strip()
+        body = rest[j + 1].strip()
+        out[title_key.lower()] = body
+    return out
+
+
+def _build_narrative_from_markdown_sections(sections: dict[str, str]) -> str:
+    """Order: reasoning, fit/strengths table, verdict; skip score-only headers."""
+    blocks: list[tuple[int, str]] = []
+    for title_l, body in sections.items():
+        if title_l.startswith("_"):
+            continue
+        if "overall fit score" in title_l:
+            continue
+        if not body:
+            continue
+        b = body.strip()
+        if len(b) < 120 and _line_looks_like_score_line(b) and "\n" not in b:
+            continue
+        display_title = " ".join(w.capitalize() for w in title_l.split())
+        if title_l.startswith("reasoning"):
+            blocks.append((0, f"**Reasoning**\n{b}"))
+            continue
+        if "fit assessment" in title_l or "strengths" in title_l or "gaps" in title_l:
+            blocks.append((1, f"**{display_title}**\n{b}"))
+            continue
+        if "verdict" in title_l:
+            blocks.append((2, f"**{display_title}**\n{b}"))
+            continue
+        blocks.append((3, f"**{display_title}**\n{b}"))
+    if not blocks:
+        return ""
+    blocks.sort(key=lambda x: x[0])
+    return "\n\n".join(x[1] for x in blocks).strip()
+
+
+def _extract_interview_probability_plain(text: str) -> Optional[int]:
+    for cre in _INTERVIEW_PLAIN_RES:
+        m = cre.search(text)
+        if m:
+            try:
+                return max(0, min(100, int(m.group(1))))
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _coerce_interview_probability_if_distinct_from_fit(
+    text: str,
+    interview_probability: Optional[int],
+    score: int,
+) -> Optional[int]:
+    """
+    Fit score and interview likelihood are different concepts. Models often echo the same number
+    for both or weak regexes pick up the fit score. When they are equal, keep interview % only if
+    the reply clearly discusses interview odds in prose (not just a bare duplicate field).
+    """
+    if interview_probability is None:
+        return None
+    if interview_probability != score:
+        return interview_probability
+    t = (text or "").lower()
+    markers = (
+        "interview probability",
+        "interview likelihood",
+        "probability of interview",
+        "probability of an interview",
+        "likelihood of interview",
+        "likelihood of an interview",
+        "interview odds",
+        "chance of an interview",
+        "chance of interview",
+        "chance they would be interviewed",
+        "likely to be interviewed",
+        "likely to receive an interview",
+        "would be invited to interview",
+        "screening interview",
+        "recruiter screen",
+    )
+    if any(m in t for m in markers):
+        return interview_probability
     return None
 
 
@@ -320,17 +517,8 @@ def parse_fit_check_fallback(content: str) -> FitCheckResult:
             # Fallback: sometimes the model includes interview probability in the
             # reasoning string but uses a non-matching key name in JSON.
             if ip is None:
-                ip_text_match = re.search(
-                    r"interview[^0-9]{0,30}(\d{1,3})\s*%?",
-                    text,
-                    re.IGNORECASE,
-                )
-                if ip_text_match:
-                    try:
-                        ip_val = int(ip_text_match.group(1))
-                        ip = max(0, min(100, ip_val))
-                    except (TypeError, ValueError):
-                        ip = None
+                ip = _extract_interview_probability_plain(text)
+            ip = _coerce_interview_probability_if_distinct_from_fit(text, ip, score)
             return FitCheckResult(
                 score=score,
                 interview_probability=ip,
@@ -344,51 +532,70 @@ def parse_fit_check_fallback(content: str) -> FitCheckResult:
 
     reasoning = ""
     thoughts = ""
-
-    reasoning_match = re.search(
-        r"(?:Reasoning|Overall Strategic Assessment|Summary|Assessment)\s*:\s*(.+?)(?:\n[A-Z][^\n]{0,60}:|\Z)",
-        text,
-        re.IGNORECASE | re.DOTALL,
-    )
-    if reasoning_match:
-        reasoning = reasoning_match.group(1).strip()
-
-    thoughts_match = re.search(
-        r"(?:Thoughts|Feedback|Why|Analysis)\s*:\s*(.+?)(?:\n[A-Z][^\n]{0,60}:|\Z)",
-        text,
-        re.IGNORECASE | re.DOTALL,
-    )
-    if thoughts_match:
-        thoughts = thoughts_match.group(1).strip()
+    stripped = _strip_leading_score_lines(text)
+    md_sections = _markdown_sections_dict(stripped)
+    narrative = _build_narrative_from_markdown_sections(md_sections)
+    if narrative:
+        reasoning = narrative
 
     if not reasoning:
+        mh = _REASONING_HEADER_RE.search(stripped) or _REASONING_HEADER_RE.search(text)
+        if mh:
+            reasoning = mh.group(1).strip()
+    if not reasoning:
+        mc = _REASONING_COLON_RE.search(stripped) or _REASONING_COLON_RE.search(text)
+        if mc:
+            reasoning = mc.group(1).strip()
+
+    if not thoughts:
+        th = _THOUGHTS_HEADER_RE.search(stripped) or _THOUGHTS_HEADER_RE.search(text)
+        if th:
+            thoughts = th.group(1).strip()
+
+    if not reasoning:
+        reasoning_match = re.search(
+            r"(?:Reasoning|Overall Strategic Assessment|Summary|Assessment)\s*:\s*(.+?)(?:\n[A-Z][^\n]{0,60}:|\Z)",
+            text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if reasoning_match:
+            reasoning = reasoning_match.group(1).strip()
+
+    if not thoughts:
+        thoughts_match = re.search(
+            r"(?:Thoughts|Feedback|Why|Analysis)\s*:\s*(.+?)(?:\n[A-Z][^\n]{0,60}:|\Z)",
+            text,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if thoughts_match:
+            thoughts = thoughts_match.group(1).strip()
+
+    _REASONING_JOIN_MAX = 12000
+    _THOUGHTS_JOIN_MAX = 8000
+    if not reasoning:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
-        filtered = []
-        for line in lines:
-            if re.search(
-                r"(?:Resume\s+Match\s+Score|ATS\s+Match\s+Score|Recruiter\s+Score|Match\s+Score|Fit\s+Score|Score)\s*(?:\([^)]*\))?\s*[:=-]?\s*\d{1,3}",
-                line,
-                re.IGNORECASE,
-            ):
-                continue
-            filtered.append(line)
+        filtered = [ln for ln in lines if not _line_looks_like_score_line(ln)]
         if filtered:
-            reasoning = filtered[0][:500]
-            if len(filtered) > 1:
-                thoughts = thoughts or "\n".join(filtered[1:])[:1000]
+            reasoning = "\n".join(filtered)[:_REASONING_JOIN_MAX]
+            if len(filtered) > 1 and not thoughts:
+                thoughts = "\n".join(filtered[1:])[:_THOUGHTS_JOIN_MAX]
 
     if score_val is not None:
-        interview_probability = None
-        ip_match = re.search(
-            r"(?:Interview\s+(?:probability|likelihood))\s*[:=-]?\s*(\d{1,3})\s*(?:%|/100)?",
-            text,
-            re.IGNORECASE,
+        interview_probability = _extract_interview_probability_plain(text)
+        if interview_probability is None:
+            ip_match = re.search(
+                r"(?:Interview\s+(?:probability|likelihood))\s*[:=-]?\s*(\d{1,3})\s*(?:%|/100)?",
+                text,
+                re.IGNORECASE,
+            )
+            if ip_match:
+                try:
+                    interview_probability = max(0, min(100, int(ip_match.group(1))))
+                except (TypeError, ValueError):
+                    interview_probability = None
+        interview_probability = _coerce_interview_probability_if_distinct_from_fit(
+            text, interview_probability, score_val
         )
-        if ip_match:
-            try:
-                interview_probability = max(0, min(100, int(ip_match.group(1))))
-            except (TypeError, ValueError):
-                interview_probability = None
         return FitCheckResult(
             score=score_val,
             interview_probability=interview_probability,
@@ -396,10 +603,12 @@ def parse_fit_check_fallback(content: str) -> FitCheckResult:
             thoughts=thoughts or reasoning or "",
         )
 
+    _ip = _extract_interview_probability_plain(text)
+    _ip = _coerce_interview_probability_if_distinct_from_fit(text, _ip, 50)
     return FitCheckResult(
         score=50,
-        interview_probability=None,
-        reasoning=(reasoning or text[:500] or "Could not parse fit check. Defaulting."),
+        interview_probability=_ip,
+        reasoning=(reasoning or text[:_REASONING_JOIN_MAX] or "Could not parse fit check. Defaulting."),
         thoughts=thoughts or "",
     )
 

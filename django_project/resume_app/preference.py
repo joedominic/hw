@@ -8,7 +8,8 @@ from typing import List, Optional, Tuple
 
 from django.core.cache import cache
 
-from .models import JobListingAction, JobListingEmbedding, JobListing, Track
+from .models import JobListingEmbedding, JobListing, Track
+from .track_actions import normalize_track_slug, q_preference_embedding_track
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +51,9 @@ def get_preference_vectors(track: Optional[str] = None) -> Optional[Tuple[List[f
         embedding_type=JobListingEmbedding.EmbeddingType.DISLIKED
     ).select_related("job_listing")
     if track:
-        liked_qs = liked_qs.filter(track=track)
-        disliked_qs = disliked_qs.filter(track=track)
+        slug = normalize_track_slug(track)
+        liked_qs = liked_qs.filter(q_preference_embedding_track(slug))
+        disliked_qs = disliked_qs.filter(q_preference_embedding_track(slug))
 
     liked_vecs: List[List[float]] = []
     disliked_vecs: List[List[float]] = []
@@ -146,7 +148,8 @@ def get_disliked_embeddings(track: Optional[str] = None) -> List[Tuple[int, List
         embedding_type=JobListingEmbedding.EmbeddingType.DISLIKED
     ).select_related("job_listing")
     if track:
-        qs = qs.filter(track=track)
+        slug = normalize_track_slug(track)
+        qs = qs.filter(q_preference_embedding_track(slug))
     out: List[Tuple[int, List[float]]] = []
     for row in qs:
         job = row.job_listing

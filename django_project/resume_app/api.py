@@ -783,28 +783,38 @@ def llm_connect(request, payload: ConnectRequest):
 
 @router.get("/llm/models")
 def llm_models(request, provider: str):
-    """Return list of models for provider using stored API key. 401 if no key or key invalid."""
+    """Return list of models for provider using stored API key or env fallback. 401 if no key or key invalid."""
     if provider not in LLM_PROVIDERS:
         raise HttpError(400, f"provider must be one of: {', '.join(sorted(LLM_PROVIDERS))}")
     config = LLMProviderConfig.objects.filter(provider=provider).first()
-    if not config or not config.encrypted_api_key:
-        raise HttpError(401, "No API key stored. Enter key and click Connect.")
-    api_key = decrypt_api_key(config.encrypted_api_key)
-    if not api_key:
-        config.encrypted_api_key = ""
-        config.last_validated_at = None
-        config.save(update_fields=["encrypted_api_key", "last_validated_at", "updated_at"])
-        raise HttpError(401, "Stored key invalid. Please enter a new key and Connect.")
-    try:
-        models = list_models_for_provider(provider, api_key)
-        config.last_validated_at = timezone.now()
-        config.save(update_fields=["last_validated_at", "updated_at"])
-        return {"models": models, "default_model": config.default_model or DEFAULT_MODELS.get(provider)}
-    except Exception as e:
-        if is_auth_error(e):
+    api_key = None
+    if config and config.encrypted_api_key:
+        api_key = decrypt_api_key(config.encrypted_api_key)
+        if not api_key:
             config.encrypted_api_key = ""
             config.last_validated_at = None
             config.save(update_fields=["encrypted_api_key", "last_validated_at", "updated_at"])
+            raise HttpError(401, "Stored key invalid. Please enter a new key and Connect.")
+    if not api_key:
+        from .pipeline_llm_skill_extract import resolve_provider_api_key
+
+        api_key = resolve_provider_api_key(provider)
+    if not api_key:
+        raise HttpError(401, "No API key stored. Enter key and click Connect, or set env for this provider.")
+    had_stored_key = bool(config and config.encrypted_api_key)
+    try:
+        models = list_models_for_provider(provider, api_key)
+        if config:
+            config.last_validated_at = timezone.now()
+            config.save(update_fields=["last_validated_at", "updated_at"])
+        default_m = (config.default_model if config else None) or DEFAULT_MODELS.get(provider)
+        return {"models": models, "default_model": default_m}
+    except Exception as e:
+        if is_auth_error(e):
+            if had_stored_key and config:
+                config.encrypted_api_key = ""
+                config.last_validated_at = None
+                config.save(update_fields=["encrypted_api_key", "last_validated_at", "updated_at"])
             raise HttpError(401, f"API key no longer valid: {e}")
         raise HttpError(400, str(e))
 

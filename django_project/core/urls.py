@@ -25,6 +25,11 @@ urlpatterns = [
     path("jobs/search/", resume_views.job_search_view, name="jobs_search"),
     path("jobs/pipeline/", resume_views.pipeline_view, name="pipeline"),
     path("jobs/vetting/", resume_views.vetting_view, name="vetting"),
+    path(
+        "jobs/vetting/match-debug/<int:job_listing_id>/",
+        resume_views.vetting_match_debug_view,
+        name="vetting_match_debug",
+    ),
     path("jobs/applying/", resume_views.applying_view, name="applying"),
     path("jobs/done/", resume_views.done_view, name="done"),
     path("jobs/tracks/", resume_views.track_list_view, name="track_list"),

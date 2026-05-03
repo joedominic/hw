@@ -20,7 +20,8 @@ from .jobs_api import (
     jobs_save as api_jobs_save,
 )
 from .llm_session import get_active_llm_provider
-from .models import JobListingAction, OptimizedResume, PipelineEntry, Track
+from .models import OptimizedResume, PipelineEntry, Track
+from .track_actions import saved_listing_id_set
 from .prompt_store import get_effective_prompts
 from .utils import format_job_source_label
 
@@ -316,11 +317,7 @@ def pipeline_board_view(request, board_stage: str):
 
     saved_ids: set[int] = set()
     if board_stage == "pipeline":
-        saved_ids = set(
-            JobListingAction.objects.filter(action=JobListingAction.ActionType.SAVED).values_list(
-                "job_listing_id", flat=True
-            )
-        )
+        saved_ids = saved_listing_id_set(raw_track)
 
     entries_qs = PipelineEntry.objects.filter(track=raw_track, removed_at__isnull=True)
     if board_stage == "pipeline":
@@ -389,6 +386,7 @@ def pipeline_board_view(request, board_stage: str):
         "applying": base_qs.filter(stage=PipelineEntry.Stage.APPLYING).count(),
         "done": base_qs.filter(stage=PipelineEntry.Stage.DONE).count(),
     }
+    pipeline_resume_summary_eligible_count = stage_counts["vetting"] + stage_counts["applying"]
 
     search_q = (request.GET.get("q") or "").strip()
     if search_q:
@@ -423,7 +421,7 @@ def pipeline_board_view(request, board_stage: str):
     }
     board_subtitles = {
         "pipeline": "Jobs from scheduled tasks. Focus % is computed when you open this page. Like, Dislike, Save, and Delete behave like Job Search.",
-        "vetting": "Saved from Pipeline for detailed review. Save here when you are ready to apply.",
+        "vetting": "Interview % shows only when the model reply is parsed to a number. Use Match debug on a job to run one call and inspect the raw response. Automation retries missing scores on a cooldown so unparsed replies do not spam the LLM.",
         "applying": "Active applications. Optimize runs only when you click it—moving a job here does not auto-start LLM tailoring. Saving marks a job done after you submit.",
         "done": "Completed applications.",
     }
@@ -470,6 +468,30 @@ def pipeline_board_view(request, board_stage: str):
     qd.pop("track", None)
     pipeline_board_extra_query = qd.urlencode()
 
+    show_pipeline_resume_summary = board_stage in ("vetting", "applying")
+    pipeline_resume_llm_providers: list[str] = []
+    pipeline_resume_llm_provider: str | None = None
+    pipeline_resume_llm_configured = False
+    if show_pipeline_resume_summary:
+        from .llm_services import LLM_PROVIDERS
+        from .models import LLMProviderConfig
+        from .pipeline_llm_skill_extract import resolve_provider_api_key
+
+        configured = list(
+            LLMProviderConfig.objects.exclude(encrypted_api_key="")
+            .values_list("provider", flat=True)
+            .distinct()
+        )
+        if not configured:
+            configured = [p for p in sorted(LLM_PROVIDERS) if resolve_provider_api_key(p)]
+        pipeline_resume_llm_providers = sorted(set(configured))
+        pipeline_resume_llm_configured = bool(pipeline_resume_llm_providers)
+        chosen = (request.session.get("pipeline_resume_llm_provider") or "").strip()
+        if chosen and chosen in pipeline_resume_llm_providers:
+            pipeline_resume_llm_provider = chosen
+        elif pipeline_resume_llm_providers:
+            pipeline_resume_llm_provider = pipeline_resume_llm_providers[0]
+
     context = {
         "pipeline_jobs": pipeline_jobs,
         "pipeline_track": raw_track,
@@ -495,6 +517,11 @@ def pipeline_board_view(request, board_stage: str):
         "conversion_percent": conversion_percent,
         "job_tasks_url": job_tasks_url,
         "pipeline_board_extra_query": pipeline_board_extra_query,
+        "show_pipeline_resume_summary": show_pipeline_resume_summary,
+        "pipeline_resume_summary_eligible_count": pipeline_resume_summary_eligible_count,
+        "pipeline_resume_llm_providers": pipeline_resume_llm_providers,
+        "pipeline_resume_llm_provider": pipeline_resume_llm_provider,
+        "pipeline_resume_llm_configured": pipeline_resume_llm_configured,
     }
     return render(request, "resume_app/pipeline_board.html", context)
 

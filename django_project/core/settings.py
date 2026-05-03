@@ -79,6 +79,10 @@ DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": BASE_DIR / "db.sqlite3",
+        # Huey + runserver (or multiple workers) contending on SQLite — longer wait + WAL (see resume_app.apps).
+        "OPTIONS": {
+            "timeout": 30,
+        },
     }
 }
 
@@ -218,6 +222,21 @@ LLM_RATE_LIMIT_BY_PROVIDER = {
     "Groq": (LLM_RATE_LIMIT_GROQ_RPM, LLM_RATE_LIMIT_GROQ_TPM),
 }
 # Optional: set LLM_RATE_LIMIT_OPENAI_RPM / TPM in future by extending this dict in code or env-driven wiring.
+
+# Pipeline resume summary — LLM batch extraction (OpenAI)
+PIPELINE_LLM_BATCH_SIZE = env.int("PIPELINE_LLM_BATCH_SIZE", default=1)
+# Local Ollama: multi-JD batches mean one huge prompt + long generation; progress stays at 0 until the batch returns.
+PIPELINE_LLM_BATCH_SIZE_OLLAMA_LOCAL = env.int("PIPELINE_LLM_BATCH_SIZE_OLLAMA_LOCAL", default=1)
+PIPELINE_LLM_MAX_TOKENS_PER_MINUTE = env.int("PIPELINE_LLM_MAX_TOKENS_PER_MINUTE", default=90000)
+PIPELINE_LLM_REQUESTS_PER_MINUTE = env.int("PIPELINE_LLM_REQUESTS_PER_MINUTE", default=60)
+# Per batch: total HTTP attempts for transient 429/5xx (1 initial + N-1 retries). Default 3 = two retries.
+PIPELINE_LLM_HTTP_MAX_ATTEMPTS = env.int("PIPELINE_LLM_HTTP_MAX_ATTEMPTS", default=3)
+# After all JD batches finish: one LLM pass to merge near-duplicates (e.g. architect / architected). Set false to skip.
+PIPELINE_LLM_CONSOLIDATE = env.bool("PIPELINE_LLM_CONSOLIDATE", default=True)
+# Max strings per key sent into consolidation (sorted); avoids huge prompts on very large runs.
+PIPELINE_LLM_CONSOLIDATE_MAX_ITEMS_PER_KEY = env.int("PIPELINE_LLM_CONSOLIDATE_MAX_ITEMS_PER_KEY", default=400)
+# Drop keywords that appear fewer than this many times across all batch lines (1 = keep all).
+PIPELINE_LLM_KEYWORD_MIN_COUNT = env.int("PIPELINE_LLM_KEYWORD_MIN_COUNT", default=1)
 
 # python-jobspy logs Glassdoor API hiccups at ERROR even when the HTTP request succeeds.
 # Downgrade so runserver output stays readable; other JobSpy:* loggers unchanged.

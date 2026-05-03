@@ -171,7 +171,9 @@ def list_models_ollama_local(host_or_ip: str) -> List[str]:
 
         # key is our host/IP for this provider
         url = _normalize_ollama_local_base_url(key) + "/api/tags"
+        logger.info("[ollama_local] list models GET %s", url)
         r = requests.get(url, timeout=15)
+        logger.debug("[ollama_local] /api/tags status=%s", r.status_code)
         r.raise_for_status()
         return r.json()
 
