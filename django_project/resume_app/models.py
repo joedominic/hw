@@ -86,6 +86,32 @@ class UserResume(models.Model):
     def __str__(self):
         return self.original_filename or f"Resume {self.id} uploaded at {self.uploaded_at}"
 
+
+class ResumeChunk(models.Model):
+    """Local RAG index: one row per resume bullet/segment with dense embedding."""
+
+    user_resume = models.ForeignKey(
+        UserResume,
+        on_delete=models.CASCADE,
+        related_name="resume_chunks",
+    )
+    ordinal = models.PositiveIntegerField()
+    section = models.CharField(max_length=64, blank=True, default="")
+    text = models.TextField()
+    embedding = models.JSONField(help_text="384-dim float list (sentence-transformers)")
+    embedding_model = models.CharField(max_length=128)
+    source_fingerprint = models.CharField(max_length=64, db_index=True)
+
+    class Meta:
+        ordering = ["user_resume_id", "ordinal"]
+        indexes = [
+            models.Index(fields=["user_resume", "source_fingerprint"]),
+        ]
+
+    def __str__(self):
+        return f"ResumeChunk ur={self.user_resume_id} #{self.ordinal}"
+
+
 class JobDescription(models.Model):
     content = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
@@ -129,6 +155,26 @@ class OptimizedResume(models.Model):
         on_delete=models.SET_NULL,
         related_name="optimized_resumes",
         help_text="Saved workflow used when this run was enqueued.",
+    )
+    optimization_notes = models.TextField(
+        blank=True,
+        default="",
+        help_text="Optional user notes passed to the Writer (token-capped).",
+    )
+    pipeline_skills_json = models.TextField(
+        blank=True,
+        default="",
+        help_text="Optional JSON or keyword blob from pipeline (token-capped).",
+    )
+    job_highlights = models.TextField(
+        blank=True,
+        default="",
+        help_text="Optional short job-specific bullets (token-capped).",
+    )
+    optimizer_context_snapshot = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Last run: writer JD/resume budgets, retrieval stats (debug).",
     )
 
 class AgentLog(models.Model):

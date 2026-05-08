@@ -80,6 +80,9 @@ class OptimizeRequest(Schema):
     workflow_steps: Optional[str] = None  # JSON array of step ids, e.g. ["writer","ats_judge","recruiter_judge"]
     loop_to: Optional[str] = None  # step to loop back to after last step; empty = single pass
     score_threshold: Optional[int] = None  # exit when avg score >= this (0-100, default 85)
+    optimization_notes: Optional[str] = None
+    pipeline_skills_json: Optional[str] = None
+    job_highlights: Optional[str] = None
 
 class StatusResponse(Schema):
     status: str
@@ -91,6 +94,7 @@ class StatusResponse(Schema):
     total_input_tokens: Optional[int] = None
     total_output_tokens: Optional[int] = None
     logs: List[dict] = []
+    optimizer_context_snapshot: Optional[dict] = None
 
 class PromptsResponse(Schema):
     writer: str
@@ -135,6 +139,9 @@ class RunStepRequest(Schema):
     llm_model: Optional[str] = None
     debug: Optional[bool] = None
     job_cache_key: Optional[str] = None
+    optimization_notes: Optional[str] = None
+    pipeline_skills_json: Optional[str] = None
+    job_highlights: Optional[str] = None
 
 
 class RunStepResponse(Schema):
@@ -230,6 +237,7 @@ def run_step(
     llm = get_llm(payload.llm_provider, api_key, model)
 
     from .prompt_store import build_optimizer_graph_prompt_state, get_effective_prompts, save_prompts_to_profile
+    from .optimizer_budget import build_optimizer_context_state_raw
 
     _ov = {}
     if payload.prompt_writer and str(payload.prompt_writer).strip():
@@ -277,10 +285,16 @@ def run_step(
             if not resume_text:
                 raise HttpError(400, "For writer step provide a resume file upload or use_resume_id.")
             feedback = [f.strip() for f in (payload.feedback or "").split(",") if f.strip()]
+            ctx = build_optimizer_context_state_raw(
+                resume_text,
+                payload.job_description,
+                optimization_notes=(payload.optimization_notes or "").strip(),
+                pipeline_skills_json=(payload.pipeline_skills_json or "").strip(),
+                job_highlights=(payload.job_highlights or "").strip(),
+                user_resume_id=int(payload.use_resume_id) if payload.use_resume_id else None,
+            )
             state = {
-                "resume_text": resume_text,
-                "source_resume_text": resume_text,
-                "job_description": payload.job_description,
+                **ctx,
                 "optimized_resume": (payload.optimized_resume or "").strip(),
                 "ats_score": 0,
                 "recruiter_score": 0,
@@ -304,7 +318,17 @@ def run_step(
                 "max_iterations": 3,
             }
             out = writer_node(state)
-            return RunStepResponse(step="writer", output={"optimized_resume": out.get("optimized_resume", ""), "debug_prompt": out.get("debug_prompt"), "input_tokens": out.get("input_tokens"), "output_tokens": out.get("output_tokens"), "tokens_estimated": out.get("tokens_estimated")})
+            return RunStepResponse(
+                step="writer",
+                output={
+                    "optimized_resume": out.get("optimized_resume", ""),
+                    "debug_prompt": out.get("debug_prompt"),
+                    "input_tokens": out.get("input_tokens"),
+                    "output_tokens": out.get("output_tokens"),
+                    "tokens_estimated": out.get("tokens_estimated"),
+                    "optimizer_context_budget": ctx.get("optimizer_context_budget"),
+                },
+            )
 
         if step in ("ats_judge", "recruiter_judge"):
             optimized_resume = (payload.optimized_resume or "").strip()
@@ -437,7 +461,7 @@ def fit_check(request, payload: FitCheckRequest = Form(...), file: UploadedFile 
 
 @router.get("/prompts", response=PromptsResponse)
 def get_prompts(request):
-    """Return default LLM prompt templates. Writer: {source_resume_text}, {resume_text}, {optimized_resume}, {job_description}, {feedback}."""
+    """Return default LLM prompt templates. Writer also: {full_job_description}, {retrieval_context}, {optimization_notes}, {pipeline_skills_json}, {job_highlights}."""
     from .prompts import (
         DEFAULT_INSIGHTS_PROMPT,
         DEFAULT_INSIGHTS_SYSTEM,
@@ -499,7 +523,10 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
     optimized = OptimizedResume.objects.create(
         original_resume=user_resume,
         job_description=job_desc,
-        status=OptimizedResume.STATUS_QUEUED
+        status=OptimizedResume.STATUS_QUEUED,
+        optimization_notes=(payload.optimization_notes or "").strip(),
+        pipeline_skills_json=(payload.pipeline_skills_json or "").strip(),
+        job_highlights=(payload.job_highlights or "").strip(),
     )
 
     # Resolve API key: request > stored config > env
@@ -586,9 +613,7 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
     task_id = result.id if result else None
     return {"task_id": task_id, "resume_id": optimized.id}
 
-@router.get("/status/{resume_id}", response=StatusResponse)
-def get_status(request, resume_id: int):
-    _require_api_auth(request)
+def get_status_data(resume_id: int):
     optimized = get_object_or_404(OptimizedResume, id=resume_id)
     logs = AgentLog.objects.filter(optimized_resume=optimized).order_by('created_at')
 
@@ -614,8 +639,14 @@ def get_status(request, resume_id: int):
         "error_message": optimized.error_message,
         "total_input_tokens": optimized.total_input_tokens,
         "total_output_tokens": optimized.total_output_tokens,
-        "logs": [{"step": l.step_name, "thought": l.thought} for l in logs]
+        "logs": [{"step": l.step_name, "thought": l.thought} for l in logs],
+        "optimizer_context_snapshot": optimized.optimizer_context_snapshot,
     }
+
+@router.get("/status/{resume_id}", response=StatusResponse)
+def get_status(request, resume_id: int):
+    _require_api_auth(request)
+    return get_status_data(resume_id)
 
 
 CANCELLED_MESSAGE = "Cancelled by user"
@@ -851,57 +882,201 @@ def _parse_markdown_blocks(content: str):
             yield ("paragraph", raw.strip())
 
 
-def _split_bold_spans(text: str):
-    """Yield (is_bold, segment) for text with **bold** markers."""
+def _normalize_export_content(text: str) -> str:
+    """Normalize common Unicode punctuation and whitespace for PDF/Word export."""
+    if not text:
+        return text
+    import unicodedata
+
+    text = unicodedata.normalize("NFKC", text)
+    replacements = {
+        "\u2010": "-",
+        "\u2011": "-",
+        "\u2012": "-",
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2015": "-",
+        "\u2212": "-",
+        "\u00A0": " ",
+        "\u202F": " ",
+        "\u2007": " ",
+        "\u2009": " ",
+        "\u200B": "",
+        "\u200C": "",
+        "\u200D": "",
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201C": '"',
+        "\u201D": '"',
+        "\u2026": "...",
+    }
+    return text.translate(str.maketrans(replacements))
+
+
+def _split_style_spans(text: str):
+    """Yield (is_bold, is_italic, segment) for text with **bold** and *italic* markers."""
     import re
-    parts = re.split(r"(\*\*[^*]+\*\*)", text)
+    parts = re.split(r"(\*\*\*[^*]+\*\*\*|\*\*[^*]+\*\*|\*[^*]+\*)", text)
     for p in parts:
         if not p:
             continue
-        if p.startswith("**") and p.endswith("**"):
-            yield (True, p[2:-2])
+        if p.startswith("***") and p.endswith("***"):
+            yield (True, True, p[3:-3])
+        elif p.startswith("**") and p.endswith("**"):
+            yield (True, False, p[2:-2])
+        elif p.startswith("*") and p.endswith("*"):
+            yield (False, True, p[1:-1])
         else:
-            yield (False, p)
+            yield (False, False, p)
+
+
+def _draw_rich_text(
+    c,
+    x: float,
+    y: float,
+    max_width: float,
+    segments,
+    line_height: float,
+    font_size: float = 10,
+    first_line_indent: float = None,
+    default_font_name: str = "Times-Roman",
+    text_color = None,
+) -> float:
+    if line_height is None:
+        line_height = font_size * 1.5
+    if first_line_indent is None:
+        first_line_indent = x
+    current_x = x
+    current_y = y
+    line_start = x
+    for is_bold, is_italic, segment in segments:
+        import re
+        tokens = re.findall(r"\s+|\S+", segment)
+        for token in tokens:
+            if is_bold and is_italic:
+                # Map default font to correct variant
+                if "Times" in default_font_name:
+                    font_name = "Times-BoldItalic"
+                else:
+                    font_name = "Helvetica-BoldOblique"
+            elif is_bold:
+                if "Times" in default_font_name:
+                    font_name = "Times-Bold"
+                else:
+                    font_name = "Helvetica-Bold"
+            elif is_italic:
+                if "Times" in default_font_name:
+                    font_name = "Times-Italic"
+                else:
+                    font_name = "Helvetica-Oblique"
+            else:
+                font_name = default_font_name
+            c.setFont(font_name, font_size)
+            if text_color:
+                c.setFillColor(text_color)
+            token_width = c.stringWidth(token, font_name, font_size)
+            if token.strip() and current_x + token_width > line_start + max_width:
+                current_y -= line_height
+                current_x = first_line_indent
+                line_start = first_line_indent
+            if token.isspace() and current_x == line_start:
+                continue
+            c.drawString(current_x, current_y, token)
+            current_x += token_width
+    # Reset color to black for next section
+    from reportlab.lib import colors
+    c.setFillColor(colors.black)
+    return current_y - line_height
 
 
 def _build_export_pdf(content: str) -> io.BytesIO:
-    """Build PDF from markdown-style content with headings, bullets, bold."""
+    """Build PDF from markdown-style content with headings, bullets, bold, italic.
+    Uses Times-Roman for professional typography and blue headings for visual hierarchy."""
+    content = _normalize_export_content(content)
     try:
         from reportlab.lib.pagesizes import letter
         from reportlab.pdfgen import canvas
         from reportlab.lib.units import inch
+        from reportlab.lib import colors
+        
         buf = io.BytesIO()
         c = canvas.Canvas(buf, pagesize=letter)
         width, height = letter
         y = height - inch
-        line_height = 14
+        body_line_height = 18
+        text_width = width - 2 * inch
+        heading_color = (31/255, 78/255, 121/255)
+        
         for block_type, text in _parse_markdown_blocks(content):
-            if y < inch + line_height * 2:
+            block_height = body_line_height
+            if block_type == "heading1":
+                block_height = 26
+            elif block_type == "heading2":
+                block_height = 22
+            elif block_type == "bullet":
+                block_height = 20
+            
+            if y < inch + block_height * 3:
                 c.showPage()
                 y = height - inch
+            
             if block_type == "heading1":
-                c.setFont("Helvetica-Bold", 16)
-                c.drawString(inch, y, text[:120])
-                y -= line_height + 4
+                y -= body_line_height / 4
+                y = _draw_rich_text(
+                    c,
+                    inch,
+                    y,
+                    text_width,
+                    _split_style_spans(text),
+                    block_height,
+                    font_size=18,
+                    default_font_name="Times-Bold",
+                    text_color=heading_color,
+                )
+                y -= body_line_height / 3
             elif block_type == "heading2":
-                c.setFont("Helvetica-Bold", 12)
-                c.drawString(inch, y, text[:120])
-                y -= line_height + 2
+                y -= body_line_height / 4
+                y = _draw_rich_text(
+                    c,
+                    inch,
+                    y,
+                    text_width,
+                    _split_style_spans(text),
+                    block_height,
+                    font_size=13,
+                    default_font_name="Times-Bold",
+                    text_color=heading_color,
+                )
+                y -= body_line_height / 3
             elif block_type == "bullet":
-                c.setFont("Helvetica", 10)
-                c.drawString(inch, y, chr(8226) + " " + text[:95])
-                y -= line_height
+                c.setFont("Times-Roman", 11)
+                c.setFillRGB(0, 0, 0)
+                c.drawString(inch, y, "•")
+                y = _draw_rich_text(
+                    c,
+                    inch + 14,
+                    y,
+                    text_width - 14,
+                    _split_style_spans(text),
+                    block_height,
+                    font_size=11,
+                    first_line_indent=inch + 14,
+                    default_font_name="Times-Roman",
+                )
+                y -= body_line_height / 6
             else:
-                c.setFont("Helvetica", 10)
-                x = inch
-                for is_bold, segment in _split_bold_spans(text):
-                    if is_bold:
-                        c.setFont("Helvetica-Bold", 10)
-                    c.drawString(x, y, segment[:100])
-                    x += c.stringWidth(segment[:100], "Helvetica-Bold" if is_bold else "Helvetica", 10)
-                    if is_bold:
-                        c.setFont("Helvetica", 10)
-                y -= line_height
+                y = _draw_rich_text(
+                    c,
+                    inch,
+                    y,
+                    text_width,
+                    _split_style_spans(text),
+                    body_line_height,
+                    font_size=11,
+                    default_font_name="Times-Roman",
+                )
+                y -= body_line_height / 5
+        
         c.save()
         buf.seek(0)
         return buf
@@ -910,7 +1085,8 @@ def _build_export_pdf(content: str) -> io.BytesIO:
 
 
 def _build_export_docx(content: str) -> io.BytesIO:
-    """Build Word from markdown-style content with headings, bullets, bold."""
+    """Build Word from markdown-style content with headings, bullets, bold, italic."""
+    content = _normalize_export_content(content)
     try:
         from docx import Document
         from docx.shared import Pt
@@ -923,18 +1099,18 @@ def _build_export_docx(content: str) -> io.BytesIO:
                 p = doc.add_heading(text, level=1)
                 p.paragraph_format.space_after = Pt(6)
             elif block_type == "bullet":
-                p = doc.add_paragraph()
-                p.paragraph_format.left_indent = Pt(18)
-                p.add_run(chr(8226) + " ")
-                for is_bold, segment in _split_bold_spans(text):
+                p = doc.add_paragraph(style="List Bullet")
+                for is_bold, is_italic, segment in _split_style_spans(text):
                     r = p.add_run(segment)
                     r.bold = is_bold
+                    r.italic = is_italic
                 p.paragraph_format.space_after = Pt(4)
             else:
                 p = doc.add_paragraph()
-                for is_bold, segment in _split_bold_spans(text):
+                for is_bold, is_italic, segment in _split_style_spans(text):
                     r = p.add_run(segment)
                     r.bold = is_bold
+                    r.italic = is_italic
                 p.paragraph_format.space_after = Pt(6)
         buf = io.BytesIO()
         doc.save(buf)
@@ -944,13 +1120,44 @@ def _build_export_docx(content: str) -> io.BytesIO:
         return None
 
 
+def _apply_export_replacements(content: str, request) -> str:
+    if not content:
+        return content
+    replacements = []
+    params = request.GET
+    for key, value in params.items():
+        if not key.startswith("replace_token_") or not value:
+            continue
+        suffix = key[len("replace_token_"):]
+        replacement = params.get(f"replace_value_{suffix}")
+        if replacement is None or replacement == "":
+            continue
+        replacements.append((value, replacement))
+
+    if not replacements:
+        raw_replacements = request.session.get("export_replacements") or []
+        for entry in raw_replacements:
+            if not isinstance(entry, dict):
+                continue
+            token = (entry.get("token") or "").strip()
+            replacement = entry.get("value")
+            if not token or replacement is None or replacement == "":
+                continue
+            replacements.append((token, replacement))
+
+    for token, replacement in replacements:
+        content = content.replace(token, replacement)
+    return content
+
+
 @router.get("/export/{resume_id}/pdf")
 def export_pdf(request, resume_id: int):
     """Export optimized resume as PDF. Returns 404 if not found or not completed."""
     optimized = get_object_or_404(OptimizedResume, id=resume_id)
     if optimized.status != OptimizedResume.STATUS_COMPLETED or not optimized.optimized_content:
         raise HttpError(404, "Optimized resume not ready for export")
-    buf = _build_export_pdf(optimized.optimized_content)
+    content = _apply_export_replacements(optimized.optimized_content, request)
+    buf = _build_export_pdf(content)
     if buf is None:
         raise HttpError(503, "PDF export requires reportlab; install with: pip install reportlab")
     return FileResponse(buf, as_attachment=True, filename="optimized_resume.pdf", content_type="application/pdf")
@@ -962,7 +1169,8 @@ def export_docx(request, resume_id: int):
     optimized = get_object_or_404(OptimizedResume, id=resume_id)
     if optimized.status != OptimizedResume.STATUS_COMPLETED or not optimized.optimized_content:
         raise HttpError(404, "Optimized resume not ready for export")
-    buf = _build_export_docx(optimized.optimized_content)
+    content = _apply_export_replacements(optimized.optimized_content, request)
+    buf = _build_export_docx(content)
     if buf is None:
         raise HttpError(503, "Word export requires python-docx; install with: pip install python-docx")
     return FileResponse(buf, as_attachment=True, filename="optimized_resume.docx", content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")

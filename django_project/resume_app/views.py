@@ -23,6 +23,7 @@ from .api import (
     get_prompts as api_get_prompts,
     optimize_resume as api_optimize_resume,
     get_status as api_get_status,
+    get_status_data as api_get_status_data,
     llm_connect as api_llm_connect,
     llm_models as api_llm_models,
     llm_set_default_model as api_llm_set_default_model,
@@ -55,7 +56,9 @@ from .models import (
     JobSearchTaskRun,
     Track,
     JobListingEmbedding,
+    LLMProviderConfig,
 )
+from .pipeline_llm_skill_extract import resolve_provider_api_key
 from .preference import invalidate_preference_cache, invalidate_disliked_embeddings_cache
 from .job_sources import DEFAULT_SITE_NAMES
 from .tasks import run_job_search_task, get_next_run_at, validate_cron, try_vetting_match_debug, VETTING_MATCHING_JD_MIN_CHARS
@@ -117,6 +120,17 @@ def _parse_task_form(request, default_track: str, valid_track_slugs: set):
         "start_time": start_time,
         "site_name": site_name,
     }, []
+
+
+def _get_optimizer_supporting_context(request):
+    raw = request.session.get("optimizer_supporting_context")
+    if not isinstance(raw, dict):
+        raw = {}
+    return {
+        "optimization_notes": str(raw.get("optimization_notes") or "").strip(),
+        "pipeline_skills_json": str(raw.get("pipeline_skills_json") or "").strip(),
+        "job_highlights": str(raw.get("job_highlights") or "").strip(),
+    }
 
 
 def optimizer_view(request):
@@ -302,6 +316,17 @@ def optimizer_view(request):
                 try:
                     score_threshold_raw = request.POST.get("score_threshold", "").strip()
                     score_threshold_val = int(score_threshold_raw) if score_threshold_raw else None
+                    saved_supporting_context = _get_optimizer_supporting_context(request)
+                    optimization_notes = (request.POST.get("optimization_notes") or "").strip()
+                    if not optimization_notes:
+                        optimization_notes = saved_supporting_context["optimization_notes"]
+                    pipeline_skills_json = (request.POST.get("pipeline_skills_json") or "").strip()
+                    if not pipeline_skills_json:
+                        pipeline_skills_json = saved_supporting_context["pipeline_skills_json"]
+                    job_highlights = (request.POST.get("job_highlights") or "").strip()
+                    if not job_highlights:
+                        job_highlights = saved_supporting_context["job_highlights"]
+
                     payload = OptimizeRequest(
                         job_description=job_description,
                         llm_provider=selected_provider,
@@ -314,6 +339,9 @@ def optimizer_view(request):
                         workflow_steps=request.POST.get("workflow_steps") or None,
                         loop_to=request.POST.get("loop_to") or None,
                         score_threshold=score_threshold_val,
+                        optimization_notes=optimization_notes or None,
+                        pipeline_skills_json=pipeline_skills_json or None,
+                        job_highlights=job_highlights or None,
                     )
                     # optimize_resume also reads rate_limit_delay and max_iterations from request.POST
                     if rate_limit_delay:
@@ -340,7 +368,7 @@ def optimizer_view(request):
     status_data = None
     if opt_id:
         try:
-            status_data = api_get_status(request, int(opt_id))
+            status_data = api_get_status_data(int(opt_id))
             # Format agent log thoughts for display (thought is a JSONField dict)
             logs = status_data.get("logs") or []
             for log in logs:
@@ -369,8 +397,18 @@ def optimizer_view(request):
             status_data = None
 
     selected_llm_model = request.session.get("optimizer_llm_model") or llm_default_model
+    optimizer_supporting_context = _get_optimizer_supporting_context(request)
     job_description_value = (
         request.POST.get("job_description", "") if request.method == "POST" else prefill_job_description
+    )
+    optimization_notes_value = (
+        request.POST.get("optimization_notes", "") if request.method == "POST" else optimizer_supporting_context["optimization_notes"]
+    )
+    pipeline_skills_json_value = (
+        request.POST.get("pipeline_skills_json", "") if request.method == "POST" else optimizer_supporting_context["pipeline_skills_json"]
+    )
+    job_highlights_value = (
+        request.POST.get("job_highlights", "") if request.method == "POST" else optimizer_supporting_context["job_highlights"]
     )
     prefill_resume_name = None
     if prefill_resume_id:
@@ -408,6 +446,9 @@ def optimizer_view(request):
         "prefill_resume_id": prefill_resume_id,
         "prefill_resume_name": prefill_resume_name,
         "job_description_value": job_description_value,
+        "optimization_notes_value": optimization_notes_value,
+        "pipeline_skills_json_value": pipeline_skills_json_value,
+        "job_highlights_value": job_highlights_value,
         "saved_workflows": saved_workflows,
         "optimizer_temperature": request.session.get("optimizer_temperature", "0.7"),
         "wizard_initial_step": wizard_initial_step,
@@ -527,6 +568,13 @@ def settings_view(request):
             else:
                 automation.applying_optimizer_workflow = None
 
+            request.session["optimizer_supporting_context"] = {
+                "optimization_notes": (request.POST.get("optimization_notes") or "").strip(),
+                "pipeline_skills_json": (request.POST.get("pipeline_skills_json") or "").strip(),
+                "job_highlights": (request.POST.get("job_highlights") or "").strip(),
+            }
+            request.session.modified = True
+
             def _cleanup_days(field: str):
                 raw = (request.POST.get(field) or "").strip()
                 try:
@@ -568,6 +616,16 @@ def settings_view(request):
             )
             messages.success(request, "App automation settings saved.")
             return redirect(reverse("settings") + "?tab=app")
+        if action == "save_export_replacements":
+            replacements = []
+            for i in range(5):
+                token = (request.POST.get(f"replacement_token_{i}") or "").strip()
+                value = (request.POST.get(f"replacement_value_{i}") or "").strip()
+                replacements.append({"token": token, "value": value})
+            request.session["export_replacements"] = replacements
+            request.session.modified = True
+            messages.success(request, "Export replacement tokens saved.")
+            return redirect(reverse("settings") + "?tab=replacements")
         if action == "dedupe_pipeline":
             from .job_dedupe import dedupe_pipeline_entries
 
@@ -763,7 +821,7 @@ def settings_view(request):
                 return redirect(reverse("settings") + "?tab=llm")
 
     tab = (request.GET.get("tab") or "llm").strip().lower()
-    if tab not in ("llm", "app", "usage"):
+    if tab not in ("llm", "app", "usage", "replacements", "candidate_context"):
         tab = "llm"
     provider_preference_list = list(_get_provider_preferences())
     connected_provider_names = [cfg.provider for cfg in provider_preference_list]
@@ -891,6 +949,25 @@ def settings_view(request):
             }
         )
 
+    raw_optimizer_supporting_context = request.session.get("optimizer_supporting_context") or {}
+    optimizer_supporting_context = {
+        "optimization_notes": str(raw_optimizer_supporting_context.get("optimization_notes") or "").strip(),
+        "pipeline_skills_json": str(raw_optimizer_supporting_context.get("pipeline_skills_json") or "").strip(),
+        "job_highlights": str(raw_optimizer_supporting_context.get("job_highlights") or "").strip(),
+    }
+    raw_replacements = request.session.get("export_replacements") or []
+    replacement_entries = []
+    if isinstance(raw_replacements, list):
+        for entry in raw_replacements[:5]:
+            if isinstance(entry, dict):
+                replacement_entries.append(
+                    {"token": (entry.get("token") or "").strip(), "value": (entry.get("value") or "")}
+                )
+            else:
+                replacement_entries.append({"token": "", "value": ""})
+    while len(replacement_entries) < 5:
+        replacement_entries.append({"token": "", "value": ""})
+
     context = {
         "provider_infos": provider_infos,
         "provider_preference_list": provider_preference_list,
@@ -901,12 +978,14 @@ def settings_view(request):
         "settings_tab": tab,
         "app_automation": AppAutomationSettings.get_solo(),
         "optimizer_workflows": list(OptimizerWorkflow.objects.all().order_by("name")),
+        "optimizer_supporting_context": optimizer_supporting_context,
         "dedupe_tracks": tracks_for_dedupe,
         "usage_totals": usage_totals,
         "usage_rows": usage_rows,
         "usage_estimated_pct": est_pct,
         "usage_cooldown_error": usage_cooldown_error,
         "usage_by_query_rows": usage_by_query_rows,
+        "replacement_entries": replacement_entries,
     }
     return render(request, "resume_app/settings.html", context)
 
@@ -2029,11 +2108,47 @@ def vetting_match_debug_view(request, job_listing_id: int):
         messages.error(request, "No vetting row found for this job and track.")
         return redirect(reverse("vetting") + f"?track={raw_track}")
 
+    from .pipeline_llm_skill_extract import resolve_provider_api_key
+
+    available_providers = sorted(
+        [p for p in LLM_PROVIDERS if resolve_provider_api_key(p)]
+    )
+    selected_provider = (request.POST.get("llm_provider") or request.GET.get("provider") or "").strip()
+    selected_model = (request.POST.get("llm_model") or request.GET.get("model") or "").strip()
+    if selected_provider not in available_providers:
+        selected_provider = None
+    if not selected_provider:
+        selected_provider = (
+            "Ollama Local"
+            if "Ollama Local" in available_providers
+            else (available_providers[0] if available_providers else None)
+        )
+
+    llm_models = []
+    llm_default_model = None
+    llm_key_error = None
+    if selected_provider:
+        try:
+            models_data = api_llm_models(request, provider=selected_provider)
+            llm_models = models_data.get("models", [])
+            llm_default_model = models_data.get("default_model")
+        except HttpError as e:
+            llm_key_error = str(e)
+
+    if selected_model not in llm_models:
+        selected_model = llm_default_model or (llm_models[0] if llm_models else None)
+
     debug_result = None
+    matching_prompt = None
     if request.method == "POST":
         prompts = get_effective_prompts(request)
         matching_prompt = prompts.get("matching")
-        debug_result = try_vetting_match_debug(entry, matching_prompt=matching_prompt or None)
+        debug_result = try_vetting_match_debug(
+            entry,
+            matching_prompt=matching_prompt or None,
+            llm_provider=selected_provider,
+            llm_model=selected_model,
+        )
         if debug_result.get("ok"):
             ip = (debug_result.get("result") or {}).get("interview_probability")
             if ip is None:
@@ -2048,6 +2163,18 @@ def vetting_match_debug_view(request, job_listing_id: int):
                 request,
                 "Match debug did not complete: {}.".format(debug_result.get("skip_reason", "unknown")),
             )
+    elif selected_provider == "Ollama Local" and not llm_key_error:
+        try:
+            prompts = get_effective_prompts(request)
+            matching_prompt = prompts.get("matching")
+            debug_result = try_vetting_match_debug(
+                entry,
+                matching_prompt=matching_prompt or None,
+                llm_provider=selected_provider,
+                llm_model=selected_model,
+            )
+        except Exception:
+            debug_result = None
 
     context = {
         "entry": entry,
@@ -2056,6 +2183,11 @@ def vetting_match_debug_view(request, job_listing_id: int):
         "jd_min": VETTING_MATCHING_JD_MIN_CHARS,
         "debug_result": debug_result,
         "vetting_url": reverse("vetting") + f"?track={raw_track}",
+        "available_providers": available_providers,
+        "selected_provider": selected_provider,
+        "llm_models": llm_models,
+        "selected_model": selected_model,
+        "llm_key_error": llm_key_error,
     }
     return render(request, "resume_app/vetting_match_debug.html", context)
 
@@ -2120,12 +2252,24 @@ def focus_alignment_view(request, job_listing_id: int, liked_job_id: int):
 def optimizer_status_view(request, resume_id: int):
     """
     JSON endpoint used by the frontend to poll optimization status.
-    Wraps the existing Ninja get_status handler.
+    Wraps the existing Ninja status helper without requiring API auth.
     """
     try:
-        data = api_get_status(request, int(resume_id))
+        from .models import OptimizedResume
+        optimized = OptimizedResume.objects.get(id=int(resume_id))
+        data = api_get_status_data(int(resume_id))
         return JsonResponse(data)
-    except HttpError as e:
-        return JsonResponse({"error": str(e)}, status=e.status_code)
+    except OptimizedResume.DoesNotExist:
+        return JsonResponse({"error": f"Optimized resume {resume_id} not found"}, status=404)
     except Exception as e:
+        logger.exception(f"Error fetching status for resume {resume_id}: {e}")
         return JsonResponse({"error": str(e)}, status=500)
+
+
+def optimizer_context_debug_view(request, resume_id: int):
+    """JSON: last saved writer context budget / retrieval debug for an OptimizedResume run."""
+    from django.shortcuts import get_object_or_404
+    from .models import OptimizedResume
+
+    opt = get_object_or_404(OptimizedResume, pk=int(resume_id))
+    return JsonResponse(opt.optimizer_context_snapshot or {})

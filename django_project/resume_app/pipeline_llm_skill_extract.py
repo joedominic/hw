@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 import random
+import re
 import time
 from collections import Counter
 from dataclasses import dataclass
@@ -30,6 +31,10 @@ SKILL_ARRAY_KEYS = (
 
 SYSTEM_PROMPT = """You are an expert Technical Recruiter and Data Engineer. 
 Your task is to analyze a batch of Job Descriptions and extract high-signal keywords into a strict JSON object.
+
+OUTPUT RULES (CRITICAL):
+- Your entire response must be ONE JSON object only: no preamble, no markdown code fences, no chain-of-thought, no analysis.
+- Do not use tags such as <thinking> or <think>. Do not explain your reasoning.
 
 EXTRACTION & FORMATTING RULES:
 1. DISCRETE ITEMS ONLY: Never include commas or "and" inside an extracted item. Split lists into separate array elements. (e.g., instead of ["python, aws, c++"], output ["python", "aws", "c++"]).
@@ -439,6 +444,39 @@ _USER_JSON_TAIL = (
     + " (each value is an array of strings). Use lowercase for every string. No markdown code fences."
 )
 
+_STRICT_JSON_RETRY_TAIL = (
+    "\n\nCRITICAL: Reply with ONLY valid JSON for this schema. "
+    "No other characters before or after the JSON object. "
+    "Do not include thinking tags or prose."
+)
+
+
+_REASONING_STRIP_PATTERNS = (
+    # Common "reasoning" / chain-of-thought wrappers (incl. API-leaked redacted blocks)
+    re.compile(r"<think>[\s\S]*?</think>", re.IGNORECASE),
+    re.compile(r"<thinking>[\s\S]*?</thinking>", re.IGNORECASE),
+    re.compile(r"<reasoning>[\s\S]*?</reasoning>", re.IGNORECASE),
+)
+
+
+def _strip_pipeline_reasoning_noise(content: str) -> str:
+    """Remove common model reasoning / thinking wrappers so JSON extraction can succeed."""
+    if not content or not isinstance(content, str):
+        return ""
+    t = content.replace("\r\n", "\n").replace("\r", "\n")
+    for rx in _REASONING_STRIP_PATTERNS:
+        t = rx.sub("", t)
+    # Unclosed <think>… (stream ended mid-block): if JSON appears later, keep from first '{'.
+    if re.search(r"<redacted_thinking\s*>", t, re.I) and not re.search(
+        r"</redacted_thinking\s*>", t, re.I
+    ):
+        m = re.search(r"<redacted_thinking\s*>", t, re.I)
+        if m:
+            tail = t[m.end() :].lstrip()
+            br = tail.find("{")
+            t = tail[br:] if br >= 0 else ""
+    return t.strip()
+
 
 def _normalize_token_list(items: Any) -> List[str]:
     out: List[str] = []
@@ -454,7 +492,8 @@ def _normalize_token_list(items: Any) -> List[str]:
 
 
 def _skills_from_llm_text(content: str) -> Dict[str, List[str]]:
-    text = (content or "").strip()
+    raw = (content or "").strip()
+    text = _strip_pipeline_reasoning_noise(raw)
     data: Any = None
     if text:
         try:
@@ -469,11 +508,15 @@ def _skills_from_llm_text(content: str) -> Dict[str, List[str]]:
                 )
     if not isinstance(data, dict):
         logger.warning(
-            "Pipeline LLM returned non-JSON (first 800 chars): %r",
-            text[:800] if text else "",
+            "Pipeline LLM returned non-JSON (first 800 chars raw): %r",
+            raw[:800] if raw else "",
         )
         raise ValueError("Model response is not a JSON object")
     return {k: _normalize_token_list(data.get(k)) for k in SKILL_ARRAY_KEYS}
+
+
+def _empty_skills_dict() -> Dict[str, List[str]]:
+    return {k: [] for k in SKILL_ARRAY_KEYS}
 
 
 @dataclass
@@ -770,7 +813,53 @@ def run_pipeline_llm_extraction(
             actual_prompt = prompt_tokens or est
             bucket.record_usage(actual_prompt)
 
-            skills = _skills_from_llm_text(content)
+            try:
+                skills = _skills_from_llm_text(content)
+            except ValueError:
+                from django.conf import settings as dj_settings
+
+                parse_retry = bool(
+                    getattr(dj_settings, "PIPELINE_LLM_JSON_PARSE_RETRY", True)
+                )
+                empty_fallback = bool(
+                    getattr(
+                        dj_settings,
+                        "PIPELINE_LLM_USE_EMPTY_SKILLS_AFTER_RETRIES",
+                        True,
+                    )
+                )
+                if parse_retry:
+                    logger.warning(
+                        "Pipeline batch JSON parse failed (jobs %s–%s); retrying with strict JSON-only tail.",
+                        start_i + 1,
+                        end_i + 1,
+                    )
+                    content2, prompt_tokens2, _total2 = llm_call_with_retries(
+                        provider=provider,
+                        api_key=api_key,
+                        model=model,
+                        user_content=user_text + _STRICT_JSON_RETRY_TAIL,
+                        max_attempts=http_max_attempts,
+                    )
+                    last_request_end = time.time()
+                    bucket.record_usage(prompt_tokens2 or est)
+                    try:
+                        skills = _skills_from_llm_text(content2)
+                    except ValueError:
+                        if empty_fallback:
+                            logger.error(
+                                "Pipeline batch still not JSON after retry; using empty skill arrays."
+                            )
+                            skills = _empty_skills_dict()
+                        else:
+                            raise
+                elif empty_fallback:
+                    logger.error(
+                        "Pipeline batch JSON parse failed; using empty skill arrays."
+                    )
+                    skills = _empty_skills_dict()
+                else:
+                    raise
             batch_record = {
                 "start_index": start_i,
                 "end_index": end_i,

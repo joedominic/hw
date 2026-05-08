@@ -15,6 +15,11 @@ urlpatterns = [
     path("api/", api.urls),
     path("resume/optimizer/", resume_views.optimizer_view, name="resume_optimizer"),
     path("resume/status/<int:resume_id>/", resume_views.optimizer_status_view, name="resume_status"),
+    path(
+        "resume/optimizer/context/<int:resume_id>/",
+        resume_views.optimizer_context_debug_view,
+        name="optimizer_context_debug",
+    ),
     path("settings/", resume_views.settings_view, name="settings"),
     path("resume/prompts/", resume_views.prompt_library_view, name="prompt_library"),
     path("resume/llm-test/", resume_views.llm_test_view, name="llm_test"),

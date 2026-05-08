@@ -18,17 +18,67 @@
            class="rounded-t-concierge px-4 py-2 text-sm font-semibold {% if settings_tab == 'llm' %}bg-white text-concierge-slate ring-1 ring-slate-200 ring-b-0{% else %}text-slate-600 hover:text-concierge-slate{% endif %}">
             LLM settings
         </a>
-        <a href="?tab=app"
-           class="rounded-t-concierge px-4 py-2 text-sm font-semibold {% if settings_tab == 'app' %}bg-white text-concierge-slate ring-1 ring-slate-200 ring-b-0{% else %}text-slate-600 hover:text-concierge-slate{% endif %}">
-            App settings
-        </a>
         <a href="?tab=usage"
            class="rounded-t-concierge px-4 py-2 text-sm font-semibold {% if settings_tab == 'usage' %}bg-white text-concierge-slate ring-1 ring-slate-200 ring-b-0{% else %}text-slate-600 hover:text-concierge-slate{% endif %}">
             Usage
         </a>
+        <a href="?tab=candidate_context"
+           class="rounded-t-concierge px-4 py-2 text-sm font-semibold {% if settings_tab == 'candidate_context' %}bg-white text-concierge-slate ring-1 ring-slate-200 ring-b-0{% else %}text-slate-600 hover:text-concierge-slate{% endif %}">
+            Candidate Context
+        </a>
+        <a href="?tab=replacements"
+           class="rounded-t-concierge px-4 py-2 text-sm font-semibold {% if settings_tab == 'replacements' %}bg-white text-concierge-slate ring-1 ring-slate-200 ring-b-0{% else %}text-slate-600 hover:text-concierge-slate{% endif %}">
+            Replacements
+        </a>
+        <a href="?tab=app"
+           class="rounded-t-concierge px-4 py-2 text-sm font-semibold {% if settings_tab == 'app' %}bg-white text-concierge-slate ring-1 ring-slate-200 ring-b-0{% else %}text-slate-600 hover:text-concierge-slate{% endif %}">
+            App settings
+        </a>
     </div>
 
-    {% if settings_tab == 'usage' %}
+    {% if settings_tab == 'candidate_context' %}
+    <div class="space-y-6">
+        <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 class="text-lg font-semibold text-concierge-slate">Default optimizer supporting context</h2>
+            <p class="mt-1 text-sm text-slate-600">
+                Save default notes, skills JSON, and supplemental accomplishments to prefill the optimizer form on every run. These values are used when the per-run fields are left blank.
+            </p>
+            <form method="post" class="mt-6 space-y-4">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="save_app_automation">
+                <div class="grid gap-4">
+                    <div>
+                        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="optimizer-notes">Notes</label>
+                        <textarea id="optimizer-notes" name="optimization_notes" rows="4"
+                                  class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                  placeholder="e.g. Emphasize leadership, omit Company X">{{ optimizer_supporting_context.optimization_notes|default:'' }}</textarea>
+                        <p class="mt-2 text-xs text-slate-500">Use this for free-form guidance to the optimizer writer: tone, emphasis, exclusions, or how the resume should be tailored.</p>
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="optimizer-skills">Pipeline / skills JSON</label>
+                        <textarea id="optimizer-skills" name="pipeline_skills_json" rows="4"
+                                  class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                  placeholder='{"hard_skills":["python","aws"]}'>{{ optimizer_supporting_context.pipeline_skills_json|default:'' }}</textarea>
+                        <p class="mt-2 text-xs text-slate-500">Enter structured skill or qualification data the optimizer can use to surface relevant capabilities and match the resume to the target job.</p>
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="optimizer-highlights">Supplemental accomplishments</label>
+                        <textarea id="optimizer-highlights" name="job_highlights" rows="4"
+                                  class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                  placeholder="List accomplishments you want the optimizer to weave into the resume">{{ optimizer_supporting_context.job_highlights|default:'' }}</textarea>
+                        <p class="mt-2 text-xs text-slate-500">Use this for your own accomplishments or impact statements the optimizer can introduce into the resume based on the target role.</p>
+                    </div>
+                </div>
+                <button type="submit" class="rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+                    Save candidate context
+                </button>
+            </form>
+            <p class="mt-4 text-sm text-slate-500">
+                All fields are optional. Leave blank to skip that context on future runs, or enter values to use by default when the optimizer form fields are empty.
+            </p>
+        </div>
+    </div>
+    {% elif settings_tab == 'usage' %}
     <div class="space-y-6">
         <form method="post" class="rounded-concierge border border-slate-200 bg-slate-50/80 p-4 flex flex-wrap items-center justify-between gap-3">
             {% csrf_token %}
@@ -147,6 +197,45 @@
                     {% endfor %}
                 </tbody>
             </table>
+        </div>
+    </div>
+    {% elif settings_tab == 'replacements' %}
+    <div class="space-y-6">
+        <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 class="text-lg font-semibold text-concierge-slate">Export replacements</h2>
+            <p class="mt-1 text-sm text-slate-600">
+                Define up to five token/value pairs to apply automatically whenever you export an optimized resume to PDF or Word.
+            </p>
+            <form method="post" class="mt-6 space-y-4">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="save_export_replacements">
+                <div class="grid gap-4">
+                    {% for entry in replacement_entries %}
+                    <div class="grid gap-3 sm:grid-cols-[1fr_1fr]">
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="replacement-token-{{ forloop.counter0 }}">Token</label>
+                            <input id="replacement-token-{{ forloop.counter0 }}" name="replacement_token_{{ forloop.counter0 }}" type="text"
+                                   value="{{ entry.token }}"
+                                   placeholder="$$NAME$$"
+                                   class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="replacement-value-{{ forloop.counter0 }}">Replacement</label>
+                            <input id="replacement-value-{{ forloop.counter0 }}" name="replacement_value_{{ forloop.counter0 }}" type="text"
+                                   value="{{ entry.value }}"
+                                   placeholder="Jane Doe"
+                                   class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                <button type="submit" class="rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+                    Save export replacements
+                </button>
+            </form>
+            <p class="mt-4 text-sm text-slate-500">
+                Only token/value pairs with both fields filled are applied during export. Leave fields blank to skip that replacement.
+            </p>
         </div>
     </div>
     {% elif settings_tab == 'app' %}

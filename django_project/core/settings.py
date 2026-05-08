@@ -168,6 +168,25 @@ JOB_RESUME_MAX_REUSE = 2
 JOB_RESUME_MIN_SIM = 0.45
 # Keyword overlap weight: blended = (1 - β)*cosine + β*overlap. 0.2 rewards resume sentences that contain job terms.
 JOB_RESUME_KEYWORD_WEIGHT = 0.2
+
+# --- Resume optimizer: writer context budgets (Phase 1) + local RAG (Phase 2) ---
+OPTIMIZER_USE_ROLE_SLICE_FOR_WRITER_JD = True
+OPTIMIZER_WRITER_JD_ROLE_MAX_CHARS = 8000
+# Body shown to Writer on first pass (then replaced by prior draft on later writer steps).
+OPTIMIZER_WRITER_RESUME_MAX_CHARS = 14000
+# When hybrid retrieval returns chunks, shrink the parallel full-resume excerpt further.
+OPTIMIZER_WRITER_RESUME_MAX_CHARS_WITH_RAG = 8000
+# Immutable source anchor passed to Writer (capped).
+OPTIMIZER_SOURCE_RESUME_MAX_CHARS = 12000
+OPTIMIZER_CONTEXT_NOTES_MAX_CHARS = 4000
+OPTIMIZER_CONTEXT_SKILLS_JSON_MAX_CHARS = 8000
+OPTIMIZER_CONTEXT_JOB_HIGHLIGHTS_MAX_CHARS = 4000
+# Local hybrid retrieval over ResumeChunk rows (dense + BM25).
+OPTIMIZER_RETRIEVAL_ENABLED = True
+OPTIMIZER_RETRIEVAL_TOP_K = 28
+OPTIMIZER_RETRIEVAL_MAX_PACK_CHARS = 12000
+OPTIMIZER_RETRIEVAL_DENSE_WEIGHT = 0.75
+OPTIMIZER_RETRIEVAL_KEYWORD_WEIGHT = 0.25
 # Title gate: when title_sim (cosine) is below this, role can add at most JOB_FOCUS_ROLE_MAX_LIFT.
 JOB_FOCUS_TITLE_GATE = 0.30  # cosine in [-1,1]; ~25% when converted to 0-100
 JOB_FOCUS_ROLE_MAX_LIFT = 0.15  # max extra from role when below gate (so combined <= title_sim + this)
@@ -231,6 +250,10 @@ PIPELINE_LLM_MAX_TOKENS_PER_MINUTE = env.int("PIPELINE_LLM_MAX_TOKENS_PER_MINUTE
 PIPELINE_LLM_REQUESTS_PER_MINUTE = env.int("PIPELINE_LLM_REQUESTS_PER_MINUTE", default=60)
 # Per batch: total HTTP attempts for transient 429/5xx (1 initial + N-1 retries). Default 3 = two retries.
 PIPELINE_LLM_HTTP_MAX_ATTEMPTS = env.int("PIPELINE_LLM_HTTP_MAX_ATTEMPTS", default=3)
+# If first response is not valid JSON (e.g. model emitted thinking tags), one extra LLM call with a strict JSON-only tail.
+PIPELINE_LLM_JSON_PARSE_RETRY = env.bool("PIPELINE_LLM_JSON_PARSE_RETRY", default=True)
+# After a failed parse (and optional retry), write empty skill arrays for the batch instead of failing the run.
+PIPELINE_LLM_USE_EMPTY_SKILLS_AFTER_RETRIES = env.bool("PIPELINE_LLM_USE_EMPTY_SKILLS_AFTER_RETRIES", default=True)
 # After all JD batches finish: one LLM pass to merge near-duplicates (e.g. architect / architected). Set false to skip.
 PIPELINE_LLM_CONSOLIDATE = env.bool("PIPELINE_LLM_CONSOLIDATE", default=True)
 # Max strings per key sent into consolidation (sorted); avoids huge prompts on very large runs.

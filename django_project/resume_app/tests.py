@@ -17,6 +17,7 @@ from .tasks import (
     apply_vetting_to_applying_promotions,
     _enqueue_single_pipeline_resume_optimization,
 )
+from .api import _normalize_export_content
 from .services import parse_pdf, PDFParseError
 from .llm_services import LLM_PROVIDERS
 from .job_sources import _row_to_dict
@@ -60,6 +61,12 @@ class ServiceTestCase(TestCase):
         with self.assertRaises(PDFParseError):
             parse_pdf("")
 
+    def test_normalize_export_content_replaces_unusual_hyphens(self):
+        source = "Strategic engineering leader with 20+ years of experience delivering high\u2011impact software solutions"
+        normalized = _normalize_export_content(source)
+        self.assertNotIn("\u2011", normalized)
+        self.assertIn("high-impact", normalized)
+
 
 class JobSourceNormalizationTestCase(TestCase):
     def test_row_to_dict_falls_back_to_linkedin_description_keys(self):
@@ -88,6 +95,50 @@ class JobSourceNormalizationTestCase(TestCase):
 class APITestCase(TestCase):
     def setUp(self):
         self.client = Client()
+
+    def test_save_optimizer_supporting_context_in_settings_session(self):
+        response = self.client.post(
+            "/settings/",
+            data={
+                "action": "save_app_automation",
+                "pipeline_to_vetting_enabled": "1",
+                "vetting_to_applying_enabled": "1",
+                "pipeline_preference_margin_min": "0",
+                "vetting_interview_probability_min": "70",
+                "cleanup_pipeline_retention_days": "0",
+                "cleanup_vetting_retention_days": "0",
+                "cleanup_applying_retention_days": "0",
+                "cleanup_done_retention_days": "0",
+                "optimization_notes": "Emphasize leadership",
+                "pipeline_skills_json": '{"hard_skills":["python"]}',
+                "job_highlights": "Lead hiring projects",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        session = self.client.session
+        self.assertEqual(
+            session.get("optimizer_supporting_context"),
+            {
+                "optimization_notes": "Emphasize leadership",
+                "pipeline_skills_json": '{"hard_skills":["python"]}',
+                "job_highlights": "Lead hiring projects",
+            },
+        )
+
+    def test_optimizer_form_prefills_supporting_context_from_session(self):
+        session = self.client.session
+        session["optimizer_supporting_context"] = {
+            "optimization_notes": "Emphasize leadership",
+            "pipeline_skills_json": '{"hard_skills":["python"]}',
+            "job_highlights": "Lead hiring projects",
+        }
+        session.save()
+
+        response = self.client.get("/resume/optimizer/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Emphasize leadership")
+        self.assertContains(response, '{"hard_skills":["python"]}')
+        self.assertContains(response, "Lead hiring projects")
 
     def test_status_404_for_invalid_resume_id(self):
         response = self.client.get("/api/resume/status/99999/")
@@ -170,14 +221,26 @@ class APITestCase(TestCase):
 
 
 class TaskTestCase(TestCase):
+    @patch("resume_app.tasks.build_optimizer_context_state")
     @patch("resume_app.tasks.parse_pdf")
     @patch("resume_app.tasks.create_workflow")
     def test_optimize_resume_task_updates_status_on_success(
-        self, mock_create_workflow, mock_parse_pdf
+        self, mock_create_workflow, mock_parse_pdf, mock_ctx
     ):
         from .tasks import optimize_resume_task
         from .models import AgentLog
 
+        mock_ctx.return_value = {
+            "job_description": "JD",
+            "writer_job_description": "JD",
+            "resume_text": "Resume text",
+            "source_resume_text": "Resume text",
+            "optimization_notes": "(none)",
+            "pipeline_skills_json": "(none)",
+            "job_highlights": "(none)",
+            "retrieval_context": "(none)",
+            "optimizer_context_budget": {"writer_jd_chars": 2},
+        }
         mock_parse_pdf.return_value = "Resume text"
         graph = MagicMock()
         graph.stream.return_value = [
@@ -199,6 +262,7 @@ class TaskTestCase(TestCase):
         self.assertEqual(optimized.optimized_content, "Optimized")
         self.assertEqual(optimized.ats_score, 80)
         self.assertEqual(optimized.recruiter_score, 85)
+        self.assertEqual(optimized.optimizer_context_snapshot, {"writer_jd_chars": 2})
         self.assertGreater(AgentLog.objects.filter(optimized_resume=optimized).count(), 0)
 
 
@@ -644,6 +708,43 @@ class PipelineAutomationTestCase(TestCase):
         pe.refresh_from_db()
         self.assertEqual(pe.stage, "")
         mock_ev.assert_not_called()
+
+    def test_vetting_matching_task_uses_explicit_llm_provider_and_model(self):
+        job = JobListing.objects.create(
+            source="test",
+            external_id="vetting-override",
+            title="Engineer",
+            company_name="ACME",
+            description="A" * 2100,
+        )
+        pe = PipelineEntry.objects.create(
+            job_listing=job,
+            track="ic",
+            stage=PipelineEntry.Stage.VETTING,
+        )
+        UserResume.objects.create(file="resume.pdf")
+
+        mock_llm = MagicMock()
+        mock_llm._resume_provider = "Ollama Local"
+        mock_llm._resume_model = "mistral"
+
+        with patch("resume_app.tasks.parse_pdf", return_value="resume text"), \
+            patch("resume_app.tasks.resolve_prompt_parts", return_value=("sys", "usr", None)), \
+            patch("resume_app.tasks.resolve_provider_api_key", return_value="http://localhost:11434"), \
+            patch("resume_app.tasks.list_models_for_provider", return_value=["mistral", "starling"]), \
+            patch("resume_app.tasks.get_llm", return_value=mock_llm), \
+            patch("resume_app.tasks.run_matching", return_value={"interview_probability": 75, "reasoning": "ok"}) as mock_run_matching:
+            result = evaluate_vetting_matching_task(
+                [pe.id],
+                llm_provider="Ollama Local",
+                llm_model="mistral",
+                matching_prompt="Custom matching prompt",
+            )
+
+        self.assertEqual(result["updated"], 1)
+        mock_run_matching.assert_called_once()
+        passed_llm = mock_run_matching.call_args.args[2]
+        self.assertEqual(passed_llm, mock_llm)
 
     def test_vetting_auto_promotion_moves_to_applying(self):
         cfg = AppAutomationSettings.get_solo()

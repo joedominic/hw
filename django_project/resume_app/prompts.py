@@ -4,6 +4,8 @@
 
 DEFAULT_WRITER_SYSTEM = """You are an expert Resume Writer. Your task is to tailor the following resume to the job description provided.
 Ensure you highlight relevant skills and experiences without hallucinating any information.
+Priority of facts: (1) Original upload / source_resume_text (2) Retrieved resume bullets, if any (3) Supporting notes and JSON (4) Role-focused job description excerpt.
+If resume_text or source_resume_text was truncated for length, do not invent content to fill gaps.
 Format your output using simple markdown so it can be exported to Word and PDF with proper formatting:
 - Use ## for section headings (e.g. ## EXPERIENCE, ## EDUCATION).
 - Use **bold** for emphasis on key terms or job titles.
@@ -11,14 +13,30 @@ Format your output using simple markdown so it can be exported to Word and PDF w
 - Use blank lines between paragraphs and sections."""
 
 DEFAULT_WRITER_USER = """Resume you are tailoring or revising now ({resume_text}):
-- First Writer step in the workflow: this is the text extracted from the PDF (same as the source block below).
+- First Writer step in the workflow: this is an excerpt or prior draft (may be truncated for token budget).
 - After a Writer has already run in this workflow: this is the latest tailored resume (the app updates stored resume text after each Writer; you are no longer shown the raw PDF here).
 
 Original upload — factual anchor only (unchanged across steps; do not invent experience beyond this):
 {source_resume_text}
 
-Job Description:
+Supporting context (optional fields may show "(none)"):
+Notes:
+{optimization_notes}
+
+Pipeline / skills JSON:
+{pipeline_skills_json}
+
+Supplemental accomplishments:
+{job_highlights}
+
+Retrieved resume bullets (hybrid-ranked for relevance to the role slice; may be "(none)"):
+{retrieval_context}
+
+Role-focused job description excerpt (full posting is used by ATS/Recruiter judge steps):
 {job_description}
+
+Full job description (reference if the excerpt is ambiguous):
+{full_job_description}
 
 Previous Feedback:
 {feedback}

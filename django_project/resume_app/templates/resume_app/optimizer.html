@@ -65,6 +65,7 @@
 
     <form method="post" enctype="multipart/form-data" id="optimizer-form" class="space-y-8">
         {% csrf_token %}
+        <input type="hidden" name="llm_provider" value="{{ selected_provider|default_if_none:'' }}">
         <input type="hidden" name="action" value="run_optimizer">
         {% if prefill_resume_id %}
         <input type="hidden" name="use_resume_id" value="{{ prefill_resume_id }}">
@@ -185,7 +186,7 @@
                             <textarea id="prompt-writer-input" name="prompt_writer" rows="10"
                                       class="mt-1 w-full rounded-concierge border border-slate-200 p-2 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
                                       placeholder="Writer prompt template">{{ prompts.writer }}</textarea>
-                            <p class="mt-1 text-xs text-slate-400">Placeholders: <code class="rounded bg-slate-100 px-1">{source_resume_text}</code> (PDF facts, fixed), <code class="rounded bg-slate-100 px-1">{resume_text}</code> (PDF text on first Writer, then last tailored output each step), <code class="rounded bg-slate-100 px-1">{optimized_resume}</code> (prior draft when set), <code class="rounded bg-slate-100 px-1">{job_description}</code>, <code class="rounded bg-slate-100 px-1">{feedback}</code></p>
+                            <p class="mt-1 text-xs text-slate-400">Placeholders: <code class="rounded bg-slate-100 px-1">{source_resume_text}</code>, <code class="rounded bg-slate-100 px-1">{resume_text}</code>, <code class="rounded bg-slate-100 px-1">{optimized_resume}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code> (role slice for Writer), <code class="rounded bg-slate-100 px-1">{full_job_description}</code>, <code class="rounded bg-slate-100 px-1">{retrieval_context}</code>, <code class="rounded bg-slate-100 px-1">{optimization_notes}</code>, <code class="rounded bg-slate-100 px-1">{pipeline_skills_json}</code>, <code class="rounded bg-slate-100 px-1">{job_highlights}</code>, <code class="rounded bg-slate-100 px-1">{feedback}</code></p>
                         </details>
                     </div>
                     <div class="rounded-concierge border border-slate-200 bg-white p-4 shadow-sm">
@@ -284,6 +285,32 @@
                     <textarea id="job-description-input" name="job_description" rows="14"
                               class="mt-3 w-full rounded-concierge border border-slate-200 p-3 text-sm text-concierge-slate focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
                               placeholder="Paste the target job description here">{{ job_description_value }}</textarea>
+                </div>
+            </div>
+
+            <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+                <h3 class="font-semibold text-concierge-slate">Supporting context <span class="text-xs font-normal text-slate-500">(optional)</span></h3>
+                <p class="mt-1 text-xs text-slate-500">Passed to the Writer only; lengths are capped server-side. Full job text is still used for ATS/Recruiter judges.</p>
+                <p class="mt-1 text-xs text-slate-500">Leave these blank to use saved defaults from Settings.</p>
+                <div class="mt-4 grid gap-4 lg:grid-cols-3">
+                    <div>
+                        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="optimization-notes-input">Notes</label>
+                        <textarea id="optimization-notes-input" name="optimization_notes" rows="5"
+                                  class="w-full rounded-concierge border border-slate-200 p-2 text-sm text-concierge-slate focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                  placeholder="e.g. Emphasize leadership, omit Company X">{{ optimization_notes_value|default:'' }}</textarea>
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="pipeline-skills-input">Pipeline / skills JSON</label>
+                        <textarea id="pipeline-skills-input" name="pipeline_skills_json" rows="5"
+                                  class="w-full rounded-concierge border border-slate-200 p-2 text-sm text-concierge-slate focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                  placeholder='e.g. {"hard_skills":["python","aws"]}'>{{ pipeline_skills_json_value|default:'' }}</textarea>
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="job-highlights-input">Supplemental accomplishments</label>
+                        <textarea id="job-highlights-input" name="job_highlights" rows="5"
+                                  class="w-full rounded-concierge border border-slate-200 p-2 text-sm text-concierge-slate focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                  placeholder="List accomplishments you want the optimizer to weave into the resume">{{ job_highlights_value|default:'' }}</textarea>
+                    </div>
                 </div>
             </div>
 
@@ -822,6 +849,11 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
             html += '<p class="text-center text-sm text-slate-600">Recruiter score: <span class="font-semibold text-concierge-slate">' + esc(rec) + "</span></p>";
         }
         html += '<p class="text-xs text-slate-500">Tokens (total): ' + esc(data.total_input_tokens != null ? data.total_input_tokens : 0) + " in · " + esc(data.total_output_tokens != null ? data.total_output_tokens : 0) + " out</p>";
+        if (data.optimizer_context_snapshot && typeof data.optimizer_context_snapshot === "object") {
+            var snap = data.optimizer_context_snapshot;
+            html += '<details class="mt-2 rounded-concierge border border-slate-200 bg-slate-50/80 p-2 text-xs"><summary class="cursor-pointer font-medium text-concierge-slate">Writer context budget</summary>';
+            html += '<pre class="mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-slate-700">' + esc(JSON.stringify(snap, null, 2)) + "</pre></details>";
+        }
         html += "</div>";
 
         html += '<div class="space-y-4">';
@@ -838,7 +870,7 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
             html += '<div class="mt-4 flex flex-wrap gap-3">';
             html += '<a class="inline-flex items-center rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800" href="/api/resume/export/' + esc(resumeId) + '/pdf">Export PDF</a>';
             html += '<a class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50" href="/api/resume/export/' + esc(resumeId) + '/docx">Export Word</a>';
-            html += '<a class="inline-flex items-center text-sm font-medium text-slate-500 hover:text-concierge-slate" href="{% url 'resume_optimizer' %}">Run again</a>';
+            html += "<a class=\"inline-flex items-center text-sm font-medium text-slate-500 hover:text-concierge-slate\" href=\"{% url 'resume_optimizer' %}\">Run again</a>";
             html += "</div></div>";
         } else if (data.error_message != null && data.error_message !== "" || data.status === "failed") {
             html += '<p class="mt-4 rounded-concierge border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">' + esc(data.error_message || "Optimization failed.") + "</p>";
@@ -885,17 +917,30 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
 
     var pollTimer = null;
     function startPolling(url, resumeId) {
+        console.log("Starting polling for resume", resumeId, "at URL", url);
         if (pollTimer) clearTimeout(pollTimer);
         function poll() {
             if (!url) return;
             fetch(url, { headers: { "X-Requested-With": "XMLHttpRequest" } })
-                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (r) {
+                    if (r.ok) return r.json();
+                    return r.text().then(function(text) { throw new Error("HTTP " + r.status + ": " + text); });
+                })
                 .then(function (data) {
+                    console.log("Poll response received:", data);
                     if (data) renderStatusFromJson(data, resumeId);
                     var done = data && (data.status === "completed" || data.status === "failed" || (data.optimized_content != null && data.optimized_content !== "") || (data.error_message != null && data.error_message !== ""));
-                    if (data && !done) pollTimer = setTimeout(poll, 2000);
+                    if (data && !done) {
+                        console.log("Poll incomplete, scheduling next poll");
+                        pollTimer = setTimeout(poll, 2000);
+                    } else if (done) {
+                        console.log("Poll complete, stopping");
+                    }
                 })
-                .catch(function () { pollTimer = setTimeout(poll, 5000); });
+                .catch(function (err) { 
+                    console.error("Status poll error:", err);
+                    pollTimer = setTimeout(poll, 5000); 
+                });
         }
         poll();
     }
@@ -1014,6 +1059,5 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
                 });
         });
     }
-})();
-</script>
+
 {% endblock %}

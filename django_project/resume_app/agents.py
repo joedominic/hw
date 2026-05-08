@@ -409,6 +409,12 @@ class AgentState(_AgentStateBase, total=False):
     score_threshold: int  # Exit when avg(ats_score, recruiter_score) >= this (default 85)
     job_cache_key: str  # Stable id for LLM gateway pinning (e.g. optimized resume id)
     source_resume_text: str  # PDF extraction; immutable fact anchor for Writer across steps
+    writer_job_description: str  # Role-focused JD excerpt for Writer (optional; else full JD)
+    optimization_notes: str
+    pipeline_skills_json: str
+    job_highlights: str
+    retrieval_context: str
+    optimizer_context_budget: dict  # Char counts / retrieval debug for UI
     writer_prompt_system: str
     writer_prompt_user: str
     writer_prompt_legacy: str
@@ -430,6 +436,8 @@ _STATE_KEYS = frozenset({
     "ats_judge_prompt_system", "ats_judge_prompt_user", "ats_judge_prompt_legacy",
     "recruiter_judge_prompt_system", "recruiter_judge_prompt_user", "recruiter_judge_prompt_legacy",
     "debug", "max_iterations", "score_threshold", "job_cache_key",
+    "writer_job_description", "optimization_notes", "pipeline_skills_json", "job_highlights",
+    "retrieval_context", "optimizer_context_budget",
 })
 
 
@@ -458,12 +466,21 @@ def writer_node(state: AgentState):
         src = base
     # Same as state.resume_text whenever prior is empty; when prior is set without base synced (rare), prefer prior.
     resume_body_this_step = prior if prior else base
+    jd_full = (_state_get(state, "job_description") or "").strip()
+    jd_writer = (_state_get(state, "writer_job_description") or "").strip()
+    if not jd_writer:
+        jd_writer = jd_full
     fmt = dict(
         resume_text=resume_body_this_step,
-        job_description=_state_get(state, "job_description") or "",
+        job_description=jd_writer,
+        full_job_description=jd_full,
         feedback=", ".join(_state_get(state, "feedback") or []),
         optimized_resume=prior,
         source_resume_text=src,
+        optimization_notes=_state_get(state, "optimization_notes") or "(none)",
+        pipeline_skills_json=_state_get(state, "pipeline_skills_json") or "(none)",
+        job_highlights=_state_get(state, "job_highlights") or "(none)",
+        retrieval_context=_state_get(state, "retrieval_context") or "(none)",
     )
     legacy = (_state_get(state, "writer_prompt_legacy") or "").strip()
     sys_t = (_state_get(state, "writer_prompt_system") or "").strip()

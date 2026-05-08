@@ -10,6 +10,7 @@ from .models import (
     OptimizedResume,
     AgentLog,
     LLMProviderConfig,
+    LLMProviderPreference,
     UserResume,
     JobSearchTask,
     JobSearchTaskRun,
@@ -40,13 +41,16 @@ from .crypto import decrypt_api_key
 from .services import parse_pdf
 from .callbacks import TokenUsageCallback
 from .llm_gateway import USAGE_QUERY_PIPELINE_VETTING
-from .llm_services import is_auth_error
+from .pipeline_llm_skill_extract import resolve_provider_api_key
+from .llm_services import is_auth_error, list_models_for_provider
+from .llm_factory import get_llm
 from .llm_session import get_runtime_provider_candidates, get_active_llm_provider
 from .prompt_store import (
     build_optimizer_graph_prompt_state,
     profile_for_llm,
     resolve_prompt_parts,
 )
+from .optimizer_budget import build_optimizer_context_state
 import time
 import logging
 
@@ -101,6 +105,48 @@ def validate_cron(cron_string: str) -> None:
         croniter.croniter(cron_string)
     except Exception as e:
         raise ValueError(f"Invalid cron expression: expected 5 fields (minute hour day month weekday). {e}") from e
+
+
+def _build_llm_override(llm_provider: str, llm_model: str | None):
+    api_key = resolve_provider_api_key(llm_provider)
+    if not api_key:
+        raise ValueError(f"No API key configured for {llm_provider}.")
+
+    available_models = list_models_for_provider(llm_provider, api_key)
+    if not available_models:
+        raise ValueError(f"No models available for {llm_provider}.")
+
+    if llm_model and llm_model in available_models:
+        model_to_use = llm_model
+    else:
+        # Try to use highest priority model from configured preferences
+        model_to_use = None
+        prefs = (
+            LLMProviderPreference.objects.filter(
+                provider_config__provider=llm_provider
+            )
+            .select_related("provider_config")
+            .order_by("priority", "id")
+        )
+        for pref in prefs:
+            candidate_model = (pref.model or pref.provider_config.default_model or "").strip()
+            if candidate_model and candidate_model in available_models:
+                model_to_use = candidate_model
+                break
+        
+        # Fall back to first available if no preference match found
+        if not model_to_use:
+            model_to_use = available_models[0]
+        
+        if llm_model:
+            logger.warning(
+                "LLM model %r not available for provider %s; using highest priority %s instead",
+                llm_model,
+                llm_provider,
+                model_to_use,
+            )
+
+    return get_llm(llm_provider, api_key, model_to_use)
 
 
 def get_next_run_at(cron_string: str, from_time=None):
@@ -173,6 +219,12 @@ def optimize_resume_task(
         # Parse PDF
         resume_text = parse_pdf(optimized_resume.original_resume.file.path)
 
+        ctx_state = build_optimizer_context_state(
+            optimized=optimized_resume,
+            resume_text_full=resume_text or "",
+            job_description_full=job_desc or "",
+        )
+
         # Setup Graph: configurable steps or default Writer -> ATS -> Recruiter
         steps = workflow_steps if workflow_steps else ["writer", "ats_judge", "recruiter_judge"]
         if workflow_steps:
@@ -192,9 +244,7 @@ def optimize_resume_task(
         # Initial State (prompts from profile + optional API override)
         _pb = build_optimizer_graph_prompt_state(prompts or None)
         initial_state = {
-            "resume_text": resume_text,
-            "source_resume_text": resume_text,
-            "job_description": job_desc,
+            **ctx_state,
             "optimized_resume": "",
             "ats_score": 0,
             "recruiter_score": 0,
@@ -215,6 +265,8 @@ def optimize_resume_task(
             "recruiter_judge_prompt_user": _pb["recruiter_judge_prompt_user"],
             "recruiter_judge_prompt_legacy": _pb["recruiter_judge_prompt_legacy"],
             "debug": bool(debug),
+            "max_iterations": max(1, min(int(max_iterations), 5)),
+            "score_threshold": max(0, min(100, int(score_threshold))),
         }
 
         # Run Graph
@@ -270,6 +322,9 @@ def optimize_resume_task(
         optimized_resume.status_display = ""
         optimized_resume.total_input_tokens = usage_callback.total_input_tokens or None
         optimized_resume.total_output_tokens = usage_callback.total_output_tokens or None
+        snap = last_state.get("optimizer_context_budget")
+        if isinstance(snap, dict):
+            optimized_resume.optimizer_context_snapshot = snap
         optimized_resume.save()
 
         return {"status": "success", "resume_id": resume_id}
@@ -618,7 +673,22 @@ def evaluate_vetting_matching_task(
 
         from .llm_gateway import preference_candidates_available
 
-        if not preference_candidates_available():
+        llm_override = None
+        if llm_provider:
+            try:
+                llm_override = _build_llm_override(llm_provider, llm_model)
+            except Exception as e:
+                logger.exception(
+                    "[evaluate_vetting_matching_task] invalid LLM override provider=%s model=%s: %s",
+                    llm_provider,
+                    llm_model,
+                    e,
+                )
+                return {
+                    "status": "error",
+                    "message": f"Invalid LLM override: {e}",
+                }
+        elif not preference_candidates_available():
             return {"status": "error", "message": "No LLM configured (add provider keys and preference rows)."}
 
         jd_max_chars = getattr(settings, "JOB_MATCHING_JD_MAX_CHARS", 12000)
@@ -679,7 +749,7 @@ def evaluate_vetting_matching_task(
                         result = run_matching(
                             resume_snippet,
                             jd,
-                            None,
+                            llm_override,
                             prompt_template=matching_prompt,
                             job_cache_key=f"vetting:{entry.id}",
                             usage_query_kind=USAGE_QUERY_PIPELINE_VETTING,
@@ -688,7 +758,7 @@ def evaluate_vetting_matching_task(
                         result = run_matching(
                             resume_snippet,
                             jd,
-                            None,
+                            llm_override,
                             prompt_system=ms,
                             prompt_user=mu,
                             prompt_legacy=ml or None,
@@ -739,6 +809,8 @@ def try_vetting_match_debug(
     entry: PipelineEntry | int,
     *,
     matching_prompt: str | None = None,
+    llm_provider: str | None = None,
+    llm_model: str | None = None,
 ) -> dict:
     """
     Run exactly one vetting matching LLM call and return parsed fields plus raw model text.
@@ -781,13 +853,82 @@ def try_vetting_match_debug(
         }
     jd_max_chars = getattr(settings, "JOB_MATCHING_JD_MAX_CHARS", 12000)
     jd_use = jd[:jd_max_chars]
+
+    llm = None
+    if llm_provider:
+        api_key = resolve_provider_api_key(llm_provider)
+        if not api_key:
+            return {
+                "ok": False,
+                "skip_reason": "no_api_key",
+                "provider": llm_provider,
+            }
+        
+        # Validate and resolve model if needed
+        try:
+            from .llm_services import list_models_for_provider
+            from .llm_factory import get_llm
+            
+            available_models = list_models_for_provider(llm_provider, api_key)
+            if not available_models:
+                return {
+                    "ok": False,
+                    "skip_reason": "no_models_available",
+                    "provider": llm_provider,
+                }
+            
+            # Use requested model if available, else use highest priority configured model
+            if llm_model and llm_model in available_models:
+                model_to_use = llm_model
+            else:
+                # Try to use highest priority model from configured preferences
+                model_to_use = None
+                prefs = (
+                    LLMProviderPreference.objects.filter(
+                        provider_config__provider=llm_provider
+                    )
+                    .select_related("provider_config")
+                    .order_by("priority", "id")
+                )
+                for pref in prefs:
+                    candidate_model = (pref.model or pref.provider_config.default_model or "").strip()
+                    if candidate_model and candidate_model in available_models:
+                        model_to_use = candidate_model
+                        break
+                
+                # Fall back to first available if no preference match found
+                if not model_to_use:
+                    model_to_use = available_models[0]
+                
+                if llm_model:
+                    logger.warning(
+                        "try_vetting_match_debug requested model %s not available for %s, using highest priority %s",
+                        llm_model,
+                        llm_provider,
+                        model_to_use,
+                    )
+            
+            llm = get_llm(llm_provider, api_key, model_to_use)
+        except Exception as e:
+            logger.exception(
+                "try_vetting_match_debug llm init entry_id=%s provider=%s model=%s",
+                entry.id,
+                llm_provider,
+                llm_model,
+            )
+            return {
+                "ok": False,
+                "skip_reason": "llm_init_error",
+                "error": str(e),
+            }
+
     ms, mu, ml = resolve_prompt_parts(profile_for_llm(None), "matching")
     try:
         if matching_prompt and str(matching_prompt).strip():
             result = run_matching(
                 resume_snippet,
                 jd_use,
-                None,
+                llm,
                 prompt_template=matching_prompt,
                 job_cache_key=f"vetting:debug:{entry.id}",
                 usage_query_kind=USAGE_QUERY_PIPELINE_VETTING,
@@ -797,7 +938,7 @@ def try_vetting_match_debug(
             result = run_matching(
                 resume_snippet,
                 jd_use,
-                None,
+                llm,
                 prompt_system=ms,
                 prompt_user=mu,
                 prompt_legacy=ml or None,
