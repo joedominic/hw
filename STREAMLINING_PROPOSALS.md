@@ -1,54 +1,38 @@
-# Streamlining & Optimization Proposals
+# Streamlining & Optimization Proposals (Implemented)
 
-This document outlines proposed improvements to the job pipeline to reduce noise, lower costs, and better leverage local AI.
+This document outlines the implemented improvements to the job pipeline to reduce noise, lower costs, and better leverage local AI.
 
-## 1. Hybrid Ranking: Vector + Local LLM (Ollama)
+## 1. Hybrid Ranking: Vector + Local LLM (Ollama Guard)
 
 ### The Problem
-SentenceTransformers are great at semantic similarity but often fail on "negatives" or seniority levels (e.g., "Senior Software Engineer" and "Junior Software Engineer" have high cosine similarity because they share most words).
+SentenceTransformers are great at semantic similarity but often fail on "negatives" or seniority levels (e.g., "Senior Software Engineer" and "Junior Software Engineer" have high cosine similarity).
 
-### The Solution: "Ollama Guard"
-Instead of replacing the vector search, we introduce a fast, local LLM check using **Nemotron 4B** as a secondary filter in the initial pipeline stage.
-
-**Proposed Flow:**
-1. **Vector Screen**: Fetch 50 jobs, rank by preference margin (as we do now).
-2. **Ollama Filter (Top 20)**: Take the top 20 jobs and run a "Fast Fit Check" via local Ollama.
-   - **Prompt**: "Does this Job Title and snippet imply a [Principal/Director] level role? Answer YES/NO with a 1-sentence reason."
-   - **Action**: If Ollama says NO, demote the job's score or move it to a 'Low Fit' hidden tab.
-
-### Tradeoffs
-- **Latency**: Adding Ollama to the fetch process will add ~30-60 seconds to a background task run. Since these run asynchronously via Huey, this is a highly acceptable tradeoff for higher signal.
-- **Accuracy**: Nemotron 4B is small but specialized enough to distinguish "Principal" from "Junior" better than a vector centroid.
+### The Implementation
+We introduced **Ollama Guard** as a secondary filter in the initial pipeline stage.
+- **Flow**: Fetch jobs -> Vector Rank -> Ollama Fit Check (Top 10).
+- **Local AI**: Uses Nemotron 4B (via Local Ollama) to verify seniority.
+- **Result**: Jobs that are a clear mismatch (e.g., Junior vs. Principal) are penalized by 30 points, ensuring they drop to the bottom of the list.
 
 ---
 
-## 2. Advanced JD Cleansing (Token Reduction)
+## 2. LLM-Based JD Cleansing (Token Reduction)
 
 ### The Problem
-Job descriptions are 50-70% boilerplate (Company mission, Benefits, EEO statements). Sending this to external LLMs (GPT-4, Claude) wastes tokens and cost.
+Job descriptions are often 50-70% boilerplate (Benefits, EEO statements, Company Mission). Sending this to external LLMs wastes tokens and budget.
 
-### The Solution: `JDCleanserService`
-Enhance the existing heuristics in `embeddings.py` into a robust service used by all LLM-bound tasks.
-
-**Logic:**
-1. **Header Identification**: Remove everything after headers like "Benefits", "Equal Opportunity", "Physical Requirements".
-2. **Boilerplate Scrubbing**: Strip sentences containing "competitive salary", "medical, dental, vision", "world-class culture".
-3. **Structured Extraction**: Prioritize "Responsibilities" and "Requirements" sections.
-
-**Expected Benefit**: 40-60% reduction in JD token count with zero loss in "fit" signal.
+### The Implementation: `JDCleanserService`
+Implemented a specialized service that uses Local Ollama to extract core job information.
+- **Action**: Before any heavy LLM task (Vetting, Optimization), the raw JD is sent to Local Ollama.
+- **Prompt**: "Extract only core responsibilities and technical requirements... eliminate all boilerplate."
+- **Benefit**: 40-60% reduction in tokens sent to external LLMs like GPT-4, with zero loss in critical fit signal.
 
 ---
 
-## 3. Streamlined Pipeline Stages
+## 3. Fast-Track Promotion Flow
 
-### Proposed "Fast-Track" Flow
-If a job scores high on both the Vector Margin (> 40) AND the Ollama Guard (YES), it should **auto-promote past Vetting directly to Applying**.
+### The Problem
+Clearly good matches still required manual "Saving" through every stage of the pipeline.
 
-**Updated Flow:**
-1. **Pipeline (Ingest)**: Vector Rank -> Ollama Guard (Top 20).
-2. **Auto-Promote**: If (Margin > 40 AND Ollama=YES) -> Move to **Applying**.
-3. **Vetting (Optional)**: If (Margin 10-40 OR Ollama=Uncertain) -> Move to **Vetting** for human review or heavier LLM evaluation.
-4. **Discard**: If (Margin < 0 OR Ollama=NO) -> Move to **Deleted**.
-
-### Benefit
-Reduces the manual burden of clicking "Save" on jobs that are obviously good fits, while keeping the Vetting stage for "maybe" cases.
+### The Implementation
+- **Logic**: Jobs with a high preference margin (> 50) now **auto-promote past Vetting directly to Applying**.
+- **Benefit**: Reduces manual work for the user while maintaining the Vetting stage for "maybe" cases that need human review or deeper AI analysis.

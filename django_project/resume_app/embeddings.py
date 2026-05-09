@@ -75,57 +75,11 @@ MAX_ROLE_SENTENCES = 25   # cap per job to limit embed cost
 def extract_role_description(description: str, title: str, max_chars: int = 800) -> str:
     """
     Extract role-focused slice of job description (responsibilities, requirements).
-    Strips boilerplate (why join, benefits, culture). No LLM; heuristics only.
+    Uses JDCleanserService to strip boilerplate.
     """
-    if not (description or "").strip():
-        return ""
-    d = (description or "").strip()
-    title = (title or "").strip()
+    from .jd_cleanser import JDCleanserService
 
-    # 1) Find section boundaries: **Header** or ## Header
-    section_starts = list(re.finditer(r"(?:\*\*([^*]+)\*\*|^##\s*(.+?)(?:\n|$))", d, re.MULTILINE | re.IGNORECASE))
-    if section_starts:
-        collected = []
-        for i, m in enumerate(section_starts):
-            header = (m.group(1) or m.group(2) or "").strip().lower()
-            if any(kw in header for kw in FLUFF_HEADER_KEYWORDS):
-                break
-            if any(kw in header for kw in ROLE_HEADER_KEYWORDS):
-                start = m.end()
-                end = section_starts[i + 1].start() if i + 1 < len(section_starts) else len(d)
-                block = d[start:end].strip()
-                if block:
-                    collected.append(block)
-        if collected:
-            return " ".join(collected)[:max_chars]
-
-    # 2) Lead-in skip: drop fluff at start, then take next max_chars
-    rest = d
-    for pat in LEADIN_FLUFF_PATTERNS:
-        rest = re.sub(pat, "", rest, flags=re.IGNORECASE)
-    role_markers = re.compile(
-        r"(responsible for|you will|requirements?|qualifications?|the ideal candidate|about the role)",
-        re.IGNORECASE,
-    )
-    if title and len(title) > 2:
-        try:
-            idx = rest.lower().index(title.lower())
-            rest = rest[idx:]
-        except ValueError:
-            pass
-    m = role_markers.search(rest)
-    if m:
-        rest = rest[m.start() : m.start() + max_chars]
-    else:
-        rest = rest[:max_chars]
-    if rest.strip():
-        return rest.strip()
-
-    # 3) Fallback: first 2 paragraphs or first 600 chars
-    paras = [p.strip() for p in d.split("\n\n") if p.strip()]
-    if paras:
-        return " ".join(paras[:2])[:max_chars]
-    return d[:max_chars]
+    return JDCleanserService.cleanse(description, title=title, max_chars=max_chars)
 
 
 def split_into_sentences(text: str) -> List[str]:
