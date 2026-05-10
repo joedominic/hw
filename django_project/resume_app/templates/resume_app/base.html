@@ -89,7 +89,7 @@
                     Job automation
                 </a>
                 <a href="{% url 'huey_dashboard' %}"
-                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'huey_dashboard' or url_name == 'huey_periodic_revoke' or url_name == 'huey_periodic_restore' or url_name == 'huey_flush_queue' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
+                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'huey_dashboard' or url_name == 'huey_periodic_revoke' or url_name == 'huey_periodic_restore' or url_name == 'huey_flush_queue' or url_name == 'huey_run_cleanup_now' or url_name == 'huey_task_run_now' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
                     Background jobs
                 </a>
             </div>
@@ -127,7 +127,7 @@
                 <a href="{% url 'jobs_search' %}" class="rounded-concierge px-2 py-1 hover:bg-slate-50 hover:text-concierge-slate">Search</a>
                 <a href="{% url 'pipeline' %}" class="rounded-concierge px-2 py-1 hover:bg-slate-50 hover:text-concierge-slate">Pipeline</a>
                 <span class="hidden px-1 text-slate-300 sm:inline" aria-hidden="true">|</span>
-                <a href="{% url 'job_automation' %}" class="rounded-concierge px-2 py-1 {% if url_name == 'job_automation' or url_name == 'job_task_create' or url_name == 'job_task_edit' or url_name == 'job_task_run_now' or url_name == 'job_task_toggle_active' or url_name == 'huey_dashboard' or url_name == 'huey_periodic_revoke' or url_name == 'huey_periodic_restore' or url_name == 'huey_flush_queue' %}bg-slate-100 text-concierge-slate{% else %}hover:bg-slate-50 hover:text-concierge-slate{% endif %}">Automation</a>
+                <a href="{% url 'job_automation' %}" class="rounded-concierge px-2 py-1 {% if url_name == 'job_automation' or url_name == 'job_task_create' or url_name == 'job_task_edit' or url_name == 'job_task_run_now' or url_name == 'job_task_toggle_active' or url_name == 'huey_dashboard' or url_name == 'huey_periodic_revoke' or url_name == 'huey_periodic_restore' or url_name == 'huey_flush_queue' or url_name == 'huey_run_cleanup_now' or url_name == 'huey_task_run_now' %}bg-slate-100 text-concierge-slate{% else %}hover:bg-slate-50 hover:text-concierge-slate{% endif %}">Automation</a>
                 <a href="{% url 'track_list' %}" class="rounded-concierge px-2 py-1 {% if url_name == 'track_list' or url_name == 'track_delete' %}bg-slate-100 text-concierge-slate{% else %}hover:bg-slate-50 hover:text-concierge-slate{% endif %}" title="Tracks and resume PDFs">Tracks</a>
                 <a href="{% url 'workflow_list' %}" class="rounded-concierge px-2 py-1 {% if url_name == 'workflow_list' or url_name == 'workflow_create' or url_name == 'workflow_edit' or url_name == 'workflow_delete' %}bg-slate-100 text-concierge-slate{% else %}hover:bg-slate-50 hover:text-concierge-slate{% endif %}">Workflows</a>
             </nav>

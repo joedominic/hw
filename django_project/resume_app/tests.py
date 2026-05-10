@@ -905,6 +905,19 @@ class PromptStoreResolveTestCase(TestCase):
         self.assertIn("JSON", s)
         self.assertIn("{resume_text}", u)
 
+    def test_resolve_jd_cleanse_uses_code_defaults_when_profile_empty(self):
+        from resume_app.prompt_store import resolve_prompt_parts
+        from resume_app.models import UserPromptProfile
+
+        UserPromptProfile.objects.filter(pk=1).delete()
+        UserPromptProfile.objects.create(pk=1)
+        prof = UserPromptProfile.objects.get(pk=1)
+        s, u, leg = resolve_prompt_parts(prof, "jd_cleanse")
+        self.assertIsNone(leg)
+        self.assertIn("core job signal", s.lower())
+        self.assertIn("{job_description}", u)
+        self.assertIn("{title}", u)
+
 
 class LlmRateLimitTestCase(TestCase):
     def test_acquire_when_disabled_returns_noop(self):

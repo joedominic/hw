@@ -1,6 +1,6 @@
 import re
 import logging
-from typing import List, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -8,7 +8,8 @@ class JDCleanserService:
     """
     Service to cleanse job descriptions by stripping boilerplate and fluff sections
     to focus on core responsibilities and requirements.
-    Uses Local Ollama for high-quality extraction, with a heuristic fallback.
+    Uses Local Ollama for high-quality extraction (prompt from Prompt Library → jd_cleanse),
+    with a heuristic fallback.
     """
 
     @staticmethod
@@ -31,11 +32,12 @@ class JDCleanserService:
     def cleanse_with_llm(description: str, title: str = "") -> Optional[str]:
         """
         Use Local Ollama to extract core job information.
+        Prompt templates: Settings → Prompt library, tab **JD cleanse**. Placeholders: ``{title}``, ``{job_description}``.
         """
         try:
             from .llm_factory import get_llm
             from .models import LLMProviderConfig
-            from langchain_core.messages import HumanMessage
+            from .prompt_store import build_jd_cleanse_llm_messages
 
             provider = "Ollama Local"
             config = LLMProviderConfig.objects.filter(provider=provider, is_active=True).first()
@@ -44,15 +46,14 @@ class JDCleanserService:
 
             llm = get_llm(provider, model=config.default_model or "nemotron")
 
-            prompt = (
-                f"Extract only the core responsibilities and technical requirements for the job title '{title}' "
-                "from the following description. Eliminate all boilerplate, benefits, company info, and EEO statements. "
-                "Preserve technical keywords and specific qualifications.\n\n"
-                f"Job Description:\n{description[:8000]}\n\n"
-                "Extracted Core Info:"
+            body = (description or "")[:8000]
+            messages = build_jd_cleanse_llm_messages(
+                None,
+                title=(title or "").strip(),
+                job_description=body,
             )
 
-            response = llm.invoke([HumanMessage(content=prompt)])
+            response = llm.invoke(messages)
             content = response.content if hasattr(response, 'content') else str(response)
 
             if content and len(content) > 50:

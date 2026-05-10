@@ -186,7 +186,7 @@ class AgentLog(models.Model):
 
 class UserPromptProfile(models.Model):
     """
-    Singleton-style profile (use id=1) for edited Writer / Judge / Matching / Insights prompts.
+    Singleton-style profile (use id=1) for edited Writer / Judge / Matching / Insights / JD cleanse prompts.
     Empty string for a field means fall back to the code default in prompts.py.
 
     When *_system / *_user are both empty but the legacy single field (e.g. writer) is set,
@@ -208,6 +208,9 @@ class UserPromptProfile(models.Model):
     insights = models.TextField(blank=True)
     insights_system = models.TextField(blank=True)
     insights_user = models.TextField(blank=True)
+    jd_cleanse = models.TextField(blank=True)
+    jd_cleanse_system = models.TextField(blank=True)
+    jd_cleanse_user = models.TextField(blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

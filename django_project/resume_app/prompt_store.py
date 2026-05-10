@@ -18,6 +18,9 @@ from .prompts import (
     DEFAULT_INSIGHTS_PROMPT,
     DEFAULT_INSIGHTS_SYSTEM,
     DEFAULT_INSIGHTS_USER,
+    DEFAULT_JD_CLEANSE_PROMPT,
+    DEFAULT_JD_CLEANSE_SYSTEM,
+    DEFAULT_JD_CLEANSE_USER,
     DEFAULT_MATCHING_PROMPT,
     DEFAULT_MATCHING_SYSTEM,
     DEFAULT_MATCHING_USER,
@@ -35,9 +38,10 @@ DEFAULT_PROMPTS: Dict[str, str] = {
     "recruiter_judge": DEFAULT_RECRUITER_JUDGE_PROMPT,
     "matching": DEFAULT_MATCHING_PROMPT,
     "insights": DEFAULT_INSIGHTS_PROMPT,
+    "jd_cleanse": DEFAULT_JD_CLEANSE_PROMPT,
 }
 
-_LEGACY_FIELDS = ("writer", "ats_judge", "recruiter_judge", "matching", "insights")
+_LEGACY_FIELDS = ("writer", "ats_judge", "recruiter_judge", "matching", "insights", "jd_cleanse")
 
 _PROMPT_SPEC = {
     "writer": ("writer", "writer_system", "writer_user", DEFAULT_WRITER_SYSTEM, DEFAULT_WRITER_USER),
@@ -51,6 +55,13 @@ _PROMPT_SPEC = {
     ),
     "matching": ("matching", "matching_system", "matching_user", DEFAULT_MATCHING_SYSTEM, DEFAULT_MATCHING_USER),
     "insights": ("insights", "insights_system", "insights_user", DEFAULT_INSIGHTS_SYSTEM, DEFAULT_INSIGHTS_USER),
+    "jd_cleanse": (
+        "jd_cleanse",
+        "jd_cleanse_system",
+        "jd_cleanse_user",
+        DEFAULT_JD_CLEANSE_SYSTEM,
+        DEFAULT_JD_CLEANSE_USER,
+    ),
 }
 
 
@@ -113,6 +124,9 @@ def get_effective_prompts(request: Optional[Any]) -> Dict[str, str]:
     """
     Return merged prompts for forms and display: legacy combined strings plus
     system/user fields. Keys: writer, writer_system, writer_user, ...
+
+    System/user textareas show the effective templates (including code defaults when
+    the profile row is still empty), so the Prompt Library matches runtime behavior.
     """
     profile = _get_or_create_profile()
     if request is not None and hasattr(request, "session") and _profile_is_empty(profile):
@@ -125,10 +139,17 @@ def get_effective_prompts(request: Optional[Any]) -> Dict[str, str]:
         raw_sys = (getattr(profile, sys_a) or "").strip()
         raw_usr = (getattr(profile, usr_a) or "").strip()
 
-        out[f"{kind}_system"] = getattr(profile, sys_a) or ""
-        out[f"{kind}_user"] = getattr(profile, usr_a) or ""
-
         has_split = bool(raw_sys or raw_usr)
+        eff_sys, eff_usr, eff_leg = resolve_prompt_parts(profile, kind)
+
+        # Form fields: show effective system/user (code defaults when DB is empty), not raw blanks.
+        if eff_leg:
+            out[f"{kind}_system"] = ""
+            out[f"{kind}_user"] = ""
+        else:
+            out[f"{kind}_system"] = eff_sys
+            out[f"{kind}_user"] = eff_usr
+
         if has_split:
             out[kind] = (raw_sys or def_sys) + "\n\n" + (raw_usr or def_user)
         elif raw_legacy:
@@ -210,3 +231,25 @@ def build_optimizer_graph_prompt_state(
         _fallback = _DEF_W if kind == "writer" else _DEF_ATS if kind == "ats_judge" else _DEF_REC
         out[f"{prefix}template"] = (leg if leg else (s + "\n\n" + u)).strip() or _fallback
     return out
+
+
+def build_jd_cleanse_llm_messages(
+    request: Optional[Any],
+    *,
+    title: str,
+    job_description: str,
+):
+    """
+    LangChain messages for Ollama Local JD cleansing (vetting + pipeline optimizer paths).
+    Uses Prompt Library kind "jd_cleanse"; placeholders: {title}, {job_description}.
+    """
+    from .agents import build_llm_messages_for_prompt
+
+    prof = profile_for_llm(request)
+    s, u, leg = resolve_prompt_parts(prof, "jd_cleanse")
+    return build_llm_messages_for_prompt(
+        legacy_combined=leg or None,
+        system_template=s or None,
+        user_template=u or None,
+        format_kwargs={"title": title or "", "job_description": job_description or ""},
+    )

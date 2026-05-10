@@ -63,7 +63,14 @@ from .preference import invalidate_preference_cache, invalidate_disliked_embeddi
 from .job_sources import DEFAULT_SITE_NAMES
 from .tasks import run_job_search_task, get_next_run_at, validate_cron, try_vetting_match_debug, VETTING_MATCHING_JD_MIN_CHARS
 from .utils import cron_to_short_description
-from .huey_dashboard import PERIODIC_TASKS, get_periodic_task_info, get_periodic_task_wrapper
+from .huey_dashboard import (
+    ADHOC_RUN_NOW_TASKS,
+    PERIODIC_TASKS,
+    get_periodic_task_info,
+    get_periodic_task_wrapper,
+    get_run_now_display_name,
+    run_now_task_names,
+)
 from .prompt_store import get_effective_prompts, save_prompts_to_profile, clear_all_prompts_in_profile
 from .llm_session import (
     get_active_llm_provider as _get_active_llm_provider,
@@ -1113,7 +1120,7 @@ def llm_test_view(request):
 
 def prompt_library_view(request):
     """
-    Prompt Library: edit Writer / ATS / Recruiter / Matching / Insights templates.
+    Prompt Library: edit Writer / ATS / Recruiter / Matching / Insights / JD cleanse templates.
     Values are stored in UserPromptProfile (see prompt_store).
     """
     try:
@@ -1164,6 +1171,14 @@ def prompt_library_view(request):
             else:
                 ins_leg, ins_sys, ins_usr = "", i_sys, i_usr
 
+            jd_sys = (request.POST.get("prompt_jd_cleanse_system") or "").strip()
+            jd_usr = (request.POST.get("prompt_jd_cleanse_user") or "").strip()
+            jd_combined = (request.POST.get("prompt_jd_cleanse_combined") or "").strip()
+            if jd_combined:
+                jd_leg, jd_sys, jd_usr = jd_combined, "", ""
+            else:
+                jd_leg, jd_sys, jd_usr = "", jd_sys, jd_usr
+
             prompts = {
                 "writer": writer_leg,
                 "writer_system": writer_sys,
@@ -1180,10 +1195,13 @@ def prompt_library_view(request):
                 "insights": ins_leg,
                 "insights_system": ins_sys,
                 "insights_user": ins_usr,
+                "jd_cleanse": jd_leg,
+                "jd_cleanse_system": jd_sys,
+                "jd_cleanse_user": jd_usr,
             }
             save_prompts_to_profile(request, prompts)
             prompts = get_effective_prompts(request)
-            messages.success(request, "Prompts saved. They will be used by the Resume Optimizer and Job Search.")
+            messages.success(request, "Prompts saved. They will be used by the Resume Optimizer, Job Search, vetting, and JD cleansing.")
             return redirect(reverse("prompt_library"))
         if action == "reset_prompts":
             try:
@@ -1671,11 +1689,23 @@ def huey_dashboard_view(request):
     from .tasks import CLEANUP_STATUS_CACHE_KEY
     cleanup_status = cache.get(CLEANUP_STATUS_CACHE_KEY)
 
+    adhoc_rows: list[dict[str, str]] = []
+    for info in ADHOC_RUN_NOW_TASKS:
+        adhoc_rows.append(
+            {
+                "task_fn_name": info["task_fn_name"],
+                "display_name": info["display_name"],
+                "basic": info.get("basic") or "",
+                "advanced": info.get("advanced") or "",
+            }
+        )
+
     context = {
         "immediate": immediate,
         "queue_stats": queue_stats,
         "queue_stats_error": queue_stats_error,
         "periodic_tasks": periodic_rows,
+        "adhoc_run_tasks": adhoc_rows,
         "recent_runs": recent_runs,
         "cleanup_status": cleanup_status,
     }
@@ -1791,6 +1821,32 @@ def huey_run_cleanup_now_view(request):
         return redirect("huey_dashboard")
 
     messages.success(request, "Cleanup Manager queued (dedupe, retention purge, inactive Applying check).")
+    return redirect("huey_dashboard")
+
+
+def huey_task_run_now_view(request, task_name: str):
+    """Enqueue a periodic Huey task or an ad-hoc @db_task that needs no arguments."""
+
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+
+    if task_name not in run_now_task_names():
+        messages.error(request, f"Unknown or unsupported on-demand task: {task_name}")
+        return redirect("huey_dashboard")
+
+    wrapper = get_periodic_task_wrapper(task_name)
+    if wrapper is None:
+        messages.error(request, f"Task not found in resume_app.tasks: {task_name}")
+        return redirect("huey_dashboard")
+
+    label = get_run_now_display_name(task_name)
+    try:
+        wrapper()
+    except Exception as e:
+        messages.error(request, f'Failed to queue "{label}": {e}')
+        return redirect("huey_dashboard")
+
+    messages.success(request, f"Queued: {label}")
     return redirect("huey_dashboard")
 
 
