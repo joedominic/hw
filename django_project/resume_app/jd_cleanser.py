@@ -30,19 +30,11 @@ class JDCleanserService:
     @staticmethod
     def cleanse_with_llm(description: str, title: str = "") -> Optional[str]:
         """
-        Use Local Ollama to extract core job information.
+        Use LLM to extract core job information, preferring local models.
         """
         try:
-            from .llm_factory import get_llm
-            from .models import LLMProviderConfig
+            from .llm_gateway import invoke_llm_messages
             from langchain_core.messages import HumanMessage
-
-            provider = "Ollama Local"
-            config = LLMProviderConfig.objects.filter(provider=provider, is_active=True).first()
-            if not config:
-                return None
-
-            llm = get_llm(provider, model=config.default_model or "nemotron")
 
             prompt = (
                 f"Extract only the core responsibilities and technical requirements for the job title '{title}' "
@@ -52,7 +44,11 @@ class JDCleanserService:
                 "Extracted Core Info:"
             )
 
-            response = llm.invoke([HumanMessage(content=prompt)])
+            response = invoke_llm_messages(
+                [HumanMessage(content=prompt)],
+                prefer_local=True,
+                only_local=True,
+            )
             content = response.content if hasattr(response, 'content') else str(response)
 
             if content and len(content) > 50:
