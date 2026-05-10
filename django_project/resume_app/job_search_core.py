@@ -381,7 +381,20 @@ def rank_and_filter_jobs(
     """
     ranked = _rank_jobs_with_meta(jobs_with_meta, track)
     jobs_out = _apply_auto_dislike(ranked, track)
-    return _apply_disliked_penalty_and_final_sort(jobs_out, track)
+    jobs_out = _apply_disliked_penalty_and_final_sort(jobs_out, track)
+
+    # NEW: Apply Ollama Guard to top 10 results to reduce noise (e.g. seniority mismatch)
+    from django.conf import settings
+
+    if getattr(settings, "OLLAMA_GUARD_ENABLED", False):
+        try:
+            from .services import run_ollama_guard_on_payloads
+
+            jobs_out = run_ollama_guard_on_payloads(jobs_out[:10], track) + jobs_out[10:]
+        except Exception as e:
+            logger.warning("Ollama Guard failed, skipping: %s", e)
+
+    return jobs_out
 
 
 def recompute_preferences_for_jobs(

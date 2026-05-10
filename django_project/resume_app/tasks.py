@@ -343,6 +343,8 @@ PIPELINE_OPT_MIN_JD_CHARS = 50
 
 
 def _build_pipeline_job_description(job: JobListing) -> str:
+    from .jd_cleanser import JDCleanserService
+
     title = (job.title or "").strip()
     company = (job.company_name or "").strip()
     loc = (job.location or "").strip()
@@ -355,7 +357,9 @@ def _build_pipeline_job_description(job: JobListing) -> str:
         )
         if x
     )
-    desc = (job.description or "").strip()
+    # Use JDCleanserService to strip boilerplate before sending to LLM.
+    # LLM-based cleansing is enabled here for maximum quality in the Optimizer.
+    desc = JDCleanserService.cleanse((job.description or ""), title=title, use_llm=True)
     url = (job.url or "").strip()
     tail_parts = [p for p in (desc, f"URL: {url}" if url else "") if p]
     tail = "\n\n".join(tail_parts)
@@ -734,10 +738,16 @@ def evaluate_vetting_matching_task(
                 skipped += 1
                 continue
 
-            jd = (entry.job_listing.description or "").strip()
-            if not jd or len(jd) < VETTING_MATCHING_JD_MIN_CHARS:
+            from .jd_cleanser import JDCleanserService
+
+            raw_jd = (entry.job_listing.description or "").strip()
+            if not raw_jd or len(raw_jd) < VETTING_MATCHING_JD_MIN_CHARS:
                 skipped += 1
                 continue
+
+            # Cleanse JD for vetting match to save tokens.
+            # LLM-based cleansing is enabled here for high-quality fit check.
+            jd = JDCleanserService.cleanse(raw_jd, title=entry.job_listing.title, use_llm=True)
             jd = jd[:jd_max_chars]
 
             try:
@@ -989,10 +999,35 @@ def apply_pipeline_auto_promotions() -> int:
             continue
         entry.move_to_vetting(save=True)
         promoted.append(entry.id)
-    if promoted:
+    # Fast-track high-confidence matches directly to Applying
+    fast_tracked = []
+    normal_promoted = []
+
+    for entry_id in promoted:
+        entry = PipelineEntry.objects.get(id=entry_id)
+        # Heuristic: If margin is very high (e.g. > 50), skip Vetting and go to Applying
+        # In a real scenario, we might also check the Ollama Guard status here if persisted
+        m = JobListingTrackMetrics.objects.filter(
+            job_listing_id=entry.job_listing_id, track=entry.track
+        ).first()
+
+        if m and m.preference_margin is not None and m.preference_margin > 50:
+            entry.move_to_applying(save=True)
+            fast_tracked.append(entry_id)
+        else:
+            normal_promoted.append(entry_id)
+
+    if normal_promoted:
         evaluate_vetting_matching_task(
-            promoted, llm_provider=None, llm_model=None, matching_prompt=None
+            normal_promoted, llm_provider=None, llm_model=None, matching_prompt=None
         )
+
+    if fast_tracked:
+        logger.info(
+            "[apply_pipeline_auto_promotions] Fast-tracked %d high-confidence jobs to Applying",
+            len(fast_tracked),
+        )
+
     return len(promoted)
 
 

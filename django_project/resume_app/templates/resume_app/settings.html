@@ -556,6 +556,9 @@
                 <p class="mt-1 text-xs text-slate-600">
                     Order is controlled by priority (lower runs first). Active provider is always tried first. Until you use “Refresh model lists from providers,” each row only shows your saved model (or default) in the dropdown.
                 </p>
+                <p class="mt-1 text-xs text-slate-600">
+                    <strong>Local:</strong> Set to <strong>Yes</strong> for on-device providers (e.g. Ollama Local). The LLM gateway uses this when prioritizing or filtering local-only routes.
+                </p>
                 <p class="mt-2 text-xs text-slate-600">
                     <strong>Rate limits (optional):</strong> Set <em>both</em> RPM and TPM per row, or leave blank for env defaults. Requires <code class="rounded bg-slate-100 px-1">LLM_RATE_LIMIT_ENABLED</code> and Redis. Cooldown: seconds to skip this provider/model after a limit hit (empty = 300s).
                 </p>
@@ -566,6 +569,7 @@
                                 <th class="min-w-0 px-2 py-1.5">Provider</th>
                                 <th class="w-14 shrink-0 whitespace-nowrap px-1.5 py-1.5" title="Lower number = tried sooner">Priority</th>
                                 <th class="min-w-0 px-2 py-1.5">Model</th>
+                                <th class="w-16 shrink-0 whitespace-nowrap px-1.5 py-1.5 text-center" title="Local / on-device provider+model (e.g. Ollama Local)">Local</th>
                                 <th class="w-[7rem] min-w-[7rem] whitespace-nowrap px-1.5 py-1.5" title="Max requests per minute">RPM</th>
                                 <th class="w-[9rem] min-w-[9rem] whitespace-nowrap px-1.5 py-1.5" title="Input tokens per minute (estimated)">TPM</th>
                                 <th class="w-[4.5rem] min-w-[4.5rem] shrink-0 whitespace-nowrap px-1.5 py-1.5" title="Cooldown seconds after limit">Cooldown</th>
@@ -603,6 +607,13 @@
                                 {% endif %}
                             </select>
                         </td>
+                        <td class="px-1.5 py-1 align-middle text-center">
+                            <select name="pref_is_local" title="Local model runs on-device"
+                                    class="w-full max-w-[4.5rem] rounded border border-slate-200 bg-white px-1 py-0.5 leading-tight text-concierge-slate">
+                                <option value="0" {% if not pref.is_local %}selected{% endif %}>No</option>
+                                <option value="1" {% if pref.is_local %}selected{% endif %}>Yes</option>
+                            </select>
+                        </td>
                         <td class="px-1.5 py-1 align-middle">
                             <input type="number" min="1" step="1" name="pref_rate_limit_rpm" value="{{ pref.rate_limit_rpm|default:'' }}"
                                    placeholder="—"
@@ -632,7 +643,7 @@
                     {% endwith %}
                     {% empty %}
                     <tr id="pref-empty-hint">
-                        <td colspan="7" class="px-3 py-6 text-center text-sm text-slate-500">Connect at least one provider to configure preference order.</td>
+                        <td colspan="8" class="px-3 py-6 text-center text-sm text-slate-500">Connect at least one provider to configure preference order.</td>
                     </tr>
                     {% endfor %}
                         </tbody>
@@ -702,6 +713,10 @@
                             '</td>' +
                             '<td class="px-2 py-1 align-middle">' +
                             '<select name="pref_model" class="w-full max-w-[14rem] rounded border border-slate-200 bg-white px-1.5 py-0.5 leading-tight text-concierge-slate">' + buildModelOptions(provider, '') + '</select>' +
+                            '</td>' +
+                            '<td class="px-1.5 py-1 align-middle text-center">' +
+                            '<select name="pref_is_local" title="Local model runs on-device" class="w-full max-w-[4.5rem] rounded border border-slate-200 bg-white px-1 py-0.5 leading-tight text-concierge-slate">' +
+                            '<option value="0" selected>No</option><option value="1">Yes</option></select>' +
                             '</td>' +
                             '<td class="px-1.5 py-1 align-middle"><input type="number" min="1" step="1" name="pref_rate_limit_rpm" value="" placeholder="—" title="Requests per minute" class="w-full min-w-[6.5rem] rounded border border-slate-200 px-1.5 py-0.5 leading-tight tabular-nums"></td>' +
                             '<td class="px-1.5 py-1 align-middle"><input type="number" min="1" step="1" name="pref_rate_limit_tpm" value="" placeholder="—" title="Input tokens per minute" class="w-full min-w-[8.5rem] rounded border border-slate-200 px-1.5 py-0.5 leading-tight tabular-nums"></td>' +

@@ -196,6 +196,7 @@ def _preference_candidates() -> list[dict]:
                 "model_get_llm": resolved_get_llm,
                 "model_key": mkey,
                 "priority": int(row.priority),
+                "is_local": bool(row.is_local),
                 "preference_id": row.id,
                 "config": cfg,
                 "api_key": api_key,
@@ -271,11 +272,15 @@ def _tier_pick_index(job_cache_key: str | None, priority: int, pref_ids: list[in
 
 def _ordered_eligible_candidates(
     job_cache_key: str | None,
+    prefer_local: bool = True,
+    only_local: bool = False,
 ) -> list[dict]:
     raw = _preference_candidates()
     eligible = []
     for c in raw:
         if is_llm_on_cooldown(c["provider"], c["model_get_llm"]):
+            continue
+        if only_local and not c.get("is_local"):
             continue
         eligible.append(c)
     if not eligible:
@@ -285,21 +290,30 @@ def _ordered_eligible_candidates(
     pinned = None
     if pin_p and pin_m is not None:
         for c in eligible:
-            if c["provider"] == pin_p and c["model_key"] == pin_m and not is_llm_on_cooldown(
-                c["provider"], c["model_get_llm"]
-            ):
+            if c["provider"] == pin_p and c["model_key"] == pin_m:
+                # We already checked cooldown when building eligible list
                 pinned = c
                 break
 
-    min_p = min(c["priority"] for c in eligible)
-    tier = [c for c in eligible if c["priority"] == min_p]
-    pref_ids = [c["preference_id"] for c in tier]
-    idx = _tier_pick_index(job_cache_key, min_p, pref_ids, len(tier))
-    tier_rot = tier[idx:] + tier[:idx]
+    def _sort_and_rotate(candidates: list[dict]) -> list[dict]:
+        if not candidates:
+            return []
+        min_p = min(c["priority"] for c in candidates)
+        tier = [c for c in candidates if c["priority"] == min_p]
+        pref_ids = [c["preference_id"] for c in tier]
+        idx = _tier_pick_index(job_cache_key, min_p, pref_ids, len(tier))
+        tier_rot = tier[idx:] + tier[:idx]
+        rest = [c for c in candidates if c["priority"] != min_p]
+        rest.sort(key=lambda x: (x["priority"], x["preference_id"]))
+        return list(tier_rot) + rest
 
-    rest = [c for c in eligible if c["priority"] != min_p]
-    rest.sort(key=lambda x: (x["priority"], x["preference_id"]))
-    ordered = list(tier_rot) + rest
+    if prefer_local:
+        locals_in = [c for c in eligible if c.get("is_local")]
+        remotes_in = [c for c in eligible if not c.get("is_local")]
+        ordered = _sort_and_rotate(locals_in) + _sort_and_rotate(remotes_in)
+    else:
+        ordered = _sort_and_rotate(eligible)
+
     if pinned is not None and pinned in ordered:
         ordered.remove(pinned)
         ordered.insert(0, pinned)
@@ -362,6 +376,8 @@ def invoke_llm_messages(
     llm_override: Any | None = None,
     max_attempts_per_model: int = 2,
     usage_query_kind: str | None = None,
+    prefer_local: bool = True,
+    only_local: bool = False,
 ) -> Any:
     """
     Invoke LangChain chat messages through the central gateway.
@@ -385,7 +401,9 @@ def invoke_llm_messages(
             usage_query_kind=usage_query_kind,
         )
 
-    candidates = _ordered_eligible_candidates(job_cache_key)
+    candidates = _ordered_eligible_candidates(
+        job_cache_key, prefer_local=prefer_local, only_local=only_local
+    )
     if not candidates:
         raise RuntimeError(
             "No eligible LLM candidates (check provider keys, preferences, and cooldowns)."

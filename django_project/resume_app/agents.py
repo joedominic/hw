@@ -129,6 +129,8 @@ def _llm_invoke_with_retry(
     structured_schema=None,
     job_cache_key: str | None = None,
     usage_query_kind: str | None = None,
+    prefer_local: bool = True,
+    only_local: bool = False,
 ):
     from .llm_gateway import call_invoke_llm_messages
 
@@ -140,6 +142,8 @@ def _llm_invoke_with_retry(
         llm_override=llm,
         max_attempts_per_model=max_attempts,
         usage_query_kind=usage_query_kind,
+        prefer_local=prefer_local,
+        only_local=only_local,
     )
 
 
@@ -520,6 +524,7 @@ def writer_node(state: AgentState):
         messages,
         job_cache_key=_state_get(state, "job_cache_key"),
         usage_query_kind=USAGE_QUERY_OPTIMIZER_WRITER,
+        prefer_local=False,
     )
     out.update({
         "optimized_resume": response.content,
@@ -608,6 +613,7 @@ def _judge_node(
             structured_schema=ScoreFeedback,
             job_cache_key=_state_get(state, "job_cache_key"),
             usage_query_kind=_usage_qk,
+            prefer_local=False,
         )
         if isinstance(result, ScoreFeedback):
             data = result
@@ -622,6 +628,7 @@ def _judge_node(
             messages,
             job_cache_key=_state_get(state, "job_cache_key"),
             usage_query_kind=_usage_qk,
+            prefer_local=False,
         )
         content = raw.content if hasattr(raw, "content") else str(raw)
         logger.warning("[%s] raw LLM output (before parse), length=%s:\n---\n%s\n---", label, len(content), content)

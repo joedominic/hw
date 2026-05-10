@@ -76,6 +76,37 @@ PERIODIC_TASKS: list[dict[str, str]] = [
     },
 ]
 
+# @db_task callables that can be queued with no arguments from the Huey dashboard.
+ADHOC_RUN_NOW_TASKS: list[dict[str, str]] = [
+    {
+        "task_fn_name": "dedupe_pipeline_jobs_task",
+        "display_name": "Dedupe pipeline rows",
+        "basic": (
+            "Runs dedupe across Pipeline, Vetting, and Applying (same duplicate detection as Cleanup Manager's "
+            "first step). Does not run retention purge or Applying URL checks."
+        ),
+        "advanced": (
+            "Calls dedupe_pipeline_jobs_task() with defaults: track='*', stage='all', include_done=False. "
+            "Heavy on large databases; use after bulk imports."
+        ),
+    },
+]
+
+
+def run_now_task_names() -> frozenset[str]:
+    """Task function names allowed for POST …/huey/task/<name>/run/."""
+
+    names = {row["task_fn_name"] for row in PERIODIC_TASKS}
+    names.update(row["task_fn_name"] for row in ADHOC_RUN_NOW_TASKS)
+    return frozenset(names)
+
+
+def get_adhoc_run_task_info(task_fn_name: str) -> dict[str, str] | None:
+    for info in ADHOC_RUN_NOW_TASKS:
+        if info["task_fn_name"] == task_fn_name:
+            return info
+    return None
+
 
 def get_periodic_task_wrapper(task_fn_name: str) -> Any | None:
     """
@@ -98,4 +129,14 @@ def get_periodic_task_info(task_fn_name: str) -> dict[str, str] | None:
         if info["task_fn_name"] == task_fn_name:
             return info
     return None
+
+
+def get_run_now_display_name(task_fn_name: str) -> str:
+    p = get_periodic_task_info(task_fn_name)
+    if p:
+        return p["display_name"]
+    a = get_adhoc_run_task_info(task_fn_name)
+    if a:
+        return a["display_name"]
+    return task_fn_name
 

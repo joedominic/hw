@@ -112,6 +112,9 @@ class PromptsResponse(Schema):
     insights: str
     insights_system: str = ""
     insights_user: str = ""
+    jd_cleanse: str
+    jd_cleanse_system: str = ""
+    jd_cleanse_user: str = ""
 
 class FitCheckRequest(Schema):
     job_description: str
@@ -461,19 +464,26 @@ def fit_check(request, payload: FitCheckRequest = Form(...), file: UploadedFile 
 
 @router.get("/prompts", response=PromptsResponse)
 def get_prompts(request):
-    """Return default LLM prompt templates. Writer also: {full_job_description}, {retrieval_context}, {optimization_notes}, {pipeline_skills_json}, {job_highlights}."""
+    """Return default LLM prompt templates. Writer also: {full_job_description}, {retrieval_context}, {optimization_notes}, {pipeline_skills_json}, {job_highlights}. JD cleanse: {title}, {job_description}."""
     from .prompts import (
+        DEFAULT_ATS_JUDGE_PROMPT,
+        DEFAULT_ATS_JUDGE_SYSTEM,
+        DEFAULT_ATS_JUDGE_USER,
         DEFAULT_INSIGHTS_PROMPT,
         DEFAULT_INSIGHTS_SYSTEM,
         DEFAULT_INSIGHTS_USER,
+        DEFAULT_JD_CLEANSE_PROMPT,
+        DEFAULT_JD_CLEANSE_SYSTEM,
+        DEFAULT_JD_CLEANSE_USER,
+        DEFAULT_MATCHING_PROMPT,
         DEFAULT_MATCHING_SYSTEM,
         DEFAULT_MATCHING_USER,
-        DEFAULT_WRITER_SYSTEM,
-        DEFAULT_WRITER_USER,
-        DEFAULT_ATS_JUDGE_SYSTEM,
-        DEFAULT_ATS_JUDGE_USER,
+        DEFAULT_RECRUITER_JUDGE_PROMPT,
         DEFAULT_RECRUITER_JUDGE_SYSTEM,
         DEFAULT_RECRUITER_JUDGE_USER,
+        DEFAULT_WRITER_PROMPT,
+        DEFAULT_WRITER_SYSTEM,
+        DEFAULT_WRITER_USER,
     )
     return {
         "writer": DEFAULT_WRITER_PROMPT,
@@ -491,6 +501,9 @@ def get_prompts(request):
         "insights": DEFAULT_INSIGHTS_PROMPT,
         "insights_system": DEFAULT_INSIGHTS_SYSTEM,
         "insights_user": DEFAULT_INSIGHTS_USER,
+        "jd_cleanse": DEFAULT_JD_CLEANSE_PROMPT,
+        "jd_cleanse_system": DEFAULT_JD_CLEANSE_SYSTEM,
+        "jd_cleanse_user": DEFAULT_JD_CLEANSE_USER,
     }
 
 @router.post("/optimize")
@@ -1050,7 +1063,7 @@ def _build_export_pdf(content: str) -> io.BytesIO:
                 y -= body_line_height / 3
             elif block_type == "bullet":
                 c.setFont("Times-Roman", 11)
-                c.setFillRGB(0, 0, 0)
+                c.setFillColor(colors.black)
                 c.drawString(inch, y, "•")
                 y = _draw_rich_text(
                     c,
