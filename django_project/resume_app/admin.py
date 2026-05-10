@@ -51,6 +51,7 @@ class LLMProviderPreferenceAdmin(admin.ModelAdmin):
     list_display = (
         "provider_config",
         "model",
+        "is_local",
         "priority",
         "rate_limit_rpm",
         "rate_limit_tpm",

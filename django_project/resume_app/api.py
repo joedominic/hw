@@ -1063,7 +1063,7 @@ def _build_export_pdf(content: str) -> io.BytesIO:
                 y -= body_line_height / 3
             elif block_type == "bullet":
                 c.setFont("Times-Roman", 11)
-                c.setFillRGB(0, 0, 0)
+                c.setFillColor(colors.black)
                 c.drawString(inch, y, "•")
                 y = _draw_rich_text(
                     c,
