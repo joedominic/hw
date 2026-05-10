@@ -258,6 +258,10 @@ class LLMProviderPreference(models.Model):
         related_name="preference_rows",
     )
     model = models.CharField(max_length=128, blank=True)
+    is_local = models.BooleanField(
+        default=False,
+        help_text="If true, this provider+model is treated as local (prioritized or required).",
+    )
     priority = models.PositiveSmallIntegerField(default=100)
     rate_limit_rpm = models.PositiveIntegerField(
         null=True,

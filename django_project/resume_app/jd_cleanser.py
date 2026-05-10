@@ -1,6 +1,6 @@
 import re
 import logging
-from typing import Optional
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -8,8 +8,7 @@ class JDCleanserService:
     """
     Service to cleanse job descriptions by stripping boilerplate and fluff sections
     to focus on core responsibilities and requirements.
-    Uses Local Ollama for high-quality extraction (prompt from Prompt Library → jd_cleanse),
-    with a heuristic fallback.
+    Uses Local Ollama for high-quality extraction, with a heuristic fallback.
     """
 
     @staticmethod
@@ -31,29 +30,25 @@ class JDCleanserService:
     @staticmethod
     def cleanse_with_llm(description: str, title: str = "") -> Optional[str]:
         """
-        Use Local Ollama to extract core job information.
-        Prompt templates: Settings → Prompt library, tab **JD cleanse**. Placeholders: ``{title}``, ``{job_description}``.
+        Use LLM to extract core job information, preferring local models.
         """
         try:
-            from .llm_factory import get_llm
-            from .models import LLMProviderConfig
-            from .prompt_store import build_jd_cleanse_llm_messages
+            from .llm_gateway import invoke_llm_messages
+            from langchain_core.messages import HumanMessage
 
-            provider = "Ollama Local"
-            config = LLMProviderConfig.objects.filter(provider=provider, is_active=True).first()
-            if not config:
-                return None
-
-            llm = get_llm(provider, model=config.default_model or "nemotron")
-
-            body = (description or "")[:8000]
-            messages = build_jd_cleanse_llm_messages(
-                None,
-                title=(title or "").strip(),
-                job_description=body,
+            prompt = (
+                f"Extract only the core responsibilities and technical requirements for the job title '{title}' "
+                "from the following description. Eliminate all boilerplate, benefits, company info, and EEO statements. "
+                "Preserve technical keywords and specific qualifications.\n\n"
+                f"Job Description:\n{description[:8000]}\n\n"
+                "Extracted Core Info:"
             )
 
-            response = llm.invoke(messages)
+            response = invoke_llm_messages(
+                [HumanMessage(content=prompt)],
+                prefer_local=True,
+                only_local=True,
+            )
             content = response.content if hasattr(response, 'content') else str(response)
 
             if content and len(content) > 50:
