@@ -9,8 +9,10 @@ from langgraph.graph import StateGraph, END
 from .callbacks import TokenUsageCallback
 from .llm_factory import get_llm
 from .parsers import (
+    AtsJudgeResult,
     ScoreFeedback,
     FitCheckResult,
+    parse_ats_judge_fallback as _parse_ats_judge_fallback,
     parse_score_fallback as _parse_score_fallback,
     parse_fit_check_fallback as _parse_fit_check_fallback_from_parsers,
     normalize_dict_keys as _normalize_dict_keys,
@@ -539,6 +541,19 @@ def writer_node(state: AgentState):
     return out
 
 
+def _resolve_judge_scores(
+    data: ScoreFeedback | AtsJudgeResult,
+    last_json: Optional[dict],
+) -> tuple[int, str, Optional[dict]]:
+    """Map structured or fallback judge output to score, feedback text, and optional JSON blob."""
+    if isinstance(data, AtsJudgeResult):
+        json_out = last_json if last_json is not None else data.model_dump()
+        return data.ats_match_score, data.feedback_text(), json_out
+    if isinstance(data, ScoreFeedback):
+        return data.score, data.feedback, last_json
+    raise TypeError(f"Unexpected judge result type: {type(data)!r}")
+
+
 def _judge_node(
     state: AgentState,
     *,
@@ -553,6 +568,8 @@ def _judge_node(
     score_key: str,
     feedback_prefix: str,
     last_json_state_key: str,
+    structured_schema: type = ScoreFeedback,
+    parse_fallback=_parse_score_fallback,
 ):
     llm = _state_get(state, "llm")
     draft = (_state_get(state, "optimized_resume") or "").strip() or (_state_get(state, "resume_text") or "").strip()
@@ -605,22 +622,28 @@ def _judge_node(
     last_json = None
     raw = None
     usage_callback = TokenUsageCallback()
+    data: ScoreFeedback | AtsJudgeResult
     try:
         result = _llm_invoke_with_retry(
             llm,
             messages,
             config={"callbacks": [usage_callback]},
-            structured_schema=ScoreFeedback,
+            structured_schema=structured_schema,
             job_cache_key=_state_get(state, "job_cache_key"),
             usage_query_kind=_usage_qk,
             prefer_local=False,
         )
-        if isinstance(result, ScoreFeedback):
+        if isinstance(result, structured_schema):
             data = result
         else:
             content = str(result)
-            logger.warning("[%s] raw LLM output (structured returned non-ScoreFeedback), length=%s:\n---\n%s\n---", label, len(content), content)
-            data, last_json = _parse_score_fallback(content, label)
+            logger.warning(
+                "[%s] raw LLM output (structured returned unexpected type), length=%s:\n---\n%s\n---",
+                label,
+                len(content),
+                content,
+            )
+            data, last_json = parse_fallback(content, label)
     except Exception as e:
         logger.warning("%s structured output failed: %s", label, e)
         raw = _llm_invoke_with_retry(
@@ -632,14 +655,15 @@ def _judge_node(
         )
         content = raw.content if hasattr(raw, "content") else str(raw)
         logger.warning("[%s] raw LLM output (before parse), length=%s:\n---\n%s\n---", label, len(content), content)
-        data, last_json = _parse_score_fallback(content, label)
+        data, last_json = parse_fallback(content, label)
 
+    score, feedback_text, json_out = _resolve_judge_scores(data, last_json)
     out.update({
-        score_key: data.score,
-        "feedback": [f"{feedback_prefix}{data.feedback}"],
+        score_key: score,
+        "feedback": [f"{feedback_prefix}{feedback_text}"],
     })
-    if last_json is not None:
-        out[last_json_state_key] = _normalize_dict_keys(last_json)
+    if json_out is not None:
+        out[last_json_state_key] = _normalize_dict_keys(json_out)
     if raw is not None:
         usage = _normalize_token_usage(raw, getattr(raw, "llm_output", None), dbg_prompt)
         out["input_tokens"] = usage["input_tokens"]
@@ -650,7 +674,7 @@ def _judge_node(
         out["input_tokens"] = usage_callback.total_input_tokens
         out["output_tokens"] = usage_callback.total_output_tokens
     else:
-        usage = _normalize_token_usage(None, None, dbg_prompt, str(data.feedback) if data else None)
+        usage = _normalize_token_usage(None, None, dbg_prompt, feedback_text if data else None)
         out["input_tokens"] = usage["input_tokens"]
         out["output_tokens"] = usage["output_tokens"]
         if usage.get("tokens_estimated"):
@@ -672,6 +696,8 @@ def ats_judge_node(state: AgentState):
         score_key="ats_score",
         feedback_prefix="ATS: ",
         last_json_state_key="last_ats_json",
+        structured_schema=AtsJudgeResult,
+        parse_fallback=_parse_ats_judge_fallback,
     )
 
 

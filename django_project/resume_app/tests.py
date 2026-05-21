@@ -575,23 +575,17 @@ class PipelineStageViewTestCase(TestCase):
         pe.refresh_from_db()
         self.assertEqual(pe.stage, PipelineEntry.Stage.DONE)
 
-    def test_applying_bulk_optimize_enqueues_task(self):
+    def test_applying_board_shows_open_optimizer_link(self):
         job, pe = self._create_job_and_entry()
         job.description = "x" * 60
         job.save(update_fields=["description"])
         pe.move_to_applying()
-        with patch("resume_app.tasks.enqueue_applying_resume_optimization_task") as mock_eq:
-            response = self.client.post(
-                "/jobs/applying/?track=ic",
-                data={
-                    "action": "bulk_optimize",
-                    "job_ids": [str(job.id)],
-                    "track": "ic",
-                    "next": "/jobs/applying/?track=ic",
-                },
-            )
-        self.assertIn(response.status_code, (302, 303))
-        mock_eq.assert_called_once_with([pe.id], force_new=True)
+        UserResume.objects.create(track="ic", file="r.pdf")
+        response = self.client.get("/jobs/applying/?track=ic")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "/resume/optimizer/")
+        self.assertContains(response, f"job_id={job.id}")
+        self.assertContains(response, "Open optimizer")
 
 
 class PipelineResumeEnqueueTestCase(TestCase):
@@ -938,3 +932,141 @@ class BuildOptimizerPromptStateTestCase(TestCase):
         self.assertIn("writer_prompt_user", st)
         self.assertIn("writer_prompt_legacy", st)
         self.assertTrue(st["writer_prompt_system"] or st["writer_prompt_user"] or st["writer_prompt_legacy"])
+
+
+class SaveOptimizedDraftTestCase(TestCase):
+    def test_save_draft_completed(self):
+        from resume_app.models import JobDescription, OptimizedResume, UserResume
+        from resume_app.services import save_optimized_draft_content
+
+        ur = UserResume.objects.create(file="test.pdf", original_filename="t.pdf")
+        jd = JobDescription.objects.create(content="JD")
+        opt = OptimizedResume.objects.create(
+            original_resume=ur,
+            job_description=jd,
+            status=OptimizedResume.STATUS_COMPLETED,
+            optimized_content="Original",
+        )
+        updated = save_optimized_draft_content(opt.id, "Edited final draft")
+        self.assertEqual(updated.optimized_content, "Edited final draft")
+
+    def test_save_draft_rejects_empty(self):
+        from resume_app.models import JobDescription, OptimizedResume, UserResume
+        from resume_app.services import DraftSaveError, save_optimized_draft_content
+
+        ur = UserResume.objects.create(file="test.pdf", original_filename="t.pdf")
+        jd = JobDescription.objects.create(content="JD")
+        opt = OptimizedResume.objects.create(
+            original_resume=ur,
+            job_description=jd,
+            status=OptimizedResume.STATUS_COMPLETED,
+            optimized_content="x",
+        )
+        with self.assertRaises(DraftSaveError):
+            save_optimized_draft_content(opt.id, "   ")
+
+
+class AtsJudgeProfilePromptTestCase(TestCase):
+    def setUp(self):
+        from resume_app.models import AtsJudgeProfile
+
+        AtsJudgeProfile.objects.all().delete()
+        self.strict = AtsJudgeProfile.objects.create(
+            name="Strict",
+            slug="strict",
+            ats_judge_system="STRICT_SYS",
+            ats_judge_user="STRICT_USR {optimized_resume}",
+        )
+        self.default = AtsJudgeProfile.objects.create(
+            name="Default",
+            slug="default-alt",
+            is_default=True,
+        )
+
+    def test_resolve_ats_judge_parts_split(self):
+        from resume_app.prompt_store import resolve_ats_judge_parts
+
+        s, u, leg = resolve_ats_judge_parts(self.strict)
+        self.assertEqual(s, "STRICT_SYS")
+        self.assertIn("STRICT_USR", u)
+        self.assertIsNone(leg)
+
+    def test_build_state_uses_profile_id(self):
+        from resume_app.prompt_store import build_optimizer_graph_prompt_state
+
+        st = build_optimizer_graph_prompt_state(
+            None,
+            ats_judge_profile_id=self.strict.pk,
+        )
+        self.assertEqual(st["ats_judge_prompt_system"], "STRICT_SYS")
+        self.assertIn("STRICT_USR", st["ats_judge_prompt_user"])
+
+    def test_resolve_effective_id_workflow_over_default(self):
+        from resume_app.models import OptimizerWorkflow
+        from resume_app.prompt_store import resolve_effective_ats_judge_profile_id
+
+        wf = OptimizerWorkflow.objects.create(
+            name="WF",
+            steps=["writer", "ats_judge", "recruiter_judge"],
+            ats_judge_profile=self.strict,
+        )
+        eff = resolve_effective_ats_judge_profile_id(workflow=wf)
+        self.assertEqual(eff, self.strict.pk)
+        eff_run = resolve_effective_ats_judge_profile_id(
+            ats_judge_profile_id=self.default.pk,
+            workflow=wf,
+        )
+        self.assertEqual(eff_run, self.default.pk)
+
+    def test_prompt_override_wins_over_profile(self):
+        from resume_app.prompt_store import build_optimizer_graph_prompt_state
+
+        st = build_optimizer_graph_prompt_state(
+            {"ats_judge": "OVERRIDE_LEGACY"},
+            ats_judge_profile_id=self.strict.pk,
+        )
+        self.assertEqual(st["ats_judge_prompt_legacy"], "OVERRIDE_LEGACY")
+
+
+class AtsJudgeParserTestCase(TestCase):
+    def test_parse_ats_judge_fallback_full_schema(self):
+        from resume_app.parsers import parse_ats_judge_fallback
+
+        payload = json.dumps(
+            {
+                "ats_match_score": 82,
+                "missing_keywords": ["Kubernetes", "CI/CD"],
+                "formatting_issues": ["Two-column layout"],
+                "strategic_feedback": "Add cloud keywords to summary.",
+            }
+        )
+        result, raw = parse_ats_judge_fallback(payload)
+        self.assertEqual(result.ats_match_score, 82)
+        self.assertEqual(result.missing_keywords, ["Kubernetes", "CI/CD"])
+        self.assertEqual(result.formatting_issues, ["Two-column layout"])
+        self.assertIn("cloud keywords", result.strategic_feedback)
+        self.assertIn("Missing keywords", result.feedback_text())
+        self.assertIsNotNone(raw)
+
+    def test_parse_ats_judge_fallback_legacy_score_key(self):
+        from resume_app.parsers import parse_ats_judge_fallback
+
+        payload = json.dumps({"ats_score": 75, "feedback": "Legacy shape"})
+        result, _ = parse_ats_judge_fallback(payload)
+        self.assertEqual(result.ats_match_score, 75)
+        self.assertIn("Legacy shape", result.strategic_feedback)
+
+    def test_resolve_judge_scores_from_structured_ats(self):
+        from resume_app.agents import _resolve_judge_scores
+        from resume_app.parsers import AtsJudgeResult
+
+        data = AtsJudgeResult(
+            ats_match_score=90,
+            missing_keywords=["Rust"],
+            strategic_feedback="Mention systems programming.",
+        )
+        score, feedback, json_out = _resolve_judge_scores(data, None)
+        self.assertEqual(score, 90)
+        self.assertIn("Rust", feedback)
+        self.assertEqual(json_out["ats_match_score"], 90)
+        self.assertEqual(json_out["missing_keywords"], ["Rust"])

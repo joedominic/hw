@@ -13,6 +13,37 @@ class ScoreFeedback(BaseModel):
     feedback: str = Field(description="Brief feedback text")
 
 
+class AtsJudgeResult(BaseModel):
+    """Structured ATS judge output (keywords, formatting, strategic advice)."""
+
+    ats_match_score: int = Field(ge=0, le=100, description="ATS match score 0-100")
+    missing_keywords: list[str] = Field(
+        default_factory=list,
+        description="Job-relevant keywords missing or weak in the resume",
+    )
+    formatting_issues: list[str] = Field(
+        default_factory=list,
+        description="ATS parseability / formatting problems",
+    )
+    strategic_feedback: str = Field(
+        default="",
+        description="Actionable advice for improving match and parseability",
+    )
+
+    def feedback_text(self) -> str:
+        """Human-readable feedback for optimizer logs and writer loop."""
+        sections: list[str] = []
+        if self.strategic_feedback.strip():
+            sections.append(f"Strategic feedback: {self.strategic_feedback.strip()}")
+        if self.missing_keywords:
+            sections.append("Missing keywords: " + ", ".join(self.missing_keywords))
+        if self.formatting_issues:
+            sections.append(
+                "Formatting issues:\n- " + "\n- ".join(self.formatting_issues)
+            )
+        return "\n".join(sections) if sections else "No ATS feedback provided."
+
+
 class FitCheckResult(BaseModel):
     """Candidate-job fit: score 0-100, reasoning, and thoughts on why/why not a fit."""
 
@@ -142,11 +173,14 @@ def _extract_json_object(
                             norm_keys = {_normalize_key(k) for k in obj}
                             root_keys = {
                                 "ats_match_score",
+                                "ats_score",
                                 "score",
                                 "recruiter_score",
                                 "analysis",
                                 "feedback",
                                 "missing_keywords",
+                                "formatting_issues",
+                                "strategic_feedback",
                                 "actionable_feedback",
                             }
                             if norm_keys & root_keys:
@@ -392,6 +426,83 @@ def _coerce_interview_probability_if_distinct_from_fit(
     if any(m in t for m in markers):
         return interview_probability
     return None
+
+
+def _coerce_str_list(value) -> list[str]:
+    """Normalize LLM list fields that may arrive as a list, string, or absent."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def parse_ats_judge_fallback(
+    content: str, node_name: str = "ats_judge"
+) -> tuple[AtsJudgeResult, Optional[dict]]:
+    """Fallback when ATS structured output is not available or fails."""
+    logger.debug("[%s] parse_ats_judge_fallback content len=%s", node_name, len(content) if content else 0)
+    data = _extract_json_object(content)
+    if data is not None:
+        logger.warning(
+            "[%s] parse_ats_judge_fallback extracted data keys=%s",
+            node_name,
+            list(data.keys()),
+        )
+        try:
+            raw_score = _get_key(
+                data, "ats_match_score", "ats_score", "score", "recruiter_score"
+            )
+            score = int(raw_score) if raw_score is not None else 70
+            score = max(0, min(100, score))
+            missing = _coerce_str_list(_get_key(data, "missing_keywords"))
+            formatting = _coerce_str_list(_get_key(data, "formatting_issues"))
+            strategic = _get_key(
+                data, "strategic_feedback", "feedback", "actionable_feedback"
+            )
+            strategic_s = str(strategic).strip() if strategic is not None else ""
+            if not strategic_s:
+                legacy_fb = _get_key(data, "analysis")
+                if isinstance(legacy_fb, str):
+                    strategic_s = legacy_fb.strip()
+            result = AtsJudgeResult(
+                ats_match_score=score,
+                missing_keywords=missing,
+                formatting_issues=formatting,
+                strategic_feedback=strategic_s,
+            )
+            return result, data
+        except (ValueError, TypeError, KeyError) as e:
+            logger.warning("[%s] could not use parsed ATS JSON: %s", node_name, e)
+    if content and isinstance(content, str):
+        score = _extract_plain_text_score(content)
+        if score is not None:
+            feedback = content.strip()[:2000] + ("..." if len(content) > 2000 else "")
+            logger.warning(
+                "[%s] parse_ats_judge_fallback extracted score from plain text: %s",
+                node_name,
+                score,
+            )
+            return (
+                AtsJudgeResult(
+                    ats_match_score=score,
+                    strategic_feedback=feedback,
+                ),
+                None,
+            )
+    logger.warning(
+        "[%s] parse_ats_judge_fallback returning default (no data or exception)",
+        node_name,
+    )
+    return (
+        AtsJudgeResult(
+            ats_match_score=70,
+            strategic_feedback="Could not parse ATS judge output. Defaulting.",
+        ),
+        None,
+    )
 
 
 def parse_score_fallback(content: str, node_name: str) -> tuple[ScoreFeedback, Optional[dict]]:

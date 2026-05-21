@@ -9,7 +9,15 @@ from ninja.errors import HttpError
 from django.shortcuts import get_object_or_404
 from django.http import FileResponse
 from django.utils import timezone
-from .models import UserResume, JobDescription, OptimizedResume, AgentLog, LLMProviderConfig, OptimizerWorkflow
+from .models import (
+    AtsJudgeProfile,
+    UserResume,
+    JobDescription,
+    OptimizedResume,
+    AgentLog,
+    LLMProviderConfig,
+    OptimizerWorkflow,
+)
 from .jobs_api import router as jobs_router
 from .tasks import optimize_resume_task
 from .prompts import DEFAULT_MATCHING_PROMPT
@@ -76,6 +84,8 @@ class OptimizeRequest(Schema):
     prompt_writer: Optional[str] = None  # override default writer prompt template
     prompt_ats_judge: Optional[str] = None  # override default ATS judge prompt template
     prompt_recruiter_judge: Optional[str] = None  # override default recruiter judge prompt template
+    ats_judge_profile_id: Optional[int] = None  # named ATS profile from library
+    optimizer_workflow_id: Optional[int] = None  # saved workflow (steps + default ATS)
     debug: Optional[bool] = None  # when True, log full prompts sent to LLM in agent logs
     workflow_steps: Optional[str] = None  # JSON array of step ids, e.g. ["writer","ats_judge","recruiter_judge"]
     loop_to: Optional[str] = None  # step to loop back to after last step; empty = single pass
@@ -138,6 +148,8 @@ class RunStepRequest(Schema):
     prompt_writer: Optional[str] = None
     prompt_ats_judge: Optional[str] = None
     prompt_recruiter_judge: Optional[str] = None
+    ats_judge_profile_id: Optional[int] = None
+    optimizer_workflow_id: Optional[int] = None
     llm_provider: str
     llm_model: Optional[str] = None
     debug: Optional[bool] = None
@@ -249,7 +261,15 @@ def run_step(
         _ov["ats_judge"] = payload.prompt_ats_judge.strip()
     if payload.prompt_recruiter_judge and str(payload.prompt_recruiter_judge).strip():
         _ov["recruiter_judge"] = payload.prompt_recruiter_judge.strip()
-    _graph_prompts = build_optimizer_graph_prompt_state(_ov if _ov else None, request)
+    workflow = None
+    if payload.optimizer_workflow_id:
+        workflow = OptimizerWorkflow.objects.filter(pk=int(payload.optimizer_workflow_id)).first()
+    _graph_prompts = build_optimizer_graph_prompt_state(
+        _ov if _ov else None,
+        request,
+        ats_judge_profile_id=payload.ats_judge_profile_id,
+        workflow=workflow,
+    )
     # Step-by-step always runs in debug mode
     debug = True
     # Persist edited prompts to UserPromptProfile
@@ -258,7 +278,6 @@ def run_step(
         merged.update(
             {
                 "writer": payload.prompt_writer or "",
-                "ats_judge": payload.prompt_ats_judge or "",
                 "recruiter_judge": payload.prompt_recruiter_judge or "",
             }
         )
@@ -532,6 +551,21 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
     # 2. Save Job Description
     job_desc = JobDescription.objects.create(content=payload.job_description)
 
+    workflow = None
+    if payload.optimizer_workflow_id:
+        try:
+            workflow = OptimizerWorkflow.objects.get(pk=int(payload.optimizer_workflow_id))
+        except (OptimizerWorkflow.DoesNotExist, ValueError, TypeError):
+            workflow = None
+
+    from .prompt_store import resolve_effective_ats_judge_profile_id, get_ats_judge_profile_by_id
+
+    effective_ats_id = resolve_effective_ats_judge_profile_id(
+        ats_judge_profile_id=payload.ats_judge_profile_id,
+        workflow=workflow,
+    )
+    ats_profile = get_ats_judge_profile_by_id(effective_ats_id)
+
     # 3. Create OptimizedResume record
     optimized = OptimizedResume.objects.create(
         original_resume=user_resume,
@@ -540,6 +574,8 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
         optimization_notes=(payload.optimization_notes or "").strip(),
         pipeline_skills_json=(payload.pipeline_skills_json or "").strip(),
         job_highlights=(payload.job_highlights or "").strip(),
+        optimizer_workflow=workflow,
+        ats_judge_profile=ats_profile,
     )
 
     # Resolve API key: request > stored config > env
@@ -609,6 +645,21 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
         score_threshold = st
 
     # Enqueue Huey task (Redis-backed worker)
+    loop_to_val = loop_to
+    max_it_val = max_iterations
+    score_t_val = score_threshold
+    if workflow:
+        if not workflow_steps and workflow.steps:
+            workflow_steps = [
+                s for s in workflow.steps if isinstance(s, str) and s in VALID_STEP_IDS
+            ] or None
+        if not loop_to_val and (workflow.loop_to or "").strip():
+            loop_to_val = workflow.loop_to.strip()
+        if workflow.max_iterations:
+            max_it_val = max(1, min(int(workflow.max_iterations), 5))
+        if workflow.score_threshold is not None:
+            score_t_val = max(0, min(100, int(workflow.score_threshold)))
+
     result = optimize_resume_task(
         optimized.id,
         job_desc.id,
@@ -618,10 +669,11 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
         prompts=prompts,
         debug=debug,
         rate_limit_delay=rate_limit_delay,
-        max_iterations=max_iterations,
-        score_threshold=score_threshold,
+        max_iterations=max_it_val,
+        score_threshold=score_t_val,
         workflow_steps=workflow_steps,
-        loop_to=loop_to,
+        loop_to=loop_to_val,
+        ats_judge_profile_id=effective_ats_id,
     )
     task_id = result.id if result else None
     return {"task_id": task_id, "resume_id": optimized.id}
@@ -640,12 +692,11 @@ def get_status_data(resume_id: int):
             if 'recruiter_score' in log.thought:
                 recruiter_score = log.thought['recruiter_score']
 
-    # Human-readable status: prefer status_display when running
-    status_text = optimized.status_display or optimized.status
-
+    # "status" must stay the canonical workflow value (queued|running|completed|failed) so
+    # the optimizer UI and templates can branch correctly. Human progress lives in status_display.
     return {
-        "status": status_text,
-        "status_display": optimized.status_display or None,
+        "status": optimized.status,
+        "status_display": (optimized.status_display or "").strip() or None,
         "ats_score": ats_score,
         "recruiter_score": recruiter_score,
         "optimized_content": optimized.optimized_content,
@@ -663,6 +714,28 @@ def get_status(request, resume_id: int):
 
 
 CANCELLED_MESSAGE = "Cancelled by user"
+
+
+class SaveDraftRequest(Schema):
+    optimized_content: str
+
+
+class SaveDraftResponse(Schema):
+    ok: bool = True
+    optimized_content: str
+
+
+@router.post("/status/{resume_id}/draft", response=SaveDraftResponse)
+def save_optimized_draft(request, resume_id: int, payload: SaveDraftRequest):
+    """Save manual edits to the optimized resume draft before PDF/Word export."""
+    from .services import DraftSaveError, save_optimized_draft_content
+
+    _require_api_auth(request)
+    try:
+        optimized = save_optimized_draft_content(resume_id, payload.optimized_content or "")
+    except DraftSaveError as e:
+        raise HttpError(e.status_code, e.message) from e
+    return {"ok": True, "optimized_content": optimized.optimized_content or ""}
 
 
 @router.post("/status/{resume_id}/cancel")
@@ -688,6 +761,7 @@ class WorkflowSchema(Schema):
     loop_to: str
     max_iterations: int
     score_threshold: int
+    ats_judge_profile_id: Optional[int] = None
 
 
 class WorkflowCreateUpdate(Schema):
@@ -696,6 +770,75 @@ class WorkflowCreateUpdate(Schema):
     loop_to: Optional[str] = ""
     max_iterations: Optional[int] = 3
     score_threshold: Optional[int] = 85
+    ats_judge_profile_id: Optional[int] = None
+
+
+class AtsJudgeProfileListItem(Schema):
+    id: int
+    name: str
+    slug: str
+    is_builtin: bool
+    is_default: bool
+
+
+class AtsJudgeProfileDetail(Schema):
+    id: int
+    name: str
+    slug: str
+    is_builtin: bool
+    is_default: bool
+    ats_judge: str
+    ats_judge_system: str
+    ats_judge_user: str
+    ats_judge_legacy_combined: str = ""
+
+
+class AtsJudgeProfileCreateUpdate(Schema):
+    name: str
+    slug: Optional[str] = None
+    is_default: Optional[bool] = False
+    ats_judge: Optional[str] = ""
+    ats_judge_system: Optional[str] = ""
+    ats_judge_user: Optional[str] = ""
+    ats_judge_legacy_combined: Optional[str] = ""
+
+
+def _workflow_to_schema(w: OptimizerWorkflow) -> dict:
+    return {
+        "id": w.id,
+        "name": w.name,
+        "steps": w.steps,
+        "loop_to": w.loop_to or "",
+        "max_iterations": w.max_iterations,
+        "score_threshold": w.score_threshold,
+        "ats_judge_profile_id": w.ats_judge_profile_id,
+    }
+
+
+def _ats_profile_to_detail(p: AtsJudgeProfile) -> dict:
+    from .prompt_store import get_ats_judge_profile_display
+
+    disp = get_ats_judge_profile_display(p)
+    return {
+        "id": p.id,
+        "name": p.name,
+        "slug": p.slug,
+        "is_builtin": p.is_builtin,
+        "is_default": p.is_default,
+        "ats_judge": disp["ats_judge"],
+        "ats_judge_system": disp["ats_judge_system"],
+        "ats_judge_user": disp["ats_judge_user"],
+        "ats_judge_legacy_combined": disp["ats_judge_legacy_combined"],
+    }
+
+
+def _resolve_ats_profile_fk(profile_id: Optional[int]) -> Optional[AtsJudgeProfile]:
+    if profile_id is None:
+        return None
+    try:
+        return AtsJudgeProfile.objects.get(pk=int(profile_id))
+    except (AtsJudgeProfile.DoesNotExist, ValueError, TypeError):
+        raise HttpError(400, f"Invalid ats_judge_profile_id: {profile_id}")
 
 
 def _validate_workflow_steps(steps: list) -> None:
@@ -706,33 +849,110 @@ def _validate_workflow_steps(steps: list) -> None:
         raise HttpError(400, f"Invalid step id(s): {invalid}. Allowed: {sorted(VALID_STEP_IDS)}")
 
 
+@router.get("/ats-judge-profiles", response=List[AtsJudgeProfileListItem])
+def list_ats_judge_profiles_api(request):
+    """List named ATS judge prompt profiles."""
+    _require_api_auth(request)
+    return [
+        {
+            "id": p.id,
+            "name": p.name,
+            "slug": p.slug,
+            "is_builtin": p.is_builtin,
+            "is_default": p.is_default,
+        }
+        for p in AtsJudgeProfile.objects.all().order_by("name")
+    ]
+
+
+@router.get("/ats-judge-profiles/{profile_id}", response=AtsJudgeProfileDetail)
+def get_ats_judge_profile_api(request, profile_id: int):
+    _require_api_auth(request)
+    p = get_object_or_404(AtsJudgeProfile, id=profile_id)
+    return _ats_profile_to_detail(p)
+
+
+@router.post("/ats-judge-profiles", response=AtsJudgeProfileDetail)
+def create_ats_judge_profile_api(request, payload: AtsJudgeProfileCreateUpdate):
+    _require_api_auth(request)
+    from .prompt_store import save_ats_judge_profile
+
+    name = (payload.name or "").strip()
+    if not name:
+        raise HttpError(400, "name is required")
+    slug = (payload.slug or "").strip() or None
+    if slug and AtsJudgeProfile.objects.filter(slug=slug).exists():
+        raise HttpError(400, f"slug already exists: {slug}")
+    leg = (payload.ats_judge_legacy_combined or payload.ats_judge or "").strip()
+    p = AtsJudgeProfile(name=name, slug=slug or "", is_default=bool(payload.is_default))
+    if slug:
+        p.slug = slug
+    save_ats_judge_profile(
+        p,
+        ats_judge=leg,
+        ats_judge_system=(payload.ats_judge_system or "").strip(),
+        ats_judge_user=(payload.ats_judge_user or "").strip(),
+    )
+    if payload.is_default:
+        p.is_default = True
+        p.save()
+    return _ats_profile_to_detail(p)
+
+
+@router.put("/ats-judge-profiles/{profile_id}", response=AtsJudgeProfileDetail)
+def update_ats_judge_profile_api(request, profile_id: int, payload: AtsJudgeProfileCreateUpdate):
+    _require_api_auth(request)
+    from .prompt_store import save_ats_judge_profile
+
+    p = get_object_or_404(AtsJudgeProfile, id=profile_id)
+    name = (payload.name or "").strip()
+    if not name:
+        raise HttpError(400, "name is required")
+    slug = (payload.slug or "").strip()
+    if slug and slug != p.slug and AtsJudgeProfile.objects.filter(slug=slug).exclude(pk=p.pk).exists():
+        raise HttpError(400, f"slug already exists: {slug}")
+    if slug:
+        p.slug = slug
+    leg = (payload.ats_judge_legacy_combined or payload.ats_judge or "").strip()
+    save_ats_judge_profile(
+        p,
+        name=name,
+        ats_judge=leg,
+        ats_judge_system=(payload.ats_judge_system or "").strip(),
+        ats_judge_user=(payload.ats_judge_user or "").strip(),
+    )
+    if payload.is_default is not None:
+        p.is_default = bool(payload.is_default)
+        p.save()
+    return _ats_profile_to_detail(p)
+
+
+@router.delete("/ats-judge-profiles/{profile_id}")
+def delete_ats_judge_profile_api(request, profile_id: int):
+    _require_api_auth(request)
+    p = get_object_or_404(AtsJudgeProfile, id=profile_id)
+    if p.is_builtin and AtsJudgeProfile.objects.count() <= 1:
+        raise HttpError(400, "Cannot delete the only built-in ATS profile.")
+    was_default = p.is_default
+    p.delete()
+    if was_default:
+        fallback = AtsJudgeProfile.objects.order_by("pk").first()
+        if fallback:
+            fallback.is_default = True
+            fallback.save()
+    return {"success": True}
+
+
 @router.get("/workflows", response=List[WorkflowSchema])
 def list_workflows(request):
     """List all saved optimizer workflows."""
-    return [
-        {
-            "id": w.id,
-            "name": w.name,
-            "steps": w.steps,
-            "loop_to": w.loop_to or "",
-            "max_iterations": w.max_iterations,
-            "score_threshold": w.score_threshold,
-        }
-        for w in OptimizerWorkflow.objects.all()
-    ]
+    return [_workflow_to_schema(w) for w in OptimizerWorkflow.objects.all()]
 
 
 @router.get("/workflows/{workflow_id}", response=WorkflowSchema)
 def get_workflow(request, workflow_id: int):
     w = get_object_or_404(OptimizerWorkflow, id=workflow_id)
-    return {
-        "id": w.id,
-        "name": w.name,
-        "steps": w.steps,
-        "loop_to": w.loop_to or "",
-        "max_iterations": w.max_iterations,
-        "score_threshold": w.score_threshold,
-    }
+    return _workflow_to_schema(w)
 
 
 @router.post("/workflows", response=WorkflowSchema)
@@ -751,15 +971,9 @@ def create_workflow_api(request, payload: WorkflowCreateUpdate):
         loop_to=loop_to,
         max_iterations=max_it,
         score_threshold=score_t,
+        ats_judge_profile=_resolve_ats_profile_fk(payload.ats_judge_profile_id),
     )
-    return {
-        "id": w.id,
-        "name": w.name,
-        "steps": w.steps,
-        "loop_to": w.loop_to or "",
-        "max_iterations": w.max_iterations,
-        "score_threshold": w.score_threshold,
-    }
+    return _workflow_to_schema(w)
 
 
 @router.put("/workflows/{workflow_id}", response=WorkflowSchema)
@@ -778,15 +992,13 @@ def update_workflow(request, workflow_id: int, payload: WorkflowCreateUpdate):
     w.loop_to = loop_to
     w.max_iterations = max_it
     w.score_threshold = score_t
+    w.ats_judge_profile = (
+        _resolve_ats_profile_fk(payload.ats_judge_profile_id)
+        if payload.ats_judge_profile_id
+        else None
+    )
     w.save()
-    return {
-        "id": w.id,
-        "name": w.name,
-        "steps": w.steps,
-        "loop_to": w.loop_to or "",
-        "max_iterations": w.max_iterations,
-        "score_threshold": w.score_threshold,
-    }
+    return _workflow_to_schema(w)
 
 
 @router.delete("/workflows/{workflow_id}")

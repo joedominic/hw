@@ -230,20 +230,18 @@ def optimizer_view(request):
             merged.update(
                 {
                     "writer": request.POST.get("prompt_writer") or merged.get("writer", ""),
-                    "ats_judge": request.POST.get("prompt_ats_judge") or merged.get("ats_judge", ""),
                     "recruiter_judge": request.POST.get("prompt_recruiter_judge") or merged.get("recruiter_judge", ""),
                     "writer_system": "",
                     "writer_user": "",
-                    "ats_judge_system": "",
-                    "ats_judge_user": "",
                     "recruiter_judge_system": "",
                     "recruiter_judge_user": "",
                 }
             )
             save_prompts_to_profile(request, merged)
+            full = get_effective_prompts(request)
             prompts = {
                 "writer": merged["writer"],
-                "ats_judge": merged["ats_judge"],
+                "ats_judge": full.get("ats_judge", ""),
                 "recruiter_judge": merged["recruiter_judge"],
             }
             messages.success(request, "Prompts saved for future runs.")
@@ -296,22 +294,28 @@ def optimizer_view(request):
             merged.update(
                 {
                     "writer": request.POST.get("prompt_writer") or merged.get("writer", ""),
-                    "ats_judge": request.POST.get("prompt_ats_judge") or merged.get("ats_judge", ""),
                     "recruiter_judge": request.POST.get("prompt_recruiter_judge") or merged.get("recruiter_judge", ""),
                     "writer_system": "",
                     "writer_user": "",
-                    "ats_judge_system": "",
-                    "ats_judge_user": "",
                     "recruiter_judge_system": "",
                     "recruiter_judge_user": "",
                 }
             )
             save_prompts_to_profile(request, merged)
+            full = get_effective_prompts(request)
             prompts = {
                 "writer": merged["writer"],
-                "ats_judge": merged["ats_judge"],
+                "ats_judge": full.get("ats_judge", ""),
                 "recruiter_judge": merged["recruiter_judge"],
             }
+
+            raw_ats = (request.POST.get("ats_judge_profile_id") or "").strip()
+            ats_profile_id = int(raw_ats) if raw_ats.isdigit() else None
+            if ats_profile_id:
+                request.session["optimizer_ats_judge_profile_id"] = ats_profile_id
+                request.session.modified = True
+            raw_wf = (request.POST.get("optimizer_workflow_id") or "").strip()
+            optimizer_workflow_id = int(raw_wf) if raw_wf.isdigit() else None
 
             if not llm_key_stored:
                 messages.error(request, "No API key stored for this provider. Connect an API key before running.")
@@ -340,8 +344,9 @@ def optimizer_view(request):
                         llm_model=llm_model or None,
                         api_key=None,  # use stored key from LLMProviderConfig
                         prompt_writer=prompts["writer"],
-                        prompt_ats_judge=prompts["ats_judge"],
                         prompt_recruiter_judge=prompts["recruiter_judge"],
+                        ats_judge_profile_id=ats_profile_id,
+                        optimizer_workflow_id=optimizer_workflow_id,
                         debug=debug,
                         workflow_steps=request.POST.get("workflow_steps") or None,
                         loop_to=request.POST.get("loop_to") or None,
@@ -426,9 +431,23 @@ def optimizer_view(request):
         except Exception:
             pass
     from .models import OptimizerWorkflow
-    saved_workflows = list(OptimizerWorkflow.objects.all())
+    from .prompt_store import get_ats_judge_profile_display, list_ats_judge_profiles
+
+    saved_workflows = list(OptimizerWorkflow.objects.select_related("ats_judge_profile").all())
     for w in saved_workflows:
         w.steps_json = json.dumps(w.steps)
+    ats_profiles = list_ats_judge_profiles()
+    for p in ats_profiles:
+        p.preview_text = get_ats_judge_profile_display(p).get("ats_judge", "")[:200]
+    selected_ats_profile_id = request.session.get("optimizer_ats_judge_profile_id")
+    if selected_ats_profile_id is not None:
+        try:
+            selected_ats_profile_id = int(selected_ats_profile_id)
+        except (ValueError, TypeError):
+            selected_ats_profile_id = None
+    if not selected_ats_profile_id and ats_profiles:
+        default_ats = next((p for p in ats_profiles if p.is_default), None) or ats_profiles[0]
+        selected_ats_profile_id = default_ats.pk
     optimized_resume_id = None
     if opt_id:
         try:
@@ -438,6 +457,17 @@ def optimizer_view(request):
     wizard_initial_step = 1
     if optimized_resume_id or (status_data and status_data.get("status")):
         wizard_initial_step = 3
+    else:
+        wsp = (request.GET.get("wizard_step") or "").strip()
+        if wsp:
+            try:
+                n = int(wsp)
+                if 1 <= n <= 3:
+                    wizard_initial_step = n
+            except ValueError:
+                pass
+        elif job_id:
+            wizard_initial_step = 2
     context = {
         "selected_provider": selected_provider,
         "llm_models": llm_models,
@@ -457,6 +487,8 @@ def optimizer_view(request):
         "pipeline_skills_json_value": pipeline_skills_json_value,
         "job_highlights_value": job_highlights_value,
         "saved_workflows": saved_workflows,
+        "ats_profiles": ats_profiles,
+        "selected_ats_profile_id": selected_ats_profile_id,
         "optimizer_temperature": request.session.get("optimizer_temperature", "0.7"),
         "wizard_initial_step": wizard_initial_step,
     }
@@ -1125,16 +1157,98 @@ def llm_test_view(request):
 
 def prompt_library_view(request):
     """
-    Prompt Library: edit Writer / ATS / Recruiter / Matching / Insights / JD cleanse templates.
-    Values are stored in UserPromptProfile (see prompt_store).
+    Prompt Library: edit Writer / Recruiter / Matching / Insights / JD cleanse templates.
+    ATS judge prompts are managed as named AtsJudgeProfile rows.
     """
+    from .models import AtsJudgeProfile
+    from .prompt_store import (
+        get_ats_judge_profile_display,
+        list_ats_judge_profiles,
+        save_ats_judge_profile,
+    )
+
     try:
         prompts = get_effective_prompts(request)
     except Exception:
         prompts = get_effective_prompts(None)
 
+    ats_profiles = list_ats_judge_profiles()
+    selected_ats_id = request.GET.get("ats_profile")
+    if selected_ats_id:
+        try:
+            selected_ats_id = int(selected_ats_id)
+        except (ValueError, TypeError):
+            selected_ats_id = None
+    if not selected_ats_id and ats_profiles:
+        default_ats = next((p for p in ats_profiles if p.is_default), None) or ats_profiles[0]
+        selected_ats_id = default_ats.pk
+    selected_ats = None
+    ats_prompts = {}
+    if selected_ats_id:
+        selected_ats = AtsJudgeProfile.objects.filter(pk=selected_ats_id).first()
+        if selected_ats:
+            ats_prompts = get_ats_judge_profile_display(selected_ats)
+
     if request.method == "POST":
         action = request.POST.get("action")
+        if action == "save_ats_profile":
+            profile_id = request.POST.get("ats_profile_id")
+            name = (request.POST.get("ats_profile_name") or "").strip()
+            a_sys = request.POST.get("prompt_ats_system") or ""
+            a_usr = request.POST.get("prompt_ats_user") or ""
+            a_combined = request.POST.get("prompt_ats_combined") or ""
+
+            def _ats_triple(sys_v: str, usr_v: str, leg_v: str) -> tuple[str, str, str]:
+                sys_v = (sys_v or "").strip()
+                usr_v = (usr_v or "").strip()
+                leg_v = (leg_v or "").strip()
+                if sys_v or usr_v:
+                    return "", sys_v, usr_v
+                if leg_v:
+                    return leg_v, "", ""
+                return "", "", ""
+
+            ats_leg, ats_sys, ats_usr = _ats_triple(a_sys, a_usr, a_combined)
+            is_default = request.POST.get("ats_profile_is_default") == "on"
+            if profile_id and str(profile_id).strip().isdigit():
+                prof = get_object_or_404(AtsJudgeProfile, pk=int(profile_id))
+            else:
+                prof = AtsJudgeProfile(name=name or "New ATS profile")
+            save_ats_judge_profile(
+                prof,
+                name=name or prof.name,
+                ats_judge=ats_leg,
+                ats_judge_system=ats_sys,
+                ats_judge_user=ats_usr,
+            )
+            if is_default:
+                prof.is_default = True
+                prof.save()
+            messages.success(request, f'ATS profile "{prof.name}" saved.')
+            return redirect(reverse("prompt_library") + f"?ats_profile={prof.pk}")
+
+        if action == "new_ats_profile":
+            prof = AtsJudgeProfile.objects.create(name="New ATS profile", slug="")
+            return redirect(reverse("prompt_library") + f"?ats_profile={prof.pk}")
+
+        if action == "delete_ats_profile":
+            profile_id = request.POST.get("ats_profile_id")
+            if profile_id and str(profile_id).strip().isdigit():
+                prof = get_object_or_404(AtsJudgeProfile, pk=int(profile_id))
+                if prof.is_builtin and AtsJudgeProfile.objects.count() <= 1:
+                    messages.error(request, "Cannot delete the only built-in ATS profile.")
+                else:
+                    was_default = prof.is_default
+                    name = prof.name
+                    prof.delete()
+                    if was_default:
+                        fallback = AtsJudgeProfile.objects.order_by("pk").first()
+                        if fallback:
+                            fallback.is_default = True
+                            fallback.save()
+                    messages.success(request, f'ATS profile "{name}" deleted.')
+            return redirect(reverse("prompt_library"))
+
         if action == "save_prompts":
             # Split (system/user) wins over Combined (legacy) when either side has text.
             # Otherwise a stale legacy textarea on another tab overwrites edits here.
@@ -1152,11 +1266,6 @@ def prompt_library_view(request):
             w_usr = request.POST.get("prompt_writer_user") or ""
             w_combined = request.POST.get("prompt_writer_combined") or ""
             writer_leg, writer_sys, writer_usr = _prompt_triple(w_sys, w_usr, w_combined)
-
-            a_sys = request.POST.get("prompt_ats_system") or ""
-            a_usr = request.POST.get("prompt_ats_user") or ""
-            a_combined = request.POST.get("prompt_ats_combined") or ""
-            ats_leg, ats_sys, ats_usr = _prompt_triple(a_sys, a_usr, a_combined)
 
             r_sys = request.POST.get("prompt_recruiter_system") or ""
             r_usr = request.POST.get("prompt_recruiter_user") or ""
@@ -1182,9 +1291,6 @@ def prompt_library_view(request):
                 "writer": writer_leg,
                 "writer_system": writer_sys,
                 "writer_user": writer_usr,
-                "ats_judge": ats_leg,
-                "ats_judge_system": ats_sys,
-                "ats_judge_user": ats_usr,
                 "recruiter_judge": rec_leg,
                 "recruiter_judge_system": rec_sys,
                 "recruiter_judge_user": rec_usr,
@@ -1210,7 +1316,16 @@ def prompt_library_view(request):
             except Exception as e:
                 messages.error(request, f"Could not reset prompts: {e}")
 
-    return render(request, "resume_app/prompt_library.html", {"prompts": prompts})
+    return render(
+        request,
+        "resume_app/prompt_library.html",
+        {
+            "prompts": prompts,
+            "ats_profiles": ats_profiles,
+            "selected_ats": selected_ats,
+            "ats_prompts": ats_prompts,
+        },
+    )
 
 
 # Step ids for workflow builder (must match agents.VALID_STEP_IDS)
@@ -1231,24 +1346,35 @@ def workflow_list_view(request):
     )
 
 
+def _workflow_form_context(workflow, steps_json: str) -> dict:
+    from .models import AtsJudgeProfile
+    from .prompt_store import list_ats_judge_profiles
+
+    return {
+        "workflow": workflow,
+        "workflow_steps_json": steps_json,
+        "ats_profiles": list_ats_judge_profiles(),
+    }
+
+
 def workflow_create_view(request):
     """Create a new workflow. POST: validate and save then redirect to list."""
-    from .models import OptimizerWorkflow
+    from .models import AtsJudgeProfile, OptimizerWorkflow
     if request.method == "POST":
         name = (request.POST.get("name") or "").strip()
         if not name:
             messages.error(request, "Name is required.")
-            return render(request, "resume_app/workflow_form.html", {"workflow": None, "workflow_steps_json": "[]"})
+            return render(request, "resume_app/workflow_form.html", _workflow_form_context(None, "[]"))
         steps_raw = request.POST.get("workflow_steps", "")
         try:
             steps = json.loads(steps_raw) if steps_raw else []
         except json.JSONDecodeError:
             messages.error(request, "Invalid steps format.")
-            return render(request, "resume_app/workflow_form.html", {"workflow": None, "workflow_steps_json": "[]"})
+            return render(request, "resume_app/workflow_form.html", _workflow_form_context(None, "[]"))
         invalid = [s for s in steps if s not in WORKFLOW_STEP_IDS]
         if invalid or not steps:
             messages.error(request, "Steps must be a non-empty list of: Writer, ATS Judge, Recruiter Judge.")
-            return render(request, "resume_app/workflow_form.html", {"workflow": None, "workflow_steps_json": "[]"})
+            return render(request, "resume_app/workflow_form.html", _workflow_form_context(None, "[]"))
         loop_to = (request.POST.get("loop_to") or "").strip()
         if loop_to and loop_to not in WORKFLOW_STEP_IDS:
             loop_to = ""
@@ -1260,41 +1386,47 @@ def workflow_create_view(request):
             score_threshold = max(0, min(100, int(request.POST.get("score_threshold") or 85)))
         except (TypeError, ValueError):
             score_threshold = 85
+        ats_prof = None
+        raw_ats = (request.POST.get("ats_judge_profile_id") or "").strip()
+        if raw_ats.isdigit():
+            ats_prof = AtsJudgeProfile.objects.filter(pk=int(raw_ats)).first()
         OptimizerWorkflow.objects.create(
             name=name,
             steps=steps,
             loop_to=loop_to,
             max_iterations=max_iterations,
             score_threshold=score_threshold,
+            ats_judge_profile=ats_prof,
         )
         messages.success(request, f"Workflow \"{name}\" created.")
         return redirect(reverse("workflow_list"))
     return render(
         request,
         "resume_app/workflow_form.html",
-        {"workflow": None, "workflow_steps_json": "[]"},
+        _workflow_form_context(None, "[]"),
     )
 
 
 def workflow_edit_view(request, workflow_id):
     """Edit an existing workflow. POST: validate and save then redirect to list."""
-    from .models import OptimizerWorkflow
+    from .models import AtsJudgeProfile, OptimizerWorkflow
     workflow = get_object_or_404(OptimizerWorkflow, id=workflow_id)
+    steps_json = json.dumps(workflow.steps)
     if request.method == "POST":
         name = (request.POST.get("name") or "").strip()
         if not name:
             messages.error(request, "Name is required.")
-            return render(request, "resume_app/workflow_form.html", {"workflow": workflow, "workflow_steps_json": json.dumps(workflow.steps)})
+            return render(request, "resume_app/workflow_form.html", _workflow_form_context(workflow, steps_json))
         steps_raw = request.POST.get("workflow_steps", "")
         try:
             steps = json.loads(steps_raw) if steps_raw else []
         except json.JSONDecodeError:
             messages.error(request, "Invalid steps format.")
-            return render(request, "resume_app/workflow_form.html", {"workflow": workflow, "workflow_steps_json": json.dumps(workflow.steps)})
+            return render(request, "resume_app/workflow_form.html", _workflow_form_context(workflow, steps_json))
         invalid = [s for s in steps if s not in WORKFLOW_STEP_IDS]
         if invalid or not steps:
             messages.error(request, "Steps must be a non-empty list of: Writer, ATS Judge, Recruiter Judge.")
-            return render(request, "resume_app/workflow_form.html", {"workflow": workflow, "workflow_steps_json": json.dumps(workflow.steps)})
+            return render(request, "resume_app/workflow_form.html", _workflow_form_context(workflow, steps_json))
         loop_to = (request.POST.get("loop_to") or "").strip()
         if loop_to and loop_to not in WORKFLOW_STEP_IDS:
             loop_to = ""
@@ -1306,18 +1438,24 @@ def workflow_edit_view(request, workflow_id):
             score_threshold = max(0, min(100, int(request.POST.get("score_threshold") or 85)))
         except (TypeError, ValueError):
             score_threshold = 85
+        raw_ats = (request.POST.get("ats_judge_profile_id") or "").strip()
+        if raw_ats.isdigit():
+            ats_prof = AtsJudgeProfile.objects.filter(pk=int(raw_ats)).first()
+        else:
+            ats_prof = None
         workflow.name = name
         workflow.steps = steps
         workflow.loop_to = loop_to
         workflow.max_iterations = max_iterations
         workflow.score_threshold = score_threshold
+        workflow.ats_judge_profile = ats_prof
         workflow.save()
         messages.success(request, f"Workflow \"{name}\" updated.")
         return redirect(reverse("workflow_list"))
     return render(
         request,
         "resume_app/workflow_form.html",
-        {"workflow": workflow, "workflow_steps_json": json.dumps(workflow.steps)},
+        _workflow_form_context(workflow, steps_json),
     )
 
 
@@ -2302,6 +2440,29 @@ def focus_alignment_view(request, job_listing_id: int, liked_job_id: int):
         )
         return redirect("focus_breakdown", job_listing_id=job_listing_id)
     return render(request, "resume_app/focus_alignment.html", {"alignment": data})
+
+
+def optimizer_save_draft_view(request, resume_id: int):
+    """POST JSON { optimized_content } — save user edits to the final draft (no API token required)."""
+    if request.method != "POST":
+        return JsonResponse({"error": "POST required"}, status=405)
+    try:
+        body = json.loads(request.body.decode("utf-8") or "{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON body"}, status=400)
+    content = body.get("optimized_content")
+    if content is None:
+        return JsonResponse({"error": "optimized_content is required"}, status=400)
+    try:
+        from .services import DraftSaveError, save_optimized_draft_content
+
+        optimized = save_optimized_draft_content(int(resume_id), str(content))
+        return JsonResponse({"ok": True, "optimized_content": optimized.optimized_content or ""})
+    except DraftSaveError as e:
+        return JsonResponse({"error": e.message}, status=e.status_code)
+    except Exception as e:
+        logger.exception("save draft failed for resume %s", resume_id)
+        return JsonResponse({"error": str(e)}, status=500)
 
 
 def optimizer_status_view(request, resume_id: int):

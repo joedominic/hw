@@ -36,6 +36,7 @@ class JobPayload(Schema):
     interview_reasoning: Optional[str] = None
     fetched_at: Optional[datetime] = None  # when we pulled the job into the app (or from posting if we had it)
     optimized_resume_id: Optional[int] = None  # latest OptimizedResume for Applying board (pipeline-linked)
+    optimizer_user_resume_id: Optional[int] = None  # UserResume id for "Open optimizer" prefill (Applying board)
 
 
 class JobDetailPayload(Schema):

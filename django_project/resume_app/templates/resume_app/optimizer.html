@@ -71,8 +71,10 @@
         <input type="hidden" name="use_resume_id" value="{{ prefill_resume_id }}">
         {% endif %}
         <input type="hidden" name="workflow_steps" id="workflow-steps-input" value="">
+        <input type="hidden" name="optimizer_workflow_id" id="optimizer-workflow-id-input" value="">
+        <input type="hidden" name="ats_judge_profile_id" id="ats-judge-profile-id-input" value="{{ selected_ats_profile_id|default:'' }}">
         <input type="hidden" name="loop_to" id="loop-to-input" value="">
-        <input type="hidden" name="max_iterations" value="1">
+        <input type="hidden" name="max_iterations" value="3">
         <input type="hidden" name="score_threshold" value="85">
 
         {# ——— Step 1 ——— #}
@@ -192,16 +194,9 @@
                     <div class="rounded-concierge border border-slate-200 bg-white p-4 shadow-sm">
                         <div class="flex h-10 w-10 items-center justify-center rounded-concierge bg-slate-100 text-lg">⚖</div>
                         <h3 class="mt-3 font-semibold text-concierge-slate">ATS judge</h3>
-                        <p class="mt-1 text-xs text-slate-500">Scores keyword and structure fit for ATS systems.</p>
-                        <p class="mt-3 line-clamp-3 rounded-concierge bg-slate-50 p-2 font-mono text-xs leading-relaxed text-slate-600">{{ prompts.ats_judge|truncatechars:160 }}</p>
-                        <details class="mt-3 group">
-                            <summary class="cursor-pointer text-sm font-medium text-concierge-slate hover:underline">Edit instruction set</summary>
-                            <label class="mt-2 block text-xs text-slate-500" for="prompt-ats-input">ATS judge prompt</label>
-                            <textarea id="prompt-ats-input" name="prompt_ats_judge" rows="10"
-                                      class="mt-1 w-full rounded-concierge border border-slate-200 p-2 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
-                                      placeholder="ATS judge prompt template">{{ prompts.ats_judge }}</textarea>
-                            <p class="mt-1 text-xs text-slate-400">Placeholders: <code class="rounded bg-slate-100 px-1">{optimized_resume}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code></p>
-                        </details>
+                        <p class="mt-1 text-xs text-slate-500">Scores keyword and structure fit. Choose the <strong>ATS profile</strong> on the Input step (Workflow section) before you run.</p>
+                        <p id="ats-profile-summary-setup" class="mt-3 rounded-concierge bg-slate-50 p-2 text-xs text-slate-600"></p>
+                        <p class="mt-2 text-xs text-slate-400"><a href="{% url 'prompt_library' %}" class="font-medium text-concierge-slate underline">Edit ATS profiles</a> in the Prompt Library.</p>
                     </div>
                     <div class="rounded-concierge border border-slate-200 bg-white p-4 shadow-sm">
                         <div class="flex h-10 w-10 items-center justify-center rounded-concierge bg-slate-100 text-lg">👤</div>
@@ -324,12 +319,29 @@
                     {% if saved_workflows %}
                     <optgroup label="Saved workflows">
                         {% for w in saved_workflows %}
-                        <option value="wf_{{ w.id }}" data-steps="{{ w.steps_json|force_escape }}">{{ w.name }}</option>
+                        <option value="wf_{{ w.id }}" data-steps="{{ w.steps_json|force_escape }}" data-workflow-id="{{ w.id }}" data-ats-id="{{ w.ats_judge_profile_id|default:'' }}">{{ w.name }}</option>
                         {% endfor %}
                     </optgroup>
                     {% endif %}
                 </select>
                 <p id="workflow-help" class="mt-2 text-xs text-slate-500">Runs once in order shown. <a href="{% url 'workflow_list' %}" class="font-medium text-concierge-slate underline">Manage workflows</a></p>
+
+                <div class="mt-6 border-t border-slate-100 pt-6">
+                    <label class="mb-1 block text-sm font-medium text-concierge-slate" for="ats-profile-select">ATS profile</label>
+                    <p class="mb-2 text-xs text-slate-500">Which ATS scoring prompt to use when the workflow includes the ATS Judge step.</p>
+                    {% if ats_profiles %}
+                    <select id="ats-profile-select" class="w-full max-w-xl rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                        {% for p in ats_profiles %}
+                        <option value="{{ p.id }}" data-preview="{{ p.preview_text|force_escape }}"
+                                {% if selected_ats_profile_id == p.id %}selected{% endif %}>{{ p.name }}{% if p.is_default %} (default){% endif %}</option>
+                        {% endfor %}
+                    </select>
+                    <p id="ats-profile-preview" class="mt-3 line-clamp-4 rounded-concierge bg-slate-50 p-2 font-mono text-xs leading-relaxed text-slate-600"></p>
+                    {% else %}
+                    <p class="text-sm text-amber-800">No ATS profiles found. Run <code class="rounded bg-amber-50 px-1">python manage.py migrate resume_app</code> or create one in the <a href="{% url 'prompt_library' %}" class="underline font-medium">Prompt Library</a>.</p>
+                    {% endif %}
+                    <p class="mt-2 text-xs text-slate-500"><a href="{% url 'prompt_library' %}" class="font-medium text-concierge-slate underline">Manage ATS profiles</a></p>
+                </div>
 
                 <div class="mt-6 grid gap-4 sm:grid-cols-2">
                     <div>
@@ -407,7 +419,7 @@
             <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm" id="optimizer-status-card">
                 <h3 class="font-semibold text-concierge-slate">Run status</h3>
                 <div class="mt-4" id="optimizer-status-container"
-                     {% if optimized_resume_id %}data-resume-id="{{ optimized_resume_id }}" data-status-url="{% url 'resume_status' resume_id=optimized_resume_id %}"{% endif %}>
+                     {% if optimized_resume_id %}data-resume-id="{{ optimized_resume_id }}" data-status-url="{% url 'resume_status' resume_id=optimized_resume_id %}" data-save-draft-url="{% url 'resume_save_draft' resume_id=optimized_resume_id %}"{% endif %}>
                     <div id="optimizer-status-body">
                         {% if optimized_resume_id %}
                             {% if status %}
@@ -430,7 +442,6 @@
             {% csrf_token %}
             <input type="hidden" name="action" value="save_prompts">
             <input type="hidden" name="prompt_writer" id="save-prompts-writer" value="">
-            <input type="hidden" name="prompt_ats_judge" id="save-prompts-ats" value="">
             <input type="hidden" name="prompt_recruiter_judge" id="save-prompts-recruiter" value="">
             <button type="submit" class="rounded-concierge border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-medium text-concierge-slate hover:bg-slate-100">Save prompts only</button>
         </form>
@@ -448,12 +459,35 @@
 <script>
 document.getElementById("save-prompts-form")?.addEventListener("submit", function () {
     var w = document.getElementById("prompt-writer-input");
-    var a = document.getElementById("prompt-ats-input");
     var r = document.getElementById("prompt-recruiter-input");
     document.getElementById("save-prompts-writer").value = w ? w.value : "";
-    document.getElementById("save-prompts-ats").value = a ? a.value : "";
     document.getElementById("save-prompts-recruiter").value = r ? r.value : "";
 });
+
+(function () {
+    var atsSel = document.getElementById("ats-profile-select");
+    var atsPreview = document.getElementById("ats-profile-preview");
+    var atsHidden = document.getElementById("ats-judge-profile-id-input");
+    var atsSummarySetup = document.getElementById("ats-profile-summary-setup");
+    function syncAtsProfile() {
+        if (!atsSel) return;
+        var opt = atsSel.selectedOptions && atsSel.selectedOptions[0];
+        var preview = opt ? (opt.getAttribute("data-preview") || "") : "";
+        var label = opt ? (opt.textContent || "").trim() : "";
+        if (atsPreview) atsPreview.textContent = preview;
+        if (atsHidden && opt) atsHidden.value = opt.value || "";
+        if (atsSummarySetup) {
+            atsSummarySetup.textContent = label
+                ? ("Selected: " + label + (preview ? " — " + preview.slice(0, 120) + (preview.length > 120 ? "…" : "") : ""))
+                : "";
+        }
+    }
+    if (atsSel) {
+        atsSel.addEventListener("change", syncAtsProfile);
+        syncAtsProfile();
+    }
+    window.__optimizerSyncAtsProfile = syncAtsProfile;
+})();
 (function () {
     var initial = {{ wizard_initial_step|default:1 }};
     function showStep(n) {
@@ -616,7 +650,8 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
         const provider = "{{ selected_provider|escapejs }}";
         const model = (document.getElementById("llm-model-select") || {}).value || '';
         const promptWriter = (document.getElementById("prompt-writer-input") || {}).value || '';
-        const promptAts = (document.getElementById("prompt-ats-input") || {}).value || '';
+        const atsProfileId = (document.getElementById("ats-judge-profile-id-input") || {}).value || '';
+        const optimizerWorkflowId = (document.getElementById("optimizer-workflow-id-input") || {}).value || '';
         const promptRecruiter = (document.getElementById("prompt-recruiter-input") || {}).value || '';
 
         runStepError.classList.add("hidden");
@@ -634,8 +669,9 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
         fd.append("llm_model", model);
         fd.append("debug", "true");
         fd.append("prompt_writer", promptWriter);
-        fd.append("prompt_ats_judge", promptAts);
         fd.append("prompt_recruiter_judge", promptRecruiter);
+        if (atsProfileId) fd.append("ats_judge_profile_id", atsProfileId);
+        if (optimizerWorkflowId) fd.append("optimizer_workflow_id", optimizerWorkflowId);
         fd.append("csrfmiddlewaretoken", getCsrf());
 
         if (step === "writer") {
@@ -832,9 +868,40 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
         return "";
     }
 
+    window.__optimizerDraftDirty = false;
+
+    function buildDraftSectionHtml(data, resumeId) {
+        var content = data.optimized_content || "";
+        var html = '<div class="mt-8 border-t border-slate-100 pt-6" id="optimizer-draft-section">';
+        if (data.status === "completed") {
+            html += '<h4 class="text-lg font-semibold text-concierge-slate">New resume draft</h4>';
+            html += '<p class="mt-1 text-xs text-slate-500">Edit the text below, then <strong>Save draft</strong> before exporting PDF or Word.</p>';
+            html += '<textarea id="optimizer-draft-editor" rows="22" data-resume-id="' + esc(resumeId) + '"';
+            html += ' class="mt-3 w-full max-h-[32rem] min-h-[12rem] resize-y rounded-concierge border border-slate-200 bg-white p-4 font-mono text-sm leading-relaxed text-slate-800 focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"></textarea>';
+            html += '<div class="mt-3 flex flex-wrap items-center gap-3">';
+            html += '<button type="button" id="save-draft-btn" data-resume-id="' + esc(resumeId) + '" class="rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">Save draft</button>';
+            html += '<span id="save-draft-status" class="text-xs text-slate-500" aria-live="polite"></span></div>';
+            html += '<p class="mt-3 text-sm text-slate-500">Replacement tokens from Settings apply on export.</p>';
+            html += '<div class="mt-4 flex flex-wrap gap-3">';
+            html += '<a class="inline-flex items-center rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800" href="/api/resume/export/' + esc(resumeId) + '/pdf">Export PDF</a>';
+            html += '<a class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50" href="/api/resume/export/' + esc(resumeId) + '/docx">Export Word</a>';
+            html += '<a class="inline-flex items-center text-sm font-medium text-slate-500 hover:text-concierge-slate" href="{% url 'resume_optimizer' %}">Run again</a></div>';
+        } else {
+            html += '<h4 class="text-lg font-semibold text-concierge-slate">Draft so far</h4>';
+            html += '<p class="mt-1 text-xs text-slate-500">Run still in progress — you can edit and save after the run <strong>completes</strong>. Exports unlock then.</p>';
+            html += '<pre class="mt-3 max-h-[28rem] overflow-auto whitespace-pre-wrap rounded-concierge border border-slate-200 bg-slate-50 p-4 text-xs text-slate-800">' + esc(content) + "</pre>";
+        }
+        html += "</div>";
+        return html;
+    }
+
     function renderStatusFromJson(data, resumeId) {
         if (!data || data.error) {
             statusBody.innerHTML = "<p class=\"text-sm text-slate-500\">" + esc(data && data.error ? data.error : "Could not load status.") + "</p>";
+            return;
+        }
+        var editor = document.getElementById("optimizer-draft-editor");
+        if (editor && (window.__optimizerDraftDirty || document.activeElement === editor)) {
             return;
         }
         var fb = lastJudgeFeedback(data);
@@ -862,21 +929,22 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
         html += judgeFeedbackMarkdownHtml(fb);
         html += "</div></div>";
 
-        var doneContent = data.optimized_content != null && data.optimized_content !== "" || data.status === "completed";
-        if (doneContent) {
-            html += '<div class="mt-8 border-t border-slate-100 pt-6">';
-            html += '<h4 class="text-lg font-semibold text-concierge-slate">New resume draft</h4>';
-            html += '<pre class="mt-3 max-h-[28rem] overflow-auto whitespace-pre-wrap rounded-concierge border border-slate-200 bg-slate-50 p-4 text-xs text-slate-800">' + esc(data.optimized_content || "") + "</pre>";
-            html += '<div class="mt-4 flex flex-wrap gap-3">';
-            html += '<a class="inline-flex items-center rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800" href="/api/resume/export/' + esc(resumeId) + '/pdf">Export PDF</a>';
-            html += '<a class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50" href="/api/resume/export/' + esc(resumeId) + '/docx">Export Word</a>';
-            html += "<a class=\"inline-flex items-center text-sm font-medium text-slate-500 hover:text-concierge-slate\" href=\"{% url 'resume_optimizer' %}\">Run again</a>";
-            html += "</div></div>";
-        } else if (data.error_message != null && data.error_message !== "" || data.status === "failed") {
+        var hasDraft = data.optimized_content != null && String(data.optimized_content).trim() !== "";
+        if (hasDraft) {
+            html += buildDraftSectionHtml(data, resumeId);
+        }
+        if (data.error_message != null && data.error_message !== "" || data.status === "failed") {
             html += '<p class="mt-4 rounded-concierge border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">' + esc(data.error_message || "Optimization failed.") + "</p>";
-        } else {
-            html += '<p class="mt-4 text-sm text-slate-500">Optimization is running. This section updates automatically.</p>';
+        } else if (data.status === "queued") {
+            html += '<p class="mt-4 rounded-concierge border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950"><strong>Queued</strong> — waiting for a worker to pick up the job. From <code class="rounded bg-white/80 px-1">django_project/</code> run <code class="rounded bg-white/80 px-1">python manage.py run_huey</code> in a separate terminal. Check <a class="font-medium underline" href="/jobs/huey/">Background jobs</a> and that Redis (<code class="rounded bg-white/80 px-1">HUEY_REDIS_HOST</code> etc.) is reachable.</p>';
+            html += '<p class="mt-2 text-sm text-slate-500">Status refreshes automatically every few seconds.</p>';
+            html += '<p class="mt-2"><button type="button" class="rounded-concierge bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700" id="stop-optimization-btn" data-resume-id="' + esc(resumeId) + '">Cancel queued run</button></p>';
+        } else if (data.status === "running" && !hasDraft) {
+            var phase = data.status_display ? esc(String(data.status_display)) : "";
+            html += '<p class="mt-4 text-sm text-slate-500">Optimization is running' + (phase ? " — " + phase : "") + ". This section updates automatically.</p>";
             html += '<p class="mt-2"><button type="button" class="rounded-concierge bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700" id="stop-optimization-btn" data-resume-id="' + esc(resumeId) + '">Stop optimization</button></p>';
+        } else if (data.status === "running" && hasDraft) {
+            html += '<p class="mt-4 text-sm text-slate-500"><button type="button" class="rounded-concierge bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700" id="stop-optimization-btn" data-resume-id="' + esc(resumeId) + '">Stop optimization</button></p>';
         }
 
         if (data.logs && data.logs.length) {
@@ -913,6 +981,10 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
             html += "</div></div>";
         }
         statusBody.innerHTML = html;
+        if (data.status === "completed") {
+            var draftTa = document.getElementById("optimizer-draft-editor");
+            if (draftTa) draftTa.value = data.optimized_content || "";
+        }
     }
 
     var pollTimer = null;
@@ -929,7 +1001,8 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
                 .then(function (data) {
                     console.log("Poll response received:", data);
                     if (data) renderStatusFromJson(data, resumeId);
-                    var done = data && (data.status === "completed" || data.status === "failed" || (data.optimized_content != null && data.optimized_content !== "") || (data.error_message != null && data.error_message !== ""));
+                    // Do not treat non-empty draft as terminal — Writer saves content before judges finish.
+                    var done = data && (data.status === "completed" || data.status === "failed" || (data.error_message != null && data.error_message !== ""));
                     if (data && !done) {
                         console.log("Poll incomplete, scheduling next poll");
                         pollTimer = setTimeout(poll, 2000);
@@ -953,7 +1026,49 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
         var input = document.querySelector('#optimizer-form input[name="csrfmiddlewaretoken"]') || document.querySelector('input[name="csrfmiddlewaretoken"]');
         return input ? input.value : '';
     }
+    statusBody.addEventListener("input", function (e) {
+        if (e.target && e.target.id === "optimizer-draft-editor") {
+            window.__optimizerDraftDirty = true;
+            var st = document.getElementById("save-draft-status");
+            if (st) { st.textContent = "Unsaved changes"; st.className = "text-xs text-amber-700"; }
+        }
+    });
+
     statusBody.addEventListener("click", function (e) {
+        var saveBtn = e.target.closest("#save-draft-btn");
+        if (saveBtn && !saveBtn.disabled) {
+            var rid = saveBtn.getAttribute("data-resume-id");
+            var ta = document.getElementById("optimizer-draft-editor");
+            var statusEl = document.getElementById("save-draft-status");
+            var draftUrl = statusContainer.getAttribute("data-save-draft-url") || ("/resume/status/" + rid + "/draft/");
+            if (!rid || !ta) return;
+            saveBtn.disabled = true;
+            if (statusEl) { statusEl.textContent = "Saving…"; statusEl.className = "text-xs text-slate-500"; }
+            fetch(draftUrl, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-CSRFToken": getCsrfOptimizer(),
+                    "X-Requested-With": "XMLHttpRequest"
+                },
+                body: JSON.stringify({ optimized_content: ta.value })
+            }).then(function (r) {
+                return r.json().then(function (d) { return { ok: r.ok, data: d }; });
+            }).then(function (res) {
+                saveBtn.disabled = false;
+                if (res.ok && res.data && res.data.ok) {
+                    window.__optimizerDraftDirty = false;
+                    if (statusEl) { statusEl.textContent = "Saved"; statusEl.className = "text-xs text-emerald-700"; }
+                } else {
+                    var err = (res.data && res.data.error) ? res.data.error : "Save failed";
+                    if (statusEl) { statusEl.textContent = err; statusEl.className = "text-xs text-red-700"; }
+                }
+            }).catch(function () {
+                saveBtn.disabled = false;
+                if (statusEl) { statusEl.textContent = "Save failed"; statusEl.className = "text-xs text-red-700"; }
+            });
+            return;
+        }
         var btn = e.target.closest("#stop-optimization-btn");
         if (!btn || btn.disabled) return;
         var rid = btn.getAttribute("data-resume-id");
@@ -999,10 +1114,23 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
         var sel = document.getElementById("workflow-preset");
         var stepsIn = document.getElementById("workflow-steps-input");
         var loopIn = document.getElementById("loop-to-input");
+        var wfIdIn = document.getElementById("optimizer-workflow-id-input");
+        var atsSel = document.getElementById("ats-profile-select");
+        var atsHidden = document.getElementById("ats-judge-profile-id-input");
         if (!sel || !stepsIn || !loopIn) return;
         loopIn.value = "";
         var steps = getWorkflowStepsArray();
         stepsIn.value = JSON.stringify(steps);
+        var val = sel.value;
+        if (wfIdIn) wfIdIn.value = (val.indexOf("wf_") === 0) ? val.replace("wf_", "") : "";
+        if (val.indexOf("wf_") === 0 && sel.selectedOptions && sel.selectedOptions.length && atsSel) {
+            var wfAts = sel.selectedOptions[0].getAttribute("data-ats-id");
+            if (wfAts) {
+                atsSel.value = wfAts;
+                if (atsHidden) atsHidden.value = wfAts;
+                atsSel.dispatchEvent(new Event("change"));
+            }
+        }
         if (typeof window.__optimizerUpdateStepUI === "function") {
             window.__optimizerUpdateStepUI(steps);
         }
@@ -1017,6 +1145,8 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
             var hasFile = fileInput && fileInput.files && fileInput.files[0];
             if (!hasFile) return;
             e.preventDefault();
+            if (typeof window.__optimizerSyncAtsProfile === "function") window.__optimizerSyncAtsProfile();
+            applyWorkflowPreset();
             var fd = new FormData(optimizerForm);
             fd.set("action", "run_optimizer");
             fd.append("file", fileInput.files[0]);
@@ -1060,4 +1190,6 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
         });
     }
 
+})();
+</script>
 {% endblock %}

@@ -22,6 +22,7 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 - `api_key`: decrypted API key for the provider
 - `model`: provider model (optional)
 - `prompts`: optional prompt overrides (`writer`, `ats_judge`, `recruiter_judge`)
+- `ats_judge_profile_id`: optional explicit ATS profile pk (else workflow default or global default profile)
 - `debug`, `rate_limit_delay`, `max_iterations`, `score_threshold`
 - `workflow_steps`, `loop_to`
 
@@ -86,7 +87,7 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 - Builds a `JobDescription` for the pipeline row
 - Picks an appropriate `UserResume` for the entry’s `track` (track-specific, else latest overall)
 - Resolves the active LLM provider config and decrypts the API key
-- Determines effective workflow settings from `AppAutomationSettings` (`applying_optimizer_workflow`)
+- Determines effective workflow settings from `AppAutomationSettings` (`applying_optimizer_workflow`), including that workflow’s optional default `ats_judge_profile`
 - Creates:
   - `JobDescription`
   - `OptimizedResume` (status `STATUS_QUEUED`)

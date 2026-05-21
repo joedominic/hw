@@ -1,5 +1,6 @@
 from django.contrib import admin
 from .models import (
+    AtsJudgeProfile,
     AppAutomationSettings,
     LLMAppUsageTotals,
     LLMUsageByModel,
@@ -124,9 +125,17 @@ class UserDisqualifierAdmin(admin.ModelAdmin):
     search_fields = ("phrase",)
 
 
+@admin.register(AtsJudgeProfile)
+class AtsJudgeProfileAdmin(admin.ModelAdmin):
+    list_display = ("name", "slug", "is_default", "is_builtin", "updated_at")
+    list_filter = ("is_builtin", "is_default")
+    search_fields = ("name", "slug")
+    prepopulated_fields = {"slug": ("name",)}
+
+
 @admin.register(OptimizerWorkflow)
 class OptimizerWorkflowAdmin(admin.ModelAdmin):
-    list_display = ("name", "max_iterations", "score_threshold", "updated_at")
+    list_display = ("name", "ats_judge_profile", "max_iterations", "score_threshold", "updated_at")
     list_filter = ("max_iterations",)
 
 

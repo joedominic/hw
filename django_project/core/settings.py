@@ -13,7 +13,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 env = environ.Env(
     DEBUG=(bool, True),
 )
-environ.Env.read_env(os.path.join(BASE_DIR.parent, ".env"))
+_env_file = os.environ.get("ENV_FILE") or os.path.join(BASE_DIR.parent, ".env")
+if os.path.isfile(_env_file):
+    environ.Env.read_env(_env_file)
 
 # SECURITY: keep the secret key used in production secret!
 SECRET_KEY = env("SECRET_KEY", default="django-insecure-+a#*@w#!qb+w*1_6vd4my0q2q^!ddes#&#%jueou)q7(5(=v*n")

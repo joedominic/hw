@@ -1,0 +1,41 @@
+# Production overrides — use with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+services:
+  web:
+    command: >
+      gunicorn core.wsgi:application
+      --bind 0.0.0.0:8000
+      --workers 2
+      --timeout 120
+    restart: unless-stopped
+    environment:
+      DEBUG: "False"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/', timeout=5)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  huey:
+    restart: unless-stopped
+    environment:
+      DEBUG: "False"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os,redis; r=redis.Redis(host=os.environ.get('HUEY_REDIS_HOST','192.168.2.174'), port=int(os.environ.get('HUEY_REDIS_PORT',6379)), db=int(os.environ.get('HUEY_REDIS_DB',0))); r.ping()",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

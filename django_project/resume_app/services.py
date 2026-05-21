@@ -37,6 +37,38 @@ def parse_pdf(file_path: str) -> str:
     return text.strip()
 
 
+class DraftSaveError(Exception):
+    """User-facing draft save validation error."""
+
+    def __init__(self, message: str, status_code: int = 400):
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+
+
+def save_optimized_draft_content(resume_id: int, content: str):
+    """
+    Persist user-edited optimized resume text before PDF/Word export.
+    """
+    from .models import OptimizedResume
+
+    optimized = OptimizedResume.objects.filter(pk=int(resume_id)).first()
+    if not optimized:
+        raise DraftSaveError("Optimized resume not found.", status_code=404)
+    if optimized.status not in (
+        OptimizedResume.STATUS_COMPLETED,
+        OptimizedResume.STATUS_RUNNING,
+    ):
+        raise DraftSaveError(
+            "Draft can only be saved when the run is completed or still in progress."
+        )
+    if not (content or "").strip():
+        raise DraftSaveError("Draft cannot be empty.")
+    optimized.optimized_content = content
+    optimized.save(update_fields=["optimized_content", "updated_at"])
+    return optimized
+
+
 def run_ollama_guard_on_payloads(payloads: list, track_slug: str) -> list:
     """
     Run local Ollama check on job payloads to verify seniority and fit.

@@ -45,8 +45,13 @@ Optimized Resume:
 """
 
 
-DEFAULT_ATS_JUDGE_SYSTEM = """You are an ATS (Applicant Tracking System) Judge. Score the following tailored resume against the job description.
-Focus on keywords and parseability. Return a score 0-100 and brief feedback."""
+DEFAULT_ATS_JUDGE_SYSTEM = """You are an ATS (Applicant Tracking System) Judge. Score the tailored resume against the job description.
+Focus on keywords and parseability. Return exactly one JSON object with:
+- ats_match_score (integer 0-100)
+- missing_keywords (array of strings)
+- formatting_issues (array of strings)
+- strategic_feedback (string with actionable advice)
+No markdown, code fences, or extra text."""
 
 DEFAULT_ATS_JUDGE_USER = """Tailored Resume:
 {optimized_resume}

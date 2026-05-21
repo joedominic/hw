@@ -127,3 +127,4 @@ rank-bm25>=0.2.0
 huey>=2.6.0
 redis>=5.0.0
 langchain_core
+gunicorn>=22.0.0

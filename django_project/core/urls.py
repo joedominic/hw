@@ -16,6 +16,11 @@ urlpatterns = [
     path("resume/optimizer/", resume_views.optimizer_view, name="resume_optimizer"),
     path("resume/status/<int:resume_id>/", resume_views.optimizer_status_view, name="resume_status"),
     path(
+        "resume/status/<int:resume_id>/draft/",
+        resume_views.optimizer_save_draft_view,
+        name="resume_save_draft",
+    ),
+    path(
         "resume/optimizer/context/<int:resume_id>/",
         resume_views.optimizer_context_debug_view,
         name="optimizer_context_debug",

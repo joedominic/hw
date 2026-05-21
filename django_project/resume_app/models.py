@@ -1,5 +1,6 @@
 from django.db import models
 from django.utils import timezone
+from django.utils.text import slugify
 
 
 class Track(models.Model):
@@ -156,6 +157,14 @@ class OptimizedResume(models.Model):
         related_name="optimized_resumes",
         help_text="Saved workflow used when this run was enqueued.",
     )
+    ats_judge_profile = models.ForeignKey(
+        "AtsJudgeProfile",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="optimized_resumes",
+        help_text="ATS judge prompt profile used for this optimization run.",
+    )
     optimization_notes = models.TextField(
         blank=True,
         default="",
@@ -182,6 +191,58 @@ class AgentLog(models.Model):
     step_name = models.CharField(max_length=100)
     thought = models.JSONField()
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class AtsJudgeProfile(models.Model):
+    """
+    Named ATS judge prompt (system/user/legacy triple). Users pick one per optimizer run;
+    OptimizerWorkflow may set a default profile for that workflow.
+    """
+
+    name = models.CharField(max_length=255)
+    slug = models.SlugField(
+        max_length=64,
+        unique=True,
+        help_text="Stable identifier for API and defaults (e.g. 'default').",
+    )
+    ats_judge = models.TextField(blank=True)
+    ats_judge_system = models.TextField(blank=True)
+    ats_judge_user = models.TextField(blank=True)
+    is_builtin = models.BooleanField(
+        default=False,
+        help_text="Seeded built-in profile; deletion may be restricted in UI.",
+    )
+    is_default = models.BooleanField(
+        default=False,
+        help_text="Global fallback when no per-run or workflow ATS is selected.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "ATS judge profile"
+        verbose_name_plural = "ATS judge profiles"
+
+    def __str__(self) -> str:
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if not (self.slug or "").strip():
+            base = slugify(self.name) or "ats-profile"
+            candidate = base
+            n = 2
+            while (
+                AtsJudgeProfile.objects.filter(slug=candidate)
+                .exclude(pk=self.pk)
+                .exists()
+            ):
+                candidate = f"{base}-{n}"
+                n += 1
+            self.slug = candidate
+        if self.is_default:
+            AtsJudgeProfile.objects.exclude(pk=self.pk).update(is_default=False)
+        super().save(*args, **kwargs)
 
 
 class UserPromptProfile(models.Model):
@@ -560,6 +621,14 @@ class OptimizerWorkflow(models.Model):
     loop_to = models.CharField(max_length=64, blank=True)
     max_iterations = models.PositiveSmallIntegerField(default=3)
     score_threshold = models.PositiveSmallIntegerField(default=85)
+    ats_judge_profile = models.ForeignKey(
+        AtsJudgeProfile,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="optimizer_workflows",
+        help_text="Default ATS judge prompt when this workflow is used.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

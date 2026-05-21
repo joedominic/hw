@@ -202,6 +202,7 @@ def optimize_resume_task(
     score_threshold=85,
     workflow_steps=None,
     loop_to=None,
+    ats_judge_profile_id=None,
 ):
     """
     Huey async task: run the resume optimizer workflow for a single OptimizedResume.
@@ -209,7 +210,11 @@ def optimize_resume_task(
     Fetches OptimizedResume once at top; on any failure sets status to failed.
     """
     try:
-        optimized_resume = OptimizedResume.objects.get(id=resume_id)
+        optimized_resume = OptimizedResume.objects.select_related(
+            "optimizer_workflow",
+            "optimizer_workflow__ats_judge_profile",
+            "ats_judge_profile",
+        ).get(id=resume_id)
     except OptimizedResume.DoesNotExist:
         return {"status": "error", "message": "OptimizedResume not found"}
 
@@ -242,7 +247,13 @@ def optimize_resume_task(
             app = create_workflow()
 
         # Initial State (prompts from profile + optional API override)
-        _pb = build_optimizer_graph_prompt_state(prompts or None)
+        workflow = optimized_resume.optimizer_workflow
+        explicit_ats = ats_judge_profile_id or optimized_resume.ats_judge_profile_id
+        _pb = build_optimizer_graph_prompt_state(
+            prompts or None,
+            ats_judge_profile_id=explicit_ats,
+            workflow=workflow,
+        )
         initial_state = {
             **ctx_state,
             "optimized_resume": "",
@@ -277,7 +288,11 @@ def optimize_resume_task(
         # recursion_limit must exceed the number of nodes: LangGraph counts each node invocation
         # and the transition to END; with limit=num_steps the last node can hit the limit before finishing.
         num_steps = len(steps) if steps else 3
-        run_config = {"callbacks": [usage_callback], "recursion_limit": num_steps + 20}
+        # LangGraph 1.x counts graph steps aggressively; too low a limit can abort before END.
+        run_config = {
+            "callbacks": [usage_callback],
+            "recursion_limit": max(100, num_steps * 25),
+        }
         # Coalesce: stream() can yield multiple times per node; only log once per node with merged state
         accumulated = {}
         prev_node = None
@@ -298,12 +313,28 @@ def optimize_resume_task(
                 accumulated[node_name].update(state_update)
                 prev_node = node_name
 
-                if 'ats_score' in state_update or 'recruiter_score' in state_update:
-                    optimized_resume.status_display = f"Scoring: ATS={last_state.get('ats_score', 'N/A')}, Recruiter={last_state.get('recruiter_score', 'N/A')}"
-                elif 'optimized_resume' in state_update:
+                update_fields: list[str] = []
+                if "optimized_resume" in state_update:
                     optimized_resume.status_display = "Drafting"
-
-                optimized_resume.save(update_fields=["status_display"])
+                    update_fields.append("status_display")
+                    oc = last_state.get("optimized_resume")
+                    if isinstance(oc, str) and oc.strip():
+                        optimized_resume.optimized_content = oc
+                        update_fields.append("optimized_content")
+                elif "ats_score" in state_update or "recruiter_score" in state_update:
+                    optimized_resume.status_display = (
+                        f"Scoring: ATS={last_state.get('ats_score', 'N/A')}, "
+                        f"Recruiter={last_state.get('recruiter_score', 'N/A')}"
+                    )
+                    update_fields.append("status_display")
+                    if "ats_score" in state_update:
+                        optimized_resume.ats_score = last_state.get("ats_score")
+                        update_fields.append("ats_score")
+                    if "recruiter_score" in state_update:
+                        optimized_resume.recruiter_score = last_state.get("recruiter_score")
+                        update_fields.append("recruiter_score")
+                if update_fields:
+                    optimized_resume.save(update_fields=list(dict.fromkeys(update_fields)))
 
                 if rate_limit_delay and float(rate_limit_delay) > 0:
                     time.sleep(float(rate_limit_delay))
@@ -497,6 +528,11 @@ def _enqueue_single_pipeline_resume_optimization(
             st = int(workflow.score_threshold)
             score_threshold = max(0, min(100, st))
 
+    from .prompt_store import resolve_effective_ats_judge_profile_id, get_ats_judge_profile_by_id
+
+    effective_ats_id = resolve_effective_ats_judge_profile_id(workflow=workflow)
+    ats_profile = get_ats_judge_profile_by_id(effective_ats_id)
+
     jd = JobDescription.objects.create(content=jd_text)
     opt = OptimizedResume.objects.create(
         original_resume=user_resume,
@@ -504,6 +540,7 @@ def _enqueue_single_pipeline_resume_optimization(
         status=OptimizedResume.STATUS_QUEUED,
         pipeline_entry=entry,
         optimizer_workflow=workflow,
+        ats_judge_profile=ats_profile,
     )
 
     optimize_resume_task(
@@ -518,6 +555,7 @@ def _enqueue_single_pipeline_resume_optimization(
         loop_to=loop_to,
         max_iterations=max_iterations,
         score_threshold=score_threshold,
+        ats_judge_profile_id=effective_ats_id,
     )
     return {
         "status": "ok",

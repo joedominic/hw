@@ -8,9 +8,9 @@ migrated once into the profile when the DB row is still empty.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from .models import UserPromptProfile
+from .models import AtsJudgeProfile, OptimizerWorkflow, UserPromptProfile
 from .prompts import (
     DEFAULT_ATS_JUDGE_PROMPT,
     DEFAULT_ATS_JUDGE_SYSTEM,
@@ -98,6 +98,129 @@ def _migrate_session_to_profile(request, profile: UserPromptProfile) -> bool:
     return changed
 
 
+def resolve_ats_judge_parts(profile: AtsJudgeProfile) -> Tuple[str, str, Optional[str]]:
+    """
+    Return (system_template, user_template, legacy_combined_or_none) for an ATS judge profile.
+    """
+    sys_v = (profile.ats_judge_system or "").strip()
+    usr_v = (profile.ats_judge_user or "").strip()
+    leg = (profile.ats_judge or "").strip()
+    if sys_v or usr_v:
+        return (sys_v or DEFAULT_ATS_JUDGE_SYSTEM, usr_v or DEFAULT_ATS_JUDGE_USER, None)
+    if leg:
+        return ("", "", leg)
+    return (DEFAULT_ATS_JUDGE_SYSTEM, DEFAULT_ATS_JUDGE_USER, None)
+
+
+def get_default_ats_judge_profile() -> Optional[AtsJudgeProfile]:
+    """Global fallback ATS profile (is_default, slug default, or lowest pk)."""
+    return (
+        AtsJudgeProfile.objects.filter(is_default=True).first()
+        or AtsJudgeProfile.objects.filter(slug="default").first()
+        or AtsJudgeProfile.objects.order_by("pk").first()
+    )
+
+
+def list_ats_judge_profiles() -> List[AtsJudgeProfile]:
+    return list(AtsJudgeProfile.objects.all().order_by("name"))
+
+
+def get_ats_judge_profile_by_id(profile_id: Optional[int]) -> Optional[AtsJudgeProfile]:
+    if not profile_id:
+        return None
+    try:
+        return AtsJudgeProfile.objects.get(pk=int(profile_id))
+    except (AtsJudgeProfile.DoesNotExist, ValueError, TypeError):
+        return None
+
+
+def resolve_effective_ats_judge_profile_id(
+    *,
+    ats_judge_profile_id: Optional[int] = None,
+    workflow: Optional[OptimizerWorkflow] = None,
+    workflow_ats_judge_profile_id: Optional[int] = None,
+) -> Optional[int]:
+    """
+    Per-run ATS selection priority:
+    1. Explicit ats_judge_profile_id
+    2. Workflow's ats_judge_profile
+    3. Global default profile
+    """
+    if ats_judge_profile_id:
+        return int(ats_judge_profile_id)
+    wf_id = workflow_ats_judge_profile_id
+    if workflow is not None and workflow.ats_judge_profile_id:
+        wf_id = workflow.ats_judge_profile_id
+    if wf_id:
+        return int(wf_id)
+    default = get_default_ats_judge_profile()
+    return default.pk if default else None
+
+
+def get_ats_judge_profile_display(profile: AtsJudgeProfile) -> Dict[str, str]:
+    """Form/display dict for one ATS profile (system, user, combined, legacy_combined)."""
+    raw_legacy = (profile.ats_judge or "").strip()
+    raw_sys = (profile.ats_judge_system or "").strip()
+    raw_usr = (profile.ats_judge_user or "").strip()
+    has_split = bool(raw_sys or raw_usr)
+    eff_sys, eff_usr, eff_leg = resolve_ats_judge_parts(profile)
+    if eff_leg:
+        system = ""
+        user = ""
+    else:
+        system = eff_sys
+        user = eff_usr
+    if has_split:
+        combined = (raw_sys or DEFAULT_ATS_JUDGE_SYSTEM) + "\n\n" + (raw_usr or DEFAULT_ATS_JUDGE_USER)
+    elif raw_legacy:
+        combined = raw_legacy
+    else:
+        combined = DEFAULT_ATS_JUDGE_PROMPT
+    return {
+        "ats_judge": combined,
+        "ats_judge_system": system,
+        "ats_judge_user": user,
+        "ats_judge_legacy_combined": "" if has_split else (profile.ats_judge or ""),
+    }
+
+
+def save_ats_judge_profile(
+    profile: AtsJudgeProfile,
+    *,
+    name: Optional[str] = None,
+    ats_judge: str = "",
+    ats_judge_system: str = "",
+    ats_judge_user: str = "",
+) -> AtsJudgeProfile:
+    """Persist triple using split-wins-over-legacy rules (mirrors prompt library)."""
+    sys_v = (ats_judge_system or "").strip()
+    usr_v = (ats_judge_user or "").strip()
+    leg_v = (ats_judge or "").strip()
+    if sys_v or usr_v:
+        profile.ats_judge = ""
+        profile.ats_judge_system = sys_v
+        profile.ats_judge_user = usr_v
+    elif leg_v:
+        profile.ats_judge = leg_v
+        profile.ats_judge_system = ""
+        profile.ats_judge_user = ""
+    else:
+        profile.ats_judge = ""
+        profile.ats_judge_system = ""
+        profile.ats_judge_user = ""
+    if name is not None and name.strip():
+        profile.name = name.strip()
+    profile.save()
+    return profile
+
+
+def _user_prompt_profile_has_ats(profile: UserPromptProfile) -> bool:
+    return any(
+        (getattr(profile, f) or "").strip()
+        for f in ("ats_judge", "ats_judge_system", "ats_judge_user")
+    )
+
+
 def resolve_prompt_parts(
     profile: UserPromptProfile,
     kind: str,
@@ -134,7 +257,11 @@ def get_effective_prompts(request: Optional[Any]) -> Dict[str, str]:
         profile.refresh_from_db()
 
     out: Dict[str, str] = {}
+    default_ats = get_default_ats_judge_profile()
     for kind, (leg_a, sys_a, usr_a, def_sys, def_user) in _PROMPT_SPEC.items():
+        if kind == "ats_judge" and default_ats is not None:
+            out.update(get_ats_judge_profile_display(default_ats))
+            continue
         raw_legacy = (getattr(profile, leg_a) or "").strip()
         raw_sys = (getattr(profile, sys_a) or "").strip()
         raw_usr = (getattr(profile, usr_a) or "").strip()
@@ -163,9 +290,11 @@ def get_effective_prompts(request: Optional[Any]) -> Dict[str, str]:
 
 
 def save_prompts_to_profile(request: Optional[Any], prompts: Dict[str, str]) -> None:
-    """Persist prompt dict to UserPromptProfile (pk=1)."""
+    """Persist prompt dict to UserPromptProfile (pk=1). ATS judge uses AtsJudgeProfile library."""
     profile = _get_or_create_profile()
     for kind, (leg_a, sys_a, usr_a, _ds, _du) in _PROMPT_SPEC.items():
+        if kind == "ats_judge":
+            continue
         if leg_a in prompts:
             setattr(profile, leg_a, prompts.get(leg_a) or "")
         if sys_a in prompts:
@@ -197,38 +326,92 @@ def profile_for_llm(request: Optional[Any]) -> UserPromptProfile:
     return _get_or_create_profile()
 
 
-def build_optimizer_graph_prompt_state(
+def _ats_judge_prompt_state(
+    *,
     prompts_override: Optional[Dict[str, str]],
+    request: Optional[Any],
+    ats_judge_profile_id: Optional[int] = None,
+    workflow: Optional[OptimizerWorkflow] = None,
+    workflow_ats_judge_profile_id: Optional[int] = None,
+) -> Dict[str, str]:
+    from .prompts import DEFAULT_ATS_JUDGE_PROMPT as _DEF_ATS
+
+    prefix = "ats_judge_prompt_"
+    ov = (prompts_override or {}).get("ats_judge") if prompts_override else None
+    if ov and str(ov).strip():
+        leg = str(ov).strip()
+        return {
+            f"{prefix}system": "",
+            f"{prefix}user": "",
+            f"{prefix}legacy": leg,
+            f"{prefix}template": leg or _DEF_ATS,
+        }
+
+    effective_id = resolve_effective_ats_judge_profile_id(
+        ats_judge_profile_id=ats_judge_profile_id,
+        workflow=workflow,
+        workflow_ats_judge_profile_id=workflow_ats_judge_profile_id,
+    )
+    ats_prof = get_ats_judge_profile_by_id(effective_id)
+    if ats_prof is not None:
+        s, u, leg = resolve_ats_judge_parts(ats_prof)
+    else:
+        prof = profile_for_llm(request)
+        if _user_prompt_profile_has_ats(prof):
+            s, u, leg = resolve_prompt_parts(prof, "ats_judge")
+        else:
+            s, u, leg = DEFAULT_ATS_JUDGE_SYSTEM, DEFAULT_ATS_JUDGE_USER, None
+
+    return {
+        f"{prefix}system": s or "",
+        f"{prefix}user": u or "",
+        f"{prefix}legacy": leg or "",
+        f"{prefix}template": (leg if leg else (s + "\n\n" + u)).strip() or _DEF_ATS,
+    }
+
+
+def build_optimizer_graph_prompt_state(
+    prompts_override: Optional[Dict[str, str]] = None,
     request: Optional[Any] = None,
+    *,
+    ats_judge_profile_id: Optional[int] = None,
+    workflow: Optional[OptimizerWorkflow] = None,
+    workflow_ats_judge_profile_id: Optional[int] = None,
 ) -> Dict[str, str]:
     """
     LangGraph initial_state keys for writer / ATS / recruiter prompts.
     Optional prompts_override keys: writer, ats_judge, recruiter_judge (each forces legacy single-template mode).
+    ATS prompt resolves from ats_judge_profile_id, workflow default, or global default profile.
     """
     from .prompts import (
-        DEFAULT_ATS_JUDGE_PROMPT as _DEF_ATS,
         DEFAULT_RECRUITER_JUDGE_PROMPT as _DEF_REC,
         DEFAULT_WRITER_PROMPT as _DEF_W,
     )
 
     prof = profile_for_llm(request)
     out: Dict[str, str] = {}
+    out.update(
+        _ats_judge_prompt_state(
+            prompts_override=prompts_override,
+            request=request,
+            ats_judge_profile_id=ats_judge_profile_id,
+            workflow=workflow,
+            workflow_ats_judge_profile_id=workflow_ats_judge_profile_id,
+        )
+    )
     for kind, prefix in (
         ("writer", "writer_prompt_"),
-        ("ats_judge", "ats_judge_prompt_"),
         ("recruiter_judge", "recruiter_judge_prompt_"),
     ):
         s, u, leg = resolve_prompt_parts(prof, kind)
-        override_key = {"writer": "writer", "ats_judge": "ats_judge", "recruiter_judge": "recruiter_judge"}[
-            kind
-        ]
+        override_key = {"writer": "writer", "recruiter_judge": "recruiter_judge"}[kind]
         ov = (prompts_override or {}).get(override_key) if prompts_override else None
         if ov and str(ov).strip():
             s, u, leg = "", "", str(ov).strip()
         out[f"{prefix}system"] = s or ""
         out[f"{prefix}user"] = u or ""
         out[f"{prefix}legacy"] = leg or ""
-        _fallback = _DEF_W if kind == "writer" else _DEF_ATS if kind == "ats_judge" else _DEF_REC
+        _fallback = _DEF_W if kind == "writer" else _DEF_REC
         out[f"{prefix}template"] = (leg if leg else (s + "\n\n" + u)).strip() or _fallback
     return out
 

@@ -21,11 +21,20 @@ from .jobs_api import (
 )
 from .llm_session import get_active_llm_provider
 from .models import OptimizedResume, PipelineEntry, Track
+from .tasks import _resolve_user_resume_for_track
 from .track_actions import saved_listing_id_set
 from .prompt_store import get_effective_prompts
 from .utils import format_job_source_label
 
 BOARD_STAGES = ("pipeline", "vetting", "applying", "done")
+
+
+def _attach_optimizer_user_resume_id(pipeline_jobs, raw_track: str) -> None:
+    """Track default UserResume id for Tailor / Open optimizer links (same resolution as pipeline enqueue)."""
+    ur = _resolve_user_resume_for_track(raw_track)
+    rid = ur.id if ur else None
+    for j in pipeline_jobs:
+        setattr(j, "optimizer_user_resume_id", rid)
 
 
 def _attach_optimized_resume_ids_for_stage(pipeline_jobs, raw_track: str, stage: str) -> None:
@@ -132,7 +141,7 @@ def _save_success_message(board_stage: str) -> str:
     if board_stage == "pipeline":
         return "Job saved to favourites."
     if board_stage == "vetting":
-        return "Job moved to Applying. Use Optimize on the Applying board when you are ready to tailor your resume."
+        return "Job moved to Applying. Use Open optimizer on the Applying board when you are ready to tailor your resume."
     if board_stage == "applying":
         return "Job moved to Done."
     return "Job saved to favourites."
@@ -157,44 +166,6 @@ def pipeline_board_view(request, board_stage: str):
         track_from_form = (request.POST.get("track") or raw_track).strip().lower()
         next_url = request.POST.get("next") or reverse(board_stage) + f"?track={raw_track}"
         selected_ids = [jid for jid in job_ids if jid] or ([job_id] if job_id else [])
-
-        if action == "bulk_optimize" and board_stage == "applying":
-            if not selected_ids:
-                messages.info(request, "Select at least one job before optimizing.")
-                return redirect(next_url)
-            track_from_form = (request.POST.get("track") or raw_track).strip().lower()
-            entry_ids: list[int] = []
-            for jid in selected_ids:
-                try:
-                    jid_int = int(jid)
-                except (ValueError, TypeError):
-                    continue
-                pe = (
-                    PipelineEntry.objects.filter(
-                        job_listing_id=jid_int,
-                        track=track_from_form,
-                        removed_at__isnull=True,
-                        stage=PipelineEntry.Stage.APPLYING,
-                    )
-                    .values_list("id", flat=True)
-                    .first()
-                )
-                if pe is not None:
-                    entry_ids.append(pe)
-            if entry_ids:
-                try:
-                    from .tasks import enqueue_applying_resume_optimization_task
-
-                    enqueue_applying_resume_optimization_task(entry_ids, force_new=True)
-                    messages.success(
-                        request,
-                        f"Queued resume optimization for {len(entry_ids)} job(s). Open each job’s Results link to track progress.",
-                    )
-                except Exception as exc:
-                    messages.error(request, str(exc))
-            else:
-                messages.info(request, "No Applying jobs matched the selection.")
-            return redirect(next_url)
 
         if action in {"bulk_delete", "bulk_like", "bulk_dislike"}:
             if not selected_ids:
@@ -259,32 +230,6 @@ def pipeline_board_view(request, board_stage: str):
                 messages.success(request, _single_delete_msg(board_stage))
             except (ValueError, TypeError):
                 messages.error(request, "Invalid job id.")
-        elif action == "optimize_resume" and board_stage == "applying" and job_id:
-            try:
-                jid_int = int(job_id)
-            except (ValueError, TypeError):
-                messages.error(request, "Invalid job id.")
-            else:
-                pe = (
-                    PipelineEntry.objects.filter(
-                        job_listing_id=jid_int,
-                        track=track_from_form,
-                        removed_at__isnull=True,
-                        stage=PipelineEntry.Stage.APPLYING,
-                    )
-                    .values_list("id", flat=True)
-                    .first()
-                )
-                if pe is None:
-                    messages.error(request, "Job is not in Applying for this track.")
-                else:
-                    try:
-                        from .tasks import enqueue_applying_resume_optimization_task
-
-                        enqueue_applying_resume_optimization_task([pe], force_new=True)
-                        messages.success(request, "Resume optimization queued.")
-                    except Exception as exc:
-                        messages.error(request, str(exc))
         elif action in ("like", "dislike", "save") and job_id:
             request.session["job_search_track"] = track_from_form
             try:
@@ -404,6 +349,7 @@ def pipeline_board_view(request, board_stage: str):
     )
 
     if board_stage == "applying":
+        _attach_optimizer_user_resume_id(pipeline_jobs, raw_track)
         _attach_optimized_resume_ids_for_stage(
             pipeline_jobs, raw_track, PipelineEntry.Stage.APPLYING
         )
@@ -422,7 +368,7 @@ def pipeline_board_view(request, board_stage: str):
     board_subtitles = {
         "pipeline": "Jobs from scheduled tasks. Focus % is computed when you open this page. Like, Dislike, Save, and Delete behave like Job Search.",
         "vetting": "Interview % shows only when the model reply is parsed to a number. Use Match debug on a job to run one call and inspect the raw response. Automation retries missing scores on a cooldown so unparsed replies do not spam the LLM.",
-        "applying": "Active applications. Optimize runs only when you click it—moving a job here does not auto-start LLM tailoring. Saving marks a job done after you submit.",
+        "applying": "Active applications. Open optimizer opens the resume tool in a new tab with this job and your track resume prefilled—run when you are ready. Saving marks a job done after you submit.",
         "done": "Completed applications.",
     }
     empty_messages = {

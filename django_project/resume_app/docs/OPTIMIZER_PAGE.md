@@ -22,8 +22,9 @@ This document describes the Resume Optimizer page: layout, actions, and backend 
 
 ### Prompts
 
-- Writer, ATS judge, and recruiter judge prompt templates in a **tabbed** interface (one prompt at a time). “Edit in Prompt Library” links to the dedicated **Prompt Library** page for full-screen editing.
-- Save prompts and Reset to server defaults; prompts are stored in session and used when running the optimizer or a step.
+- Writer and recruiter judge prompt templates in the wizard (editable inline). **ATS judge** uses a **profile dropdown** (named prompts from the library); preview text updates when you change the selection.
+- “Edit in Prompt Library” links to the dedicated **Prompt Library** page. ATS profiles are managed there (list + system/user templates); writer/recruiter/matching/etc. remain on the main library tabs.
+- Save prompts and Reset to server defaults; writer/recruiter are stored in `UserPromptProfile`. Last-selected ATS profile id is stored in session (`optimizer_ats_judge_profile_id`).
 
 ---
 
@@ -31,10 +32,10 @@ This document describes the Resume Optimizer page: layout, actions, and backend 
 
 ### 1. Upload resume & job description
 
-- **Single form** (`action=run_optimizer`) with: resume file (or prefill from Match), job description textarea, model select, writer/ATS/recruiter prompt textareas, debug checkbox, rate limit delay, max iterations (1–5).
+- **Single form** (`action=run_optimizer`) with: resume file (or prefill from Match), job description textarea, model select, writer/recruiter prompt textareas, **ATS profile** select, workflow preset, debug checkbox, rate limit delay, max iterations (1–5).
 - **Run mode** toggle: “Full run” | “Step by step”. Full run shows “Run optimizer”; step by step shows the step-by-step card.
 - **Run optimizer** (Full run): Submits the form. If a file is present, the form is submitted via AJAX to `/api/resume/optimize`; the page stays in place and the status panel shows progress and polls until completed/failed. If no file (e.g. prefill resume only), the form submits normally and redirects to the same page with `?resume_id=<id>`.
-- **Optimization status** (card “3. Optimization status”): Always visible. When a run is active (from URL `resume_id` or from AJAX start), the body shows status, ATS/recruiter scores, token usage, optimized content (when completed), download Word/PDF, error message (when failed), and “Agent thoughts” accordion from `AgentLog`. Status is polled every 2s until completed or failed (no full-page reload when started via AJAX).
+- **Optimization status** (card “3. Optimization status”): Always visible. When a run is active (from URL `resume_id` or from AJAX start), the body shows status, ATS/recruiter scores, token usage, and an **editable draft textarea** when the run completes. Use **Save draft** to persist edits; **Export PDF/Word** uses the saved text. While the run is still in progress, the draft is read-only until completion. Status is polled every 2s until completed or failed (no full-page reload when started via AJAX).
 
 ### 2. Step by step (when Run mode = Step by step)
 
@@ -76,4 +77,4 @@ This document describes the Resume Optimizer page: layout, actions, and backend 
 ## 6. Settings and Prompt Library
 
 - **Settings** (`/settings/`, `settings_view`): Manage LLM provider API keys in one place. Each provider has an API key input and “Connect & save key”. Keys are validated and stored encrypted; used by the optimizer and other tools.
-- **Prompt Library** (`/resume/prompts/`, `prompt_library_view`): Dedicated page to edit Writer, ATS Judge, and Recruiter prompt templates (tabbed). Save updates session `optimizer_prompts`; Reset loads server defaults. The optimizer links to it via “Edit in Prompt Library”.
+- **Prompt Library** (`/resume/prompts/`, `prompt_library_view`): Writer, Recruiter, Matching, Insights, JD cleanse (tabbed). **ATS judge profiles** are a separate section: create/rename/delete profiles and edit system/user/combined templates per profile. Saved workflows can set a default ATS profile for pipeline runs.

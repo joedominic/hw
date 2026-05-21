@@ -44,8 +44,8 @@
                     Delete selected
                 </button>
                 {% if stage_label == "applying" %}
-                <button type="submit" name="action" value="bulk_optimize" class="rounded-concierge border border-violet-200 bg-white px-3 py-1.5 text-xs font-semibold text-violet-900 hover:bg-violet-50">
-                    Optimize selected
+                <button type="button" id="pipeline-bulk-open-optimizer" class="rounded-concierge border border-violet-200 bg-white px-3 py-1.5 text-xs font-semibold text-violet-900 hover:bg-violet-50">
+                    Open optimizer (selected)
                 </button>
                 {% endif %}
             </div>
@@ -56,7 +56,8 @@
         <div class="mb-3 rounded-concierge border border-slate-200 bg-white p-3 shadow-sm">
             <div class="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
                 <div class="flex min-w-0 flex-1 items-start gap-2">
-                    <input form="pipeline-bulk-form" class="job-select-checkbox mt-1 h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" type="checkbox" name="job_ids" value="{{ j.id }}" id="job-select-{{ j.id }}">
+                    <input form="pipeline-bulk-form" class="job-select-checkbox mt-1 h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" type="checkbox" name="job_ids" value="{{ j.id }}" id="job-select-{{ j.id }}"
+                        {% if stage_label == "applying" %}data-optimizer-url="{% url 'resume_optimizer' %}?job_id={{ j.id }}{% if j.optimizer_user_resume_id %}&amp;resume_id={{ j.optimizer_user_resume_id }}{% endif %}"{% endif %}>
                     <div class="min-w-0">
                         <p class="font-semibold text-concierge-slate">{{ j.title }}</p>
                         <div class="mt-1 flex flex-wrap items-center gap-1">
@@ -109,7 +110,7 @@
                                 <a href="{% url 'resume_optimizer' %}?opt_id={{ j.optimized_resume_id }}" class="inline-flex items-center rounded-concierge border border-violet-200 bg-violet-50 px-2 py-1 text-xs font-medium text-violet-900 hover:bg-violet-100" title="Open scores, judge feedback, and tailored draft">Results</a>
                             {% endif %}
                             {% if stage_label == "applying" %}
-                            <button type="submit" name="action" value="optimize_resume" class="rounded-concierge border border-violet-200 bg-white px-2 py-1 text-xs font-medium text-violet-900 hover:bg-violet-50" title="Queue a new optimization run">{% if j.optimized_resume_id %}Re-optimize{% else %}Optimize{% endif %}</button>
+                            <a href="{% url 'resume_optimizer' %}?job_id={{ j.id }}{% if j.optimizer_user_resume_id %}&amp;resume_id={{ j.optimizer_user_resume_id }}{% endif %}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center rounded-concierge border border-violet-200 bg-white px-2 py-1 text-xs font-medium text-violet-900 hover:bg-violet-50" title="Open resume optimizer with this job and your track resume prefilled">Open optimizer</a>
                             {% endif %}
                         {% endif %}
                         <button type="submit" name="action" value="like" class="rounded-concierge border border-sky-200 bg-white px-2 py-1 text-xs font-medium text-sky-900 hover:bg-sky-50">Like</button>
@@ -143,6 +144,21 @@
 
     <script>
         (function() {
+            var btn = document.getElementById("pipeline-bulk-open-optimizer");
+            if (btn) {
+                btn.addEventListener("click", function() {
+                    var urls = [];
+                    document.querySelectorAll(".job-select-checkbox:checked").forEach(function(cb) {
+                        var u = cb.getAttribute("data-optimizer-url");
+                        if (u) urls.push(u);
+                    });
+                    if (!urls.length) {
+                        alert("Select at least one job (Applying board).");
+                        return;
+                    }
+                    urls.forEach(function(u) { window.open(u, "_blank", "noopener,noreferrer"); });
+                });
+            }
             const selectAll = document.getElementById('select-all-jobs');
             if (!selectAll) return;
             const checkboxes = document.getElementsByClassName('job-select-checkbox');
