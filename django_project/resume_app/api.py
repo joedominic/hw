@@ -296,7 +296,7 @@ def run_step(
                 except OSError:
                     pass
         if payload.use_resume_id:
-            ur = get_object_or_404(UserResume, id=payload.use_resume_id)
+            ur = get_object_or_404(UserResume.library(), id=payload.use_resume_id)
             return parse_pdf(ur.file.path)
         return None
 
@@ -546,7 +546,11 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
     if original_name and "/" in original_name:
         original_name = original_name.split("/")[-1]
     original_name = (original_name or "resume.pdf")[:255]
-    user_resume = UserResume.objects.create(file=file, original_filename=original_name)
+    user_resume = UserResume.objects.create(
+        file=file,
+        original_filename=original_name,
+        is_library=False,
+    )
 
     # 2. Save Job Description
     job_desc = JobDescription.objects.create(content=payload.job_description)

@@ -4,7 +4,11 @@ Returns a list of normalized dicts for upsert into JobListing.
 """
 import hashlib
 import logging
-from typing import Any, Optional
+import math
+from typing import Any, Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .models import JobListing
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +98,56 @@ def _row_to_dict(row: Any, site: str) -> dict:
         "source": source,
         "external_id": external_id,
     }
+
+
+def _scalar_fetch_value(val: Any) -> Any:
+    """Coerce JobSpy/pandas sentinels to DB-safe scalars; drop explicit nulls."""
+    if val is None:
+        return None
+    if isinstance(val, float) and math.isnan(val):
+        return None
+    s = str(val).strip()
+    if s.lower() in ("nan", "none", "<na>", "nat"):
+        return None
+    return val
+
+
+def upsert_job_listing_from_fetch(row: dict) -> Tuple["JobListing", bool]:
+    """
+    Upsert a normalized JobSpy row into JobListing.
+
+    Uses get + QuerySet.update/create instead of update_or_create: Django 5 adds
+    auto_now_add fields (e.g. fetched_at) to every update_or_create save. Rows with
+    legacy empty fetched_at ('' in SQLite) load as None and then get written back as
+    NULL, triggering NOT NULL constraint failures.
+    """
+    from django.utils import timezone
+
+    from .models import JobListing
+
+    desc = _scalar_fetch_value(row.get("description")) or ""
+    defaults = {
+        "title": _scalar_fetch_value(row.get("title")) or "Untitled",
+        "company_name": _scalar_fetch_value(row.get("company_name")) or "Unknown",
+        "location": _scalar_fetch_value(row.get("location")) or "",
+        "description": desc,
+        "url": _scalar_fetch_value(row.get("job_url")) or "",
+    }
+    defaults = {k: v for k, v in defaults.items() if v is not None}
+
+    lookup = {"source": row["source"], "external_id": row["external_id"]}
+    updated = JobListing.objects.filter(**lookup).update(**defaults)
+    if updated:
+        job = JobListing.objects.get(**lookup)
+        if not job.fetched_at:
+            JobListing.objects.filter(pk=job.pk).update(fetched_at=timezone.now())
+            job.refresh_from_db()
+        return job, False
+
+    return (
+        JobListing.objects.create(**lookup, **defaults, fetched_at=timezone.now()),
+        True,
+    )
 
 
 def fetch_jobs(

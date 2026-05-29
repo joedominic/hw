@@ -10,7 +10,7 @@ from django.conf import settings
 
 from .models import JobListing, JobListingAction, JobListingTrackMetrics, PipelineEntry
 from .track_actions import disliked_listing_id_set, normalize_track_slug
-from .job_sources import DEFAULT_SITE_NAMES, fetch_jobs
+from .job_sources import DEFAULT_SITE_NAMES, fetch_jobs, upsert_job_listing_from_fetch
 from .schemas import JobPayload
 from .preference import (
     get_preference_vectors,
@@ -114,19 +114,7 @@ def run_job_search_core(
 
     refs_for_cache: List[dict] = []
     for r in raw or []:
-        desc = r.get("description", "") or ""
-        defaults = {
-            "title": r["title"],
-            "company_name": r["company_name"],
-            "location": r.get("location", ""),
-            "description": desc,
-            "url": r.get("job_url", ""),
-        }
-        job, _ = JobListing.objects.update_or_create(
-            source=r["source"],
-            external_id=r["external_id"],
-            defaults=defaults,
-        )
+        job, _ = upsert_job_listing_from_fetch(r)
         refs_for_cache.append({"source": job.source, "external_id": job.external_id})
         if job.id in disliked_listing_ids:
             continue

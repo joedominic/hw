@@ -12,6 +12,7 @@ from .parsers import (
     AtsJudgeResult,
     ScoreFeedback,
     FitCheckResult,
+    coerce_structured_judge_result as _coerce_structured_judge_result,
     parse_ats_judge_fallback as _parse_ats_judge_fallback,
     parse_score_fallback as _parse_score_fallback,
     parse_fit_check_fallback as _parse_fit_check_fallback_from_parsers,
@@ -633,17 +634,15 @@ def _judge_node(
             usage_query_kind=_usage_qk,
             prefer_local=False,
         )
-        if isinstance(result, structured_schema):
-            data = result
-        else:
-            content = str(result)
+        data, last_json = _coerce_structured_judge_result(
+            result, structured_schema, parse_fallback, label
+        )
+        if not isinstance(data, structured_schema):
             logger.warning(
-                "[%s] raw LLM output (structured returned unexpected type), length=%s:\n---\n%s\n---",
+                "[%s] structured output coerced via fallback (type=%s)",
                 label,
-                len(content),
-                content,
+                type(data).__name__,
             )
-            data, last_json = parse_fallback(content, label)
     except Exception as e:
         logger.warning("%s structured output failed: %s", label, e)
         raw = _llm_invoke_with_retry(
@@ -655,7 +654,9 @@ def _judge_node(
         )
         content = raw.content if hasattr(raw, "content") else str(raw)
         logger.warning("[%s] raw LLM output (before parse), length=%s:\n---\n%s\n---", label, len(content), content)
-        data, last_json = parse_fallback(content, label)
+        data, last_json = _coerce_structured_judge_result(
+            raw, structured_schema, parse_fallback, label
+        )
 
     score, feedback_text, json_out = _resolve_judge_scores(data, last_json)
     out.update({

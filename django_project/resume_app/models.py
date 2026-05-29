@@ -82,10 +82,24 @@ class UserResume(models.Model):
         default="",
         help_text="Preferred preference track slug for this resume (used to default Job Search track).",
     )
+    is_library = models.BooleanField(
+        default=False,
+        help_text="True for PDFs uploaded on Resumes & Tracks; False for ephemeral optimizer run copies.",
+    )
     uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["is_library", "-uploaded_at"]),
+        ]
 
     def __str__(self):
         return self.original_filename or f"Resume {self.id} uploaded at {self.uploaded_at}"
+
+    @classmethod
+    def library(cls):
+        """Resumes explicitly uploaded on the Resumes & Tracks page."""
+        return cls.objects.filter(is_library=True)
 
 
 class ResumeChunk(models.Model):
@@ -466,6 +480,25 @@ class AppAutomationSettings(models.Model):
         default=0,
         help_text="Cleanup Manager: remove Done-stage rows older than this many days (0 = off).",
     )
+    cleanup_generated_resume_retention_days = models.PositiveSmallIntegerField(
+        default=7,
+        help_text="Remove optimizer ephemeral resume PDFs older than this many days (0 = off).",
+    )
+    default_optimization_notes = models.TextField(
+        blank=True,
+        default="",
+        help_text="Default Writer notes for the Resume Optimizer (Step 2 / Settings).",
+    )
+    default_pipeline_skills_json = models.TextField(
+        blank=True,
+        default="",
+        help_text="Default pipeline/skills JSON for the Resume Optimizer.",
+    )
+    default_job_highlights = models.TextField(
+        blank=True,
+        default="",
+        help_text="Default supplemental accomplishments for the Resume Optimizer.",
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -489,6 +522,7 @@ class AppAutomationSettings(models.Model):
                 "cleanup_vetting_retention_days": 6,
                 "cleanup_applying_retention_days": 10,
                 "cleanup_done_retention_days": 0,
+                "cleanup_generated_resume_retention_days": 7,
             },
         )
         return obj

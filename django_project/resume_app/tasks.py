@@ -402,13 +402,13 @@ def _build_pipeline_job_description(job: JobListing) -> str:
 def _resolve_user_resume_for_track(track_slug: str) -> UserResume | None:
     track_slug = (track_slug or "").strip().lower()
     latest_track = (
-        UserResume.objects.filter(track=track_slug).order_by("-uploaded_at").first()
+        UserResume.library().filter(track=track_slug).order_by("-uploaded_at").first()
         if track_slug
         else None
     )
     if latest_track and latest_track.file:
         return latest_track
-    latest = UserResume.objects.order_by("-uploaded_at").first()
+    latest = UserResume.library().order_by("-uploaded_at").first()
     if latest and latest.file:
         return latest
     return None
@@ -739,9 +739,12 @@ def evaluate_vetting_matching_task(
 
         # Parse each track's resume once per task.
         tracks = {e.track for e in entries if e.track}
-        latest_overall = UserResume.objects.order_by("-uploaded_at").first()
+        latest_overall = UserResume.library().order_by("-uploaded_at").first()
         for track in tracks:
-            latest = UserResume.objects.filter(track=track).order_by("-uploaded_at").first() or latest_overall
+            latest = (
+                UserResume.library().filter(track=track).order_by("-uploaded_at").first()
+                or latest_overall
+            )
             if not latest or not latest.file:
                 continue
             try:
@@ -878,9 +881,10 @@ def try_vetting_match_debug(
     if entry.stage != PipelineEntry.Stage.VETTING:
         return {"ok": False, "skip_reason": "not_vetting_stage", "stage": entry.stage or ""}
     track = entry.track
-    latest_overall = UserResume.objects.order_by("-uploaded_at").first()
+    latest_overall = UserResume.library().order_by("-uploaded_at").first()
     latest = (
-        UserResume.objects.filter(track=track).order_by("-uploaded_at").first() or latest_overall
+        UserResume.library().filter(track=track).order_by("-uploaded_at").first()
+        or latest_overall
     )
     if not latest or not latest.file:
         return {"ok": False, "skip_reason": "no_resume"}
@@ -1097,10 +1101,13 @@ def enqueue_due_vetting_matching_tasks():
         return None
 
     # Resolve latest resume id per track.
-    latest_overall = UserResume.objects.order_by("-uploaded_at").first()
+    latest_overall = UserResume.library().order_by("-uploaded_at").first()
     latest_by_track: dict[str, UserResume | None] = {}
     for track in {e.track for e in entries if e.track}:
-        latest_by_track[track] = UserResume.objects.filter(track=track).order_by("-uploaded_at").first() or latest_overall
+        latest_by_track[track] = (
+            UserResume.library().filter(track=track).order_by("-uploaded_at").first()
+            or latest_overall
+        )
 
     cooldown_before = timezone.now() - timedelta(hours=VETTING_MATCHING_RETRY_COOLDOWN_HOURS)
     to_enqueue: list[int] = []
@@ -1403,6 +1410,27 @@ def cleanup_manager():
         errors.append(f"retention_cleanup: {e}")
         logger.exception("[cleanup_manager] retention purge failed: %s", e)
 
+    generated_resumes_removed = 0
+    try:
+        from .resume_cleanup import purge_generated_user_resumes
+
+        generated_resumes_removed = purge_generated_user_resumes(
+            int(cfg.cleanup_generated_resume_retention_days or 0),
+        )
+        if generated_resumes_removed:
+            huey_logger.info(
+                "[cleanup_manager] generated resumes removed=%s",
+                generated_resumes_removed,
+            )
+            logger.info(
+                "[cleanup_manager] generated resumes removed=%s",
+                generated_resumes_removed,
+            )
+    except Exception as e:
+        status = "partial_failure"
+        errors.append(f"generated_resume_cleanup: {e}")
+        logger.exception("[cleanup_manager] generated resume purge failed: %s", e)
+
     try:
         from .job_activity import purge_inactive_pipeline_entries
 
@@ -1438,9 +1466,20 @@ def cleanup_manager():
         "unknown": int(purge_result.get("unknown") or 0),
         "dedupe_removed": int(dedupe_result.get("entries_removed") or 0),
         "dedupe_groups": int(dedupe_result.get("duplicate_groups") or 0),
+        "generated_resumes_removed": int(generated_resumes_removed),
         "errors": errors[:5],
     }
     cache.set(CLEANUP_STATUS_CACHE_KEY, payload, CLEANUP_STATUS_CACHE_TTL_SECONDS)
+    return None
+
+
+@db_periodic_task(crontab(minute="15", hour="*/6"))
+def purge_generated_resumes_periodic():
+    """Every 6 hours: remove old optimizer ephemeral UserResume PDFs."""
+    cfg = AppAutomationSettings.get_solo()
+    from .resume_cleanup import purge_generated_user_resumes
+
+    purge_generated_user_resumes(int(cfg.cleanup_generated_resume_retention_days or 0))
     return None
 
 

@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from typing import Optional
+from typing import Any, Callable, Optional, Tuple, Type, Union
 
 from pydantic import BaseModel, Field
 
@@ -428,6 +428,50 @@ def _coerce_interview_probability_if_distinct_from_fit(
     return None
 
 
+# Keys that indicate a parsed judge payload (vs. a wrapper object from state/UI).
+_JUDGE_PAYLOAD_KEYS = frozenset(
+    {
+        "ats_match_score",
+        "ats_score",
+        "score",
+        "recruiter_score",
+        "missing_keywords",
+        "formatting_issues",
+        "strategic_feedback",
+        "feedback",
+        "actionable_feedback",
+        "analysis",
+    }
+)
+
+_JUDGE_JSON_WRAPPER_KEYS = (
+    "last_ats_json",
+    "last_recruiter_json",
+    "ats_judge",
+    "recruiter_judge",
+    "result",
+    "response",
+    "data",
+    "output",
+)
+
+
+def _unwrap_judge_json_dict(data: dict) -> dict:
+    """Unwrap nested judge JSON when the model echoes state keys like last_ats_json."""
+    if not isinstance(data, dict):
+        return data
+    norm_keys = {_normalize_key(k) for k in data}
+    if norm_keys & _JUDGE_PAYLOAD_KEYS:
+        return data
+    for wrapper in _JUDGE_JSON_WRAPPER_KEYS:
+        inner = _get_key(data, wrapper)
+        if isinstance(inner, dict):
+            inner_norm = {_normalize_key(k) for k in inner}
+            if inner_norm & _JUDGE_PAYLOAD_KEYS:
+                return inner
+    return data
+
+
 def _coerce_str_list(value) -> list[str]:
     """Normalize LLM list fields that may arrive as a list, string, or absent."""
     if value is None:
@@ -439,12 +483,87 @@ def _coerce_str_list(value) -> list[str]:
     return []
 
 
+def _extract_partial_ats_score_from_text(content: str) -> Optional[int]:
+    """Best-effort score when JSON is truncated or malformed."""
+    if not content:
+        return None
+    for pattern in (
+        r'"(?:ats_match_score|ats_score)"\s*:\s*(\d{1,3})',
+        r"'(?:ats_match_score|ats_score)'\s*:\s*(\d{1,3})",
+    ):
+        m = re.search(pattern, content)
+        if m:
+            try:
+                return max(0, min(100, int(m.group(1))))
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def coerce_structured_judge_result(
+    result: Any,
+    structured_schema: Type[BaseModel],
+    parse_fallback: Callable[[str, str], Tuple[BaseModel, Optional[dict]]],
+    label: str,
+) -> Tuple[Union[ScoreFeedback, AtsJudgeResult], Optional[dict]]:
+    """
+    Normalize LangChain structured-output return types (Pydantic model, dict, or message)
+    into a validated judge result, falling back to text/JSON parsing when needed.
+    """
+    if isinstance(result, structured_schema):
+        return result, None
+
+    if isinstance(result, BaseModel):
+        try:
+            dumped = result.model_dump()
+            validated = structured_schema.model_validate(dumped)
+            return validated, dumped
+        except Exception as exc:
+            logger.debug("[%s] BaseModel coercion failed: %s", label, exc)
+
+    if isinstance(result, dict):
+        normalized = _normalize_dict_keys(result)
+        unwrapped = _unwrap_judge_json_dict(normalized)
+        try:
+            validated = structured_schema.model_validate(unwrapped)
+            return validated, unwrapped
+        except Exception as exc:
+            logger.warning(
+                "[%s] structured dict failed validation (keys=%s): %s",
+                label,
+                list(unwrapped.keys())[:12],
+                exc,
+            )
+        try:
+            return parse_fallback(json.dumps(unwrapped, ensure_ascii=False), label)
+        except Exception as exc:
+            logger.debug("[%s] json.dumps fallback failed: %s", label, exc)
+
+    if hasattr(result, "content"):
+        content = getattr(result, "content", None)
+        if content is not None:
+            if isinstance(content, structured_schema):
+                return content, None
+            if isinstance(content, dict):
+                return coerce_structured_judge_result(
+                    content, structured_schema, parse_fallback, label
+                )
+            text = content if isinstance(content, str) else str(content)
+            if text.strip():
+                return parse_fallback(text, label)
+
+    text = "" if result is None else str(result)
+    return parse_fallback(text, label)
+
+
 def parse_ats_judge_fallback(
     content: str, node_name: str = "ats_judge"
 ) -> tuple[AtsJudgeResult, Optional[dict]]:
     """Fallback when ATS structured output is not available or fails."""
     logger.debug("[%s] parse_ats_judge_fallback content len=%s", node_name, len(content) if content else 0)
     data = _extract_json_object(content)
+    if isinstance(data, dict):
+        data = _unwrap_judge_json_dict(_normalize_dict_keys(data))
     if data is not None:
         logger.warning(
             "[%s] parse_ats_judge_fallback extracted data keys=%s",
@@ -478,6 +597,8 @@ def parse_ats_judge_fallback(
             logger.warning("[%s] could not use parsed ATS JSON: %s", node_name, e)
     if content and isinstance(content, str):
         score = _extract_plain_text_score(content)
+        if score is None:
+            score = _extract_partial_ats_score_from_text(content)
         if score is not None:
             feedback = content.strip()[:2000] + ("..." if len(content) > 2000 else "")
             logger.warning(
@@ -489,6 +610,20 @@ def parse_ats_judge_fallback(
                 AtsJudgeResult(
                     ats_match_score=score,
                     strategic_feedback=feedback,
+                ),
+                None,
+            )
+        stripped = content.strip()
+        if len(stripped) > 80:
+            logger.warning(
+                "[%s] parse_ats_judge_fallback using prose-only fallback (len=%s)",
+                node_name,
+                len(stripped),
+            )
+            return (
+                AtsJudgeResult(
+                    ats_match_score=70,
+                    strategic_feedback=stripped[:4000],
                 ),
                 None,
             )

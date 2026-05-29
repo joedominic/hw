@@ -286,7 +286,7 @@
             <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
                 <h3 class="font-semibold text-concierge-slate">Supporting context <span class="text-xs font-normal text-slate-500">(optional)</span></h3>
                 <p class="mt-1 text-xs text-slate-500">Passed to the Writer only; lengths are capped server-side. Full job text is still used for ATS/Recruiter judges.</p>
-                <p class="mt-1 text-xs text-slate-500">Leave these blank to use saved defaults from Settings.</p>
+                <p class="mt-1 text-xs text-slate-500">Saved automatically when you leave this step or run the optimizer. Leave blank to use defaults from <a href="{% url 'settings' %}?tab=app" class="font-medium text-concierge-slate underline">Settings</a>.</p>
                 <div class="mt-4 grid gap-4 lg:grid-cols-3">
                     <div>
                         <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="optimization-notes-input">Notes</label>
@@ -490,7 +490,30 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
 })();
 (function () {
     var initial = {{ wizard_initial_step|default:1 }};
+    var wizardStep = initial;
+
+    function saveSupportingContext() {
+        var notes = document.getElementById("optimization-notes-input");
+        var skills = document.getElementById("pipeline-skills-input");
+        var highlights = document.getElementById("job-highlights-input");
+        if (!notes && !skills && !highlights) return Promise.resolve();
+        var fd = new FormData();
+        var csrf = document.querySelector("#optimizer-form input[name=csrfmiddlewaretoken]");
+        if (csrf) fd.append("csrfmiddlewaretoken", csrf.value);
+        fd.append("action", "save_supporting_context");
+        if (notes) fd.append("optimization_notes", notes.value);
+        if (skills) fd.append("pipeline_skills_json", skills.value);
+        if (highlights) fd.append("job_highlights", highlights.value);
+        return fetch(window.location.pathname, {
+            method: "POST",
+            body: fd,
+            headers: { "X-Requested-With": "XMLHttpRequest" }
+        }).catch(function () {});
+    }
+
     function showStep(n) {
+        if (wizardStep === 2 && n !== 2) saveSupportingContext();
+        wizardStep = n;
         [1, 2, 3].forEach(function (s) {
             var el = document.getElementById("wizard-panel-" + s);
             if (el) el.classList.toggle("hidden", s !== n);
@@ -510,6 +533,7 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
         });
     }
     window.__optimizerWizardGoTo = showStep;
+    window.__optimizerSaveSupportingContext = saveSupportingContext;
     document.querySelectorAll("[data-goto-step]").forEach(function (el) {
         el.addEventListener("click", function () {
             var s = parseInt(el.getAttribute("data-goto-step"), 10);

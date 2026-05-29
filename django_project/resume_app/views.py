@@ -129,14 +129,59 @@ def _parse_task_form(request, default_track: str, valid_track_slugs: set):
     }, []
 
 
+def _save_optimizer_supporting_context(
+    optimization_notes: str,
+    pipeline_skills_json: str,
+    job_highlights: str,
+) -> None:
+    from .models import AppAutomationSettings
+
+    automation = AppAutomationSettings.get_solo()
+    automation.default_optimization_notes = optimization_notes
+    automation.default_pipeline_skills_json = pipeline_skills_json
+    automation.default_job_highlights = job_highlights
+    automation.save(
+        update_fields=[
+            "default_optimization_notes",
+            "default_pipeline_skills_json",
+            "default_job_highlights",
+            "updated_at",
+        ]
+    )
+
+
 def _get_optimizer_supporting_context(request):
+    from .models import AppAutomationSettings
+
+    automation = AppAutomationSettings.get_solo()
+    notes = (automation.default_optimization_notes or "").strip()
+    skills = (automation.default_pipeline_skills_json or "").strip()
+    highlights = (automation.default_job_highlights or "").strip()
+
     raw = request.session.get("optimizer_supporting_context")
-    if not isinstance(raw, dict):
-        raw = {}
+    if isinstance(raw, dict):
+        session_notes = str(raw.get("optimization_notes") or "").strip()
+        session_skills = str(raw.get("pipeline_skills_json") or "").strip()
+        session_highlights = str(raw.get("job_highlights") or "").strip()
+        if not notes and session_notes:
+            notes = session_notes
+        if not skills and session_skills:
+            skills = session_skills
+        if not highlights and session_highlights:
+            highlights = session_highlights
+        if (session_notes or session_skills or session_highlights) and (
+            not (automation.default_optimization_notes or "").strip()
+            and not (automation.default_pipeline_skills_json or "").strip()
+            and not (automation.default_job_highlights or "").strip()
+        ):
+            _save_optimizer_supporting_context(notes, skills, highlights)
+            request.session.pop("optimizer_supporting_context", None)
+            request.session.modified = True
+
     return {
-        "optimization_notes": str(raw.get("optimization_notes") or "").strip(),
-        "pipeline_skills_json": str(raw.get("pipeline_skills_json") or "").strip(),
-        "job_highlights": str(raw.get("job_highlights") or "").strip(),
+        "optimization_notes": notes,
+        "pipeline_skills_json": skills,
+        "job_highlights": highlights,
     }
 
 
@@ -172,7 +217,7 @@ def optimizer_view(request):
         try:
             rid = int(resume_id)
             from .models import UserResume
-            if UserResume.objects.filter(id=rid).exists():
+            if UserResume.library().filter(id=rid).exists():
                 prefill_resume_id = rid
                 request.session["optimizer_resume_id"] = rid
                 request.session.modified = True
@@ -261,6 +306,18 @@ def optimizer_view(request):
             messages.success(request, "Engine settings saved for the next run.")
             return redirect(reverse("resume_optimizer"))
 
+        elif action == "save_supporting_context":
+            notes = (request.POST.get("optimization_notes") or "").strip()
+            skills = (request.POST.get("pipeline_skills_json") or "").strip()
+            highlights = (request.POST.get("job_highlights") or "").strip()
+            _save_optimizer_supporting_context(notes, skills, highlights)
+            if request.headers.get("X-Requested-With") == "XMLHttpRequest":
+                from django.http import JsonResponse
+
+                return JsonResponse({"ok": True})
+            messages.success(request, "Supporting context saved.")
+            return redirect(reverse("resume_optimizer") + "?wizard_step=2")
+
         elif action == "run_optimizer":
             from django.core.files.uploadedfile import SimpleUploadedFile
             from .models import UserResume
@@ -269,7 +326,7 @@ def optimizer_view(request):
             use_resume_id = request.POST.get("use_resume_id")
             if not resume_file and use_resume_id:
                 try:
-                    ur = UserResume.objects.get(id=int(use_resume_id))
+                    ur = UserResume.library().get(id=int(use_resume_id))
                     with ur.file.open("rb") as fh:
                         content = fh.read()
                     resume_file = SimpleUploadedFile(
@@ -337,6 +394,12 @@ def optimizer_view(request):
                     job_highlights = (request.POST.get("job_highlights") or "").strip()
                     if not job_highlights:
                         job_highlights = saved_supporting_context["job_highlights"]
+
+                    _save_optimizer_supporting_context(
+                        optimization_notes,
+                        pipeline_skills_json,
+                        job_highlights,
+                    )
 
                     payload = OptimizeRequest(
                         job_description=job_description,
@@ -426,7 +489,7 @@ def optimizer_view(request):
     if prefill_resume_id:
         try:
             from .models import UserResume
-            ur = UserResume.objects.filter(id=prefill_resume_id).first()
+            ur = UserResume.library().filter(id=prefill_resume_id).first()
             prefill_resume_name = (ur.original_filename or ur.file.name or f"#{prefill_resume_id}") if ur else None
         except Exception:
             pass
@@ -607,12 +670,11 @@ def settings_view(request):
             else:
                 automation.applying_optimizer_workflow = None
 
-            request.session["optimizer_supporting_context"] = {
-                "optimization_notes": (request.POST.get("optimization_notes") or "").strip(),
-                "pipeline_skills_json": (request.POST.get("pipeline_skills_json") or "").strip(),
-                "job_highlights": (request.POST.get("job_highlights") or "").strip(),
-            }
-            request.session.modified = True
+            _save_optimizer_supporting_context(
+                (request.POST.get("optimization_notes") or "").strip(),
+                (request.POST.get("pipeline_skills_json") or "").strip(),
+                (request.POST.get("job_highlights") or "").strip(),
+            )
 
             def _cleanup_days(field: str):
                 raw = (request.POST.get(field) or "").strip()
@@ -628,7 +690,8 @@ def settings_view(request):
             cv = _cleanup_days("cleanup_vetting_retention_days")
             ca = _cleanup_days("cleanup_applying_retention_days")
             cd = _cleanup_days("cleanup_done_retention_days")
-            if cp is None or cv is None or ca is None or cd is None:
+            cg = _cleanup_days("cleanup_generated_resume_retention_days")
+            if cp is None or cv is None or ca is None or cd is None or cg is None:
                 messages.error(
                     request,
                     "Cleanup retention days must be whole numbers from 0 (off) through 365.",
@@ -638,6 +701,7 @@ def settings_view(request):
             automation.cleanup_vetting_retention_days = cv
             automation.cleanup_applying_retention_days = ca
             automation.cleanup_done_retention_days = cd
+            automation.cleanup_generated_resume_retention_days = cg
 
             automation.save(
                 update_fields=[
@@ -650,6 +714,7 @@ def settings_view(request):
                     "cleanup_vetting_retention_days",
                     "cleanup_applying_retention_days",
                     "cleanup_done_retention_days",
+                    "cleanup_generated_resume_retention_days",
                     "updated_at",
                 ]
             )
@@ -993,12 +1058,7 @@ def settings_view(request):
             }
         )
 
-    raw_optimizer_supporting_context = request.session.get("optimizer_supporting_context") or {}
-    optimizer_supporting_context = {
-        "optimization_notes": str(raw_optimizer_supporting_context.get("optimization_notes") or "").strip(),
-        "pipeline_skills_json": str(raw_optimizer_supporting_context.get("pipeline_skills_json") or "").strip(),
-        "job_highlights": str(raw_optimizer_supporting_context.get("job_highlights") or "").strip(),
-    }
+    optimizer_supporting_context = _get_optimizer_supporting_context(request)
     raw_replacements = request.session.get("export_replacements") or []
     replacement_entries = []
     if isinstance(raw_replacements, list):
@@ -1624,7 +1684,7 @@ def job_search_view(request):
         try:
             from .models import UserResume
 
-            selected_resume = UserResume.objects.filter(id=resume_id_val).first()
+            selected_resume = UserResume.library().filter(id=resume_id_val).first()
             if selected_resume and selected_resume.track and selected_resume.track in available_slugs:
                 raw_track = selected_resume.track
         except Exception:
@@ -2107,7 +2167,7 @@ def track_list_view(request):
     # Keep this bounded: track management should stay snappy even with many resumes.
     from .models import UserResume
 
-    resumes = list(UserResume.objects.order_by("-uploaded_at")[:200])
+    resumes = list(UserResume.library().order_by("-uploaded_at")[:200])
 
     if request.method == "POST":
         action = (request.POST.get("action") or "create_track").strip()
@@ -2138,6 +2198,7 @@ def track_list_view(request):
                 file=resume_file,
                 original_filename=original_name,
                 track=track_slug or "",
+                is_library=True,
             )
             messages.success(request, "Resume uploaded.")
             return redirect("track_list")
@@ -2153,7 +2214,7 @@ def track_list_view(request):
                 messages.error(request, "Invalid resume id.")
                 return redirect("track_list")
 
-            resume = UserResume.objects.filter(id=delete_resume_id).first()
+            resume = UserResume.library().filter(id=delete_resume_id).first()
             if not resume:
                 messages.error(request, "Resume not found.")
                 return redirect("track_list")
@@ -2181,7 +2242,7 @@ def track_list_view(request):
                 new_slug = (value or "").strip().lower()
                 if new_slug and new_slug not in track_slugs:
                     continue  # ignore invalid slugs
-                updated_count += UserResume.objects.filter(id=rid).update(track=new_slug or "")
+                updated_count += UserResume.library().filter(id=rid).update(track=new_slug or "")
             messages.success(
                 request,
                 f"Updated track assignment for {updated_count} resume(s).",
@@ -2243,7 +2304,7 @@ def track_delete_view(request, slug: str):
     # Disassociate any resumes assigned to this track.
     try:
         from .models import UserResume
-        UserResume.objects.filter(track=slug_val).update(track="")
+        UserResume.library().filter(track=slug_val).update(track="")
     except Exception:
         pass
 
@@ -2406,7 +2467,7 @@ def focus_breakdown_view(request, job_listing_id: int):
     resume_id = int(resume_id_raw) if resume_id_raw and resume_id_raw.lower() != "none" else None
     if resume_id is None:
         from .models import UserResume
-        latest = UserResume.objects.order_by("-uploaded_at").first()
+        latest = UserResume.library().order_by("-uploaded_at").first()
         if latest:
             resume_id = latest.id
     # Stored AI Match (LLM) result from job search "AI Match" button

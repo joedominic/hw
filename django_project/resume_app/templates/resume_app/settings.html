@@ -41,7 +41,7 @@
         <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
             <h2 class="text-lg font-semibold text-concierge-slate">Default optimizer supporting context</h2>
             <p class="mt-1 text-sm text-slate-600">
-                Save default notes, skills JSON, and supplemental accomplishments to prefill the optimizer form on every run. These values are used when the per-run fields are left blank.
+                Save default notes, skills JSON, and supplemental accomplishments to prefill the optimizer (stored in the database). Values from Step 2 are also saved there when you run or leave that step.
             </p>
             <form method="post" class="mt-6 space-y-4">
                 {% csrf_token %}
@@ -314,6 +314,13 @@
                             <input type="number" id="cleanup-done-days" name="cleanup_done_retention_days" min="0" max="365"
                                    value="{{ app_automation.cleanup_done_retention_days }}"
                                    class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="cleanup-generated-resume-days">Optimizer resume copies (days)</label>
+                            <input type="number" id="cleanup-generated-resume-days" name="cleanup_generated_resume_retention_days" min="0" max="365"
+                                   value="{{ app_automation.cleanup_generated_resume_retention_days }}"
+                                   class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                            <p class="mt-1 text-xs text-slate-500">Ephemeral PDFs created per optimization run (not your library uploads). Purged daily and every 6 hours.</p>
                         </div>
                     </div>
                 </div>

@@ -1,5 +1,7 @@
 from django.test import TestCase, Client
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.utils import timezone
+from datetime import timedelta
 from unittest.mock import patch, MagicMock
 from .models import (
     AppAutomationSettings,
@@ -20,7 +22,7 @@ from .tasks import (
 from .api import _normalize_export_content
 from .services import parse_pdf, PDFParseError
 from .llm_services import LLM_PROVIDERS
-from .job_sources import _row_to_dict
+from .job_sources import _row_to_dict, upsert_job_listing_from_fetch
 import json
 import os
 
@@ -96,7 +98,9 @@ class APITestCase(TestCase):
     def setUp(self):
         self.client = Client()
 
-    def test_save_optimizer_supporting_context_in_settings_session(self):
+    def test_save_optimizer_supporting_context_in_settings_db(self):
+        from .models import AppAutomationSettings
+
         response = self.client.post(
             "/settings/",
             data={
@@ -109,36 +113,56 @@ class APITestCase(TestCase):
                 "cleanup_vetting_retention_days": "0",
                 "cleanup_applying_retention_days": "0",
                 "cleanup_done_retention_days": "0",
+                "cleanup_generated_resume_retention_days": "0",
                 "optimization_notes": "Emphasize leadership",
                 "pipeline_skills_json": '{"hard_skills":["python"]}',
                 "job_highlights": "Lead hiring projects",
             },
         )
         self.assertEqual(response.status_code, 302)
-        session = self.client.session
-        self.assertEqual(
-            session.get("optimizer_supporting_context"),
-            {
-                "optimization_notes": "Emphasize leadership",
-                "pipeline_skills_json": '{"hard_skills":["python"]}',
-                "job_highlights": "Lead hiring projects",
-            },
-        )
+        automation = AppAutomationSettings.get_solo()
+        self.assertEqual(automation.default_optimization_notes, "Emphasize leadership")
+        self.assertEqual(automation.default_pipeline_skills_json, '{"hard_skills":["python"]}')
+        self.assertEqual(automation.default_job_highlights, "Lead hiring projects")
 
-    def test_optimizer_form_prefills_supporting_context_from_session(self):
-        session = self.client.session
-        session["optimizer_supporting_context"] = {
-            "optimization_notes": "Emphasize leadership",
-            "pipeline_skills_json": '{"hard_skills":["python"]}',
-            "job_highlights": "Lead hiring projects",
-        }
-        session.save()
+    def test_optimizer_form_prefills_supporting_context_from_db(self):
+        from .models import AppAutomationSettings
+
+        automation = AppAutomationSettings.get_solo()
+        automation.default_optimization_notes = "Emphasize leadership"
+        automation.default_pipeline_skills_json = '{"hard_skills":["python"]}'
+        automation.default_job_highlights = "Lead hiring projects"
+        automation.save(
+            update_fields=[
+                "default_optimization_notes",
+                "default_pipeline_skills_json",
+                "default_job_highlights",
+            ]
+        )
 
         response = self.client.get("/resume/optimizer/")
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Emphasize leadership")
         self.assertContains(response, '{"hard_skills":["python"]}')
         self.assertContains(response, "Lead hiring projects")
+
+    def test_save_supporting_context_ajax(self):
+        from .models import AppAutomationSettings
+
+        response = self.client.post(
+            "/resume/optimizer/",
+            data={
+                "action": "save_supporting_context",
+                "optimization_notes": "Focus on platform work",
+                "pipeline_skills_json": "{}",
+                "job_highlights": "Shipped v2",
+            },
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+        self.assertEqual(response.status_code, 200)
+        automation = AppAutomationSettings.get_solo()
+        self.assertEqual(automation.default_optimization_notes, "Focus on platform work")
+        self.assertEqual(automation.default_job_highlights, "Shipped v2")
 
     def test_status_404_for_invalid_resume_id(self):
         response = self.client.get("/api/resume/status/99999/")
@@ -580,7 +604,7 @@ class PipelineStageViewTestCase(TestCase):
         job.description = "x" * 60
         job.save(update_fields=["description"])
         pe.move_to_applying()
-        UserResume.objects.create(track="ic", file="r.pdf")
+        UserResume.objects.create(track="ic", file="r.pdf", is_library=True)
         response = self.client.get("/jobs/applying/?track=ic")
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "/resume/optimizer/")
@@ -637,7 +661,7 @@ class PipelineResumeEnqueueTestCase(TestCase):
             track="ic",
             stage=PipelineEntry.Stage.APPLYING,
         )
-        UserResume.objects.create(file="r2.pdf")
+        UserResume.objects.create(file="r2.pdf", is_library=True)
 
         result = _enqueue_single_pipeline_resume_optimization(pe.id, force_new=False)
         self.assertEqual(result["status"], "ok")
@@ -1056,6 +1080,56 @@ class AtsJudgeParserTestCase(TestCase):
         self.assertEqual(result.ats_match_score, 75)
         self.assertIn("Legacy shape", result.strategic_feedback)
 
+    def test_parse_ats_judge_fallback_unwraps_last_ats_json_wrapper(self):
+        from resume_app.parsers import parse_ats_judge_fallback
+
+        payload = json.dumps(
+            {
+                "last_ats_json": {
+                    "ats_match_score": 88,
+                    "missing_keywords": ["Terraform"],
+                    "formatting_issues": [],
+                    "strategic_feedback": "Add IaC keywords.",
+                }
+            }
+        )
+        result, raw = parse_ats_judge_fallback(payload)
+        self.assertEqual(result.ats_match_score, 88)
+        self.assertEqual(result.missing_keywords, ["Terraform"])
+        self.assertIn("IaC", result.strategic_feedback)
+        self.assertEqual(raw["ats_match_score"], 88)
+
+    def test_coerce_structured_judge_result_from_dict(self):
+        from resume_app.parsers import AtsJudgeResult, coerce_structured_judge_result, parse_ats_judge_fallback
+
+        payload = {
+            "ats_match_score": 91,
+            "missing_keywords": ["GraphQL"],
+            "formatting_issues": ["Tables"],
+            "strategic_feedback": "Surface API design experience.",
+        }
+        result, raw = coerce_structured_judge_result(
+            payload, AtsJudgeResult, parse_ats_judge_fallback, "ats_judge"
+        )
+        self.assertIsInstance(result, AtsJudgeResult)
+        self.assertEqual(result.ats_match_score, 91)
+        self.assertEqual(raw["missing_keywords"], ["GraphQL"])
+
+    def test_coerce_structured_judge_result_python_repr_dict_string(self):
+        from resume_app.parsers import AtsJudgeResult, coerce_structured_judge_result, parse_ats_judge_fallback
+
+        payload = {
+            "ats_match_score": 83,
+            "missing_keywords": [],
+            "formatting_issues": [],
+            "strategic_feedback": "Good match overall.",
+        }
+        result, _ = coerce_structured_judge_result(
+            str(payload), AtsJudgeResult, parse_ats_judge_fallback, "ats_judge"
+        )
+        self.assertEqual(result.ats_match_score, 83)
+        self.assertIn("Good match", result.strategic_feedback)
+
     def test_resolve_judge_scores_from_structured_ats(self):
         from resume_app.agents import _resolve_judge_scores
         from resume_app.parsers import AtsJudgeResult
@@ -1070,3 +1144,124 @@ class AtsJudgeParserTestCase(TestCase):
         self.assertIn("Rust", feedback)
         self.assertEqual(json_out["ats_match_score"], 90)
         self.assertEqual(json_out["missing_keywords"], ["Rust"])
+
+
+class JobListingUpsertTestCase(TestCase):
+    def test_upsert_sets_fetched_at_on_create(self):
+        row = {
+            "source": "jobspy_indeed",
+            "external_id": "upsert-create-1",
+            "title": "Engineer",
+            "company_name": "Acme",
+            "location": "Remote",
+            "description": "Build things",
+            "job_url": "https://example.com/j/1",
+        }
+        job, created = upsert_job_listing_from_fetch(row)
+        self.assertTrue(created)
+        self.assertIsNotNone(job.fetched_at)
+
+    def test_upsert_update_does_not_null_fetched_at(self):
+        row = {
+            "source": "jobspy_indeed",
+            "external_id": "upsert-update-1",
+            "title": "Engineer",
+            "company_name": "Acme",
+            "location": "",
+            "description": "",
+            "job_url": "",
+        }
+        job, _ = upsert_job_listing_from_fetch(row)
+        original = job.fetched_at
+        row["title"] = "Senior Engineer"
+        job2, created = upsert_job_listing_from_fetch(row)
+        self.assertFalse(created)
+        self.assertEqual(job.id, job2.id)
+        self.assertEqual(job2.title, "Senior Engineer")
+        self.assertEqual(job2.fetched_at, original)
+
+    def test_upsert_repairs_legacy_empty_fetched_at(self):
+        """Django 5 update_or_create breaks when fetched_at is stored as '' in SQLite."""
+        from django.db import connection
+
+        job = JobListing.objects.create(
+            source="jobspy_indeed",
+            external_id="legacy-empty-fetched-at",
+            title="Old",
+            company_name="Co",
+        )
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE resume_app_joblisting SET fetched_at = '' WHERE id = %s",
+                [job.pk],
+            )
+        job.refresh_from_db()
+        self.assertIsNone(job.fetched_at)
+        row = {
+            "source": "jobspy_indeed",
+            "external_id": "legacy-empty-fetched-at",
+            "title": "Updated",
+            "company_name": "Co",
+            "location": "",
+            "description": "",
+            "job_url": "",
+        }
+        job2, created = upsert_job_listing_from_fetch(row)
+        self.assertFalse(created)
+        self.assertEqual(job2.title, "Updated")
+        self.assertIsNotNone(job2.fetched_at)
+
+
+class TrackListLibraryResumeTestCase(TestCase):
+    def setUp(self):
+        self.client = Client()
+        Track.ensure_baseline()
+
+    def test_track_list_shows_only_library_resumes(self):
+        library = UserResume.objects.create(
+            file="library.pdf",
+            original_filename="library.pdf",
+            is_library=True,
+        )
+        ephemeral = UserResume.objects.create(
+            file="ephemeral.pdf",
+            original_filename="ephemeral.pdf",
+            is_library=False,
+        )
+        response = self.client.get("/jobs/tracks/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, library.original_filename)
+        self.assertNotContains(response, ephemeral.original_filename)
+
+
+class GeneratedResumeCleanupTestCase(TestCase):
+    def test_purge_removes_old_ephemeral_resumes(self):
+        from .resume_cleanup import purge_generated_user_resumes
+
+        old = UserResume.objects.create(
+            file="old.pdf",
+            original_filename="old.pdf",
+            is_library=False,
+        )
+        UserResume.objects.filter(pk=old.pk).update(
+            uploaded_at=timezone.now() - timedelta(days=10),
+        )
+        keep = UserResume.objects.create(
+            file="new.pdf",
+            original_filename="new.pdf",
+            is_library=False,
+        )
+        library = UserResume.objects.create(
+            file="lib.pdf",
+            original_filename="lib.pdf",
+            is_library=True,
+        )
+        UserResume.objects.filter(pk=library.pk).update(
+            uploaded_at=timezone.now() - timedelta(days=10),
+        )
+
+        removed = purge_generated_user_resumes(retention_days=7)
+        self.assertEqual(removed, 1)
+        self.assertFalse(UserResume.objects.filter(pk=old.pk).exists())
+        self.assertTrue(UserResume.objects.filter(pk=keep.pk).exists())
+        self.assertTrue(UserResume.objects.filter(pk=library.pk).exists())
