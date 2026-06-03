@@ -472,8 +472,12 @@
                                         <span class="text-xs text-slate-500">
                                             {{ j.company_name }} · {{ j.location|default:"—" }}
                                         </span>
-                                        {% if j.fetched_at %}
-                                            <span class="block text-xs text-slate-500">Found {{ j.fetched_at|date:"M j, Y" }}</span>
+                                        {% if j.posted_at or j.fetched_at %}
+                                            <span class="block text-xs text-slate-500">
+                                                {% if j.posted_at %}Posted {{ j.posted_at|date:"M j, Y" }}{% endif %}
+                                                {% if j.posted_at and j.fetched_at %} · {% endif %}
+                                                {% if j.fetched_at %}Added {{ j.fetched_at|date:"M j, Y" }}{% endif %}
+                                            </span>
                                         {% endif %}
                                         {% if j.focus_reason %}
                                             <div class="mt-1 text-xs">

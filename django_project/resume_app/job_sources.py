@@ -5,7 +5,12 @@ Returns a list of normalized dicts for upsert into JobListing.
 import hashlib
 import logging
 import math
-from typing import Any, Optional, Tuple, TYPE_CHECKING
+from datetime import date, datetime, time, timedelta
+from typing import Any, List, Optional, Tuple, TYPE_CHECKING
+
+from django.conf import settings
+from django.utils import timezone
+from django.utils.dateparse import parse_date, parse_datetime
 
 if TYPE_CHECKING:
     from .models import JobListing
@@ -89,7 +94,13 @@ def _row_to_dict(row: Any, site: str) -> dict:
     job_url = str(row.get("job_url") or row.get("JOB_URL") or row.get("url") or "").strip()
     source = _normalize_site_name(site)
     external_id = _external_id({"title": title, "company": company, "job_url": job_url})
-    return {
+    date_posted = _parse_date_posted(
+        row.get("date_posted")
+        or row.get("DATE_POSTED")
+        or row.get("date")
+        or row.get("DATE")
+    )
+    out = {
         "title": title or "Untitled",
         "company_name": company or "Unknown",
         "location": location,
@@ -98,6 +109,60 @@ def _row_to_dict(row: Any, site: str) -> dict:
         "source": source,
         "external_id": external_id,
     }
+    if date_posted is not None:
+        out["date_posted"] = date_posted
+    return out
+
+
+def _parse_date_posted(val: Any) -> Optional[datetime]:
+    """Normalize JobSpy date_posted to an aware datetime, or None if missing/invalid."""
+    if val is None:
+        return None
+    if isinstance(val, float) and math.isnan(val):
+        return None
+    if hasattr(val, "to_pydatetime"):
+        val = val.to_pydatetime()
+    if isinstance(val, date) and not isinstance(val, datetime):
+        val = datetime.combine(val, time.min)
+    if isinstance(val, datetime):
+        if timezone.is_naive(val):
+            return timezone.make_aware(val, timezone.get_current_timezone())
+        return val
+    s = str(val).strip()
+    if not s or s.lower() in ("nan", "none", "<na>", "nat"):
+        return None
+    parsed = parse_datetime(s)
+    if parsed is None:
+        d = parse_date(s)
+        if d is not None:
+            parsed = datetime.combine(d, time.min)
+    if parsed is None:
+        return None
+    if timezone.is_naive(parsed):
+        return timezone.make_aware(parsed, timezone.get_current_timezone())
+    return parsed
+
+
+def filter_rows_by_max_age(rows: List[dict], hours_old: int) -> List[dict]:
+    """Drop rows with date_posted older than hours_old (keeps rows with no date)."""
+    if not hours_old or hours_old <= 0:
+        return rows
+    cutoff = timezone.now() - timedelta(hours=hours_old)
+    kept: List[dict] = []
+    dropped = 0
+    for row in rows:
+        posted = row.get("date_posted")
+        if posted is not None and posted < cutoff:
+            dropped += 1
+            continue
+        kept.append(row)
+    if dropped:
+        logger.info(
+            "[job_sources] Dropped %d job(s) with date_posted older than %d hours",
+            dropped,
+            hours_old,
+        )
+    return kept
 
 
 def _scalar_fetch_value(val: Any) -> Any:
@@ -133,6 +198,9 @@ def upsert_job_listing_from_fetch(row: dict) -> Tuple["JobListing", bool]:
         "description": desc,
         "url": _scalar_fetch_value(row.get("job_url")) or "",
     }
+    posted = row.get("date_posted")
+    if posted is not None:
+        defaults["posted_at"] = posted
     defaults = {k: v for k, v in defaults.items() if v is not None}
 
     lookup = {"source": row["source"], "external_id": row["external_id"]}
@@ -182,6 +250,9 @@ def fetch_jobs(
     if isinstance(sites, str):
         sites = [sites]
 
+    if hours_old is None:
+        hours_old = getattr(settings, "JOB_SEARCH_HOURS_OLD", None)
+
     kwargs = {
         "site_name": sites,
         "search_term": search_term,
@@ -196,8 +267,8 @@ def fetch_jobs(
         kwargs["linkedin_fetch_description"] = True
     if location:
         kwargs["location"] = location
-    if hours_old is not None:
-        kwargs["hours_old"] = hours_old
+    if hours_old is not None and hours_old > 0:
+        kwargs["hours_old"] = int(hours_old)
     if google_search_term is not None:
         kwargs["google_search_term"] = google_search_term
 
@@ -261,4 +332,6 @@ def fetch_jobs(
     for _, row in df.iterrows():
         site = str(row.get(site_col, "unknown")).strip() if site_col in df.columns else "unknown"
         out.append(_row_to_dict(row, site))
+    if hours_old is not None and hours_old > 0:
+        out = filter_rows_by_max_age(out, int(hours_old))
     return out

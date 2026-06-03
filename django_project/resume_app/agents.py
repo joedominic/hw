@@ -1,4 +1,4 @@
-from typing import TypedDict, List, Annotated, Optional
+from typing import TypedDict, List, Annotated, Optional, Any
 import operator
 import logging
 import re
@@ -13,10 +13,13 @@ from .parsers import (
     ScoreFeedback,
     FitCheckResult,
     coerce_structured_judge_result as _coerce_structured_judge_result,
+    is_default_judge_fallback as _is_default_judge_fallback,
+    llm_message_content_to_text as _llm_message_content_to_text,
     parse_ats_judge_fallback as _parse_ats_judge_fallback,
     parse_score_fallback as _parse_score_fallback,
     parse_fit_check_fallback as _parse_fit_check_fallback_from_parsers,
     normalize_dict_keys as _normalize_dict_keys,
+    serialize_llm_result_for_log as _serialize_llm_result_for_log,
 )
 from .prompts import (
     DEFAULT_WRITER_PROMPT,
@@ -542,6 +545,43 @@ def writer_node(state: AgentState):
     return out
 
 
+def _unstructured_judge_invoke(
+    llm,
+    messages,
+    *,
+    label: str,
+    structured_schema: type,
+    parse_fallback,
+    job_cache_key: str | None,
+    usage_query_kind: str,
+    config: dict | None = None,
+) -> tuple[ScoreFeedback | AtsJudgeResult, Optional[dict], Any, dict]:
+    """
+    Raw LLM invoke + text/JSON parse (no with_structured_output).
+    Some providers return None from structured output; this path matches run_matching.
+    """
+    raw = _llm_invoke_with_retry(
+        llm,
+        messages,
+        config=config,
+        structured_schema=None,
+        job_cache_key=job_cache_key,
+        usage_query_kind=usage_query_kind,
+        prefer_local=False,
+    )
+    text = _llm_message_content_to_text(getattr(raw, "content", None) if raw is not None else None)
+    if not text.strip() and raw is not None:
+        text = _llm_message_content_to_text(raw)
+    logger.info(
+        "[%s] unstructured response length=%s first_300=%r",
+        label,
+        len(text),
+        (text or "")[:300],
+    )
+    data, last_json = parse_fallback(text or "", label)
+    return data, last_json, raw, {"path": "unstructured"}
+
+
 def _resolve_judge_scores(
     data: ScoreFeedback | AtsJudgeResult,
     last_json: Optional[dict],
@@ -571,6 +611,7 @@ def _judge_node(
     last_json_state_key: str,
     structured_schema: type = ScoreFeedback,
     parse_fallback=_parse_score_fallback,
+    use_structured_output: bool = True,
 ):
     llm = _state_get(state, "llm")
     draft = (_state_get(state, "optimized_resume") or "").strip() or (_state_get(state, "resume_text") or "").strip()
@@ -609,7 +650,8 @@ def _judge_node(
             dm.append({"role": role, "content": getattr(m, "content", "")})
         out = {"debug_prompt": dbg_prompt, "debug_messages": dm}
     else:
-        out = {}
+        # Always log judge prompts in agent thoughts (resume body is needed to debug parse failures).
+        out = {"debug_prompt": dbg_prompt}
     from .llm_gateway import (
         USAGE_QUERY_OPTIMIZER_ATS_JUDGE,
         USAGE_QUERY_OPTIMIZER_RECRUITER_JUDGE,
@@ -622,41 +664,105 @@ def _judge_node(
     )
     last_json = None
     raw = None
+    parse_info: dict = {"path": "unstructured" if not use_structured_output else "structured"}
     usage_callback = TokenUsageCallback()
+    invoke_config = {"callbacks": [usage_callback]}
     data: ScoreFeedback | AtsJudgeResult
-    try:
-        result = _llm_invoke_with_retry(
+
+    if not use_structured_output:
+        data, last_json, raw, parse_info = _unstructured_judge_invoke(
             llm,
             messages,
-            config={"callbacks": [usage_callback]},
+            label=label,
             structured_schema=structured_schema,
+            parse_fallback=parse_fallback,
             job_cache_key=_state_get(state, "job_cache_key"),
             usage_query_kind=_usage_qk,
-            prefer_local=False,
+            config=invoke_config,
         )
-        data, last_json = _coerce_structured_judge_result(
-            result, structured_schema, parse_fallback, label
-        )
-        if not isinstance(data, structured_schema):
-            logger.warning(
-                "[%s] structured output coerced via fallback (type=%s)",
-                label,
-                type(data).__name__,
+        out["raw_llm_response"] = _serialize_llm_result_for_log(raw)
+        out["raw_llm_result_type"] = type(raw).__name__ if raw is not None else "NoneType"
+    else:
+        try:
+            structured_result = _llm_invoke_with_retry(
+                llm,
+                messages,
+                config=invoke_config,
+                structured_schema=structured_schema,
+                job_cache_key=_state_get(state, "job_cache_key"),
+                usage_query_kind=_usage_qk,
+                prefer_local=False,
             )
-    except Exception as e:
-        logger.warning("%s structured output failed: %s", label, e)
-        raw = _llm_invoke_with_retry(
-            llm,
-            messages,
-            job_cache_key=_state_get(state, "job_cache_key"),
-            usage_query_kind=_usage_qk,
-            prefer_local=False,
-        )
-        content = raw.content if hasattr(raw, "content") else str(raw)
-        logger.warning("[%s] raw LLM output (before parse), length=%s:\n---\n%s\n---", label, len(content), content)
-        data, last_json = _coerce_structured_judge_result(
-            raw, structured_schema, parse_fallback, label
-        )
+            out["raw_llm_response"] = _serialize_llm_result_for_log(structured_result)
+            out["raw_llm_result_type"] = (
+                type(structured_result).__name__
+                if structured_result is not None
+                else "NoneType"
+            )
+
+            if structured_result is None:
+                parse_info = {"path": "structured_null"}
+                logger.warning(
+                    "[%s] structured output returned None; using unstructured invoke",
+                    label,
+                )
+                data, last_json, raw, parse_info = _unstructured_judge_invoke(
+                    llm,
+                    messages,
+                    label=label,
+                    structured_schema=structured_schema,
+                    parse_fallback=parse_fallback,
+                    job_cache_key=_state_get(state, "job_cache_key"),
+                    usage_query_kind=_usage_qk,
+                    config=invoke_config,
+                )
+                out["raw_llm_response_retry"] = _serialize_llm_result_for_log(raw)
+            else:
+                data, last_json = _coerce_structured_judge_result(
+                    structured_result, structured_schema, parse_fallback, label
+                )
+                if _is_default_judge_fallback(data):
+                    parse_info = {"path": "structured_default_fallback"}
+                    logger.warning(
+                        "[%s] structured parse failed; retrying unstructured",
+                        label,
+                    )
+                    data, last_json, raw, parse_info = _unstructured_judge_invoke(
+                        llm,
+                        messages,
+                        label=label,
+                        structured_schema=structured_schema,
+                        parse_fallback=parse_fallback,
+                        job_cache_key=_state_get(state, "job_cache_key"),
+                        usage_query_kind=_usage_qk,
+                        config=invoke_config,
+                    )
+                    out["raw_llm_response_retry"] = _serialize_llm_result_for_log(raw)
+                    if _is_default_judge_fallback(data):
+                        parse_info["path"] = "unstructured_retry_default"
+                    else:
+                        parse_info["path"] = "unstructured_retry"
+        except Exception as e:
+            parse_info = {"path": "structured_exception", "error": str(e)}
+            logger.warning("%s structured output failed: %s", label, e)
+            data, last_json, raw, parse_info = _unstructured_judge_invoke(
+                llm,
+                messages,
+                label=label,
+                structured_schema=structured_schema,
+                parse_fallback=parse_fallback,
+                job_cache_key=_state_get(state, "job_cache_key"),
+                usage_query_kind=_usage_qk,
+                config=invoke_config,
+            )
+            out["raw_llm_response"] = _serialize_llm_result_for_log(raw)
+            out["raw_llm_result_type"] = type(raw).__name__ if raw is not None else "NoneType"
+            if _is_default_judge_fallback(data):
+                parse_info["path"] = "exception_retry_default"
+            else:
+                parse_info["path"] = "exception_retry_ok"
+
+    out["parse_info"] = parse_info
 
     score, feedback_text, json_out = _resolve_judge_scores(data, last_json)
     out.update({
@@ -683,6 +789,83 @@ def _judge_node(
     return out
 
 
+_AGENT_LOG_SKIP_KEYS = frozenset({
+    "feedback",
+    "reasoning",
+    "message",
+    "optimized_resume",
+    "input_tokens",
+    "output_tokens",
+    "ats_score",
+    "recruiter_score",
+    "debug_prompt",
+    "debug_messages",
+    "raw_llm_response",
+    "raw_llm_response_retry",
+    "raw_llm_result_type",
+    "raw_llm_result_type_retry",
+    "parse_info",
+    "tokens_estimated",
+})
+
+
+def format_agent_log_thought(thought) -> str:
+    """Human-readable agent log body for optimizer UI (server + client mirror)."""
+    if thought is None:
+        return ""
+    if isinstance(thought, str):
+        return thought
+    if not isinstance(thought, dict):
+        return str(thought)
+
+    parts: list[str] = []
+    prompt = (thought.get("debug_prompt") or "").strip()
+    if prompt:
+        parts.append("--- Prompt sent to LLM ---\n" + prompt)
+
+    raw = (thought.get("raw_llm_response") or "").strip()
+    if raw:
+        parts.append("--- Raw LLM response ---\n" + raw)
+
+    raw_retry = (thought.get("raw_llm_response_retry") or "").strip()
+    if raw_retry:
+        parts.append("--- Raw LLM response (unstructured retry) ---\n" + raw_retry)
+
+    parse_info = thought.get("parse_info")
+    if parse_info:
+        try:
+            import json as _json
+
+            parts.append(
+                "--- Parse info ---\n"
+                + _json.dumps(parse_info, indent=2, ensure_ascii=False, default=str)
+            )
+        except Exception:
+            parts.append("--- Parse info ---\n" + str(parse_info))
+
+    for key in ("feedback", "reasoning", "message"):
+        val = thought.get(key)
+        if val:
+            parts.append(str(val))
+
+    resume_out = thought.get("optimized_resume")
+    if isinstance(resume_out, str) and resume_out.strip():
+        s = resume_out.strip()
+        parts.append(s[:2000] + ("…" if len(s) > 2000 else ""))
+
+    rest = {k: v for k, v in thought.items() if k not in _AGENT_LOG_SKIP_KEYS}
+    if rest:
+        import json as _json
+
+        parts.append(_json.dumps(rest, indent=2, ensure_ascii=False, default=str))
+
+    if parts:
+        return "\n\n".join(parts)
+    import json as _json
+
+    return _json.dumps(thought, indent=2, ensure_ascii=False, default=str)
+
+
 def ats_judge_node(state: AgentState):
     return _judge_node(
         state,
@@ -699,6 +882,7 @@ def ats_judge_node(state: AgentState):
         last_json_state_key="last_ats_json",
         structured_schema=AtsJudgeResult,
         parse_fallback=_parse_ats_judge_fallback,
+        use_structured_output=False,
     )
 
 

@@ -56,6 +56,7 @@ def _job_to_payload(job: JobListing, *, snippet: Optional[str] = None) -> JobPay
         url=job.url or "",
         source=src,
         source_display=format_job_source_label(src),
+        posted_at=job.posted_at,
         fetched_at=job.fetched_at,
     )
 
@@ -90,25 +91,28 @@ def run_job_search_core(
     disqualifier_pattern = build_disqualifier_pattern(get_disqualifier_phrases())
     jobs_with_meta: List[Tuple[JobListing, JobPayload]] = []
 
+    hours_old = getattr(settings, "JOB_SEARCH_HOURS_OLD", 168)
+    fetch_kwargs = {
+        "search_term": search_term.strip(),
+        "location": (location or "").strip() or None,
+        "site_name": site_name,
+        "results_wanted": results_wanted,
+        "hours_old": hours_old,
+    }
     try:
-        raw = fetch_jobs(
-            search_term=search_term.strip(),
-            location=(location or "").strip() or None,
-            site_name=site_name,
-            results_wanted=results_wanted,
-        )
+        raw = fetch_jobs(**fetch_kwargs)
     except Exception as e:
         raise RuntimeError(f"Job fetch failed: {e}") from e
 
     jobs_fetched = len(raw or [])
-    logger.info("[job_search_core] JobSpy returned %d jobs (requested %d)", jobs_fetched, results_wanted)
+    logger.info(
+        "[job_search_core] JobSpy returned %d jobs (requested %d, hours_old=%s)",
+        jobs_fetched,
+        results_wanted,
+        hours_old,
+    )
     if not raw and results_wanted > 50:
-        raw = fetch_jobs(
-            search_term=search_term.strip(),
-            location=(location or "").strip() or None,
-            site_name=site_name,
-            results_wanted=50,
-        )
+        raw = fetch_jobs(**{**fetch_kwargs, "results_wanted": 50})
         jobs_fetched = len(raw or [])
         logger.info("[job_search_core] JobSpy retry(50) returned %d jobs", jobs_fetched)
 

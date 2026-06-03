@@ -195,6 +195,7 @@ JOB_FOCUS_ROLE_MAX_LIFT = 0.15  # max extra from role when below gate (so combin
 # Job search: over-fetch from API so after disqualifier/dislike filtering we still fill the page.
 JOB_SEARCH_FETCH_BUFFER = 150  # fetch this many from JobSpy; then filter and take top DISPLAY_LIMIT
 JOB_SEARCH_DISPLAY_LIMIT = 50  # max jobs returned per search (top N after sort)
+JOB_SEARCH_HOURS_OLD = 168  # only jobs posted within this many hours (7 days); passed to JobSpy + post-filter
 # Disliked-job similarity: penalize results similar to disliked (listing-level embedding).
 JOB_DISLIKED_SIMILARITY_PENALTY_WEIGHT = 0.4  # penalty = weight * disliked_sim (0–1)
 JOB_DISLIKED_SIMILARITY_THRESHOLD = 0.3  # only penalize when similarity above this (0–1)

@@ -34,7 +34,8 @@ class JobPayload(Schema):
     matching_score: Optional[int] = None
     interview_probability: Optional[int] = None
     interview_reasoning: Optional[str] = None
-    fetched_at: Optional[datetime] = None  # when we pulled the job into the app (or from posting if we had it)
+    posted_at: Optional[datetime] = None  # when the job was posted on the source board
+    fetched_at: Optional[datetime] = None  # when we first ingested the job into the app
     optimized_resume_id: Optional[int] = None  # latest OptimizedResume for Applying board (pipeline-linked)
     optimizer_user_resume_id: Optional[int] = None  # UserResume id for "Open optimizer" prefill (Applying board)
 
@@ -49,6 +50,7 @@ class JobDetailPayload(Schema):
     url: str
     source: str
     external_id: str = ""
+    posted_at: Optional[datetime] = None
     fetched_at: Optional[datetime] = None
     raw_json: Optional[Any] = None
 

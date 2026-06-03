@@ -23,9 +23,14 @@ From the repo root (`JobApp-Jules/`):
 cp .env.example .env
 # Edit .env: HUEY_REDIS_HOST, SECRET_KEY, ALLOWED_HOSTS
 
-# Avoid Docker creating a directory instead of the DB file on first run:
+# Avoid Docker creating a *directory* instead of the DB/WAL files on first run:
 mkdir -p django_project/media
-touch django_project/db.sqlite3
+# Linux/macOS:
+touch django_project/db.sqlite3 django_project/db.sqlite3-wal django_project/db.sqlite3-shm
+# Windows PowerShell (if you use Docker bind mounts for SQLite):
+#   New-Item -ItemType File -Force django_project/db.sqlite3, django_project/db.sqlite3-wal, django_project/db.sqlite3-shm
+# If migrate fails with "unable to open database file", check that db.sqlite3-wal and
+# db.sqlite3-shm are files, not folders — remove empty directories and recreate as files.
 
 docker compose up --build
 ```
@@ -59,7 +64,7 @@ Serve `/media/` via a reverse proxy (nginx/Caddy). Django `urls.py` does not exp
 
 | Mount | Purpose |
 |-------|---------|
-| `./django_project/db.sqlite3` | SQLite database (shared by web + huey) |
+| `./django_project/db.sqlite3` (+ `-wal`, `-shm`) | SQLite database in WAL mode (shared by web + huey) |
 | `./django_project/media` | Uploaded resumes and pipeline artifacts |
 | `hf_cache` (named volume) | Hugging Face / sentence-transformers model cache |
 
@@ -127,12 +132,14 @@ After `docker compose up --build`:
 | Jobs stuck on “Queued” | `docker compose ps` — is **huey** running? Redis ping? |
 | `Connection refused` to Redis | `HUEY_REDIS_HOST`, firewall, bind address on Redis server |
 | `database is locked` | SQLite contention — reduce parallel Huey work or migrate to PostgreSQL |
+| `database disk image is malformed` | WAL files out of sync — stop web/huey, mount all three DB files in compose (see Volumes), recover from backup |
 | First job search slow | Model download — `hf_cache` volume persists `all-MiniLM-L6-v2` after first run |
-| Large image build | ~3–4 GB due to `torch` + `sentence-transformers`; normal for this app |
+| Large image build | ~2–3 GB content (CPU torch + sentence-transformers on slim base) |
 
 ## Image notes
 
-- Base: `python:3.12-bookworm`
+- Base: `python:3.12-slim-bookworm`; CPU-only PyTorch from `download.pytorch.org/whl/cpu`
+- `playwright` / `altair` / `GitPython` omitted from `requirements.txt` (unused by the Django app)
 - Build context: repo root (`JobApp-Jules/`)
 - Compose `env_file: .env` injects variables into the container environment (optional file; copy from `.env.example`)
 

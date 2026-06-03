@@ -103,7 +103,7 @@ class LLMUsageByQueryAdmin(admin.ModelAdmin):
 
 @admin.register(JobListing)
 class JobListingAdmin(admin.ModelAdmin):
-    list_display = ("title", "company_name", "source", "fetched_at")
+    list_display = ("title", "company_name", "source", "posted_at", "fetched_at")
     list_filter = ("source",)
     search_fields = ("title", "company_name")
 

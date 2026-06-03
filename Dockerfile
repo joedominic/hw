@@ -1,5 +1,5 @@
-# ResumeElite — web + Huey worker image (torch + sentence-transformers).
-FROM python:3.12-bookworm
+# ResumeElite — web + Huey worker image (CPU torch + sentence-transformers).
+FROM python:3.12-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -8,15 +8,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Build tools for wheels (cryptography, etc.)
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc libffi-dev \
-    && rm -rf /var/lib/apt/lists/*
-
 COPY requirements.txt .
-RUN pip install --upgrade pip \
+# libgomp1: PyTorch OpenMP; gcc/g++: compile wheels — removed after pip to shrink the image.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc g++ libffi-dev libgomp1 \
+    && pip install --upgrade pip \
+    && pip install torch --index-url https://download.pytorch.org/whl/cpu \
     && pip install -r requirements.txt \
-    && pip install gunicorn
+    && apt-get purge -y --auto-remove gcc g++ \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY django_project/ django_project/
 COPY docker-entrypoint.sh /docker-entrypoint.sh

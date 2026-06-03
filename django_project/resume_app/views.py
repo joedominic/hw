@@ -445,24 +445,12 @@ def optimizer_view(request):
         try:
             status_data = api_get_status_data(int(opt_id))
             # Format agent log thoughts for display (thought is a JSONField dict)
+            from .agents import format_agent_log_thought
+
             logs = status_data.get("logs") or []
             for log in logs:
                 t = log.get("thought")
-                if isinstance(t, dict):
-                    parts = []
-                    for key in ("feedback", "reasoning", "message"):
-                        if t.get(key):
-                            parts.append(str(t[key]))
-                    if t.get("optimized_resume") and isinstance(t["optimized_resume"], str):
-                        s = t["optimized_resume"]
-                        parts.append(s[:2000] + ("…" if len(s) > 2000 else ""))
-                    skip = {"feedback", "reasoning", "message", "optimized_resume", "input_tokens", "output_tokens", "ats_score", "recruiter_score"}
-                    rest = {k: v for k, v in t.items() if k not in skip}
-                    if rest:
-                        parts.append(json.dumps(rest, indent=2))
-                    log["thought_text"] = "\n\n".join(parts) if parts else json.dumps(t, indent=2)
-                else:
-                    log["thought_text"] = str(t) if t else ""
+                log["thought_text"] = format_agent_log_thought(t)
                 log["step_in"] = (t.get("input_tokens") or t.get("input")) if isinstance(t, dict) else None
                 log["step_out"] = (t.get("output_tokens") or t.get("output")) if isinstance(t, dict) else None
         except HttpError as e:

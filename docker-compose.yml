@@ -3,6 +3,7 @@
 services:
   web:
     build: .
+    image: jobapp-jules-app:latest
     command: python manage.py runserver 0.0.0.0:8000
     ports:
       - "8000:8000"
@@ -12,11 +13,15 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
+      # WAL mode needs all three files on the same mount (see resume_app.apps).
       - ./django_project/db.sqlite3:/app/django_project/db.sqlite3
+      - ./django_project/db.sqlite3-wal:/app/django_project/db.sqlite3-wal
+      - ./django_project/db.sqlite3-shm:/app/django_project/db.sqlite3-shm
       - ./django_project/media:/app/django_project/media
       - hf_cache:/root/.cache/huggingface
 
   huey:
+    image: jobapp-jules-app:latest
     build: .
     command: python manage.py run_huey
     env_file:
@@ -26,6 +31,8 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./django_project/db.sqlite3:/app/django_project/db.sqlite3
+      - ./django_project/db.sqlite3-wal:/app/django_project/db.sqlite3-wal
+      - ./django_project/db.sqlite3-shm:/app/django_project/db.sqlite3-shm
       - ./django_project/media:/app/django_project/media
       - hf_cache:/root/.cache/huggingface
     depends_on:

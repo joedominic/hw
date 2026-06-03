@@ -500,6 +500,67 @@ def _extract_partial_ats_score_from_text(content: str) -> Optional[int]:
     return None
 
 
+def serialize_llm_result_for_log(result: Any, *, max_len: int = 12000) -> str:
+    """Best-effort string for agent logs / debugging."""
+    if result is None:
+        return "(null)"
+    if isinstance(result, BaseModel):
+        try:
+            text = json.dumps(result.model_dump(), indent=2, ensure_ascii=False)
+        except Exception:
+            text = repr(result)
+    elif isinstance(result, dict):
+        try:
+            text = json.dumps(result, indent=2, ensure_ascii=False, default=str)
+        except Exception:
+            text = repr(result)
+    elif hasattr(result, "content"):
+        text = llm_message_content_to_text(getattr(result, "content", None))
+        if not text.strip():
+            text = repr(result)
+    else:
+        text = str(result)
+    if len(text) > max_len:
+        return text[:max_len] + f"\n... [truncated, total {len(text)} chars]"
+    return text
+
+
+def llm_message_content_to_text(content: Any) -> str:
+    """Normalize AIMessage / provider content blocks to plain text."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, BaseModel):
+        try:
+            return json.dumps(content.model_dump(), ensure_ascii=False)
+        except Exception:
+            return str(content)
+    if isinstance(content, dict):
+        return json.dumps(content, ensure_ascii=False, default=str)
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict):
+                parts.append(
+                    str(
+                        block.get("text")
+                        or block.get("content")
+                        or json.dumps(block, ensure_ascii=False, default=str)
+                    )
+                )
+            elif isinstance(block, str):
+                parts.append(block)
+            else:
+                parts.append(str(block))
+        return "\n".join(parts)
+    return str(content)
+
+
+def _content_to_parse_text(content: Any) -> str:
+    return llm_message_content_to_text(content).strip()
+
+
 def coerce_structured_judge_result(
     result: Any,
     structured_schema: Type[BaseModel],
@@ -510,6 +571,10 @@ def coerce_structured_judge_result(
     Normalize LangChain structured-output return types (Pydantic model, dict, or message)
     into a validated judge result, falling back to text/JSON parsing when needed.
     """
+    if result is None:
+        logger.warning("[%s] coerce_structured_judge_result: result is None", label)
+        return parse_fallback("", label)
+
     if isinstance(result, structured_schema):
         return result, None
 
@@ -548,12 +613,39 @@ def coerce_structured_judge_result(
                 return coerce_structured_judge_result(
                     content, structured_schema, parse_fallback, label
                 )
-            text = content if isinstance(content, str) else str(content)
-            if text.strip():
+            text = _content_to_parse_text(content)
+            if text:
                 return parse_fallback(text, label)
 
-    text = "" if result is None else str(result)
+    # Avoid str(None) == "None" which breaks JSON extraction.
+    if isinstance(result, str):
+        return parse_fallback(result, label)
+    text = str(result)
+    if text.strip().lower() == "none":
+        return parse_fallback("", label)
     return parse_fallback(text, label)
+
+
+def is_default_judge_fallback(
+    data: BaseModel,
+    *,
+    node_name: str = "",
+) -> bool:
+    """True when parse/coercion fell back to the generic default score."""
+    if isinstance(data, AtsJudgeResult):
+        return (
+            data.ats_match_score == 70
+            and not data.missing_keywords
+            and not data.formatting_issues
+            and data.strategic_feedback.strip()
+            == "Could not parse ATS judge output. Defaulting."
+        )
+    if isinstance(data, ScoreFeedback):
+        return (
+            data.score == 70
+            and data.feedback.strip() == "Could not parse score. Defaulting."
+        )
+    return False
 
 
 def parse_ats_judge_fallback(

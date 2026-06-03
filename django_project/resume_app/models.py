@@ -537,6 +537,11 @@ class JobListing(models.Model):
     location = models.CharField(max_length=512, blank=True)
     description = models.TextField(blank=True)
     url = models.URLField(max_length=2048, blank=True)
+    posted_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the job was posted on the source board (from JobSpy date_posted).",
+    )
     fetched_at = models.DateTimeField(auto_now_add=True)
     raw_json = models.JSONField(null=True, blank=True)
     # Cached preference metrics for pipeline/saved jobs (per track) live in JobListingTrackMetrics.

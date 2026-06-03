@@ -126,6 +126,7 @@ def _job_to_payload(job: JobListing, *, snippet: Optional[str] = None) -> JobPay
         url=job.url or "",
         source=src,
         source_display=format_job_source_label(src),
+        posted_at=job.posted_at,
         fetched_at=job.fetched_at,
     )
 
@@ -852,6 +853,7 @@ def jobs_get(request, job_listing_id: int):
         url=job.url or "",
         source=job.source,
         external_id=job.external_id or "",
+        posted_at=job.posted_at,
         fetched_at=job.fetched_at,
         raw_json=job.raw_json,
     )

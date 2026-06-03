@@ -978,6 +978,10 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
                 if (typeof thought === "string") return thought;
                 if (typeof thought !== "object") return String(thought);
                 var parts = [];
+                if (thought.debug_prompt) parts.push("--- Prompt sent to LLM ---\n" + String(thought.debug_prompt));
+                if (thought.raw_llm_response) parts.push("--- Raw LLM response ---\n" + String(thought.raw_llm_response));
+                if (thought.raw_llm_response_retry) parts.push("--- Raw LLM response (unstructured retry) ---\n" + String(thought.raw_llm_response_retry));
+                if (thought.parse_info) parts.push("--- Parse info ---\n" + JSON.stringify(thought.parse_info, null, 2));
                 if (thought.feedback) parts.push(String(thought.feedback));
                 if (thought.reasoning) parts.push(String(thought.reasoning));
                 if (thought.message) parts.push(String(thought.message));
@@ -986,7 +990,7 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
                     parts.push(s.slice(0, 2000) + (s.length > 2000 ? "…" : ""));
                 }
                 var rest = {};
-                var skip = ["feedback", "reasoning", "message", "optimized_resume", "input_tokens", "output_tokens", "ats_score", "recruiter_score"];
+                var skip = ["feedback", "reasoning", "message", "optimized_resume", "input_tokens", "output_tokens", "ats_score", "recruiter_score", "debug_prompt", "debug_messages", "raw_llm_response", "raw_llm_response_retry", "raw_llm_result_type", "raw_llm_result_type_retry", "parse_info", "tokens_estimated"];
                 for (var k in thought) if (thought.hasOwnProperty(k) && skip.indexOf(k) < 0) rest[k] = thought[k];
                 if (Object.keys(rest).length) parts.push(JSON.stringify(rest, null, 2));
                 return parts.join("\n\n") || JSON.stringify(thought, null, 2);
@@ -1000,7 +1004,7 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
                 stepLabel += " — " + stepIn + " in · " + stepOut + " out";
                 var bodyText = thoughtToText(log.thought);
                 html += "<details class=\"rounded-concierge border border-slate-200 bg-white\"><summary class=\"cursor-pointer px-3 py-2 text-sm font-medium\">" + esc(stepLabel) + "</summary>";
-                html += "<pre class=\"max-h-80 overflow-auto whitespace-pre-wrap border-t border-slate-100 p-3 text-xs\">" + esc(bodyText) + "</pre></details>";
+                html += "<pre class=\"max-h-[32rem] overflow-auto whitespace-pre-wrap border-t border-slate-100 p-3 text-xs\">" + esc(bodyText) + "</pre></details>";
             });
             html += "</div></div>";
         }

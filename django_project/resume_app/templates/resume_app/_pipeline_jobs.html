@@ -80,8 +80,12 @@
                             {% endif %}
                         </div>
                         <p class="mt-1 text-xs text-slate-500">{{ j.company_name }} · {{ j.location|default:"—" }}</p>
-                        {% if j.fetched_at %}
-                            <p class="text-xs text-slate-400">Found {{ j.fetched_at|date:"M j, Y" }}</p>
+                        {% if j.posted_at or j.fetched_at %}
+                            <p class="text-xs text-slate-400">
+                                {% if j.posted_at %}Posted {{ j.posted_at|date:"M j, Y" }}{% endif %}
+                                {% if j.posted_at and j.fetched_at %} · {% endif %}
+                                {% if j.fetched_at %}Added {{ j.fetched_at|date:"M j, Y" }}{% endif %}
+                            </p>
                         {% endif %}
                         {% if j.focus_reason %}
                             <div class="mt-2 text-xs text-slate-600">
@@ -194,8 +198,9 @@
                         })
                         .then(function(data) {
                             heading.textContent = (data.title || 'Job') + ' @ ' + (data.company_name || '—');
+                            var pa = data.posted_at ? String(data.posted_at) : '—';
                             var fa = data.fetched_at ? String(data.fetched_at) : '—';
-                            meta.textContent = 'id=' + data.id + ' · external_id=' + (data.external_id || '—') + ' · source=' + (data.source || '—') + ' · description length=' + (data.description_char_count != null ? data.description_char_count : (data.description || '').length) + ' chars · fetched_at=' + fa;
+                            meta.textContent = 'id=' + data.id + ' · external_id=' + (data.external_id || '—') + ' · source=' + (data.source || '—') + ' · description length=' + (data.description_char_count != null ? data.description_char_count : (data.description || '').length) + ' chars · posted_at=' + pa + ' · added_at=' + fa;
                             bodyEl.textContent = (data.description && data.description.length) ? data.description : '(empty — nothing stored in description for this row)';
                             if (data.raw_json != null && data.raw_json !== '') {
                                 try {

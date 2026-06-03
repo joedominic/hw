@@ -1099,6 +1099,16 @@ class AtsJudgeParserTestCase(TestCase):
         self.assertIn("IaC", result.strategic_feedback)
         self.assertEqual(raw["ats_match_score"], 88)
 
+    def test_coerce_structured_judge_result_none_does_not_parse_literal_none(self):
+        from resume_app.parsers import AtsJudgeResult, coerce_structured_judge_result, parse_ats_judge_fallback
+
+        result, raw = coerce_structured_judge_result(
+            None, AtsJudgeResult, parse_ats_judge_fallback, "ats_judge"
+        )
+        self.assertEqual(result.ats_match_score, 70)
+        self.assertIn("Could not parse", result.strategic_feedback)
+        self.assertIsNone(raw)
+
     def test_coerce_structured_judge_result_from_dict(self):
         from resume_app.parsers import AtsJudgeResult, coerce_structured_judge_result, parse_ats_judge_fallback
 
@@ -1146,7 +1156,52 @@ class AtsJudgeParserTestCase(TestCase):
         self.assertEqual(json_out["missing_keywords"], ["Rust"])
 
 
+class JobSourcesDateFilterTestCase(TestCase):
+    def test_parse_date_posted_from_iso_string(self):
+        from resume_app.job_sources import _parse_date_posted
+
+        dt = _parse_date_posted("2026-05-28T12:00:00")
+        self.assertIsNotNone(dt)
+        self.assertEqual(dt.year, 2026)
+        self.assertEqual(dt.month, 5)
+        self.assertEqual(dt.day, 28)
+
+    def test_filter_rows_by_max_age_drops_stale(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from resume_app.job_sources import filter_rows_by_max_age
+
+        now = timezone.now()
+        rows = [
+            {"title": "Fresh", "date_posted": now - timedelta(hours=24)},
+            {"title": "Stale", "date_posted": now - timedelta(days=10)},
+            {"title": "Unknown"},
+        ]
+        kept = filter_rows_by_max_age(rows, hours_old=168)
+        titles = [r["title"] for r in kept]
+        self.assertEqual(titles, ["Fresh", "Unknown"])
+
+
 class JobListingUpsertTestCase(TestCase):
+    def test_upsert_sets_posted_at_on_create(self):
+        posted = timezone.now() - timedelta(days=2)
+        row = {
+            "source": "jobspy_linkedin",
+            "external_id": "upsert-posted-1",
+            "title": "Engineer",
+            "company_name": "Acme",
+            "location": "Remote",
+            "description": "Build things",
+            "job_url": "https://example.com/j/2",
+            "date_posted": posted,
+        }
+        job, created = upsert_job_listing_from_fetch(row)
+        self.assertTrue(created)
+        self.assertIsNotNone(job.posted_at)
+        self.assertEqual(job.posted_at, posted)
+
     def test_upsert_sets_fetched_at_on_create(self):
         row = {
             "source": "jobspy_indeed",

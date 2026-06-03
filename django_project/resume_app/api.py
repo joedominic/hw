@@ -397,7 +397,17 @@ def run_step(
                     fb = fb[-1]
                 elif not isinstance(fb, str):
                     fb = str(fb) if fb else ""
-                output = {"ats_score": out.get("ats_score"), "feedback": fb, "debug_prompt": out.get("debug_prompt"), "input_tokens": out.get("input_tokens"), "output_tokens": out.get("output_tokens"), "tokens_estimated": out.get("tokens_estimated")}
+                output = {
+                    "ats_score": out.get("ats_score"),
+                    "feedback": fb,
+                    "debug_prompt": out.get("debug_prompt"),
+                    "raw_llm_response": out.get("raw_llm_response"),
+                    "raw_llm_response_retry": out.get("raw_llm_response_retry"),
+                    "parse_info": out.get("parse_info"),
+                    "input_tokens": out.get("input_tokens"),
+                    "output_tokens": out.get("output_tokens"),
+                    "tokens_estimated": out.get("tokens_estimated"),
+                }
                 if out.get("last_ats_json") is not None:
                     output["response_json"] = out["last_ats_json"]
                 return RunStepResponse(step="ats_judge", output=output)
@@ -408,7 +418,17 @@ def run_step(
                     fb = fb[-1]
                 elif not isinstance(fb, str):
                     fb = str(fb) if fb else ""
-                output = {"recruiter_score": out.get("recruiter_score"), "feedback": fb, "debug_prompt": out.get("debug_prompt"), "input_tokens": out.get("input_tokens"), "output_tokens": out.get("output_tokens"), "tokens_estimated": out.get("tokens_estimated")}
+                output = {
+                    "recruiter_score": out.get("recruiter_score"),
+                    "feedback": fb,
+                    "debug_prompt": out.get("debug_prompt"),
+                    "raw_llm_response": out.get("raw_llm_response"),
+                    "raw_llm_response_retry": out.get("raw_llm_response_retry"),
+                    "parse_info": out.get("parse_info"),
+                    "input_tokens": out.get("input_tokens"),
+                    "output_tokens": out.get("output_tokens"),
+                    "tokens_estimated": out.get("tokens_estimated"),
+                }
                 if out.get("last_recruiter_json") is not None:
                     output["response_json"] = out["last_recruiter_json"]
                 return RunStepResponse(step="recruiter_judge", output=output)
