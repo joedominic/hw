@@ -360,7 +360,7 @@ def pipeline_board_view(request, board_stage: str):
 
     job_tasks_url = reverse("job_automation")
     board_titles = {
-        "pipeline": "Pipeline",
+        "pipeline": "Dashboard",
         "vetting": "Vetting",
         "applying": "Applying",
         "done": "Done",

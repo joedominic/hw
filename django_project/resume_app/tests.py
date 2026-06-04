@@ -23,6 +23,7 @@ from .api import _normalize_export_content
 from .services import parse_pdf, PDFParseError
 from .llm_services import LLM_PROVIDERS
 from .job_sources import _row_to_dict, upsert_job_listing_from_fetch
+from .views import MAX_TRACK_RESUME_UPLOAD_BYTES, _count_unique_library_resumes
 import json
 import os
 
@@ -1287,6 +1288,120 @@ class TrackListLibraryResumeTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, library.original_filename)
         self.assertNotContains(response, ephemeral.original_filename)
+
+    def test_track_list_shows_stats_and_default_profile(self):
+        track_count = Track.objects.count()
+        unique_resumes = _count_unique_library_resumes(UserResume)
+        default = Track.objects.filter(is_default=True).first()
+        response = self.client.get("/jobs/tracks/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Track management")
+        self.assertContains(response, "Unique resumes")
+        self.assertContains(response, "Total tracks")
+        self.assertContains(response, "Default profile")
+        self.assertContains(response, str(track_count))
+        self.assertContains(response, str(unique_resumes))
+        if default:
+            self.assertContains(response, default.label)
+
+    def test_track_list_sort_by_slug(self):
+        Track.objects.create(slug="aaa", label="Zebra track")
+        Track.objects.create(slug="zzz", label="Alpha track")
+        response = self.client.get("/jobs/tracks/?sort=slug")
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        self.assertLess(content.index("slug: aaa"), content.index("slug: zzz"))
+
+    def test_track_list_shows_resume_filename_on_track(self):
+        UserResume.objects.create(
+            file="dallas.pdf",
+            original_filename="N_Principal_Dallas.pdf",
+            track="ic",
+            is_library=True,
+        )
+        response = self.client.get("/jobs/tracks/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "N_Principal_Dallas.pdf")
+
+    def test_unique_resume_stat_dedupes_by_filename(self):
+        UserResume.objects.create(
+            file="a.pdf",
+            original_filename="Principal.pdf",
+            track="ic",
+            is_library=True,
+        )
+        UserResume.objects.create(
+            file="b.pdf",
+            original_filename="principal.pdf",
+            track="mgmt",
+            is_library=True,
+        )
+        response = self.client.get("/jobs/tracks/")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Unique resumes")
+        # Two rows, one distinct filename
+        self.assertContains(response, ">1<")
+        self.assertContains(response, "(2 uploads)")
+
+    def test_edit_track_updates_attributes(self):
+        track = Track.objects.get(slug="ic")
+        response = self.client.post(
+            "/jobs/tracks/",
+            {
+                "action": "edit_track",
+                "original_slug": "ic",
+                "slug": "ic",
+                "label": "IC Updated",
+                "description": "New description",
+                "is_default": "1",
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        track.refresh_from_db()
+        self.assertEqual(track.label, "IC Updated")
+        self.assertEqual(track.description, "New description")
+        self.assertTrue(track.is_default)
+
+    def test_edit_track_renames_slug_cascades_to_resume(self):
+        UserResume.objects.create(
+            file="linked.pdf",
+            original_filename="linked.pdf",
+            track="mgmt",
+            is_library=True,
+        )
+        response = self.client.post(
+            "/jobs/tracks/",
+            {
+                "action": "edit_track",
+                "original_slug": "mgmt",
+                "slug": "management",
+                "label": "Management",
+                "description": "",
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(Track.objects.filter(slug="mgmt").exists())
+        self.assertTrue(Track.objects.filter(slug="management").exists())
+        resume = UserResume.library().get(original_filename="linked.pdf")
+        self.assertEqual(resume.track, "management")
+
+    def test_track_list_rejects_oversized_upload(self):
+        oversized = SimpleUploadedFile(
+            "big.pdf",
+            b"%PDF" + (b"0" * (MAX_TRACK_RESUME_UPLOAD_BYTES + 1)),
+            content_type="application/pdf",
+        )
+        before = UserResume.library().count()
+        response = self.client.post(
+            "/jobs/tracks/",
+            {"action": "upload_resume", "resume_file": oversized},
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "10MB")
+        self.assertEqual(UserResume.library().count(), before)
 
 
 class GeneratedResumeCleanupTestCase(TestCase):

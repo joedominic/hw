@@ -13,10 +13,9 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      # WAL mode needs all three files on the same mount (see resume_app.apps).
+      # Mount only db.sqlite3 — do not bind-mount -wal/-shm paths; missing files become
+      # directories on Windows and break local SQLite (see resume_app.apps WAL setup).
       - ./django_project/db.sqlite3:/app/django_project/db.sqlite3
-      - ./django_project/db.sqlite3-wal:/app/django_project/db.sqlite3-wal
-      - ./django_project/db.sqlite3-shm:/app/django_project/db.sqlite3-shm
       - ./django_project/media:/app/django_project/media
       - hf_cache:/root/.cache/huggingface
 
@@ -31,8 +30,6 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./django_project/db.sqlite3:/app/django_project/db.sqlite3
-      - ./django_project/db.sqlite3-wal:/app/django_project/db.sqlite3-wal
-      - ./django_project/db.sqlite3-shm:/app/django_project/db.sqlite3-shm
       - ./django_project/media:/app/django_project/media
       - hf_cache:/root/.cache/huggingface
     depends_on:

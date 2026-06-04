@@ -2142,11 +2142,139 @@ def job_task_toggle_active_view(request, task_id):
     return redirect("job_automation")
 
 
+MAX_TRACK_RESUME_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+def _format_resume_file_size(size_bytes: int | None) -> str:
+    """Human-readable size for library resume rows."""
+    if size_bytes is None or size_bytes < 0:
+        return "—"
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+
+def _track_list_sort_param(request) -> str:
+    sort = (request.GET.get("sort") or "label").strip().lower()
+    return sort if sort in ("label", "slug") else "label"
+
+
+def _count_unique_library_resumes(UserResume) -> int:
+    """
+    Count distinct library PDFs by normalized filename (one row per file name).
+
+    Duplicate uploads of the same filename count once; rows with no filename
+    are keyed by id so they are not collapsed together.
+    """
+    seen: set[str] = set()
+    unique = 0
+    for row in UserResume.library().only("id", "original_filename"):
+        name = (row.original_filename or "").strip().lower()
+        key = name if name else f"__id_{row.id}"
+        if key in seen:
+            continue
+        seen.add(key)
+        unique += 1
+    return unique
+
+
+def _track_list_context(request, tracks_qs, *, UserResume):
+    """Build template context for the Track Management page."""
+    from django.db.models import Count
+
+    sort = _track_list_sort_param(request)
+    order_field = "label" if sort == "label" else "slug"
+    tracks = list(tracks_qs.order_by(order_field))
+    default_track_slug = Track.get_default_slug()
+    default_track = next((t for t in tracks if t.is_default), None)
+    if default_track is None and tracks:
+        default_track = tracks[0]
+
+    slugs = [t.slug for t in tracks]
+    counts_qs = (
+        UserResume.library()
+        .filter(track__in=slugs)
+        .values("track")
+        .annotate(c=Count("id"))
+    )
+    resume_counts_by_slug = {row["track"]: row["c"] for row in counts_qs}
+    resume_names_by_slug: dict[str, list[str]] = {slug: [] for slug in slugs}
+    for resume in (
+        UserResume.library()
+        .filter(track__in=slugs)
+        .order_by("-uploaded_at")
+        .only("track", "original_filename")
+    ):
+        slug = resume.track
+        if slug in resume_names_by_slug:
+            resume_names_by_slug[slug].append(
+                (resume.original_filename or "resume.pdf").strip() or "resume.pdf"
+            )
+    for slug in slugs:
+        resume_counts_by_slug.setdefault(slug, 0)
+    for track in tracks:
+        track.library_resume_count = resume_counts_by_slug.get(track.slug, 0)
+        track.library_resume_names = resume_names_by_slug.get(track.slug, [])
+
+    resume_rows = []
+    for resume in UserResume.library().order_by("-uploaded_at")[:200]:
+        try:
+            size_bytes = resume.file.size if resume.file else None
+        except Exception:
+            size_bytes = None
+        resume_rows.append(
+            {
+                "resume": resume,
+                "file_size_display": _format_resume_file_size(size_bytes),
+            }
+        )
+
+    return {
+        "tracks": tracks,
+        "resume_rows": resume_rows,
+        "default_track_slug": default_track_slug,
+        "resume_counts_by_slug": resume_counts_by_slug,
+        "track_sort": sort,
+        "stats": {
+            "track_count": len(tracks),
+            "resume_count": _count_unique_library_resumes(UserResume),
+            "resume_rows_count": len(resume_rows),
+            "default_track": default_track,
+        },
+    }
+
+
+def _cascade_track_slug_rename(old_slug: str, new_slug: str) -> None:
+    """Update track slug references across models that store slug as CharField."""
+    from .models import (
+        JobListingAction,
+        JobListingEmbedding,
+        JobListingTrackMetrics,
+        JobSearchTask,
+        PipelineEntry,
+        UserResume,
+    )
+
+    UserResume.objects.filter(track=old_slug).update(track=new_slug)
+    JobSearchTask.objects.filter(track=old_slug).update(track=new_slug)
+    PipelineEntry.objects.filter(track=old_slug).update(track=new_slug)
+    JobListingAction.objects.filter(track=old_slug).update(track=new_slug)
+    JobListingEmbedding.objects.filter(track=old_slug).update(track=new_slug)
+    JobListingTrackMetrics.objects.filter(track=old_slug).update(track=new_slug)
+    try:
+        invalidate_preference_cache()
+        invalidate_disliked_embeddings_cache()
+    except Exception:
+        pass
+
+
 def track_list_view(request):
     """
-    Tracks & resumes page: search tracks (CRUD for Track) and resume PDFs (upload, assign
-    default track, delete). POST `action` distinguishes create_track, upload_resume,
-    assign_resume_tracks, delete_resume.
+    Track Management page: search tracks (CRUD for Track) and resume PDFs (upload, assign
+    default track, delete). POST `action` distinguishes create_track, edit_track,
+    upload_resume, assign_resume_tracks, delete_resume.
     """
     tracks_qs = Track.ensure_baseline()
     tracks = list(tracks_qs)
@@ -2154,8 +2282,6 @@ def track_list_view(request):
 
     # Keep this bounded: track management should stay snappy even with many resumes.
     from .models import UserResume
-
-    resumes = list(UserResume.library().order_by("-uploaded_at")[:200])
 
     if request.method == "POST":
         action = (request.POST.get("action") or "create_track").strip()
@@ -2179,6 +2305,10 @@ def track_list_view(request):
             original_name = original_name.split("\\")[-1].split("/")[-1].strip()
             if not original_name.lower().endswith(".pdf"):
                 messages.error(request, "Resume file must be a PDF.")
+                return redirect("track_list")
+            file_size = getattr(resume_file, "size", None)
+            if file_size is not None and file_size > MAX_TRACK_RESUME_UPLOAD_BYTES:
+                messages.error(request, "Resume file must be 10MB or smaller.")
                 return redirect("track_list")
             original_name = (original_name or "resume.pdf")[:255]
 
@@ -2237,34 +2367,63 @@ def track_list_view(request):
             )
             return redirect("track_list")
 
-        # Default branch: create a new track
-        slug = (request.POST.get("slug") or "").strip().lower()
-        label = (request.POST.get("label") or "").strip()
-        description = (request.POST.get("description") or "").strip()
-        is_default = bool(request.POST.get("is_default"))
-        if not slug:
-            messages.error(request, "Slug is required.")
-        elif not label:
-            messages.error(request, "Label is required.")
-        elif Track.objects.filter(slug=slug).exists():
-            messages.error(request, f"Track with slug '{slug}' already exists.")
-        else:
+        if action == "edit_track":
+            original_slug = (request.POST.get("original_slug") or "").strip().lower()
+            new_slug = (request.POST.get("slug") or "").strip().lower()
+            label = (request.POST.get("label") or "").strip()
+            description = (request.POST.get("description") or "").strip()
+            is_default = bool(request.POST.get("is_default"))
+
+            track = Track.objects.filter(slug=original_slug).first()
+            if not track:
+                messages.error(request, "Track not found.")
+                return redirect("track_list")
+            if not new_slug:
+                messages.error(request, "Slug is required.")
+                return redirect("track_list")
+            if not label:
+                messages.error(request, "Label is required.")
+                return redirect("track_list")
+            if new_slug != original_slug and Track.objects.filter(slug=new_slug).exists():
+                messages.error(request, f"Track with slug '{new_slug}' already exists.")
+                return redirect("track_list")
+
             if is_default:
                 Track.objects.update(is_default=False)
-            track = Track.objects.create(
-                slug=slug,
-                label=label,
-                description=description,
-                is_default=is_default,
-            )
-            messages.success(request, f"Track \"{track.label}\" created.")
+            if new_slug != original_slug:
+                _cascade_track_slug_rename(original_slug, new_slug)
+                track.slug = new_slug
+            track.label = label
+            track.description = description
+            track.is_default = is_default
+            track.save(update_fields=["slug", "label", "description", "is_default"])
+            messages.success(request, f"Track \"{track.label}\" updated.")
             return redirect("track_list")
 
-    context = {
-        "tracks": tracks,
-        "resumes": resumes,
-        "default_track_slug": default_track_slug,
-    }
+        if action == "create_track":
+            slug = (request.POST.get("slug") or "").strip().lower()
+            label = (request.POST.get("label") or "").strip()
+            description = (request.POST.get("description") or "").strip()
+            is_default = bool(request.POST.get("is_default"))
+            if not slug:
+                messages.error(request, "Slug is required.")
+            elif not label:
+                messages.error(request, "Label is required.")
+            elif Track.objects.filter(slug=slug).exists():
+                messages.error(request, f"Track with slug '{slug}' already exists.")
+            else:
+                if is_default:
+                    Track.objects.update(is_default=False)
+                track = Track.objects.create(
+                    slug=slug,
+                    label=label,
+                    description=description,
+                    is_default=is_default,
+                )
+                messages.success(request, f"Track \"{track.label}\" created.")
+            return redirect("track_list")
+
+    context = _track_list_context(request, tracks_qs, UserResume=UserResume)
     return render(request, "resume_app/tracks.html", context)
 
 

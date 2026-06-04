@@ -55,7 +55,7 @@
 {% elif status.status == "failed" %}
 <p class="mt-4 rounded-concierge border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900">{{ status.error_message|default:"Optimization failed." }}</p>
 {% elif status.status == "queued" %}
-<p class="mt-4 rounded-concierge border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950"><strong>Queued</strong> — start a worker with <code class="rounded bg-white/80 px-1">python manage.py run_huey</code> (see <a href="{% url 'huey_dashboard' %}" class="font-medium underline">Background jobs</a>). Redis must match your <code class="rounded bg-white/80 px-1">HUEY_REDIS_*</code> settings.</p>
+<p class="mt-4 rounded-concierge border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950"><strong>Queued</strong> — start a worker with <code class="rounded bg-white/80 px-1">python manage.py run_huey</code> (see <a href="{% url 'huey_dashboard' %}" class="font-medium underline">Monitor</a>). Redis must match your <code class="rounded bg-white/80 px-1">HUEY_REDIS_*</code> settings.</p>
 <p class="mt-2 text-sm text-slate-500">This section updates when you refresh or when live polling is active.</p>
 <p class="mt-2"><button type="button" class="rounded-concierge bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700" id="stop-optimization-btn" data-resume-id="{{ rid }}">Cancel queued run</button></p>
 {% else %}

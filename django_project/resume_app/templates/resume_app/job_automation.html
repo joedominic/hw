@@ -1,20 +1,20 @@
 {% extends "resume_app/base.html" %}
 
-{% block title %}Job automation — ResumeElite{% endblock %}
+{% block title %}Searches — ResumeElite{% endblock %}
 
 {% block content %}
 <div class="mx-auto max-w-6xl">
     {% include "resume_app/_jobs_workspace_tabs.html" with workspace_automation_track=selected_track_slug %}
     <div class="mb-8 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-            <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Job search automation</h1>
+            <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Searches</h1>
             <p class="mt-1 text-sm text-slate-600">
                 Tracks separate profiles; scheduled tasks fetch jobs into the track’s pipeline.
             </p>
         </div>
         <div class="flex shrink-0 flex-col items-end gap-1 text-right">
             <a href="{% url 'huey_dashboard' %}" class="inline-flex items-center justify-center rounded-concierge border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-concierge-slate hover:bg-slate-50">
-                Huey queue &amp; scheduler →
+                Monitor →
             </a>
             <p class="max-w-xs text-xs text-slate-500">Background worker (<code class="rounded bg-slate-100 px-1">run_huey</code>) must be running. Periodic tasks enqueue from here.</p>
         </div>

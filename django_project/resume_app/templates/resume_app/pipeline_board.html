@@ -164,7 +164,7 @@
     <form method="get" class="mb-6 space-y-4">
         <input type="hidden" name="track" value="{{ pipeline_track }}">
         <div class="flex flex-col gap-2 sm:flex-row">
-            <input type="search" name="q" class="min-w-0 flex-1 rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate" placeholder="Search title, company, description…" value="{{ pipeline_search_query|default:'' }}" aria-label="Search pipeline board">
+            <input type="search" name="q" class="min-w-0 flex-1 rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate" placeholder="Search title, company, description…" value="{{ pipeline_search_query|default:'' }}" aria-label="Search dashboard">
             <div class="flex flex-wrap gap-2">
                 <button type="submit" class="rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50">Apply filters</button>
                 {% if pipeline_has_active_filters %}
