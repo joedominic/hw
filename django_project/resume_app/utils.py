@@ -3,14 +3,17 @@
 
 def format_job_source_label(source: str | None) -> str:
     """
-    Human-readable board name for JobSpy `source` values, e.g. jobspy_indeed → Indeed.
+    Human-readable board name for job `source` values, e.g. jobspy_indeed → Indeed, adzuna → Adzuna.
     """
     if not source:
         return "—"
     s = str(source).strip().lower()
+    if s == "adzuna":
+        return "Adzuna"
+    if s == "dice":
+        return "Dice"
     if s.startswith("jobspy_"):
         s = s[7:]
-    # ziprecruiter is stored as jobspy_ziprecruiter → ziprecruiter
     return s.replace("_", " ").title()
 
 

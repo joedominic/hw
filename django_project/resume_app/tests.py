@@ -22,7 +22,17 @@ from .tasks import (
 from .api import _normalize_export_content
 from .services import parse_pdf, PDFParseError
 from .llm_services import LLM_PROVIDERS
-from .job_sources import _row_to_dict, upsert_job_listing_from_fetch
+from .job_sources import (
+    _dedupe_fetch_rows,
+    _per_site_results_cap,
+    _row_to_dict,
+    fetch_jobs,
+    normalize_site_names,
+    upsert_job_listing_from_fetch,
+)
+from .adzuna_client import _adzuna_result_to_dict, fetch_adzuna_jobs
+from .dice_client import _parse_jobs_from_html
+from .utils import format_job_source_label
 from .views import MAX_TRACK_RESUME_UPLOAD_BYTES, _count_unique_library_resumes
 import json
 import os
@@ -69,6 +79,141 @@ class ServiceTestCase(TestCase):
         normalized = _normalize_export_content(source)
         self.assertNotIn("\u2011", normalized)
         self.assertIn("high-impact", normalized)
+
+
+class NormalizeSiteNamesTestCase(TestCase):
+    def test_drops_removed_boards(self):
+        self.assertEqual(
+            normalize_site_names(["indeed", "glassdoor", "google", "zip_recruiter"]),
+            ["indeed"],
+        )
+
+    def test_empty_or_all_removed_defaults_to_indeed(self):
+        self.assertEqual(normalize_site_names([]), ["indeed"])
+        self.assertEqual(normalize_site_names(None), ["indeed"])
+        self.assertEqual(normalize_site_names(["glassdoor"]), ["indeed"])
+
+    def test_preserves_indeed_and_linkedin(self):
+        self.assertEqual(
+            normalize_site_names(["linkedin", "indeed"]),
+            ["linkedin", "indeed"],
+        )
+
+    def test_preserves_dice_and_adzuna(self):
+        self.assertEqual(
+            normalize_site_names(["dice", "adzuna", "indeed"]),
+            ["dice", "adzuna", "indeed"],
+        )
+
+
+class JobFetchHelpersTestCase(TestCase):
+    def test_per_site_results_cap(self):
+        self.assertEqual(_per_site_results_cap(50, 4), 12)
+        self.assertEqual(_per_site_results_cap(50, 1), 50)
+        self.assertEqual(_per_site_results_cap(20, 3), 10)
+
+    def test_dedupe_fetch_rows(self):
+        rows = [
+            {"source": "adzuna", "external_id": "a1"},
+            {"source": "adzuna", "external_id": "a1"},
+            {"source": "dice", "external_id": "d1"},
+        ]
+        self.assertEqual(len(_dedupe_fetch_rows(rows)), 2)
+
+
+class AdzunaClientTestCase(TestCase):
+    def test_adzuna_result_to_dict(self):
+        row = _adzuna_result_to_dict(
+            {
+                "id": 42,
+                "title": "Python Dev",
+                "company": {"display_name": "Acme"},
+                "location": {"display_name": "Boston, MA"},
+                "description": "Build APIs",
+                "redirect_url": "https://example.com/job/42",
+                "created": "2026-01-15T12:00:00Z",
+            },
+            "us",
+        )
+        self.assertEqual(row["source"], "adzuna")
+        self.assertEqual(row["external_id"], "adzuna:us:42")
+        self.assertEqual(row["company_name"], "Acme")
+        self.assertEqual(row["job_url"], "https://example.com/job/42")
+
+    @patch("resume_app.adzuna_client.requests.get")
+    def test_fetch_adzuna_jobs_requires_keys(self, mock_get):
+        with self.assertRaises(RuntimeError) as ctx:
+            fetch_adzuna_jobs("engineer", location="Boston", results_wanted=5)
+        self.assertIn("not configured", str(ctx.exception))
+        mock_get.assert_not_called()
+
+    @patch("resume_app.adzuna_client.requests.get")
+    @patch("resume_app.adzuna_client._adzuna_credentials", return_value=("id", "key"))
+    def test_fetch_adzuna_jobs_parses_response(self, _creds, mock_get):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "results": [
+                {
+                    "id": 1,
+                    "title": "Dev",
+                    "company": {"display_name": "Co"},
+                    "location": {"display_name": "NYC"},
+                    "description": "Desc",
+                    "redirect_url": "https://adzuna.com/1",
+                }
+            ]
+        }
+        mock_get.return_value = mock_resp
+        rows = fetch_adzuna_jobs("dev", results_wanted=5)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source"], "adzuna")
+
+    def test_upsert_adzuna_listing(self):
+        row = {
+            "title": "Dev",
+            "company_name": "Co",
+            "location": "NYC",
+            "description": "Desc",
+            "job_url": "https://adzuna.com/1",
+            "source": "adzuna",
+            "external_id": "adzuna:us:1",
+        }
+        job, created = upsert_job_listing_from_fetch(row)
+        self.assertTrue(created)
+        self.assertEqual(job.source, "adzuna")
+
+
+class DiceClientTestCase(TestCase):
+    def test_parse_jobs_from_html_empty(self):
+        self.assertEqual(_parse_jobs_from_html("<html></html>", set()), [])
+
+    def test_format_job_source_labels(self):
+        self.assertEqual(format_job_source_label("adzuna"), "Adzuna")
+        self.assertEqual(format_job_source_label("dice"), "Dice")
+        self.assertEqual(format_job_source_label("jobspy_indeed"), "Indeed")
+
+
+class FetchJobsOrchestratorTestCase(TestCase):
+    @patch("resume_app.job_sources._fetch_jobs_jobspy")
+    @patch("resume_app.dice_client.fetch_dice_jobs")
+    @patch("resume_app.adzuna_client.fetch_adzuna_jobs")
+    def test_fetch_jobs_merges_providers(self, mock_adzuna, mock_dice, mock_jobspy):
+        mock_jobspy.return_value = [
+            {"source": "jobspy_indeed", "external_id": "j1", "title": "A"}
+        ]
+        mock_dice.return_value = [{"source": "dice", "external_id": "d1", "title": "B"}]
+        mock_adzuna.return_value = [{"source": "adzuna", "external_id": "a1", "title": "C"}]
+        rows = fetch_jobs(
+            "engineer",
+            site_name=["indeed", "dice", "adzuna"],
+            results_wanted=30,
+        )
+        self.assertEqual(len(rows), 3)
+        mock_jobspy.assert_called_once()
+        mock_dice.assert_called_once()
+        mock_adzuna.assert_called_once()
+        self.assertEqual(mock_jobspy.call_args[0][3], 10)
 
 
 class JobSourceNormalizationTestCase(TestCase):

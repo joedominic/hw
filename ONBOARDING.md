@@ -333,7 +333,7 @@ Also used via `getattr(settings, …)` but not in `settings.py`: `OLLAMA_*`, `OP
 | **Redis** | Huey queue + LLM RPM/TPM limits |
 | **SQLite** | Default DB |
 | **LLM APIs** | OpenAI, Anthropic, Groq, Google, Ollama, OpenRouter |
-| **JobSpy** | Scrapes Indeed, LinkedIn, ZipRecruiter, Google (no API keys) |
+| **JobSpy** | Scrapes Indeed and LinkedIn (no API keys) |
 | **sentence-transformers** | Local embeddings `all-MiniLM-L6-v2` (first run downloads model) |
 
 ### Huey periodic tasks (requires `run_huey` + Redis)
@@ -375,7 +375,7 @@ python manage.py clear_applying_optimizations
 7. **Most JSON APIs are open** — `API_ACCESS_TOKEN` only covers 5 resume endpoints; jobs/LLM-connect/workflows stay open.
 8. **No media URL wiring in `urls.py`** — may need explicit media serving in dev/production.
 9. **README Streamlit stub** — `ui/app.py` does not exist.
-10. **JobSpy scraping** — rate limits, blocking, ToS considerations; Glassdoor often flaky.
+10. **JobSpy scraping** — rate limits, blocking, ToS considerations.
 11. **First embedding run** — downloads `all-MiniLM-L6-v2` + needs `torch` (large install).
 
 ---

@@ -529,8 +529,8 @@ class AppAutomationSettings(models.Model):
 
 
 class JobListing(models.Model):
-    """A job fetched from a source (e.g. JobSpy Indeed/Google). Deduplicated by (source, external_id)."""
-    source = models.CharField(max_length=64)  # e.g. jobspy_indeed, jobspy_google
+    """A job fetched from a source (e.g. JobSpy Indeed). Deduplicated by (source, external_id)."""
+    source = models.CharField(max_length=64)  # e.g. jobspy_indeed, jobspy_linkedin
     external_id = models.CharField(max_length=256)
     title = models.CharField(max_length=512)
     company_name = models.CharField(max_length=512)

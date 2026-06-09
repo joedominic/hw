@@ -10,7 +10,7 @@ from django.conf import settings
 
 from .models import JobListing, JobListingAction, JobListingTrackMetrics, PipelineEntry
 from .track_actions import disliked_listing_id_set, normalize_track_slug
-from .job_sources import DEFAULT_SITE_NAMES, fetch_jobs, upsert_job_listing_from_fetch
+from .job_sources import fetch_jobs, normalize_site_names, upsert_job_listing_from_fetch
 from .schemas import JobPayload
 from .preference import (
     get_preference_vectors,
@@ -85,7 +85,7 @@ def run_job_search_core(
         raise ValueError("search_term is required")
 
     results_wanted = results_wanted or getattr(settings, "JOB_SEARCH_DEFAULT_RESULTS", 50)
-    site_name = site_name or list(DEFAULT_SITE_NAMES)
+    site_name = normalize_site_names(site_name)
     norm_track = normalize_track_slug(track)
     disliked_listing_ids = disliked_listing_id_set(norm_track)
     disqualifier_pattern = build_disqualifier_pattern(get_disqualifier_phrases())

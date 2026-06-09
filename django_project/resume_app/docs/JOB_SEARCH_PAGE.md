@@ -38,6 +38,29 @@ Additional UI:
 
 If the user clicks **Refresh results** (adds `?refresh=1`), the session cache is cleared and the next load triggers a **new fetch** from the external job service. Otherwise, the same search params may be served from **session cache** (see below).
 
+### Job sources (boards)
+
+On the search form, **Sites** checkboxes select which boards to query. Implementation lives in `resume_app/job_sources.py` (orchestrator) plus provider modules.
+
+| Board | Provider | Notes |
+|-------|----------|--------|
+| **Indeed** | [python-jobspy](https://pypi.org/project/python-jobspy/) | Default if none selected |
+| **LinkedIn** | python-jobspy | Fetches full descriptions (`linkedin_fetch_description`) |
+| **Dice** | `resume_app/dice_client.py` | HTML scrape of dice.com/jobs (not in upstream JobSpy) |
+| **Adzuna** | `resume_app/adzuna_client.py` | [Adzuna API](https://developer.adzuna.com/) — requires keys in `.env` |
+
+**Adzuna setup:** Register at [developer.adzuna.com](https://developer.adzuna.com/), then set:
+
+- `ADZUNA_APP_ID`
+- `ADZUNA_APP_KEY`
+- Optional: `ADZUNA_COUNTRY` (default `us`), `ADZUNA_MAX_PAGES` (default `3`)
+
+If Adzuna is checked but keys are missing, search returns a 502 with a clear error message.
+
+**Built In** is not supported yet.
+
+When multiple sites are selected, each provider receives a per-site result cap (`max(10, results_wanted / num_sites)`) so total raw volume stays bounded.
+
 ---
 
 ## 3. Filtering logic (order of operations)

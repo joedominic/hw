@@ -196,6 +196,12 @@ JOB_FOCUS_ROLE_MAX_LIFT = 0.15  # max extra from role when below gate (so combin
 JOB_SEARCH_FETCH_BUFFER = 150  # fetch this many from JobSpy; then filter and take top DISPLAY_LIMIT
 JOB_SEARCH_DISPLAY_LIMIT = 50  # max jobs returned per search (top N after sort)
 JOB_SEARCH_HOURS_OLD = 168  # only jobs posted within this many hours (7 days); passed to JobSpy + post-filter
+
+# Adzuna job search API (https://developer.adzuna.com/) — required when "adzuna" is selected as a source.
+ADZUNA_APP_ID = env("ADZUNA_APP_ID", default="")
+ADZUNA_APP_KEY = env("ADZUNA_APP_KEY", default="")
+ADZUNA_COUNTRY = env("ADZUNA_COUNTRY", default="us")
+ADZUNA_MAX_PAGES = env.int("ADZUNA_MAX_PAGES", default=3)
 # Disliked-job similarity: penalize results similar to disliked (listing-level embedding).
 JOB_DISLIKED_SIMILARITY_PENALTY_WEIGHT = 0.4  # penalty = weight * disliked_sim (0–1)
 JOB_DISLIKED_SIMILARITY_THRESHOLD = 0.3  # only penalize when similarity above this (0–1)
@@ -264,14 +270,3 @@ PIPELINE_LLM_CONSOLIDATE_MAX_ITEMS_PER_KEY = env.int("PIPELINE_LLM_CONSOLIDATE_M
 # Drop keywords that appear fewer than this many times across all batch lines (1 = keep all).
 PIPELINE_LLM_KEYWORD_MIN_COUNT = env.int("PIPELINE_LLM_KEYWORD_MIN_COUNT", default=1)
 
-# python-jobspy logs Glassdoor API hiccups at ERROR even when the HTTP request succeeds.
-# Downgrade so runserver output stays readable; other JobSpy:* loggers unchanged.
-LOGGING = {
-    "version": 1,
-    "disable_existing_loggers": False,
-    "loggers": {
-        "JobSpy:Glassdoor": {
-            "level": "WARNING",
-        },
-    },
-}

@@ -23,7 +23,7 @@ from .models import (
     OptimizerWorkflow,
 )
 from datetime import timedelta
-from .job_sources import DEFAULT_SITE_NAMES
+from .job_sources import normalize_site_names
 from .job_search_core import run_job_search_core, recompute_preferences_for_jobs
 from .agents import (
     create_workflow,
@@ -616,7 +616,9 @@ def _run_job_search_task_impl(task_id):
             location=task.location or None,
             track=task.track or None,
             results_wanted=task.jobs_to_fetch,
-            site_name=task.site_name if isinstance(task.site_name, list) else list(DEFAULT_SITE_NAMES),
+            site_name=normalize_site_names(
+                task.site_name if isinstance(task.site_name, list) else None
+            ),
         )
     except Exception as e:
         logger.exception("[run_job_search_task] task_id=%s core failed: %s", task_id, e)

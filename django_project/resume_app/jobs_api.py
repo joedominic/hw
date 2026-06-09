@@ -25,7 +25,7 @@ from .models import (
     PipelineEntry,
     Track,
 )
-from .job_sources import DEFAULT_SITE_NAMES, fetch_jobs, upsert_job_listing_from_fetch
+from .job_sources import fetch_jobs, normalize_site_names, upsert_job_listing_from_fetch
 from .job_search_core import rank_and_filter_jobs, run_job_search_core, pipeline_jobs_to_payloads
 from .track_actions import (
     disliked_listing_id_set,
@@ -210,7 +210,7 @@ def pipeline_delete(request, job_listing_id: int, track: str = "ic"):
 
 
 def _jobs_search_site_key(site_name: Optional[List[str]]) -> tuple:
-    sites = site_name if site_name else list(DEFAULT_SITE_NAMES)
+    sites = normalize_site_names(site_name)
     if isinstance(sites, str):
         sites = [sites]
     return tuple(sorted(str(s).strip().lower() for s in sites if str(s).strip()))
@@ -280,7 +280,7 @@ def jobs_search(request, payload: JobSearchRequest):
                 location=payload.location.strip() if payload.location else None,
                 track=payload.track,
                 results_wanted=payload.results_wanted or 50,
-                site_name=payload.site_name or list(DEFAULT_SITE_NAMES),
+                site_name=normalize_site_names(payload.site_name),
                 sort=(payload.sort or "focus"),
             )
         except ValueError as e:
@@ -644,7 +644,7 @@ def jobs_run_keyword_search(request, payload: RunKeywordSearchRequest):
     if not payload.entries:
         raise HttpError(400, "entries is required (list of { keyword, resume_id })")
     location = (payload.location or "").strip() or None
-    site_name = payload.site_name or list(DEFAULT_SITE_NAMES)
+    site_name = normalize_site_names(payload.site_name)
     results_wanted = payload.results_wanted or 50
     all_results = []
     errors = []

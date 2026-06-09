@@ -60,7 +60,7 @@ from .models import (
 )
 from .pipeline_llm_skill_extract import resolve_provider_api_key
 from .preference import invalidate_preference_cache, invalidate_disliked_embeddings_cache
-from .job_sources import DEFAULT_SITE_NAMES
+from .job_sources import ALLOWED_SITE_NAMES, DEFAULT_SITE_NAMES, normalize_site_names
 from .tasks import run_job_search_task, get_next_run_at, validate_cron, try_vetting_match_debug, VETTING_MATCHING_JD_MIN_CHARS
 from .utils import cron_to_short_description
 from .huey_dashboard import (
@@ -114,9 +114,7 @@ def _parse_task_form(request, default_track: str, valid_track_slugs: set):
             start_time = datetime.strptime(start_time_str, "%H:%M").time()
         except ValueError:
             pass
-    site_name = request.POST.getlist("site_name") or ["indeed"]
-    if not site_name:
-        site_name = ["indeed"]
+    site_name = normalize_site_names(request.POST.getlist("site_name") or None)
     return {
         "name": name,
         "search_term": search_term,
@@ -1597,11 +1595,7 @@ def job_search_view(request):
     show_excluded = view_mode == "excluded"
     query = (request.GET.get("q") or "").strip()
     location = (request.GET.get("location") or "").strip()
-    selected_site_names = [s.strip().lower() for s in request.GET.getlist("site_name") if (s or "").strip()]
-    allowed_site_names = ["indeed", "linkedin", "glassdoor", "google", "zip_recruiter"]
-    selected_site_names = [s for s in selected_site_names if s in allowed_site_names]
-    if not selected_site_names:
-        selected_site_names = list(DEFAULT_SITE_NAMES)
+    selected_site_names = normalize_site_names(request.GET.getlist("site_name") or None)
     resume_id_raw = (request.GET.get("resume_id") or "").strip()
     # Treat blank or explicit "None" as no resume selected
     if not resume_id_raw or resume_id_raw.lower() == "none":
@@ -1775,7 +1769,7 @@ def job_search_view(request):
         "job_search_llm_model": job_search_llm_model,
         "job_search_track": raw_track,
         "job_tracks": list(tracks_qs),
-        "site_options": allowed_site_names,
+        "site_options": list(ALLOWED_SITE_NAMES),
         "selected_site_names": selected_site_names,
         "preserved_site_query": preserved_site_query,
     }
@@ -2094,7 +2088,9 @@ def job_task_edit_view(request, task_id):
             "job_tracks": track_list,
             "form_frequency": task.frequency,
             "form_jobs_to_fetch": task.jobs_to_fetch,
-            "form_site_name": task.site_name or list(DEFAULT_SITE_NAMES),
+            "form_site_name": normalize_site_names(
+                task.site_name if isinstance(task.site_name, list) else None
+            ),
             "form_start_time": task.start_time.strftime("%H:%M") if task.start_time else "",
         }
         return render(request, "resume_app/job_task_form.html", context)
