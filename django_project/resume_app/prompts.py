@@ -45,8 +45,13 @@ Optimized Resume:
 """
 
 
-DEFAULT_ATS_JUDGE_SYSTEM = """You are an ATS (Applicant Tracking System) Judge. Score the following tailored resume against the job description.
-Focus on keywords and parseability. Return a score 0-100 and brief feedback."""
+DEFAULT_ATS_JUDGE_SYSTEM = """You are an ATS (Applicant Tracking System) Judge. Score the tailored resume against the job description.
+Focus on keywords and parseability. Return exactly one JSON object with:
+- ats_match_score (integer 0-100)
+- missing_keywords (array of strings)
+- formatting_issues (array of strings)
+- strategic_feedback (string with actionable advice)
+No markdown, code fences, or extra text."""
 
 DEFAULT_ATS_JUDGE_USER = """Tailored Resume:
 {optimized_resume}
@@ -113,6 +118,19 @@ DEFAULT_INSIGHTS_USER = """Job descriptions:
 {job_descriptions}
 """
 
+# JD cleanse runs on Ollama Local (see jd_cleanser). Placeholders: {title}, {job_description}
+# (job_description is truncated to 8000 chars before formatting).
+DEFAULT_JD_CLEANSE_SYSTEM = """You extract core job signal from noisy postings. Stay faithful to the text; do not invent requirements or tools not supported by the description."""
+
+DEFAULT_JD_CLEANSE_USER = """Job title: {title}
+
+Job Description:
+{job_description}
+
+Extract only the core responsibilities and technical requirements for this role. Eliminate boilerplate, benefits, company info, and EEO statements. Preserve technical keywords and specific qualifications.
+
+Extracted Core Info:"""
+
 DEFAULT_PIPELINE_RESUME_REFINE_SYSTEM = """You are an expert resume and ATS keyword coach. The user only provides a locally extracted list of phrases ranked by how many shortlisted jobs mention each phrase—not full job descriptions. Group and polish that list: do not invent requirements that are not implied by the phrases given."""
 
 DEFAULT_PIPELINE_RESUME_REFINE_USER = """The user is optimizing a base resume against roles they already shortlisted (Vetting + Applying).
@@ -138,6 +156,7 @@ DEFAULT_RECRUITER_JUDGE_PROMPT = DEFAULT_RECRUITER_JUDGE_SYSTEM + "\n\n" + DEFAU
 DEFAULT_FIT_CHECK_PROMPT = DEFAULT_FIT_CHECK_SYSTEM + "\n\n" + DEFAULT_FIT_CHECK_USER
 DEFAULT_MATCHING_PROMPT = DEFAULT_MATCHING_SYSTEM + "\n\n" + DEFAULT_MATCHING_USER
 DEFAULT_INSIGHTS_PROMPT = DEFAULT_INSIGHTS_SYSTEM + "\n\n" + DEFAULT_INSIGHTS_USER
+DEFAULT_JD_CLEANSE_PROMPT = DEFAULT_JD_CLEANSE_SYSTEM + "\n\n" + DEFAULT_JD_CLEANSE_USER
 DEFAULT_PIPELINE_RESUME_REFINE_PROMPT = (
     DEFAULT_PIPELINE_RESUME_REFINE_SYSTEM + "\n\n" + DEFAULT_PIPELINE_RESUME_REFINE_USER
 )

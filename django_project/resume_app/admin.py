@@ -1,5 +1,6 @@
 from django.contrib import admin
 from .models import (
+    AtsJudgeProfile,
     AppAutomationSettings,
     LLMAppUsageTotals,
     LLMUsageByModel,
@@ -51,6 +52,7 @@ class LLMProviderPreferenceAdmin(admin.ModelAdmin):
     list_display = (
         "provider_config",
         "model",
+        "is_local",
         "priority",
         "rate_limit_rpm",
         "rate_limit_tpm",
@@ -101,7 +103,7 @@ class LLMUsageByQueryAdmin(admin.ModelAdmin):
 
 @admin.register(JobListing)
 class JobListingAdmin(admin.ModelAdmin):
-    list_display = ("title", "company_name", "source", "fetched_at")
+    list_display = ("title", "company_name", "source", "posted_at", "fetched_at")
     list_filter = ("source",)
     search_fields = ("title", "company_name")
 
@@ -123,9 +125,17 @@ class UserDisqualifierAdmin(admin.ModelAdmin):
     search_fields = ("phrase",)
 
 
+@admin.register(AtsJudgeProfile)
+class AtsJudgeProfileAdmin(admin.ModelAdmin):
+    list_display = ("name", "slug", "is_default", "is_builtin", "updated_at")
+    list_filter = ("is_builtin", "is_default")
+    search_fields = ("name", "slug")
+    prepopulated_fields = {"slug": ("name",)}
+
+
 @admin.register(OptimizerWorkflow)
 class OptimizerWorkflowAdmin(admin.ModelAdmin):
-    list_display = ("name", "max_iterations", "score_threshold", "updated_at")
+    list_display = ("name", "ats_judge_profile", "max_iterations", "score_threshold", "updated_at")
     list_filter = ("max_iterations",)
 
 

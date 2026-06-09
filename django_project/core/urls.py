@@ -16,6 +16,11 @@ urlpatterns = [
     path("resume/optimizer/", resume_views.optimizer_view, name="resume_optimizer"),
     path("resume/status/<int:resume_id>/", resume_views.optimizer_status_view, name="resume_status"),
     path(
+        "resume/status/<int:resume_id>/draft/",
+        resume_views.optimizer_save_draft_view,
+        name="resume_save_draft",
+    ),
+    path(
         "resume/optimizer/context/<int:resume_id>/",
         resume_views.optimizer_context_debug_view,
         name="optimizer_context_debug",
@@ -60,6 +65,11 @@ urlpatterns = [
         "jobs/huey/run-cleanup/",
         resume_views.huey_run_cleanup_now_view,
         name="huey_run_cleanup_now",
+    ),
+    path(
+        "jobs/huey/task/<str:task_name>/run/",
+        resume_views.huey_task_run_now_view,
+        name="huey_task_run_now",
     ),
     path("jobs/tasks/new/", resume_views.job_task_create_view, name="job_task_create"),
     path("jobs/tasks/<int:task_id>/edit/", resume_views.job_task_edit_view, name="job_task_edit"),

@@ -1,0 +1,39 @@
+# Dev profile: Django runserver + Huey worker, external LAN Redis.
+# Usage (from repo root): docker compose up --build
+services:
+  web:
+    build: .
+    image: jobapp-jules-app:latest
+    command: python manage.py runserver 0.0.0.0:8000
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Mount only db.sqlite3 — do not bind-mount -wal/-shm paths; missing files become
+      # directories on Windows and break local SQLite (see resume_app.apps WAL setup).
+      - ./django_project/db.sqlite3:/app/django_project/db.sqlite3
+      - ./django_project/media:/app/django_project/media
+      - hf_cache:/root/.cache/huggingface
+
+  huey:
+    image: jobapp-jules-app:latest
+    build: .
+    command: python manage.py run_huey
+    env_file:
+      - path: .env
+        required: false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./django_project/db.sqlite3:/app/django_project/db.sqlite3
+      - ./django_project/media:/app/django_project/media
+      - hf_cache:/root/.cache/huggingface
+    depends_on:
+      - web
+
+volumes:
+  hf_cache:

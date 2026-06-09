@@ -1,111 +1,149 @@
 {% extends "resume_app/base.html" %}
 
-{% block title %}Tracks &amp; resumes — ResumeElite{% endblock %}
+{% block title %}Track management — ResumeElite{% endblock %}
+
+{% block extra_head %}
+<style>
+    /* base.html sets dialog.concierge-dialog max-width to ~100vw; narrow track form modals. */
+    dialog.track-form-dialog.concierge-dialog {
+        width: min(100vw - 2rem, 28rem);
+        max-width: min(100vw - 2rem, 28rem);
+    }
+</style>
+{% endblock %}
 
 {% block content %}
-<div class="mx-auto max-w-6xl">
+<div class="mx-auto max-w-7xl">
     {% include "resume_app/_jobs_workspace_tabs.html" %}
-    <div class="mb-8">
-        <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Tracks &amp; resumes</h1>
-        <p class="mt-1 text-sm text-slate-600">
-            <span class="font-medium text-concierge-slate">Search tracks</span> label separate preference profiles (IC vs management, region, etc.).
-            <span class="font-medium text-concierge-slate">Resumes</span> are PDFs used for matching and the optimizer—each can default to a track for Job Search and automation.
-        </p>
+
+    <div class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+            <p class="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Workspace / Track management</p>
+            <h1 class="mt-1 text-2xl font-bold tracking-tight text-concierge-slate">Track management</h1>
+            <p class="mt-2 max-w-2xl text-sm text-slate-600">
+                Orchestrate your job search strategy. Manage preference profiles (tracks) and associate them with PDF versions of your professional experience.
+            </p>
+        </div>
+        <button type="button" id="new-track-open-btn"
+                class="shrink-0 rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">
+            + New Track
+        </button>
     </div>
 
     {% include "resume_app/_concierge_messages.html" %}
 
-    <section class="mb-10" aria-labelledby="tracks-heading">
-        <h2 id="tracks-heading" class="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">1 · Search tracks</h2>
-        <div class="grid gap-6 lg:grid-cols-2">
-            <div class="rounded-concierge border border-slate-200 bg-white shadow-sm">
-                <div class="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-concierge-slate">Existing tracks</div>
-                <div class="p-4">
-                    {% if not tracks %}
-                        <p class="text-sm text-slate-500">No tracks yet—create one on the right.</p>
-                    {% else %}
-                        <div class="overflow-x-auto">
-                            <table class="min-w-full text-sm">
-                                <thead>
-                                    <tr class="border-b border-slate-200 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                        <th class="pb-2 pr-3">Slug</th>
-                                        <th class="pb-2 pr-3">Label</th>
-                                        <th class="pb-2 pr-3">Default</th>
-                                        <th class="pb-2"></th>
-                                    </tr>
-                                </thead>
-                                <tbody class="divide-y divide-slate-100">
-                                    {% for t in tracks %}
-                                        <tr>
-                                            <td class="py-2 pr-3 font-mono text-xs">{{ t.slug }}</td>
-                                            <td class="py-2 pr-3">{{ t.label }}</td>
-                                            <td class="py-2 pr-3">{% if t.is_default %}<span class="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-800">Default</span>{% endif %}</td>
-                                            <td class="py-2 text-right">
-                                                {% if tracks|length > 1 %}
-                                                    <form method="post" action="{% url 'track_delete' t.slug %}" class="inline" onsubmit="return confirm('Delete this track and all associated data?');">
-                                                        {% csrf_token %}
-                                                        <button type="submit" class="text-xs font-medium text-red-600 hover:text-red-800">Delete</button>
-                                                    </form>
-                                                {% else %}
-                                                    <span class="text-xs text-slate-400">Last track</span>
-                                                {% endif %}
-                                            </td>
-                                        </tr>
-                                    {% endfor %}
-                                </tbody>
-                            </table>
-                        </div>
-                    {% endif %}
-                </div>
-            </div>
-
-            <div class="rounded-concierge border border-slate-200 bg-white shadow-sm">
-                <div class="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-concierge-slate">Create track</div>
-                <div class="p-4">
-                    <form method="post" class="space-y-3">
-                        {% csrf_token %}
-                        <input type="hidden" name="action" value="create_track">
-                        <div>
-                            <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="track-slug">Slug</label>
-                            <input type="text" id="track-slug" name="slug" placeholder="e.g. ic, mgmt"
-                                   class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
-                            <p class="mt-1 text-xs text-slate-500">Lowercase, used in URLs and automation tasks.</p>
-                        </div>
-                        <div>
-                            <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="track-label">Label</label>
-                            <input type="text" id="track-label" name="label" placeholder="e.g. IC (Principal / Staff)"
-                                   class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
-                        </div>
-                        <div>
-                            <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="track-description">Description (optional)</label>
-                            <textarea id="track-description" name="description" rows="2" placeholder="Short note"
-                                      class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"></textarea>
-                        </div>
-                        <label class="flex items-center gap-2 text-sm text-slate-700">
-                            <input class="h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" type="checkbox" value="1" id="track-is-default" name="is_default">
-                            Default track
-                        </label>
-                        <button type="submit" class="rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">Create track</button>
-                    </form>
-                </div>
-            </div>
+    <div class="mb-8 grid gap-4 sm:grid-cols-3">
+        <div class="rounded-concierge border border-slate-200 bg-white p-5 shadow-sm">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total tracks</p>
+            <p class="mt-2 text-3xl font-bold tabular-nums text-concierge-slate">{{ stats.track_count }}</p>
         </div>
-    </section>
+        <div class="rounded-concierge border border-slate-200 bg-white p-5 shadow-sm">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Unique resumes</p>
+            <p class="mt-2 text-3xl font-bold tabular-nums text-concierge-slate">{{ stats.resume_count }}</p>
+            <p class="mt-1 text-xs text-slate-500">
+                Distinct PDF{% if stats.resume_count != 1 %}s{% endif %} in library
+                {% if stats.resume_rows_count > stats.resume_count %}
+                    <span class="text-slate-400">({{ stats.resume_rows_count }} uploads)</span>
+                {% endif %}
+            </p>
+        </div>
+        <div class="rounded-concierge border border-violet-200 bg-violet-700 p-5 text-white shadow-sm">
+            <p class="text-xs font-semibold uppercase tracking-wide text-violet-200">Default profile</p>
+            {% if stats.default_track %}
+                <p class="mt-2 text-lg font-bold leading-snug">{{ stats.default_track.label }}</p>
+                <p class="mt-1 font-mono text-xs text-violet-200">slug: {{ stats.default_track.slug }}</p>
+            {% else %}
+                <p class="mt-2 text-sm text-violet-100">No track configured</p>
+            {% endif %}
+        </div>
+    </div>
 
-    <section aria-labelledby="resumes-heading">
-        <h2 id="resumes-heading" class="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">2 · Resumes (PDFs)</h2>
-        <div class="grid gap-6 lg:grid-cols-2 lg:items-start">
+    <div class="grid gap-6 lg:grid-cols-5 lg:items-start">
+        <section class="lg:col-span-3" aria-labelledby="tracks-heading">
+            <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <h2 id="tracks-heading" class="text-sm font-semibold text-concierge-slate">Existing tracks</h2>
+                <label class="flex items-center gap-2 text-xs text-slate-600">
+                    <span class="font-medium text-slate-500">Sorted by</span>
+                    <select id="track-sort-select" class="rounded-concierge border border-slate-200 bg-white px-2 py-1 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                        <option value="label" {% if track_sort == "label" %}selected{% endif %}>Label</option>
+                        <option value="slug" {% if track_sort == "slug" %}selected{% endif %}>Slug</option>
+                    </select>
+                </label>
+            </div>
+
+            {% if not tracks %}
+                <p class="rounded-concierge border border-dashed border-slate-200 bg-white p-6 text-sm text-slate-500">No tracks yet. Create one with <strong>+ New Track</strong>.</p>
+            {% else %}
+                <ul class="divide-y divide-slate-100 rounded-concierge border border-slate-200 bg-white shadow-sm">
+                    {% for t in tracks %}
+                        <li class="group px-3 py-2.5 hover:bg-slate-50/80">
+                            <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                                <div class="flex min-w-0 flex-1 items-center gap-2">
+                                    <h3 class="truncate text-sm font-semibold text-concierge-slate">{{ t.label }}</h3>
+                                    {% if t.is_default %}
+                                        <span class="shrink-0 rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-violet-800">Default</span>
+                                    {% endif %}
+                                    <span class="hidden font-mono text-[11px] text-slate-400 sm:inline">· {{ t.slug }}</span>
+                                </div>
+                                <div class="flex min-w-0 max-w-[11rem] flex-col items-end gap-0.5 sm:max-w-xs">
+                                    {% if t.library_resume_names %}
+                                        {% for name in t.library_resume_names %}
+                                            <span class="max-w-full truncate rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700"
+                                                  title="{{ name }}">{{ name }}</span>
+                                        {% endfor %}
+                                    {% else %}
+                                        <span class="text-[11px] text-slate-400">No resumes</span>
+                                    {% endif %}
+                                </div>
+                                <div class="flex shrink-0 items-center gap-2">
+                                    <button type="button"
+                                            class="edit-track-btn text-[11px] font-medium text-violet-700 hover:text-violet-900"
+                                            data-slug="{{ t.slug }}"
+                                            data-label="{{ t.label|escape }}"
+                                            data-is-default="{% if t.is_default %}1{% else %}0{% endif %}">
+                                        Edit
+                                    </button>
+                                    {% if tracks|length > 1 %}
+                                        <form method="post" action="{% url 'track_delete' t.slug %}" class="inline" onsubmit="return confirm('Delete this track and all associated data?');">
+                                            {% csrf_token %}
+                                            <button type="submit" class="text-[11px] font-medium text-red-600 hover:text-red-800">Delete</button>
+                                        </form>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            {% if t.description %}
+                                <p class="mt-0.5 truncate text-xs text-slate-500" title="{{ t.description }}">{{ t.description }}</p>
+                            {% endif %}
+                            <span class="hidden track-desc-data">{{ t.description }}</span>
+                            <p class="mt-0.5 font-mono text-[10px] text-slate-400 sm:hidden">slug: {{ t.slug }}</p>
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        </section>
+
+        <aside class="space-y-6 lg:col-span-2">
             <div class="rounded-concierge border border-slate-200 bg-white shadow-sm">
-                <div class="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-concierge-slate">Upload resume</div>
+                <div class="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-concierge-slate">Quick upload</div>
                 <div class="p-4">
-                    <form method="post" enctype="multipart/form-data" class="space-y-3">
+                    <form method="post" enctype="multipart/form-data" id="resume-upload-form">
                         {% csrf_token %}
                         <input type="hidden" name="action" value="upload_resume">
-                        <div>
-                            <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="resume-file-input">File</label>
-                            <input class="w-full text-sm file:mr-3 file:rounded-concierge file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-concierge-slate" type="file" id="resume-file-input" name="resume_file" accept="application/pdf" required>
+                        <div id="resume-drop-zone"
+                             class="flex flex-col items-center justify-center rounded-concierge border-2 border-dashed border-slate-200 bg-slate-50/50 px-4 py-8 text-center transition-colors">
+                            <svg class="h-8 w-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                            </svg>
+                            <p class="mt-3 text-sm font-medium text-concierge-slate">Drop your resume here</p>
+                            <p class="mt-1 text-xs text-slate-500">PDF formats only, up to 10MB</p>
+                            <p id="resume-file-name" class="mt-2 hidden text-xs font-medium text-violet-800"></p>
+                            <input type="file" id="resume-file-input" name="resume_file" accept="application/pdf" class="sr-only" required>
+                            <button type="button" id="resume-browse-btn"
+                                    class="mt-4 rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50">
+                                Browse files
+                            </button>
                         </div>
-                        <div>
+                        <div class="mt-4">
                             <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="upload-track-select">Default track</label>
                             <select id="upload-track-select" name="track_slug" class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
                                 <option value="" {% if default_track_slug == "" %}selected{% endif %}>Unassigned</option>
@@ -113,60 +151,273 @@
                                     <option value="{{ t.slug }}" {% if t.slug == default_track_slug %}selected{% endif %}>{{ t.label }}</option>
                                 {% endfor %}
                             </select>
-                            <p class="mt-1 text-xs text-slate-500">Used to default Job Search and pipeline when you pick this resume.</p>
                         </div>
-                        <button type="submit" class="rounded-concierge bg-concierge-slate px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800">Upload</button>
+                        <button type="submit" class="mt-4 w-full rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">Upload</button>
                     </form>
                 </div>
             </div>
 
-            <div class="flex min-h-0 min-w-0 flex-col rounded-concierge border border-slate-200 bg-white shadow-sm lg:max-h-[min(70vh,36rem)]">
-                <div class="shrink-0 border-b border-slate-100 px-4 py-3 text-sm font-semibold text-concierge-slate">Assign track per resume</div>
-                <div class="flex min-h-0 flex-1 flex-col p-4">
-                    <form method="post" class="flex min-h-0 flex-1 flex-col">
-                        {% csrf_token %}
-                        <input type="hidden" name="action" value="assign_resume_tracks">
-                        <input type="hidden" name="delete_resume_id" value="">
-                        {% if not resumes %}
-                            <p class="text-sm text-slate-500">No resumes yet. Add a PDF with the upload form to assign tracks.</p>
+            <div id="managed-resumes" class="flex min-h-0 flex-col rounded-concierge border border-slate-200 bg-white shadow-sm lg:max-h-[min(70vh,40rem)]">
+                <div class="flex shrink-0 items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
+                    <span class="text-sm font-semibold text-concierge-slate">Managed resumes</span>
+                    <label class="sr-only" for="resume-search-input">Search resumes</label>
+                    <div class="relative">
+                        <input type="search" id="resume-search-input" placeholder="Search…"
+                               class="w-32 rounded-concierge border border-slate-200 py-1 pl-8 pr-2 text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate sm:w-40">
+                        <svg class="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                        </svg>
+                    </div>
+                </div>
+                <form method="post" class="flex min-h-0 flex-1 flex-col">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="assign_resume_tracks">
+                    <input type="hidden" name="delete_resume_id" value="">
+                    <div class="flex min-h-0 flex-1 flex-col p-4">
+                        {% if not resume_rows %}
+                            <p class="text-sm text-slate-500">No resumes yet. Upload a PDF above to assign tracks.</p>
                         {% else %}
-                            <div class="min-h-0 flex-1 overflow-y-auto overflow-x-auto lg:pr-1">
-                                <table class="min-w-full text-sm">
-                                    <thead>
-                                        <tr class="border-b border-slate-200 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                            <th class="pb-2 pr-3">Resume</th>
-                                            <th class="pb-2">Track</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody class="divide-y divide-slate-100">
-                                        {% for r in resumes %}
-                                            <tr>
-                                                <td class="py-3 pr-3 align-top">
-                                                    <div class="text-xs text-slate-700">{{ r.original_filename|default:"resume.pdf" }} <span class="text-slate-400">(ID {{ r.id }})</span></div>
-                                                    <button type="submit" class="mt-2 text-xs font-medium text-red-600 hover:text-red-800"
-                                                            onclick="const a=this.form.querySelector('input[name=action]'); const d=this.form.querySelector('input[name=delete_resume_id]'); a.value='delete_resume'; d.value='{{ r.id }}'; return confirm('Delete this resume and derived rows?');">
-                                                        Delete
-                                                    </button>
-                                                </td>
-                                                <td class="min-w-[14rem] py-3 align-top">
-                                                    <select class="w-full rounded-concierge border border-slate-200 px-2 py-1.5 text-sm" name="resume_track_{{ r.id }}">
+                            <ul class="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                                {% for row in resume_rows %}
+                                    {% with r=row.resume %}
+                                    <li class="resume-row rounded-concierge border border-slate-100 bg-slate-50/50 p-3"
+                                        data-resume-filename="{{ r.original_filename|default:'resume.pdf'|lower }}">
+                                        <div class="flex gap-3">
+                                            <span class="mt-0.5 shrink-0 text-red-600" aria-hidden="true">
+                                                <svg class="h-5 w-5" fill="currentColor" viewBox="0 0 20 20"><path d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z"/></svg>
+                                            </span>
+                                            <div class="min-w-0 flex-1">
+                                                <p class="truncate text-sm font-medium text-concierge-slate" title="{{ r.original_filename|default:'resume.pdf' }}">
+                                                    {{ r.original_filename|default:"resume.pdf" }}
+                                                </p>
+                                                <p class="text-xs text-slate-500">{{ row.file_size_display }}</p>
+                                                <div class="mt-2 flex flex-wrap items-center gap-2">
+                                                    <select class="min-w-[8rem] flex-1 rounded-concierge border border-slate-200 bg-white px-2 py-1.5 text-sm" name="resume_track_{{ r.id }}" aria-label="Track for {{ r.original_filename|default:'resume' }}">
                                                         <option value="" {% if not r.track %}selected{% endif %}>Unassigned</option>
                                                         {% for t in tracks %}
                                                             <option value="{{ t.slug }}" {% if r.track == t.slug %}selected{% endif %}>{{ t.label }}</option>
                                                         {% endfor %}
                                                     </select>
-                                                </td>
-                                            </tr>
-                                        {% endfor %}
-                                    </tbody>
-                                </table>
-                            </div>
-                            <button type="submit" class="mt-4 shrink-0 rounded-concierge bg-concierge-slate px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800">Save assignments</button>
+                                                    <button type="submit" class="shrink-0 rounded-concierge p-1.5 text-red-600 hover:bg-red-50"
+                                                            title="Delete resume"
+                                                            onclick="const a=this.form.querySelector('input[name=action]'); const d=this.form.querySelector('input[name=delete_resume_id]'); a.value='delete_resume'; d.value='{{ r.id }}'; return confirm('Delete this resume and derived rows?');">
+                                                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                                        </svg>
+                                                        <span class="sr-only">Delete</span>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </li>
+                                    {% endwith %}
+                                {% endfor %}
+                            </ul>
+                            <button type="submit" class="mt-4 w-full shrink-0 rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">Save assignments</button>
+                            <p class="mt-3 text-center">
+                                <a href="#managed-resumes" class="text-xs font-medium text-violet-700 hover:text-violet-900">Manage assignments</a>
+                            </p>
                         {% endif %}
-                    </form>
-                </div>
+                    </div>
+                </form>
             </div>
-        </div>
-    </section>
+        </aside>
+    </div>
 </div>
+
+<dialog id="new-track-dialog" class="concierge-dialog track-form-dialog p-0">
+    <form method="post" class="w-full rounded-concierge border border-slate-200 bg-white shadow-xl">
+        <div class="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+            <h2 class="text-sm font-semibold text-concierge-slate">Create track</h2>
+            <button type="button" id="new-track-close-btn" class="rounded-concierge p-1 text-slate-500 hover:bg-slate-100" aria-label="Close">&times;</button>
+        </div>
+        <div class="space-y-3 p-4">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="create_track">
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="track-slug">Slug</label>
+                <input type="text" id="track-slug" name="slug" placeholder="e.g. ic, mgmt"
+                       class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                <p class="mt-1 text-xs text-slate-500">Lowercase, used in URLs and automation tasks.</p>
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="track-label">Label</label>
+                <input type="text" id="track-label" name="label" placeholder="e.g. IC (Principal / Staff)"
+                       class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="track-description">Description (optional)</label>
+                <textarea id="track-description" name="description" rows="2" placeholder="Short note"
+                          class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"></textarea>
+            </div>
+            <label class="flex items-center gap-2 text-sm text-slate-700">
+                <input class="h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" type="checkbox" value="1" id="track-is-default" name="is_default">
+                Default track
+            </label>
+        </div>
+        <div class="flex justify-end gap-2 border-t border-slate-100 px-4 py-3">
+            <button type="button" id="new-track-cancel-btn" class="rounded-concierge px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">Cancel</button>
+            <button type="submit" class="rounded-concierge bg-violet-700 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-800">Create track</button>
+        </div>
+    </form>
+</dialog>
+
+<dialog id="edit-track-dialog" class="concierge-dialog track-form-dialog p-0">
+    <form method="post" class="w-full rounded-concierge border border-slate-200 bg-white shadow-xl">
+        <div class="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+            <h2 class="text-sm font-semibold text-concierge-slate">Edit track</h2>
+            <button type="button" id="edit-track-close-btn" class="rounded-concierge p-1 text-slate-500 hover:bg-slate-100" aria-label="Close">&times;</button>
+        </div>
+        <div class="space-y-3 p-4">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="edit_track">
+            <input type="hidden" name="original_slug" id="edit-track-original-slug" value="">
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="edit-track-slug">Slug</label>
+                <input type="text" id="edit-track-slug" name="slug" required
+                       class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                <p class="mt-1 text-xs text-slate-500">Changing slug updates automation, pipeline, and resume links.</p>
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="edit-track-label">Label</label>
+                <input type="text" id="edit-track-label" name="label" required
+                       class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+            </div>
+            <div>
+                <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="edit-track-description">Description (optional)</label>
+                <textarea id="edit-track-description" name="description" rows="2"
+                          class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"></textarea>
+            </div>
+            <label class="flex items-center gap-2 text-sm text-slate-700">
+                <input class="h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" type="checkbox" value="1" id="edit-track-is-default" name="is_default">
+                Default track
+            </label>
+        </div>
+        <div class="flex justify-end gap-2 border-t border-slate-100 px-4 py-3">
+            <button type="button" id="edit-track-cancel-btn" class="rounded-concierge px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">Cancel</button>
+            <button type="submit" class="rounded-concierge bg-violet-700 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-800">Save changes</button>
+        </div>
+    </form>
+</dialog>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+    function wireDialog(dialog, openBtn, closeBtn, cancelBtn) {
+        if (!dialog) return;
+        function openDialog() { if (dialog.showModal) dialog.showModal(); }
+        function closeDialog() { if (dialog.close) dialog.close(); }
+        if (openBtn) openBtn.addEventListener("click", openDialog);
+        if (closeBtn) closeBtn.addEventListener("click", closeDialog);
+        if (cancelBtn) cancelBtn.addEventListener("click", closeDialog);
+        dialog.addEventListener("click", function (e) {
+            if (e.target === dialog) closeDialog();
+        });
+        return { open: openDialog, close: closeDialog };
+    }
+
+    wireDialog(
+        document.getElementById("new-track-dialog"),
+        document.getElementById("new-track-open-btn"),
+        document.getElementById("new-track-close-btn"),
+        document.getElementById("new-track-cancel-btn")
+    );
+
+    var editDialog = document.getElementById("edit-track-dialog");
+    var editControls = wireDialog(
+        editDialog,
+        null,
+        document.getElementById("edit-track-close-btn"),
+        document.getElementById("edit-track-cancel-btn")
+    );
+    var editOriginalSlug = document.getElementById("edit-track-original-slug");
+    var editSlug = document.getElementById("edit-track-slug");
+    var editLabel = document.getElementById("edit-track-label");
+    var editDescription = document.getElementById("edit-track-description");
+    var editDefault = document.getElementById("edit-track-is-default");
+
+    function decodeAttr(value) {
+        if (!value) return "";
+        var el = document.createElement("textarea");
+        el.innerHTML = value;
+        return el.value;
+    }
+
+    document.querySelectorAll(".edit-track-btn").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+            if (!editDialog || !editControls) return;
+            var card = btn.closest("li");
+            var descEl = card ? card.querySelector(".track-desc-data") : null;
+            if (editOriginalSlug) editOriginalSlug.value = btn.getAttribute("data-slug") || "";
+            if (editSlug) editSlug.value = btn.getAttribute("data-slug") || "";
+            if (editLabel) editLabel.value = decodeAttr(btn.getAttribute("data-label"));
+            if (editDescription) editDescription.value = descEl ? descEl.textContent : "";
+            if (editDefault) editDefault.checked = btn.getAttribute("data-is-default") === "1";
+            editControls.open();
+        });
+    });
+
+    var sortSelect = document.getElementById("track-sort-select");
+    if (sortSelect) {
+        sortSelect.addEventListener("change", function () {
+            var url = new URL(window.location.href);
+            url.searchParams.set("sort", sortSelect.value);
+            window.location.href = url.toString();
+        });
+    }
+
+    var fileInput = document.getElementById("resume-file-input");
+    var browseBtn = document.getElementById("resume-browse-btn");
+    var dropZone = document.getElementById("resume-drop-zone");
+    var fileNameEl = document.getElementById("resume-file-name");
+    function showFileName(file) {
+        if (!fileNameEl || !file) return;
+        fileNameEl.textContent = file.name;
+        fileNameEl.classList.remove("hidden");
+    }
+    if (browseBtn && fileInput) {
+        browseBtn.addEventListener("click", function () { fileInput.click(); });
+    }
+    if (fileInput) {
+        fileInput.addEventListener("change", function () {
+            if (fileInput.files && fileInput.files[0]) showFileName(fileInput.files[0]);
+        });
+    }
+    if (dropZone && fileInput) {
+        dropZone.addEventListener("dragover", function (e) {
+            e.preventDefault();
+            dropZone.classList.add("border-violet-300", "bg-violet-50/30");
+        });
+        dropZone.addEventListener("dragleave", function () {
+            dropZone.classList.remove("border-violet-300", "bg-violet-50/30");
+        });
+        dropZone.addEventListener("drop", function (e) {
+            e.preventDefault();
+            dropZone.classList.remove("border-violet-300", "bg-violet-50/30");
+            var files = e.dataTransfer && e.dataTransfer.files;
+            if (!files || !files.length) return;
+            try {
+                var dt = new DataTransfer();
+                dt.items.add(files[0]);
+                fileInput.files = dt.files;
+            } catch (err) {
+                return;
+            }
+            showFileName(files[0]);
+        });
+    }
+
+    var searchInput = document.getElementById("resume-search-input");
+    if (searchInput) {
+        searchInput.addEventListener("input", function () {
+            var q = (searchInput.value || "").trim().toLowerCase();
+            document.querySelectorAll(".resume-row").forEach(function (row) {
+                var name = (row.getAttribute("data-resume-filename") || "").toLowerCase();
+                row.classList.toggle("hidden", q.length > 0 && name.indexOf(q) === -1);
+            });
+        });
+    }
+})();
+</script>
 {% endblock %}

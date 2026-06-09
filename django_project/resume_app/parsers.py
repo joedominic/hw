@@ -1,7 +1,7 @@
 import json
 import logging
 import re
-from typing import Optional
+from typing import Any, Callable, Optional, Tuple, Type, Union
 
 from pydantic import BaseModel, Field
 
@@ -11,6 +11,37 @@ logger = logging.getLogger(__name__)
 class ScoreFeedback(BaseModel):
     score: int = Field(ge=0, le=100, description="Score from 0 to 100")
     feedback: str = Field(description="Brief feedback text")
+
+
+class AtsJudgeResult(BaseModel):
+    """Structured ATS judge output (keywords, formatting, strategic advice)."""
+
+    ats_match_score: int = Field(ge=0, le=100, description="ATS match score 0-100")
+    missing_keywords: list[str] = Field(
+        default_factory=list,
+        description="Job-relevant keywords missing or weak in the resume",
+    )
+    formatting_issues: list[str] = Field(
+        default_factory=list,
+        description="ATS parseability / formatting problems",
+    )
+    strategic_feedback: str = Field(
+        default="",
+        description="Actionable advice for improving match and parseability",
+    )
+
+    def feedback_text(self) -> str:
+        """Human-readable feedback for optimizer logs and writer loop."""
+        sections: list[str] = []
+        if self.strategic_feedback.strip():
+            sections.append(f"Strategic feedback: {self.strategic_feedback.strip()}")
+        if self.missing_keywords:
+            sections.append("Missing keywords: " + ", ".join(self.missing_keywords))
+        if self.formatting_issues:
+            sections.append(
+                "Formatting issues:\n- " + "\n- ".join(self.formatting_issues)
+            )
+        return "\n".join(sections) if sections else "No ATS feedback provided."
 
 
 class FitCheckResult(BaseModel):
@@ -142,11 +173,14 @@ def _extract_json_object(
                             norm_keys = {_normalize_key(k) for k in obj}
                             root_keys = {
                                 "ats_match_score",
+                                "ats_score",
                                 "score",
                                 "recruiter_score",
                                 "analysis",
                                 "feedback",
                                 "missing_keywords",
+                                "formatting_issues",
+                                "strategic_feedback",
                                 "actionable_feedback",
                             }
                             if norm_keys & root_keys:
@@ -392,6 +426,310 @@ def _coerce_interview_probability_if_distinct_from_fit(
     if any(m in t for m in markers):
         return interview_probability
     return None
+
+
+# Keys that indicate a parsed judge payload (vs. a wrapper object from state/UI).
+_JUDGE_PAYLOAD_KEYS = frozenset(
+    {
+        "ats_match_score",
+        "ats_score",
+        "score",
+        "recruiter_score",
+        "missing_keywords",
+        "formatting_issues",
+        "strategic_feedback",
+        "feedback",
+        "actionable_feedback",
+        "analysis",
+    }
+)
+
+_JUDGE_JSON_WRAPPER_KEYS = (
+    "last_ats_json",
+    "last_recruiter_json",
+    "ats_judge",
+    "recruiter_judge",
+    "result",
+    "response",
+    "data",
+    "output",
+)
+
+
+def _unwrap_judge_json_dict(data: dict) -> dict:
+    """Unwrap nested judge JSON when the model echoes state keys like last_ats_json."""
+    if not isinstance(data, dict):
+        return data
+    norm_keys = {_normalize_key(k) for k in data}
+    if norm_keys & _JUDGE_PAYLOAD_KEYS:
+        return data
+    for wrapper in _JUDGE_JSON_WRAPPER_KEYS:
+        inner = _get_key(data, wrapper)
+        if isinstance(inner, dict):
+            inner_norm = {_normalize_key(k) for k in inner}
+            if inner_norm & _JUDGE_PAYLOAD_KEYS:
+                return inner
+    return data
+
+
+def _coerce_str_list(value) -> list[str]:
+    """Normalize LLM list fields that may arrive as a list, string, or absent."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _extract_partial_ats_score_from_text(content: str) -> Optional[int]:
+    """Best-effort score when JSON is truncated or malformed."""
+    if not content:
+        return None
+    for pattern in (
+        r'"(?:ats_match_score|ats_score)"\s*:\s*(\d{1,3})',
+        r"'(?:ats_match_score|ats_score)'\s*:\s*(\d{1,3})",
+    ):
+        m = re.search(pattern, content)
+        if m:
+            try:
+                return max(0, min(100, int(m.group(1))))
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def serialize_llm_result_for_log(result: Any, *, max_len: int = 12000) -> str:
+    """Best-effort string for agent logs / debugging."""
+    if result is None:
+        return "(null)"
+    if isinstance(result, BaseModel):
+        try:
+            text = json.dumps(result.model_dump(), indent=2, ensure_ascii=False)
+        except Exception:
+            text = repr(result)
+    elif isinstance(result, dict):
+        try:
+            text = json.dumps(result, indent=2, ensure_ascii=False, default=str)
+        except Exception:
+            text = repr(result)
+    elif hasattr(result, "content"):
+        text = llm_message_content_to_text(getattr(result, "content", None))
+        if not text.strip():
+            text = repr(result)
+    else:
+        text = str(result)
+    if len(text) > max_len:
+        return text[:max_len] + f"\n... [truncated, total {len(text)} chars]"
+    return text
+
+
+def llm_message_content_to_text(content: Any) -> str:
+    """Normalize AIMessage / provider content blocks to plain text."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, BaseModel):
+        try:
+            return json.dumps(content.model_dump(), ensure_ascii=False)
+        except Exception:
+            return str(content)
+    if isinstance(content, dict):
+        return json.dumps(content, ensure_ascii=False, default=str)
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict):
+                parts.append(
+                    str(
+                        block.get("text")
+                        or block.get("content")
+                        or json.dumps(block, ensure_ascii=False, default=str)
+                    )
+                )
+            elif isinstance(block, str):
+                parts.append(block)
+            else:
+                parts.append(str(block))
+        return "\n".join(parts)
+    return str(content)
+
+
+def _content_to_parse_text(content: Any) -> str:
+    return llm_message_content_to_text(content).strip()
+
+
+def coerce_structured_judge_result(
+    result: Any,
+    structured_schema: Type[BaseModel],
+    parse_fallback: Callable[[str, str], Tuple[BaseModel, Optional[dict]]],
+    label: str,
+) -> Tuple[Union[ScoreFeedback, AtsJudgeResult], Optional[dict]]:
+    """
+    Normalize LangChain structured-output return types (Pydantic model, dict, or message)
+    into a validated judge result, falling back to text/JSON parsing when needed.
+    """
+    if result is None:
+        logger.warning("[%s] coerce_structured_judge_result: result is None", label)
+        return parse_fallback("", label)
+
+    if isinstance(result, structured_schema):
+        return result, None
+
+    if isinstance(result, BaseModel):
+        try:
+            dumped = result.model_dump()
+            validated = structured_schema.model_validate(dumped)
+            return validated, dumped
+        except Exception as exc:
+            logger.debug("[%s] BaseModel coercion failed: %s", label, exc)
+
+    if isinstance(result, dict):
+        normalized = _normalize_dict_keys(result)
+        unwrapped = _unwrap_judge_json_dict(normalized)
+        try:
+            validated = structured_schema.model_validate(unwrapped)
+            return validated, unwrapped
+        except Exception as exc:
+            logger.warning(
+                "[%s] structured dict failed validation (keys=%s): %s",
+                label,
+                list(unwrapped.keys())[:12],
+                exc,
+            )
+        try:
+            return parse_fallback(json.dumps(unwrapped, ensure_ascii=False), label)
+        except Exception as exc:
+            logger.debug("[%s] json.dumps fallback failed: %s", label, exc)
+
+    if hasattr(result, "content"):
+        content = getattr(result, "content", None)
+        if content is not None:
+            if isinstance(content, structured_schema):
+                return content, None
+            if isinstance(content, dict):
+                return coerce_structured_judge_result(
+                    content, structured_schema, parse_fallback, label
+                )
+            text = _content_to_parse_text(content)
+            if text:
+                return parse_fallback(text, label)
+
+    # Avoid str(None) == "None" which breaks JSON extraction.
+    if isinstance(result, str):
+        return parse_fallback(result, label)
+    text = str(result)
+    if text.strip().lower() == "none":
+        return parse_fallback("", label)
+    return parse_fallback(text, label)
+
+
+def is_default_judge_fallback(
+    data: BaseModel,
+    *,
+    node_name: str = "",
+) -> bool:
+    """True when parse/coercion fell back to the generic default score."""
+    if isinstance(data, AtsJudgeResult):
+        return (
+            data.ats_match_score == 70
+            and not data.missing_keywords
+            and not data.formatting_issues
+            and data.strategic_feedback.strip()
+            == "Could not parse ATS judge output. Defaulting."
+        )
+    if isinstance(data, ScoreFeedback):
+        return (
+            data.score == 70
+            and data.feedback.strip() == "Could not parse score. Defaulting."
+        )
+    return False
+
+
+def parse_ats_judge_fallback(
+    content: str, node_name: str = "ats_judge"
+) -> tuple[AtsJudgeResult, Optional[dict]]:
+    """Fallback when ATS structured output is not available or fails."""
+    logger.debug("[%s] parse_ats_judge_fallback content len=%s", node_name, len(content) if content else 0)
+    data = _extract_json_object(content)
+    if isinstance(data, dict):
+        data = _unwrap_judge_json_dict(_normalize_dict_keys(data))
+    if data is not None:
+        logger.warning(
+            "[%s] parse_ats_judge_fallback extracted data keys=%s",
+            node_name,
+            list(data.keys()),
+        )
+        try:
+            raw_score = _get_key(
+                data, "ats_match_score", "ats_score", "score", "recruiter_score"
+            )
+            score = int(raw_score) if raw_score is not None else 70
+            score = max(0, min(100, score))
+            missing = _coerce_str_list(_get_key(data, "missing_keywords"))
+            formatting = _coerce_str_list(_get_key(data, "formatting_issues"))
+            strategic = _get_key(
+                data, "strategic_feedback", "feedback", "actionable_feedback"
+            )
+            strategic_s = str(strategic).strip() if strategic is not None else ""
+            if not strategic_s:
+                legacy_fb = _get_key(data, "analysis")
+                if isinstance(legacy_fb, str):
+                    strategic_s = legacy_fb.strip()
+            result = AtsJudgeResult(
+                ats_match_score=score,
+                missing_keywords=missing,
+                formatting_issues=formatting,
+                strategic_feedback=strategic_s,
+            )
+            return result, data
+        except (ValueError, TypeError, KeyError) as e:
+            logger.warning("[%s] could not use parsed ATS JSON: %s", node_name, e)
+    if content and isinstance(content, str):
+        score = _extract_plain_text_score(content)
+        if score is None:
+            score = _extract_partial_ats_score_from_text(content)
+        if score is not None:
+            feedback = content.strip()[:2000] + ("..." if len(content) > 2000 else "")
+            logger.warning(
+                "[%s] parse_ats_judge_fallback extracted score from plain text: %s",
+                node_name,
+                score,
+            )
+            return (
+                AtsJudgeResult(
+                    ats_match_score=score,
+                    strategic_feedback=feedback,
+                ),
+                None,
+            )
+        stripped = content.strip()
+        if len(stripped) > 80:
+            logger.warning(
+                "[%s] parse_ats_judge_fallback using prose-only fallback (len=%s)",
+                node_name,
+                len(stripped),
+            )
+            return (
+                AtsJudgeResult(
+                    ats_match_score=70,
+                    strategic_feedback=stripped[:4000],
+                ),
+                None,
+            )
+    logger.warning(
+        "[%s] parse_ats_judge_fallback returning default (no data or exception)",
+        node_name,
+    )
+    return (
+        AtsJudgeResult(
+            ats_match_score=70,
+            strategic_feedback="Could not parse ATS judge output. Defaulting.",
+        ),
+        None,
+    )
 
 
 def parse_score_fallback(content: str, node_name: str) -> tuple[ScoreFeedback, Optional[dict]]:

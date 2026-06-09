@@ -25,7 +25,7 @@ from .models import (
     PipelineEntry,
     Track,
 )
-from .job_sources import DEFAULT_SITE_NAMES, fetch_jobs
+from .job_sources import fetch_jobs, normalize_site_names, upsert_job_listing_from_fetch
 from .job_search_core import rank_and_filter_jobs, run_job_search_core, pipeline_jobs_to_payloads
 from .track_actions import (
     disliked_listing_id_set,
@@ -126,6 +126,7 @@ def _job_to_payload(job: JobListing, *, snippet: Optional[str] = None) -> JobPay
         url=job.url or "",
         source=src,
         source_display=format_job_source_label(src),
+        posted_at=job.posted_at,
         fetched_at=job.fetched_at,
     )
 
@@ -166,7 +167,7 @@ def _resolve_track(track: Optional[str], session_track: Optional[str] = None) ->
 @router.get("/resumes", response=List[ResumeOption])
 def jobs_list_resumes(request):
     """List uploaded resumes for dropdown (e.g. Keyword search tab)."""
-    resumes = UserResume.objects.order_by("-uploaded_at")[:100]
+    resumes = UserResume.library().order_by("-uploaded_at")[:100]
     return [
         ResumeOption(
             id=r.id,
@@ -209,7 +210,7 @@ def pipeline_delete(request, job_listing_id: int, track: str = "ic"):
 
 
 def _jobs_search_site_key(site_name: Optional[List[str]]) -> tuple:
-    sites = site_name if site_name else list(DEFAULT_SITE_NAMES)
+    sites = normalize_site_names(site_name)
     if isinstance(sites, str):
         sites = [sites]
     return tuple(sorted(str(s).strip().lower() for s in sites if str(s).strip()))
@@ -279,7 +280,7 @@ def jobs_search(request, payload: JobSearchRequest):
                 location=payload.location.strip() if payload.location else None,
                 track=payload.track,
                 results_wanted=payload.results_wanted or 50,
-                site_name=payload.site_name or list(DEFAULT_SITE_NAMES),
+                site_name=normalize_site_names(payload.site_name),
                 sort=(payload.sort or "focus"),
             )
         except ValueError as e:
@@ -303,7 +304,7 @@ def jobs_search(request, payload: JobSearchRequest):
     # Keep resume_id_for_match for AI Match step later
     resume_id_for_match = payload.resume_id
     if resume_id_for_match is None and jobs_out:
-        latest = UserResume.objects.order_by("-uploaded_at").first()
+        latest = UserResume.library().order_by("-uploaded_at").first()
         if latest:
             resume_id_for_match = latest.id
 
@@ -330,7 +331,7 @@ def jobs_ai_match(request, payload: AiMatchRequest):
     """Run LLM Matching for selected jobs (one at a time). Stores score+reasoning in session for Why? page."""
     if not payload.job_listing_ids:
         return AiMatchResponse(results=[], errors=[])
-    resume = UserResume.objects.filter(id=payload.resume_id).first()
+    resume = UserResume.library().filter(id=payload.resume_id).first()
     if not resume or not resume.file:
         raise HttpError(400, "Resume not found or file missing.")
     resume_text = parse_pdf(resume.file.path) or ""
@@ -643,7 +644,7 @@ def jobs_run_keyword_search(request, payload: RunKeywordSearchRequest):
     if not payload.entries:
         raise HttpError(400, "entries is required (list of { keyword, resume_id })")
     location = (payload.location or "").strip() or None
-    site_name = payload.site_name or list(DEFAULT_SITE_NAMES)
+    site_name = normalize_site_names(payload.site_name)
     results_wanted = payload.results_wanted or 50
     all_results = []
     errors = []
@@ -655,7 +656,7 @@ def jobs_run_keyword_search(request, payload: RunKeywordSearchRequest):
             continue
         resume_id = entry.resume_id
         try:
-            resume = UserResume.objects.get(id=resume_id)
+            resume = UserResume.library().get(id=resume_id)
         except UserResume.DoesNotExist:
             errors.append(f"Resume id {resume_id} not found for keyword '{keyword}'")
             continue
@@ -678,19 +679,7 @@ def jobs_run_keyword_search(request, payload: RunKeywordSearchRequest):
         disqualifier_pattern = build_disqualifier_pattern(get_disqualifier_phrases())
         candidates = []  # (job, resume, keyword)
         for r in raw:
-            desc = r.get("description", "") or ""
-            defaults = {
-                "title": r["title"],
-                "company_name": r["company_name"],
-                "location": r.get("location", ""),
-                "description": desc,
-                "url": r.get("job_url", ""),
-            }
-            job, _ = JobListing.objects.update_or_create(
-                source=r["source"],
-                external_id=r["external_id"],
-                defaults=defaults,
-            )
+            job, _ = upsert_job_listing_from_fetch(r)
             if job.id in existing or job.id in disliked_ids or job_matches_disqualifiers(job, disqualifier_pattern):
                 continue
             candidates.append((job, resume, keyword))
@@ -864,6 +853,7 @@ def jobs_get(request, job_listing_id: int):
         url=job.url or "",
         source=job.source,
         external_id=job.external_id or "",
+        posted_at=job.posted_at,
         fetched_at=job.fetched_at,
         raw_json=job.raw_json,
     )
@@ -875,11 +865,11 @@ def jobs_match(request, job_listing_id: int, payload: MatchRequest):
     job = get_object_or_404(JobListing, id=job_listing_id)
     resume_id = payload.resume_id
     if not resume_id:
-        latest = UserResume.objects.order_by("-uploaded_at").first()
+        latest = UserResume.library().order_by("-uploaded_at").first()
         if not latest:
             raise HttpError(400, "No resume uploaded. Upload a resume first or pass resume_id.")
         resume_id = latest.id
-    resume = get_object_or_404(UserResume, id=resume_id)
+    resume = get_object_or_404(UserResume.library(), id=resume_id)
 
     llm = _get_llm_from_request(payload.llm_provider, payload.llm_model)
     try:
@@ -923,7 +913,7 @@ def jobs_match(request, job_listing_id: int, payload: MatchRequest):
 def jobs_mark_applied(request, job_listing_id: int, payload: MarkAppliedRequest):
     """Set JobMatchResult.status = applied for (job_listing, resume)."""
     job = get_object_or_404(JobListing, id=job_listing_id)
-    resume = get_object_or_404(UserResume, id=payload.resume_id)
+    resume = get_object_or_404(UserResume.library(), id=payload.resume_id)
     updated = JobMatchResult.objects.filter(job_listing=job, resume=resume).update(
         status=JobMatchResult.STATUS_APPLIED, analyzed_at=timezone.now()
     )

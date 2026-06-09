@@ -10,7 +10,7 @@ from django.conf import settings
 
 from .models import JobListing, JobListingAction, JobListingTrackMetrics, PipelineEntry
 from .track_actions import disliked_listing_id_set, normalize_track_slug
-from .job_sources import DEFAULT_SITE_NAMES, fetch_jobs
+from .job_sources import fetch_jobs, normalize_site_names, upsert_job_listing_from_fetch
 from .schemas import JobPayload
 from .preference import (
     get_preference_vectors,
@@ -56,6 +56,7 @@ def _job_to_payload(job: JobListing, *, snippet: Optional[str] = None) -> JobPay
         url=job.url or "",
         source=src,
         source_display=format_job_source_label(src),
+        posted_at=job.posted_at,
         fetched_at=job.fetched_at,
     )
 
@@ -84,49 +85,40 @@ def run_job_search_core(
         raise ValueError("search_term is required")
 
     results_wanted = results_wanted or getattr(settings, "JOB_SEARCH_DEFAULT_RESULTS", 50)
-    site_name = site_name or list(DEFAULT_SITE_NAMES)
+    site_name = normalize_site_names(site_name)
     norm_track = normalize_track_slug(track)
     disliked_listing_ids = disliked_listing_id_set(norm_track)
     disqualifier_pattern = build_disqualifier_pattern(get_disqualifier_phrases())
     jobs_with_meta: List[Tuple[JobListing, JobPayload]] = []
 
+    hours_old = getattr(settings, "JOB_SEARCH_HOURS_OLD", 168)
+    fetch_kwargs = {
+        "search_term": search_term.strip(),
+        "location": (location or "").strip() or None,
+        "site_name": site_name,
+        "results_wanted": results_wanted,
+        "hours_old": hours_old,
+    }
     try:
-        raw = fetch_jobs(
-            search_term=search_term.strip(),
-            location=(location or "").strip() or None,
-            site_name=site_name,
-            results_wanted=results_wanted,
-        )
+        raw = fetch_jobs(**fetch_kwargs)
     except Exception as e:
         raise RuntimeError(f"Job fetch failed: {e}") from e
 
     jobs_fetched = len(raw or [])
-    logger.info("[job_search_core] JobSpy returned %d jobs (requested %d)", jobs_fetched, results_wanted)
+    logger.info(
+        "[job_search_core] JobSpy returned %d jobs (requested %d, hours_old=%s)",
+        jobs_fetched,
+        results_wanted,
+        hours_old,
+    )
     if not raw and results_wanted > 50:
-        raw = fetch_jobs(
-            search_term=search_term.strip(),
-            location=(location or "").strip() or None,
-            site_name=site_name,
-            results_wanted=50,
-        )
+        raw = fetch_jobs(**{**fetch_kwargs, "results_wanted": 50})
         jobs_fetched = len(raw or [])
         logger.info("[job_search_core] JobSpy retry(50) returned %d jobs", jobs_fetched)
 
     refs_for_cache: List[dict] = []
     for r in raw or []:
-        desc = r.get("description", "") or ""
-        defaults = {
-            "title": r["title"],
-            "company_name": r["company_name"],
-            "location": r.get("location", ""),
-            "description": desc,
-            "url": r.get("job_url", ""),
-        }
-        job, _ = JobListing.objects.update_or_create(
-            source=r["source"],
-            external_id=r["external_id"],
-            defaults=defaults,
-        )
+        job, _ = upsert_job_listing_from_fetch(r)
         refs_for_cache.append({"source": job.source, "external_id": job.external_id})
         if job.id in disliked_listing_ids:
             continue
@@ -381,7 +373,20 @@ def rank_and_filter_jobs(
     """
     ranked = _rank_jobs_with_meta(jobs_with_meta, track)
     jobs_out = _apply_auto_dislike(ranked, track)
-    return _apply_disliked_penalty_and_final_sort(jobs_out, track)
+    jobs_out = _apply_disliked_penalty_and_final_sort(jobs_out, track)
+
+    # NEW: Apply Ollama Guard to top 10 results to reduce noise (e.g. seniority mismatch)
+    from django.conf import settings
+
+    if getattr(settings, "OLLAMA_GUARD_ENABLED", False):
+        try:
+            from .services import run_ollama_guard_on_payloads
+
+            jobs_out = run_ollama_guard_on_payloads(jobs_out[:10], track) + jobs_out[10:]
+        except Exception as e:
+            logger.warning("Ollama Guard failed, skipping: %s", e)
+
+    return jobs_out
 
 
 def recompute_preferences_for_jobs(

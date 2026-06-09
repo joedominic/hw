@@ -1,5 +1,6 @@
 from django.db import models
 from django.utils import timezone
+from django.utils.text import slugify
 
 
 class Track(models.Model):
@@ -81,10 +82,24 @@ class UserResume(models.Model):
         default="",
         help_text="Preferred preference track slug for this resume (used to default Job Search track).",
     )
+    is_library = models.BooleanField(
+        default=False,
+        help_text="True for PDFs uploaded on Resumes & Tracks; False for ephemeral optimizer run copies.",
+    )
     uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["is_library", "-uploaded_at"]),
+        ]
 
     def __str__(self):
         return self.original_filename or f"Resume {self.id} uploaded at {self.uploaded_at}"
+
+    @classmethod
+    def library(cls):
+        """Resumes explicitly uploaded on the Resumes & Tracks page."""
+        return cls.objects.filter(is_library=True)
 
 
 class ResumeChunk(models.Model):
@@ -156,6 +171,14 @@ class OptimizedResume(models.Model):
         related_name="optimized_resumes",
         help_text="Saved workflow used when this run was enqueued.",
     )
+    ats_judge_profile = models.ForeignKey(
+        "AtsJudgeProfile",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="optimized_resumes",
+        help_text="ATS judge prompt profile used for this optimization run.",
+    )
     optimization_notes = models.TextField(
         blank=True,
         default="",
@@ -184,9 +207,61 @@ class AgentLog(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
 
+class AtsJudgeProfile(models.Model):
+    """
+    Named ATS judge prompt (system/user/legacy triple). Users pick one per optimizer run;
+    OptimizerWorkflow may set a default profile for that workflow.
+    """
+
+    name = models.CharField(max_length=255)
+    slug = models.SlugField(
+        max_length=64,
+        unique=True,
+        help_text="Stable identifier for API and defaults (e.g. 'default').",
+    )
+    ats_judge = models.TextField(blank=True)
+    ats_judge_system = models.TextField(blank=True)
+    ats_judge_user = models.TextField(blank=True)
+    is_builtin = models.BooleanField(
+        default=False,
+        help_text="Seeded built-in profile; deletion may be restricted in UI.",
+    )
+    is_default = models.BooleanField(
+        default=False,
+        help_text="Global fallback when no per-run or workflow ATS is selected.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        verbose_name = "ATS judge profile"
+        verbose_name_plural = "ATS judge profiles"
+
+    def __str__(self) -> str:
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if not (self.slug or "").strip():
+            base = slugify(self.name) or "ats-profile"
+            candidate = base
+            n = 2
+            while (
+                AtsJudgeProfile.objects.filter(slug=candidate)
+                .exclude(pk=self.pk)
+                .exists()
+            ):
+                candidate = f"{base}-{n}"
+                n += 1
+            self.slug = candidate
+        if self.is_default:
+            AtsJudgeProfile.objects.exclude(pk=self.pk).update(is_default=False)
+        super().save(*args, **kwargs)
+
+
 class UserPromptProfile(models.Model):
     """
-    Singleton-style profile (use id=1) for edited Writer / Judge / Matching / Insights prompts.
+    Singleton-style profile (use id=1) for edited Writer / Judge / Matching / Insights / JD cleanse prompts.
     Empty string for a field means fall back to the code default in prompts.py.
 
     When *_system / *_user are both empty but the legacy single field (e.g. writer) is set,
@@ -208,6 +283,9 @@ class UserPromptProfile(models.Model):
     insights = models.TextField(blank=True)
     insights_system = models.TextField(blank=True)
     insights_user = models.TextField(blank=True)
+    jd_cleanse = models.TextField(blank=True)
+    jd_cleanse_system = models.TextField(blank=True)
+    jd_cleanse_user = models.TextField(blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -255,6 +333,10 @@ class LLMProviderPreference(models.Model):
         related_name="preference_rows",
     )
     model = models.CharField(max_length=128, blank=True)
+    is_local = models.BooleanField(
+        default=False,
+        help_text="If true, this provider+model is treated as local (prioritized or required).",
+    )
     priority = models.PositiveSmallIntegerField(default=100)
     rate_limit_rpm = models.PositiveIntegerField(
         null=True,
@@ -398,6 +480,25 @@ class AppAutomationSettings(models.Model):
         default=0,
         help_text="Cleanup Manager: remove Done-stage rows older than this many days (0 = off).",
     )
+    cleanup_generated_resume_retention_days = models.PositiveSmallIntegerField(
+        default=7,
+        help_text="Remove optimizer ephemeral resume PDFs older than this many days (0 = off).",
+    )
+    default_optimization_notes = models.TextField(
+        blank=True,
+        default="",
+        help_text="Default Writer notes for the Resume Optimizer (Step 2 / Settings).",
+    )
+    default_pipeline_skills_json = models.TextField(
+        blank=True,
+        default="",
+        help_text="Default pipeline/skills JSON for the Resume Optimizer.",
+    )
+    default_job_highlights = models.TextField(
+        blank=True,
+        default="",
+        help_text="Default supplemental accomplishments for the Resume Optimizer.",
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -421,20 +522,26 @@ class AppAutomationSettings(models.Model):
                 "cleanup_vetting_retention_days": 6,
                 "cleanup_applying_retention_days": 10,
                 "cleanup_done_retention_days": 0,
+                "cleanup_generated_resume_retention_days": 7,
             },
         )
         return obj
 
 
 class JobListing(models.Model):
-    """A job fetched from a source (e.g. JobSpy Indeed/Google). Deduplicated by (source, external_id)."""
-    source = models.CharField(max_length=64)  # e.g. jobspy_indeed, jobspy_google
+    """A job fetched from a source (e.g. JobSpy Indeed). Deduplicated by (source, external_id)."""
+    source = models.CharField(max_length=64)  # e.g. jobspy_indeed, jobspy_linkedin
     external_id = models.CharField(max_length=256)
     title = models.CharField(max_length=512)
     company_name = models.CharField(max_length=512)
     location = models.CharField(max_length=512, blank=True)
     description = models.TextField(blank=True)
     url = models.URLField(max_length=2048, blank=True)
+    posted_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the job was posted on the source board (from JobSpy date_posted).",
+    )
     fetched_at = models.DateTimeField(auto_now_add=True)
     raw_json = models.JSONField(null=True, blank=True)
     # Cached preference metrics for pipeline/saved jobs (per track) live in JobListingTrackMetrics.
@@ -553,6 +660,14 @@ class OptimizerWorkflow(models.Model):
     loop_to = models.CharField(max_length=64, blank=True)
     max_iterations = models.PositiveSmallIntegerField(default=3)
     score_threshold = models.PositiveSmallIntegerField(default=85)
+    ats_judge_profile = models.ForeignKey(
+        AtsJudgeProfile,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="optimizer_workflows",
+        help_text="Default ATS judge prompt when this workflow is used.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

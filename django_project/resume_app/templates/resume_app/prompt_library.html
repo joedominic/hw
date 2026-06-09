@@ -7,13 +7,13 @@
     <div class="mb-8">
         <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Prompt library</h1>
         <p class="mt-1 text-sm text-slate-600">
-            Templates for the optimizer, matching, and job insights. Saved prompts apply on the next run.
+            Templates for the optimizer, matching, job insights, and JD cleansing (Ollama Local). Saved prompts apply on the next run.
         </p>
         <p class="mt-2 rounded-md border border-amber-100 bg-amber-50/80 px-3 py-2 text-xs text-amber-900">
             <strong>Prompt caching tip:</strong> Put stable rules in <strong>System</strong> and variable resume/JD data in <strong>User</strong>.
             Avoid timestamps or session IDs in System. On Groq, similar prefixes can reuse cached tokens (see
             <a href="https://console.groq.com/docs/prompt-caching" class="underline font-medium" target="_blank" rel="noopener">Groq prompt caching</a>).
-            Optional <strong>Combined (legacy)</strong> overrides split when filled.
+            <strong>Combined (legacy)</strong> is used only when both System and User are empty; if either has text, split mode is saved (so a leftover Combined box on another tab cannot wipe your edits).
         </p>
     </div>
 
@@ -30,14 +30,14 @@
                     <div class="flex flex-wrap gap-1 border-b border-slate-200" id="prompt-tabs" role="tablist">
                         <button type="button" role="tab" aria-selected="true" aria-controls="prompt-writer-pane" id="prompt-writer-tab" data-prompt-pane="prompt-writer-pane"
                                 class="prompt-tab-btn -mb-px rounded-t border border-b-0 border-slate-200 bg-white px-3 py-2 text-sm font-medium text-concierge-slate">Writer</button>
-                        <button type="button" role="tab" aria-selected="false" aria-controls="prompt-ats-pane" id="prompt-ats-tab" data-prompt-pane="prompt-ats-pane"
-                                class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">ATS Judge</button>
                         <button type="button" role="tab" aria-selected="false" aria-controls="prompt-recruiter-pane" id="prompt-recruiter-tab" data-prompt-pane="prompt-recruiter-pane"
                                 class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">Recruiter Judge</button>
                         <button type="button" role="tab" aria-selected="false" aria-controls="prompt-matching-pane" id="prompt-matching-tab" data-prompt-pane="prompt-matching-pane"
                                 class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">Matching</button>
                         <button type="button" role="tab" aria-selected="false" aria-controls="prompt-insights-pane" id="prompt-insights-tab" data-prompt-pane="prompt-insights-pane"
                                 class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">Insights</button>
+                        <button type="button" role="tab" aria-selected="false" aria-controls="prompt-jd-cleanse-pane" id="prompt-jd-cleanse-tab" data-prompt-pane="prompt-jd-cleanse-pane"
+                                class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">JD cleanse</button>
                     </div>
                     <div class="rounded-b border border-t-0 border-slate-200 bg-slate-50/30 p-4" id="prompt-tab-content">
                         <div id="prompt-writer-pane" role="tabpanel" aria-labelledby="prompt-writer-tab">
@@ -51,26 +51,24 @@
                             <textarea id="prompt-writer-user" name="prompt_writer_user" rows="12"
                                       class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
                                       placeholder="User prompt with placeholders">{{ prompts.writer_user }}</textarea>
-                            <p class="mt-2 text-xs text-slate-500">Placeholders: <code class="rounded bg-slate-100 px-1">{resume_text}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code>, <code class="rounded bg-slate-100 px-1">{feedback}</code>, <code class="rounded bg-slate-100 px-1">{source_resume_text}</code>, <code class="rounded bg-slate-100 px-1">{optimized_resume}</code></p>
+                            <p class="mt-2 text-xs text-slate-500">
+                                Writer <strong>System</strong>, <strong>User</strong>, or <strong>Combined</strong> may include:
+                                <code class="rounded bg-slate-100 px-1">{source_resume_text}</code> (original PDF text),
+                                <code class="rounded bg-slate-100 px-1">{resume_text}</code> (draft this step),
+                                <code class="rounded bg-slate-100 px-1">{optimized_resume}</code> (current draft),
+                                <code class="rounded bg-slate-100 px-1">{job_description}</code> (role slice for Writer),
+                                <code class="rounded bg-slate-100 px-1">{full_job_description}</code>,
+                                <code class="rounded bg-slate-100 px-1">{feedback}</code>,
+                                <code class="rounded bg-slate-100 px-1">{optimization_notes}</code>,
+                                <code class="rounded bg-slate-100 px-1">{pipeline_skills_json}</code>,
+                                <code class="rounded bg-slate-100 px-1">{job_highlights}</code>,
+                                <code class="rounded bg-slate-100 px-1">{retrieval_context}</code>
+                                (<span class="text-slate-600">supporting fields show <code class="rounded bg-slate-100 px-0.5">(none)</code> when empty; retrieval is not populated yet</span>).
+                            </p>
                             <p class="mt-3 text-xs font-medium text-slate-600">Combined (legacy, optional — clears split for Writer when non-empty)</p>
                             <textarea name="prompt_writer_combined" rows="3"
                                       class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs text-slate-600"
                                       placeholder="Leave empty to use System + User above">{{ prompts.writer_legacy_combined }}</textarea>
-                        </div>
-                        <div id="prompt-ats-pane" role="tabpanel" aria-labelledby="prompt-ats-tab" class="hidden">
-                            <p class="mb-2 text-xs font-medium text-slate-600">System</p>
-                            <textarea name="prompt_ats_system" rows="6"
-                                      class="mb-3 w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
-                                      placeholder="ATS judge system">{{ prompts.ats_judge_system }}</textarea>
-                            <p class="mb-2 text-xs font-medium text-slate-600">User</p>
-                            <textarea name="prompt_ats_user" rows="12"
-                                      class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
-                                      placeholder="ATS judge user">{{ prompts.ats_judge_user }}</textarea>
-                            <p class="mt-2 text-xs text-slate-500">Placeholders: <code class="rounded bg-slate-100 px-1">{optimized_resume}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code></p>
-                            <p class="mt-3 text-xs font-medium text-slate-600">Combined (legacy, optional)</p>
-                            <textarea name="prompt_ats_combined" rows="3"
-                                      class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs"
-                                      placeholder="Optional single template">{{ prompts.ats_judge_legacy_combined }}</textarea>
                         </div>
                         <div id="prompt-recruiter-pane" role="tabpanel" aria-labelledby="prompt-recruiter-tab" class="hidden">
                             <p class="mb-2 text-xs font-medium text-slate-600">System</p>
@@ -117,6 +115,22 @@
                                       class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs"
                                       placeholder="Optional single template">{{ prompts.insights_legacy_combined }}</textarea>
                         </div>
+                        <div id="prompt-jd-cleanse-pane" role="tabpanel" aria-labelledby="prompt-jd-cleanse-tab" class="hidden">
+                            <p class="mb-2 text-xs text-slate-600">Used when stripping boilerplate from job postings before vetting match scores and Applying resume optimization. Invoked on <strong>Ollama Local</strong> only (see LLM settings).</p>
+                            <p class="mb-2 text-xs font-medium text-slate-600">System</p>
+                            <textarea name="prompt_jd_cleanse_system" rows="5"
+                                      class="mb-3 w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="JD cleanse system">{{ prompts.jd_cleanse_system }}</textarea>
+                            <p class="mb-2 text-xs font-medium text-slate-600">User</p>
+                            <textarea name="prompt_jd_cleanse_user" rows="12"
+                                      class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="JD cleanse user">{{ prompts.jd_cleanse_user }}</textarea>
+                            <p class="mt-2 text-xs text-slate-500">Placeholders: <code class="rounded bg-slate-100 px-1">{title}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code> (description is truncated to 8000 characters before substitution).</p>
+                            <p class="mt-3 text-xs font-medium text-slate-600">Combined (legacy, optional)</p>
+                            <textarea name="prompt_jd_cleanse_combined" rows="3"
+                                      class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs"
+                                      placeholder="Optional single template">{{ prompts.jd_cleanse_legacy_combined }}</textarea>
+                        </div>
                     </div>
                 </div>
                 <div class="flex flex-wrap gap-3">
@@ -129,6 +143,77 @@
                 <input type="hidden" name="action" value="reset_prompts">
                 <button type="submit" class="text-sm font-medium text-slate-500 underline hover:text-concierge-slate">Reset to server defaults</button>
             </form>
+        </div>
+    </div>
+
+    <div class="mt-8 rounded-concierge border border-slate-200 bg-white shadow-sm">
+        <div class="border-b border-slate-100 px-6 py-3 text-sm font-semibold text-concierge-slate">ATS judge profiles</div>
+        <p class="px-6 pt-3 text-xs text-slate-600">Named ATS scoring prompts. Choose one per optimizer run or set a default on a saved workflow.</p>
+        <div class="grid gap-6 p-6 lg:grid-cols-[220px_1fr]">
+            <div>
+                <ul class="space-y-1 text-sm">
+                    {% for p in ats_profiles %}
+                    <li>
+                        <a href="{% url 'prompt_library' %}?ats_profile={{ p.id }}"
+                           class="block rounded-concierge px-3 py-2 {% if selected_ats and selected_ats.id == p.id %}bg-concierge-slate text-white{% else %}text-concierge-slate hover:bg-slate-100{% endif %}">
+                            {{ p.name }}{% if p.is_default %} <span class="text-xs opacity-80">(default)</span>{% endif %}
+                        </a>
+                    </li>
+                    {% empty %}
+                    <li class="text-xs text-slate-500">No profiles yet.</li>
+                    {% endfor %}
+                </ul>
+                <form method="post" class="mt-3">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="new_ats_profile">
+                    <button type="submit" class="w-full rounded-concierge border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-concierge-slate hover:bg-slate-100">+ New profile</button>
+                </form>
+            </div>
+            <div>
+                {% if selected_ats %}
+                <form method="post">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="save_ats_profile">
+                    <input type="hidden" name="ats_profile_id" value="{{ selected_ats.id }}">
+                    <div class="mb-4">
+                        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="ats-profile-name">Profile name</label>
+                        <input type="text" id="ats-profile-name" name="ats_profile_name" required
+                               class="w-full max-w-md rounded-concierge border border-slate-200 px-3 py-2 text-sm"
+                               value="{{ selected_ats.name }}">
+                    </div>
+                    <label class="mb-3 flex items-center gap-2 text-sm text-slate-700">
+                        <input type="checkbox" name="ats_profile_is_default" class="rounded border-slate-300" {% if selected_ats.is_default %}checked{% endif %}>
+                        Use as global default when no run/workflow selection
+                    </label>
+                    <p class="mb-2 text-xs font-medium text-slate-600">System</p>
+                    <textarea name="prompt_ats_system" rows="6"
+                              class="mb-3 w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                              placeholder="ATS judge system">{{ ats_prompts.ats_judge_system }}</textarea>
+                    <p class="mb-2 text-xs font-medium text-slate-600">User</p>
+                    <textarea name="prompt_ats_user" rows="12"
+                              class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                              placeholder="ATS judge user">{{ ats_prompts.ats_judge_user }}</textarea>
+                    <p class="mt-2 text-xs text-slate-500">Placeholders: <code class="rounded bg-slate-100 px-1">{optimized_resume}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code></p>
+                    <p class="mt-3 text-xs font-medium text-slate-600">Combined (legacy, optional)</p>
+                    <textarea name="prompt_ats_combined" rows="3"
+                              class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs"
+                              placeholder="Optional single template">{{ ats_prompts.ats_judge_legacy_combined }}</textarea>
+                    <div class="mt-4 flex flex-wrap gap-3">
+                        <button type="submit" class="rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">Save ATS profile</button>
+                    </div>
+                </form>
+                {% if not selected_ats.is_builtin or ats_profiles|length > 1 %}
+                <form method="post" class="mt-4 border-t border-slate-100 pt-4" onsubmit="return confirm('Delete this ATS profile?');">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="delete_ats_profile">
+                    <input type="hidden" name="ats_profile_id" value="{{ selected_ats.id }}">
+                    <button type="submit" class="text-sm font-medium text-red-600 underline hover:text-red-800">Delete profile</button>
+                </form>
+                {% endif %}
+                {% else %}
+                <p class="text-sm text-slate-500">Create a profile to edit ATS judge prompts.</p>
+                {% endif %}
+            </div>
         </div>
     </div>
 </div>

@@ -23,7 +23,7 @@ from .models import (
     OptimizerWorkflow,
 )
 from datetime import timedelta
-from .job_sources import DEFAULT_SITE_NAMES
+from .job_sources import normalize_site_names
 from .job_search_core import run_job_search_core, recompute_preferences_for_jobs
 from .agents import (
     create_workflow,
@@ -202,6 +202,7 @@ def optimize_resume_task(
     score_threshold=85,
     workflow_steps=None,
     loop_to=None,
+    ats_judge_profile_id=None,
 ):
     """
     Huey async task: run the resume optimizer workflow for a single OptimizedResume.
@@ -209,7 +210,11 @@ def optimize_resume_task(
     Fetches OptimizedResume once at top; on any failure sets status to failed.
     """
     try:
-        optimized_resume = OptimizedResume.objects.get(id=resume_id)
+        optimized_resume = OptimizedResume.objects.select_related(
+            "optimizer_workflow",
+            "optimizer_workflow__ats_judge_profile",
+            "ats_judge_profile",
+        ).get(id=resume_id)
     except OptimizedResume.DoesNotExist:
         return {"status": "error", "message": "OptimizedResume not found"}
 
@@ -242,7 +247,13 @@ def optimize_resume_task(
             app = create_workflow()
 
         # Initial State (prompts from profile + optional API override)
-        _pb = build_optimizer_graph_prompt_state(prompts or None)
+        workflow = optimized_resume.optimizer_workflow
+        explicit_ats = ats_judge_profile_id or optimized_resume.ats_judge_profile_id
+        _pb = build_optimizer_graph_prompt_state(
+            prompts or None,
+            ats_judge_profile_id=explicit_ats,
+            workflow=workflow,
+        )
         initial_state = {
             **ctx_state,
             "optimized_resume": "",
@@ -277,7 +288,11 @@ def optimize_resume_task(
         # recursion_limit must exceed the number of nodes: LangGraph counts each node invocation
         # and the transition to END; with limit=num_steps the last node can hit the limit before finishing.
         num_steps = len(steps) if steps else 3
-        run_config = {"callbacks": [usage_callback], "recursion_limit": num_steps + 20}
+        # LangGraph 1.x counts graph steps aggressively; too low a limit can abort before END.
+        run_config = {
+            "callbacks": [usage_callback],
+            "recursion_limit": max(100, num_steps * 25),
+        }
         # Coalesce: stream() can yield multiple times per node; only log once per node with merged state
         accumulated = {}
         prev_node = None
@@ -298,12 +313,28 @@ def optimize_resume_task(
                 accumulated[node_name].update(state_update)
                 prev_node = node_name
 
-                if 'ats_score' in state_update or 'recruiter_score' in state_update:
-                    optimized_resume.status_display = f"Scoring: ATS={last_state.get('ats_score', 'N/A')}, Recruiter={last_state.get('recruiter_score', 'N/A')}"
-                elif 'optimized_resume' in state_update:
+                update_fields: list[str] = []
+                if "optimized_resume" in state_update:
                     optimized_resume.status_display = "Drafting"
-
-                optimized_resume.save(update_fields=["status_display"])
+                    update_fields.append("status_display")
+                    oc = last_state.get("optimized_resume")
+                    if isinstance(oc, str) and oc.strip():
+                        optimized_resume.optimized_content = oc
+                        update_fields.append("optimized_content")
+                elif "ats_score" in state_update or "recruiter_score" in state_update:
+                    optimized_resume.status_display = (
+                        f"Scoring: ATS={last_state.get('ats_score', 'N/A')}, "
+                        f"Recruiter={last_state.get('recruiter_score', 'N/A')}"
+                    )
+                    update_fields.append("status_display")
+                    if "ats_score" in state_update:
+                        optimized_resume.ats_score = last_state.get("ats_score")
+                        update_fields.append("ats_score")
+                    if "recruiter_score" in state_update:
+                        optimized_resume.recruiter_score = last_state.get("recruiter_score")
+                        update_fields.append("recruiter_score")
+                if update_fields:
+                    optimized_resume.save(update_fields=list(dict.fromkeys(update_fields)))
 
                 if rate_limit_delay and float(rate_limit_delay) > 0:
                     time.sleep(float(rate_limit_delay))
@@ -343,6 +374,8 @@ PIPELINE_OPT_MIN_JD_CHARS = 50
 
 
 def _build_pipeline_job_description(job: JobListing) -> str:
+    from .jd_cleanser import JDCleanserService
+
     title = (job.title or "").strip()
     company = (job.company_name or "").strip()
     loc = (job.location or "").strip()
@@ -355,7 +388,9 @@ def _build_pipeline_job_description(job: JobListing) -> str:
         )
         if x
     )
-    desc = (job.description or "").strip()
+    # Use JDCleanserService to strip boilerplate before sending to LLM.
+    # LLM-based cleansing is enabled here for maximum quality in the Optimizer.
+    desc = JDCleanserService.cleanse((job.description or ""), title=title, use_llm=True)
     url = (job.url or "").strip()
     tail_parts = [p for p in (desc, f"URL: {url}" if url else "") if p]
     tail = "\n\n".join(tail_parts)
@@ -367,13 +402,13 @@ def _build_pipeline_job_description(job: JobListing) -> str:
 def _resolve_user_resume_for_track(track_slug: str) -> UserResume | None:
     track_slug = (track_slug or "").strip().lower()
     latest_track = (
-        UserResume.objects.filter(track=track_slug).order_by("-uploaded_at").first()
+        UserResume.library().filter(track=track_slug).order_by("-uploaded_at").first()
         if track_slug
         else None
     )
     if latest_track and latest_track.file:
         return latest_track
-    latest = UserResume.objects.order_by("-uploaded_at").first()
+    latest = UserResume.library().order_by("-uploaded_at").first()
     if latest and latest.file:
         return latest
     return None
@@ -493,6 +528,11 @@ def _enqueue_single_pipeline_resume_optimization(
             st = int(workflow.score_threshold)
             score_threshold = max(0, min(100, st))
 
+    from .prompt_store import resolve_effective_ats_judge_profile_id, get_ats_judge_profile_by_id
+
+    effective_ats_id = resolve_effective_ats_judge_profile_id(workflow=workflow)
+    ats_profile = get_ats_judge_profile_by_id(effective_ats_id)
+
     jd = JobDescription.objects.create(content=jd_text)
     opt = OptimizedResume.objects.create(
         original_resume=user_resume,
@@ -500,6 +540,7 @@ def _enqueue_single_pipeline_resume_optimization(
         status=OptimizedResume.STATUS_QUEUED,
         pipeline_entry=entry,
         optimizer_workflow=workflow,
+        ats_judge_profile=ats_profile,
     )
 
     optimize_resume_task(
@@ -514,6 +555,7 @@ def _enqueue_single_pipeline_resume_optimization(
         loop_to=loop_to,
         max_iterations=max_iterations,
         score_threshold=score_threshold,
+        ats_judge_profile_id=effective_ats_id,
     )
     return {
         "status": "ok",
@@ -574,7 +616,9 @@ def _run_job_search_task_impl(task_id):
             location=task.location or None,
             track=task.track or None,
             results_wanted=task.jobs_to_fetch,
-            site_name=task.site_name if isinstance(task.site_name, list) else list(DEFAULT_SITE_NAMES),
+            site_name=normalize_site_names(
+                task.site_name if isinstance(task.site_name, list) else None
+            ),
         )
     except Exception as e:
         logger.exception("[run_job_search_task] task_id=%s core failed: %s", task_id, e)
@@ -697,9 +741,12 @@ def evaluate_vetting_matching_task(
 
         # Parse each track's resume once per task.
         tracks = {e.track for e in entries if e.track}
-        latest_overall = UserResume.objects.order_by("-uploaded_at").first()
+        latest_overall = UserResume.library().order_by("-uploaded_at").first()
         for track in tracks:
-            latest = UserResume.objects.filter(track=track).order_by("-uploaded_at").first() or latest_overall
+            latest = (
+                UserResume.library().filter(track=track).order_by("-uploaded_at").first()
+                or latest_overall
+            )
             if not latest or not latest.file:
                 continue
             try:
@@ -734,10 +781,16 @@ def evaluate_vetting_matching_task(
                 skipped += 1
                 continue
 
-            jd = (entry.job_listing.description or "").strip()
-            if not jd or len(jd) < VETTING_MATCHING_JD_MIN_CHARS:
+            from .jd_cleanser import JDCleanserService
+
+            raw_jd = (entry.job_listing.description or "").strip()
+            if not raw_jd or len(raw_jd) < VETTING_MATCHING_JD_MIN_CHARS:
                 skipped += 1
                 continue
+
+            # Cleanse JD for vetting match to save tokens.
+            # LLM-based cleansing is enabled here for high-quality fit check.
+            jd = JDCleanserService.cleanse(raw_jd, title=entry.job_listing.title, use_llm=True)
             jd = jd[:jd_max_chars]
 
             try:
@@ -830,9 +883,10 @@ def try_vetting_match_debug(
     if entry.stage != PipelineEntry.Stage.VETTING:
         return {"ok": False, "skip_reason": "not_vetting_stage", "stage": entry.stage or ""}
     track = entry.track
-    latest_overall = UserResume.objects.order_by("-uploaded_at").first()
+    latest_overall = UserResume.library().order_by("-uploaded_at").first()
     latest = (
-        UserResume.objects.filter(track=track).order_by("-uploaded_at").first() or latest_overall
+        UserResume.library().filter(track=track).order_by("-uploaded_at").first()
+        or latest_overall
     )
     if not latest or not latest.file:
         return {"ok": False, "skip_reason": "no_resume"}
@@ -989,10 +1043,35 @@ def apply_pipeline_auto_promotions() -> int:
             continue
         entry.move_to_vetting(save=True)
         promoted.append(entry.id)
-    if promoted:
+    # Fast-track high-confidence matches directly to Applying
+    fast_tracked = []
+    normal_promoted = []
+
+    for entry_id in promoted:
+        entry = PipelineEntry.objects.get(id=entry_id)
+        # Heuristic: If margin is very high (e.g. > 50), skip Vetting and go to Applying
+        # In a real scenario, we might also check the Ollama Guard status here if persisted
+        m = JobListingTrackMetrics.objects.filter(
+            job_listing_id=entry.job_listing_id, track=entry.track
+        ).first()
+
+        if m and m.preference_margin is not None and m.preference_margin > 50:
+            entry.move_to_applying(save=True)
+            fast_tracked.append(entry_id)
+        else:
+            normal_promoted.append(entry_id)
+
+    if normal_promoted:
         evaluate_vetting_matching_task(
-            promoted, llm_provider=None, llm_model=None, matching_prompt=None
+            normal_promoted, llm_provider=None, llm_model=None, matching_prompt=None
         )
+
+    if fast_tracked:
+        logger.info(
+            "[apply_pipeline_auto_promotions] Fast-tracked %d high-confidence jobs to Applying",
+            len(fast_tracked),
+        )
+
     return len(promoted)
 
 
@@ -1024,10 +1103,13 @@ def enqueue_due_vetting_matching_tasks():
         return None
 
     # Resolve latest resume id per track.
-    latest_overall = UserResume.objects.order_by("-uploaded_at").first()
+    latest_overall = UserResume.library().order_by("-uploaded_at").first()
     latest_by_track: dict[str, UserResume | None] = {}
     for track in {e.track for e in entries if e.track}:
-        latest_by_track[track] = UserResume.objects.filter(track=track).order_by("-uploaded_at").first() or latest_overall
+        latest_by_track[track] = (
+            UserResume.library().filter(track=track).order_by("-uploaded_at").first()
+            or latest_overall
+        )
 
     cooldown_before = timezone.now() - timedelta(hours=VETTING_MATCHING_RETRY_COOLDOWN_HOURS)
     to_enqueue: list[int] = []
@@ -1330,6 +1412,27 @@ def cleanup_manager():
         errors.append(f"retention_cleanup: {e}")
         logger.exception("[cleanup_manager] retention purge failed: %s", e)
 
+    generated_resumes_removed = 0
+    try:
+        from .resume_cleanup import purge_generated_user_resumes
+
+        generated_resumes_removed = purge_generated_user_resumes(
+            int(cfg.cleanup_generated_resume_retention_days or 0),
+        )
+        if generated_resumes_removed:
+            huey_logger.info(
+                "[cleanup_manager] generated resumes removed=%s",
+                generated_resumes_removed,
+            )
+            logger.info(
+                "[cleanup_manager] generated resumes removed=%s",
+                generated_resumes_removed,
+            )
+    except Exception as e:
+        status = "partial_failure"
+        errors.append(f"generated_resume_cleanup: {e}")
+        logger.exception("[cleanup_manager] generated resume purge failed: %s", e)
+
     try:
         from .job_activity import purge_inactive_pipeline_entries
 
@@ -1365,9 +1468,20 @@ def cleanup_manager():
         "unknown": int(purge_result.get("unknown") or 0),
         "dedupe_removed": int(dedupe_result.get("entries_removed") or 0),
         "dedupe_groups": int(dedupe_result.get("duplicate_groups") or 0),
+        "generated_resumes_removed": int(generated_resumes_removed),
         "errors": errors[:5],
     }
     cache.set(CLEANUP_STATUS_CACHE_KEY, payload, CLEANUP_STATUS_CACHE_TTL_SECONDS)
+    return None
+
+
+@db_periodic_task(crontab(minute="15", hour="*/6"))
+def purge_generated_resumes_periodic():
+    """Every 6 hours: remove old optimizer ephemeral UserResume PDFs."""
+    cfg = AppAutomationSettings.get_solo()
+    from .resume_cleanup import purge_generated_user_resumes
+
+    purge_generated_user_resumes(int(cfg.cleanup_generated_resume_retention_days or 0))
     return None
 
 

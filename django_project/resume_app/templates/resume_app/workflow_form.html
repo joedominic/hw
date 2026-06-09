@@ -23,6 +23,17 @@
                        class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
                        value="{{ workflow.name|default:'' }}" placeholder="e.g. Default loop">
             </div>
+            <div class="mt-4">
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="workflow-ats-profile">Default ATS profile (optional)</label>
+                <select id="workflow-ats-profile" name="ats_judge_profile_id"
+                        class="w-full max-w-xl rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                    <option value="">— Global default —</option>
+                    {% for p in ats_profiles %}
+                    <option value="{{ p.id }}" {% if workflow and workflow.ats_judge_profile_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+                    {% endfor %}
+                </select>
+                <p class="mt-1 text-xs text-slate-500">Used when this workflow runs and no per-run ATS is selected. <a href="{% url 'prompt_library' %}" class="underline">Manage ATS profiles</a></p>
+            </div>
         </div>
 
         <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
