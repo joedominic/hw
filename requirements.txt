@@ -120,3 +120,9 @@ rank-bm25>=0.2.0
 huey>=2.6.0
 redis>=5.0.0
 gunicorn>=22.0.0
+# Autonomous Apply Agent (browser automation). Run `playwright install chromium`
+# after install. browser-use powers the generic fallback for unknown ATS.
+playwright>=1.44.0
+playwright-stealth>=1.0.6
+browser-use>=0.13.0
+psutil>=5.9.0

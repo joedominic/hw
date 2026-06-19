@@ -60,6 +60,10 @@
                class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'pipeline' or url_name == 'vetting' or url_name == 'applying' or url_name == 'done' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
                 Dashboard
             </a>
+            <a href="{% url 'apply_agent' %}"
+               class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'apply_agent' or url_name == 'apply_agent_profile' or url_name == 'apply_agent_review' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
+                Apply Agent
+            </a>
 
             <p class="mt-4 px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Agentic AI</p>
             <div class="ml-2 space-y-0.5 border-l border-slate-200 pl-2">

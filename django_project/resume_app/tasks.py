@@ -1571,3 +1571,55 @@ def pipeline_resume_llm_extract_task(run_dir_str: str):
         return {"status": "error", "message": str(e)}
 
     return {"status": "ok", "run_dir": run_dir_str}
+
+
+#
+# Autonomous Apply Agent
+#
+# A per-attempt cache lock prevents the heartbeat from double-processing the same
+# attempt if a previous step is still running (Huey may have multiple workers).
+APPLY_AGENT_STEP_LOCK_PREFIX = "apply_agent_step_lock:"
+APPLY_AGENT_STEP_LOCK_TIMEOUT = 600  # 10 min safety; steps are bounded well below this
+
+
+@db_task()
+def run_apply_agent_step(attempt_id: int):
+    """Advance one ApplicationAttempt by a single state-machine step.
+
+    Browser work happens inside the orchestrator with a hard per-step deadline
+    and a small concurrency semaphore. A per-attempt lock prevents concurrent
+    processing of the same attempt.
+    """
+    lock_key = f"{APPLY_AGENT_STEP_LOCK_PREFIX}{attempt_id}"
+    if not cache.add(lock_key, 1, APPLY_AGENT_STEP_LOCK_TIMEOUT):
+        return {"status": "skipped", "message": "Attempt already processing", "attempt_id": attempt_id}
+    try:
+        from .apply_agent import orchestrator
+
+        return orchestrator.advance_attempt(int(attempt_id))
+    finally:
+        cache.delete(lock_key)
+
+
+@db_periodic_task(crontab(minute="*"))
+def apply_agent_heartbeat():
+    """
+    Primary orchestrator driver (every 60s): enqueue a step for each non-terminal
+    ApplicationAttempt. This is the source of truth for progression, so a missed
+    optimizer callback or a dead worker never strands an attempt.
+    """
+    cfg = AppAutomationSettings.get_solo()
+    if not cfg.apply_agent_enabled:
+        return None
+    from .models import ApplicationAttempt
+
+    active = ApplicationAttempt.objects.filter(
+        status__in=ApplicationAttempt.ACTIVE_STATUSES
+    ).values_list("id", flat=True)
+    enqueued = 0
+    for attempt_id in list(active):
+        run_apply_agent_step(attempt_id)
+        enqueued += 1
+    if enqueued:
+        logger.info("[apply_agent_heartbeat] enqueued %s step(s)", enqueued)
+    return {"status": "ok", "enqueued": enqueued}

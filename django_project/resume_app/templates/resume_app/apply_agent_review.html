@@ -1,0 +1,205 @@
+{% extends "resume_app/base.html" %}
+
+{% block title %}Review application — ResumeElite{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-5xl">
+    <div class="mb-6">
+        <a href="{% url 'apply_agent' %}" class="text-sm font-medium text-slate-500 hover:text-concierge-slate">&larr; Apply Agent</a>
+        <h1 class="mt-2 text-2xl font-bold tracking-tight text-concierge-slate">{{ job.title }}</h1>
+        <p class="mt-1 text-sm text-slate-600">{{ job.company_name }}{% if attempt.ats_type %} · ATS: {{ attempt.ats_type }}{% endif %}</p>
+        {% if job.url %}
+        <p class="mt-1 text-xs text-slate-500">Source listing: <a href="{{ job.url }}" target="_blank" rel="noopener" class="underline">{{ job.url|truncatechars:80 }}</a></p>
+        {% endif %}
+    </div>
+
+    {% include "resume_app/_concierge_messages.html" %}
+
+    {% if is_active %}
+    <div class="mb-6 rounded-concierge border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+        The agent is working in the background (Huey heartbeat every ~60s). This page refreshes automatically.
+        {% if not settings.apply_agent_enabled %}
+        <strong class="block mt-1 text-amber-800">Apply Agent is disabled — enable it on the profile page or progress will stall.</strong>
+        {% endif %}
+    </div>
+    {% elif attempt.status == 'failed' and attempt.error_code == 'unresolved_url' %}
+    <div class="mb-6 rounded-concierge border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        {% if mock_resolver %}
+        URL resolution uses a <strong>mock map</strong> (dev default). Aggregator links like Indeed cannot be followed automatically —
+        paste the company apply URL (e.g. Greenhouse) below, or set <code class="text-xs">APPLY_USE_MOCK_RESOLVER=false</code> for live browser resolution.
+        {% else %}
+        Could not follow the job listing to a company apply page. Paste the direct apply URL below.
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <div class="mb-6 flex flex-wrap items-center gap-3">
+        <span class="rounded-full px-3 py-1 text-sm font-medium {% if attempt.status == 'succeeded' %}bg-emerald-100 text-emerald-900{% elif attempt.status == 'failed' %}bg-red-100 text-red-900{% elif attempt.status == 'awaiting_approval' %}bg-violet-100 text-violet-900{% else %}bg-sky-100 text-sky-900{% endif %}">
+            {{ attempt.get_status_display }}
+        </span>
+        {% if attempt.confidence is not None %}
+        <span class="text-sm text-slate-500">Confidence: {{ attempt.confidence }}</span>
+        {% endif %}
+        {% if attempt.apply_url %}
+        <a href="{{ attempt.apply_url }}" target="_blank" rel="noopener"
+           class="text-sm font-medium text-concierge-slate underline">Open apply page</a>
+        {% endif %}
+    </div>
+
+    {% if attempt.error_code == 'submit_ambiguous' %}
+    <div class="mb-6 rounded-concierge border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <strong>Submission could not be confirmed.</strong> The submit button was clicked, but no confirmation was detected.
+        The application may or may not have gone through — please verify manually on the company site before re-submitting.
+    </div>
+    {% elif attempt.error_message %}
+    <div class="mb-6 rounded-concierge border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+        {{ attempt.error_message }}
+        {% if attempt.error_code == 'no_adapter' and requires_manual_submit %}
+        <p class="mt-2 text-amber-900">This ATS cannot be auto-submitted. Re-run the agent; when review completes, use <strong>Mark as applied</strong> after you submit manually.</p>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% if is_handoff %}
+    <div class="mb-6 rounded-concierge border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
+        This ATS ({{ attempt.ats_type }}) is handled as an assistive handoff. Open the apply page above, apply manually,
+        then approve to mark this job done.
+    </div>
+    {% endif %}
+
+    <div class="grid gap-6 lg:grid-cols-3">
+        <div class="lg:col-span-2">
+            <section class="mb-6 rounded-concierge border border-slate-200 bg-white p-4">
+                <h2 class="mb-3 text-lg font-semibold text-concierge-slate">Captured answers (dry run)</h2>
+                {% if payload_items %}
+                <table class="w-full text-sm">
+                    <tbody>
+                        {% for key, value in payload_items %}
+                        <tr class="border-b border-slate-100">
+                            <td class="py-1.5 pr-4 font-medium text-slate-600">{{ key }}</td>
+                            <td class="py-1.5 text-concierge-slate">{{ value }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <p class="text-sm text-slate-600">No answer key captured yet.</p>
+                {% endif %}
+            </section>
+
+            {% if network_errors %}
+            <section class="mb-6 rounded-concierge border border-red-200 bg-red-50 p-4">
+                <h2 class="mb-3 text-lg font-semibold text-red-900">Network errors</h2>
+                <ul class="space-y-1 text-sm text-red-900">
+                    {% for e in network_errors %}
+                    <li><span class="font-mono">{{ e.status }}</span> — {{ e.url }} <span class="text-xs">({{ e.step }})</span></li>
+                    {% endfor %}
+                </ul>
+            </section>
+            {% endif %}
+
+            <section class="rounded-concierge border border-slate-200 bg-white p-4">
+                <h2 class="mb-3 text-lg font-semibold text-concierge-slate">Activity log</h2>
+                <p class="mb-3 text-xs text-slate-500">
+                    {% if browser_headless %}
+                    Browser runs headless in the Huey worker — screenshots and step details appear here as steps complete.
+                    {% else %}
+                    Browser window is visible on the machine running Huey. Screenshots and step details also appear here.
+                    {% endif %}
+                </p>
+                {% if step_rows %}
+                <ol class="space-y-4 text-sm">
+                    {% for row in step_rows %}
+                    {% with step=row.step %}
+                    <li class="border-b border-slate-100 pb-3">
+                        <div class="flex flex-wrap items-baseline gap-2">
+                            <span class="font-medium text-concierge-slate">{{ step.step_name }}</span>
+                            <span class="text-xs text-slate-400">{{ step.created_at }}</span>
+                        </div>
+                        {% if step.message %}<p class="mt-1 text-slate-700">{{ step.message }}</p>{% endif %}
+                        {% if step.action_snapshot %}
+                        <details class="mt-2">
+                            <summary class="cursor-pointer text-xs font-medium text-slate-500">Step details</summary>
+                            <dl class="mt-1 space-y-1 text-xs text-slate-600">
+                                {% for k, v in step.action_snapshot.items %}
+                                {% if v %}
+                                <div><dt class="inline font-medium text-slate-500">{{ k }}:</dt> <dd class="inline">{{ v }}</dd></div>
+                                {% endif %}
+                                {% endfor %}
+                            </dl>
+                        </details>
+                        {% endif %}
+                        {% if row.screenshot_url %}
+                        <a href="{{ row.screenshot_url }}" target="_blank" rel="noopener" class="mt-2 inline-block">
+                            <img src="{{ row.screenshot_url }}" alt="Screenshot for {{ step.step_name }}" class="max-h-48 rounded border border-slate-200">
+                        </a>
+                        {% endif %}
+                    </li>
+                    {% endwith %}
+                    {% endfor %}
+                </ol>
+                {% else %}
+                <p class="text-sm text-slate-600">No steps recorded yet.</p>
+                {% endif %}
+            </section>
+        </div>
+
+        <div>
+            <section class="rounded-concierge border border-slate-200 bg-white p-4">
+                <h2 class="mb-3 text-lg font-semibold text-concierge-slate">Actions</h2>
+                {% if is_awaiting %}
+                {% if requires_manual_submit %}
+                <p class="mb-3 text-xs text-slate-600">
+                    This ATS has no auto-submit adapter. Open the apply page, submit manually, then mark done below.
+                </p>
+                {% endif %}
+                <form method="post" class="mb-3">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="approve">
+                    {% if not requires_manual_submit %}
+                    <label class="mb-2 flex items-center gap-2 text-xs text-slate-600">
+                        <input type="checkbox" name="corrected" value="1" class="h-4 w-4 rounded border-slate-300">
+                        I corrected fields before approving
+                    </label>
+                    {% endif %}
+                    <button type="submit"
+                            class="w-full rounded-concierge bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700">
+                        {% if requires_manual_submit %}Mark as applied{% else %}Approve &amp; submit{% endif %}
+                    </button>
+                </form>
+                <form method="post" class="mb-4">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="reject">
+                    <button type="submit"
+                            class="w-full rounded-concierge border border-red-200 bg-white px-4 py-2 text-sm font-semibold text-red-800 hover:bg-red-50">
+                        Reject
+                    </button>
+                </form>
+                {% else %}
+                <p class="mb-4 text-sm text-slate-600">No actions available in this state.</p>
+                {% endif %}
+
+                <form method="post">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="override_url">
+                    <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Override apply URL</label>
+                    <input type="url" name="apply_url" placeholder="https://boards.greenhouse.io/..."
+                           class="mb-2 w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm">
+                    <button type="submit"
+                            class="w-full rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50">
+                        Set URL &amp; re-run
+                    </button>
+                </form>
+            </section>
+        </div>
+    </div>
+</div>
+{% if is_active %}
+<script>
+(function () {
+    var delayMs = 10000;
+    setTimeout(function () { window.location.reload(); }, delayMs);
+})();
+</script>
+{% endif %}
+{% endblock %}

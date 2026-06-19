@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import random
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -55,21 +56,34 @@ class _RateLimitReservation:
             logger.warning("llm_rate_limit release_on_invoke_failure failed: %s", e)
 
 
+_redis_client: object | None = None
+_redis_client_lock = threading.Lock()
+
+
 def _get_redis():
-    from django.conf import settings
+    """Return a process-wide Redis client (one connection pool per Huey worker)."""
+    global _redis_client
+    if _redis_client is not None:
+        return _redis_client
+    with _redis_client_lock:
+        if _redis_client is not None:
+            return _redis_client
+        from django.conf import settings
 
-    import redis
+        import redis
 
-    url = getattr(settings, "LLM_RATE_LIMIT_REDIS_URL", None)
-    if url:
-        return redis.from_url(url, decode_responses=True)
-    db = getattr(settings, "LLM_RATE_LIMIT_REDIS_DB", settings.HUEY_REDIS_DB)
-    return redis.Redis(
-        host=settings.HUEY_REDIS_HOST,
-        port=settings.HUEY_REDIS_PORT,
-        db=db,
-        decode_responses=True,
-    )
+        url = getattr(settings, "LLM_RATE_LIMIT_REDIS_URL", None)
+        if url:
+            _redis_client = redis.from_url(url, decode_responses=True)
+        else:
+            db = getattr(settings, "LLM_RATE_LIMIT_REDIS_DB", settings.HUEY_REDIS_DB)
+            _redis_client = redis.Redis(
+                host=settings.HUEY_REDIS_HOST,
+                port=settings.HUEY_REDIS_PORT,
+                db=db,
+                decode_responses=True,
+            )
+        return _redis_client
 
 
 def _get_limits_from_preferences(provider: str, model: str | None) -> Optional[tuple[int, int]]:

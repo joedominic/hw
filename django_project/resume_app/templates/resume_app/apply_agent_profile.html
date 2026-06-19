@@ -1,0 +1,190 @@
+{% extends "resume_app/base.html" %}
+
+{% block title %}Apply Agent profile — ResumeElite{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-3xl">
+    <div class="mb-6">
+        <a href="{% url 'apply_agent' %}" class="text-sm font-medium text-slate-500 hover:text-concierge-slate">&larr; Apply Agent</a>
+        <h1 class="mt-2 text-2xl font-bold tracking-tight text-concierge-slate">Profile &amp; settings</h1>
+        <p class="mt-1 text-sm text-slate-600">Standing applicant data and apply-agent behavior.</p>
+    </div>
+
+    {% include "resume_app/_concierge_messages.html" %}
+
+    <form method="post" class="mb-8 rounded-concierge border border-slate-200 bg-white p-5">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="save_profile">
+        <h2 class="mb-4 text-lg font-semibold text-concierge-slate">Applicant profile</h2>
+        <div class="grid gap-4 sm:grid-cols-2">
+            <label class="block text-sm">
+                <span class="mb-1 block font-medium text-slate-600">Full name</span>
+                <input type="text" name="full_name" value="{{ profile.full_name }}" class="w-full rounded-concierge border border-slate-200 px-3 py-2">
+            </label>
+            <label class="block text-sm">
+                <span class="mb-1 block font-medium text-slate-600">Email</span>
+                <input type="email" name="email" value="{{ profile.email }}" class="w-full rounded-concierge border border-slate-200 px-3 py-2">
+            </label>
+            <label class="block text-sm">
+                <span class="mb-1 block font-medium text-slate-600">Phone</span>
+                <input type="text" name="phone" value="{{ profile.phone }}" class="w-full rounded-concierge border border-slate-200 px-3 py-2">
+            </label>
+            <label class="block text-sm">
+                <span class="mb-1 block font-medium text-slate-600">Location</span>
+                <input type="text" name="location" value="{{ profile.location }}" class="w-full rounded-concierge border border-slate-200 px-3 py-2">
+            </label>
+            <label class="block text-sm">
+                <span class="mb-1 block font-medium text-slate-600">LinkedIn URL</span>
+                <input type="url" name="linkedin_url" value="{{ profile.linkedin_url }}" class="w-full rounded-concierge border border-slate-200 px-3 py-2">
+            </label>
+            <label class="block text-sm">
+                <span class="mb-1 block font-medium text-slate-600">Website / portfolio</span>
+                <input type="url" name="website_url" value="{{ profile.website_url }}" class="w-full rounded-concierge border border-slate-200 px-3 py-2">
+            </label>
+            <label class="block text-sm">
+                <span class="mb-1 block font-medium text-slate-600">Work authorization</span>
+                <input type="text" name="work_authorization" value="{{ profile.work_authorization }}" class="w-full rounded-concierge border border-slate-200 px-3 py-2">
+            </label>
+            <label class="block text-sm">
+                <span class="mb-1 block font-medium text-slate-600">Salary expectation</span>
+                <input type="text" name="salary_expectation" value="{{ profile.salary_expectation }}" class="w-full rounded-concierge border border-slate-200 px-3 py-2">
+            </label>
+        </div>
+        <label class="mt-3 flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" name="requires_sponsorship" value="1" {% if profile.requires_sponsorship %}checked{% endif %} class="h-4 w-4 rounded border-slate-300">
+            I require visa sponsorship
+        </label>
+        <label class="mt-2 flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" name="include_eeo" value="1" {% if profile.include_eeo %}checked{% endif %} class="h-4 w-4 rounded border-slate-300">
+            Answer voluntary EEO / demographic questions (otherwise left blank)
+        </label>
+        <label class="mt-4 block text-sm">
+            <span class="mb-1 block font-medium text-slate-600">Cover letter template</span>
+            <textarea name="cover_letter_template" rows="4" class="w-full rounded-concierge border border-slate-200 px-3 py-2" placeholder="Dear {company} team, ...">{{ profile.cover_letter_template }}</textarea>
+            <span class="mt-1 block text-xs text-slate-400">Placeholders: {company}, {title}</span>
+        </label>
+        <label class="mt-4 block text-sm">
+            <span class="mb-1 block font-medium text-slate-600">Custom Q&amp;A (JSON)</span>
+            <textarea name="custom_qa_pairs" rows="5" class="w-full rounded-concierge border border-slate-200 px-3 py-2 font-mono text-xs" placeholder='{"GitHub URL": "https://github.com/you", "Years with Django": "5"}'>{{ custom_qa_json }}</textarea>
+            <span class="mt-1 block text-xs text-slate-400">Reusable answers for screening questions, matched by label.</span>
+        </label>
+        <button type="submit" class="mt-4 rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">
+            Save profile
+        </button>
+    </form>
+
+    <form method="post" class="rounded-concierge border border-slate-200 bg-white p-5">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="save_settings">
+        <h2 class="mb-4 text-lg font-semibold text-concierge-slate">Agent settings</h2>
+        <label class="mb-3 flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" name="apply_agent_enabled" value="1" {% if settings.apply_agent_enabled %}checked{% endif %} class="h-4 w-4 rounded border-slate-300">
+            Enable the apply agent (runs the 60s heartbeat)
+        </label>
+        <div class="grid gap-4 sm:grid-cols-2">
+            <label class="block text-sm">
+                <span class="mb-1 block font-medium text-slate-600">Automation mode</span>
+                <select name="apply_automation_mode" class="w-full rounded-concierge border border-slate-200 px-3 py-2">
+                    <option value="semi_auto" {% if settings.apply_automation_mode == 'semi_auto' %}selected{% endif %}>Semi-auto (review before submit)</option>
+                    <option value="full_auto" {% if settings.apply_automation_mode == 'full_auto' %}selected{% endif %}>Full-auto (graduated adapters only)</option>
+                </select>
+            </label>
+            <label class="block text-sm">
+                <span class="mb-1 block font-medium text-slate-600">Resume upload format</span>
+                <select name="apply_resume_upload_format" class="w-full rounded-concierge border border-slate-200 px-3 py-2">
+                    <option value="pdf" {% if settings.apply_resume_upload_format == 'pdf' %}selected{% endif %}>PDF (recommended)</option>
+                    <option value="docx" {% if settings.apply_resume_upload_format == 'docx' %}selected{% endif %}>Word (DOCX)</option>
+                </select>
+            </label>
+            <label class="block text-sm">
+                <span class="mb-1 block font-medium text-slate-600">Minimum optimizer score (0 = off)</span>
+                <input type="number" name="apply_min_optimizer_score" min="0" max="100" value="{{ settings.apply_min_optimizer_score }}" class="w-full rounded-concierge border border-slate-200 px-3 py-2">
+            </label>
+            <label class="block text-sm">
+                <span class="mb-1 block font-medium text-slate-600">Allowed ATS (comma-separated)</span>
+                <input type="text" name="apply_allowed_ats" value="{{ allowed_ats_text }}" placeholder="greenhouse, lever" class="w-full rounded-concierge border border-slate-200 px-3 py-2">
+                <span class="mt-1 block text-xs text-slate-400">Supported: {{ supported_ats|join:", " }}</span>
+            </label>
+        </div>
+        <label class="mt-3 flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" name="apply_generic_fallback_enabled" value="1" {% if settings.apply_generic_fallback_enabled %}checked{% endif %} class="h-4 w-4 rounded border-slate-300">
+            Use the generic browser agent for unknown ATS (always requires review)
+        </label>
+        <label class="mt-3 flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" name="apply_browser_show_window" value="1" {% if settings.apply_browser_show_window %}checked{% endif %} class="h-4 w-4 rounded border-slate-300">
+            Show browser window during apply steps (dev — Huey must run on this PC)
+        </label>
+        <div class="mt-4 rounded-concierge border border-slate-100 bg-slate-50 p-4">
+            <h3 class="mb-1 text-sm font-semibold text-concierge-slate">Generic agent LLM</h3>
+            <p class="mb-3 text-xs text-slate-600">
+                Used only for unknown ATS form fill (browser-use). Pick a large, vision-capable cloud model
+                (e.g. GPT-4o, Claude Sonnet, Gemini Pro). Leave provider blank to use the global active provider.
+            </p>
+            <div class="grid gap-4 sm:grid-cols-2">
+                <label class="block text-sm">
+                    <span class="mb-1 block font-medium text-slate-600">Provider</span>
+                    <select id="apply-agent-llm-provider" name="apply_agent_llm_provider" class="w-full rounded-concierge border border-slate-200 px-3 py-2">
+                        <option value="">Global active provider</option>
+                        {% for p in apply_agent_llm_providers %}
+                        <option value="{{ p }}" {% if p == apply_agent_llm_selected_provider %}selected{% endif %}>{{ p }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label class="block text-sm">
+                    <span class="mb-1 block font-medium text-slate-600">Model</span>
+                    <select id="apply-agent-llm-model" name="apply_agent_llm_model" class="w-full rounded-concierge border border-slate-200 px-3 py-2">
+                    </select>
+                    <span class="mt-1 block text-xs text-slate-400">Blank provider uses the active provider's default model.</span>
+                </label>
+            </div>
+            {% if apply_agent_llm_effective_provider %}
+            <p class="mt-2 text-xs text-slate-500">
+                Effective at runtime:
+                <strong>{{ apply_agent_llm_effective_provider }}</strong>
+                {% if apply_agent_llm_effective_model %}· {{ apply_agent_llm_effective_model }}{% endif %}
+            </p>
+            {% endif %}
+        </div>
+        <button type="submit" class="mt-4 rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">
+            Save settings
+        </button>
+    </form>
+</div>
+{{ apply_agent_llm_models_by_provider|json_script:"apply-agent-llm-models" }}
+{{ apply_agent_llm_selected_model|json_script:"apply-agent-selected-model" }}
+<script>
+(function () {
+    var modelsByProvider = JSON.parse(document.getElementById('apply-agent-llm-models').textContent);
+    var selectedModel = JSON.parse(document.getElementById('apply-agent-selected-model').textContent);
+    var providerSelect = document.getElementById('apply-agent-llm-provider');
+    var modelSelect = document.getElementById('apply-agent-llm-model');
+    if (!providerSelect || !modelSelect) return;
+
+    function rebuildModels(keepSelection) {
+        var provider = providerSelect.value;
+        var models = provider ? (modelsByProvider[provider] || []) : [];
+        modelSelect.innerHTML = '';
+        var blank = document.createElement('option');
+        blank.value = '';
+        blank.textContent = provider ? 'Provider default' : '(select a provider first)';
+        modelSelect.appendChild(blank);
+        models.forEach(function (m) {
+            var opt = document.createElement('option');
+            opt.value = m;
+            opt.textContent = m;
+            if (keepSelection && m === selectedModel) {
+                opt.selected = true;
+            }
+            modelSelect.appendChild(opt);
+        });
+        modelSelect.disabled = !provider;
+    }
+
+    providerSelect.addEventListener('change', function () {
+        selectedModel = '';
+        rebuildModels(false);
+    });
+    rebuildModels(true);
+})();
+</script>
+{% endblock %}

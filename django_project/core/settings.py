@@ -236,6 +236,17 @@ HUEY = {
     },
 }
 
+# --- Autonomous Apply Agent ---
+# Mock-first URL resolution: when true (dev/CI default), resolve_and_detect uses a
+# deterministic URL map instead of live Playwright redirect following.
+APPLY_USE_MOCK_RESOLVER = env.bool("APPLY_USE_MOCK_RESOLVER", default=True)
+# Max concurrent browser automation steps (keep low; Chromium is memory-heavy).
+APPLY_BROWSER_CONCURRENCY = env.int("APPLY_BROWSER_CONCURRENCY", default=2)
+# Hard wall-clock cap per browser-touching orchestrator step (seconds).
+APPLY_BROWSER_STEP_TIMEOUT_SECONDS = env.int("APPLY_BROWSER_STEP_TIMEOUT_SECONDS", default=360)
+# When False, Playwright and browser-use open a visible Chromium window (dev only; Huey must run locally).
+APPLY_BROWSER_HEADLESS = env.bool("APPLY_BROWSER_HEADLESS", default=False)
+
 # --- LLM rate limits (Redis, shared across workers). Only providers listed in
 # LLM_RATE_LIMIT_BY_PROVIDER are throttled; tune via env vars.
 LLM_RATE_LIMIT_ENABLED = env.bool("LLM_RATE_LIMIT_ENABLED", default=True)

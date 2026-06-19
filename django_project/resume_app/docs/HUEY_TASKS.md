@@ -364,6 +364,50 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 
 ---
 
+## 11. `apply_agent_heartbeat()`
+
+**Defined:** `resume_app/tasks.py` — `@db_periodic_task(crontab(minute="*"))`
+
+**When it runs:**
+- Every 60 seconds. This is the **primary driver** of the Autonomous Apply Agent state machine.
+
+**Gate:**
+- No-ops unless `AppAutomationSettings.apply_agent_enabled` is true (Apply Agent → Profile & settings).
+
+**What it does:**
+- Finds every `ApplicationAttempt` in a non-terminal status (`ApplicationAttempt.ACTIVE_STATUSES`) and enqueues `run_apply_agent_step` for each. Because all progress is DB-persisted, a missed optimizer callback or a dead worker never strands an attempt — the next tick resumes it.
+
+**Returns:**
+- `{"status": "ok", "enqueued": <n>}` (or `None` when disabled).
+
+---
+
+## 12. `run_apply_agent_step(attempt_id)`
+
+**Defined:** `resume_app/tasks.py` — `@db_task()`
+
+**When it runs:**
+- Enqueued by `apply_agent_heartbeat`, and as an immediate fast-path when an attempt is started, approved, or given an override URL (via the Apply Agent UI / `apply_api`).
+
+**What it does:**
+- Acquires a per-attempt cache lock (so the same attempt is never processed twice concurrently), then calls `apply_agent.orchestrator.advance_attempt(attempt_id)` to perform exactly one state-machine step:
+  - `queued → optimizing → waiting_optimizer` (waits for `OptimizedResume`)
+  - `→ resolve_and_detect` (mock URL map by default; live Playwright redirect following when `APPLY_USE_MOCK_RESOLVER=False`)
+  - `→ dry_run_fill` (headless fill via a deterministic ATS adapter, or the browser-use generic agent for unknown ATS; captures a semantic answer key)
+  - `→ awaiting_approval` (semi-auto) or `→ submitting` (graduated full-auto)
+  - `submitting` is **atomic**: re-validation fill on a fresh form + Submit + success assertion (DOM confirmation and submit XHR) in one transaction, then `succeeded` + `PipelineEntry.mark_done()`.
+- Browser work runs inside an isolated `browser.new_context()` with a 30s default page timeout and a small concurrency semaphore (`APPLY_BROWSER_CONCURRENCY`, default 2). A crash/timeout mid-submit is recorded as `submit_ambiguous` and never auto-retried (double-apply risk).
+
+**Configuration (`core/settings.py` / env):**
+- `APPLY_USE_MOCK_RESOLVER` (default `True`) — mock vs live URL resolution.
+- `APPLY_BROWSER_CONCURRENCY` (default `2`) — max concurrent browser steps.
+- `AppAutomationSettings.apply_*` — mode, allowed ATS, upload format, min optimizer score, full-auto graduation threshold.
+
+**Returns:**
+- `{"status": "ok"|"noop"|"skipped"|"error", "state": <status>}`.
+
+---
+
 ## Operational notes (re: LLM usage)
 
 - The biggest periodic LLM load is typically:

@@ -193,43 +193,44 @@ def fetch_dice_jobs(
     if not search_term or not search_term.strip():
         raise ValueError("search_term is required for Dice")
 
-    session = requests.Session()
-    session.headers.update({"User-Agent": DEFAULT_DICE_USER_AGENT})
     seen_urls: set[str] = set()
     collected: List[dict] = []
     page = 1
     max_pages = max(1, (results_wanted + DICE_JOBS_PER_PAGE - 1) // DICE_JOBS_PER_PAGE) + 2
 
-    while len(collected) < results_wanted and page <= max_pages:
-        params: dict = {
-            "q": search_term.strip(),
-            "location": (location or "").strip(),
-            "page": page,
-            "pageSize": DICE_JOBS_PER_PAGE,
-        }
-        posted = _dice_posted_date_param(hours_old)
-        if posted:
-            params["postedDate"] = posted
+    with requests.Session() as session:
+        session.headers.update({"User-Agent": DEFAULT_DICE_USER_AGENT})
 
-        try:
-            response = session.get(
-                DICE_SEARCH_URL,
-                params=params,
-                timeout=timeout_seconds,
-            )
-            response.raise_for_status()
-        except requests.RequestException as e:
-            logger.warning("Dice fetch failed page=%s: %s", page, e)
-            break
+        while len(collected) < results_wanted and page <= max_pages:
+            params: dict = {
+                "q": search_term.strip(),
+                "location": (location or "").strip(),
+                "page": page,
+                "pageSize": DICE_JOBS_PER_PAGE,
+            }
+            posted = _dice_posted_date_param(hours_old)
+            if posted:
+                params["postedDate"] = posted
 
-        page_jobs = _parse_jobs_from_html(response.text, seen_urls)
-        if not page_jobs:
-            logger.info("[dice_client] No jobs on page %s", page)
-            break
-        collected.extend(page_jobs)
-        page += 1
-        if page <= max_pages and len(collected) < results_wanted:
-            time.sleep(DICE_PAGE_DELAY_SECONDS)
+            page_jobs: List[dict] = []
+            try:
+                with session.get(
+                    DICE_SEARCH_URL,
+                    params=params,
+                    timeout=timeout_seconds,
+                ) as response:
+                    response.raise_for_status()
+                    page_jobs = _parse_jobs_from_html(response.text, seen_urls)
+            except requests.RequestException as e:
+                logger.warning("Dice fetch failed page=%s: %s", page, e)
+                break
+            if not page_jobs:
+                logger.info("[dice_client] No jobs on page %s", page)
+                break
+            collected.extend(page_jobs)
+            page += 1
+            if page <= max_pages and len(collected) < results_wanted:
+                time.sleep(DICE_PAGE_DELAY_SECONDS)
 
     logger.info("[dice_client] Fetched %d Dice job(s) (wanted %d)", len(collected), results_wanted)
     return collected[:results_wanted]

@@ -19,6 +19,7 @@ from .models import (
     OptimizerWorkflow,
 )
 from .jobs_api import router as jobs_router
+from .apply_api import router as apply_router
 from .tasks import optimize_resume_task
 from .prompts import DEFAULT_MATCHING_PROMPT
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -44,7 +45,9 @@ from .llm_gateway import (
 from .services import parse_pdf
 from .crypto import encrypt_api_key, decrypt_api_key
 from .llm_services import list_models_for_provider, is_auth_error, DEFAULT_MODELS, LLM_PROVIDERS
-from typing import List, Optional
+from typing import Annotated, List, Optional
+
+from pydantic import BeforeValidator
 from django.conf import settings
 import json
 import io
@@ -57,11 +60,24 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 router.add_router("/jobs", jobs_router)
+router.add_router("/apply", apply_router)
 
 MAX_JOB_DESCRIPTION_LENGTH = 50_000
 MAX_RESUME_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 ALLOWED_CONTENT_TYPES = ("application/pdf",)
 PDF_EXTENSION = ".pdf"
+
+
+def _optional_int_from_form(value: object) -> object:
+    """Treat blank form values as None for Optional[int] fields."""
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value
+
+
+OptionalFormInt = Annotated[Optional[int], BeforeValidator(_optional_int_from_form)]
 
 
 def _require_api_auth(request):
@@ -84,12 +100,12 @@ class OptimizeRequest(Schema):
     prompt_writer: Optional[str] = None  # override default writer prompt template
     prompt_ats_judge: Optional[str] = None  # override default ATS judge prompt template
     prompt_recruiter_judge: Optional[str] = None  # override default recruiter judge prompt template
-    ats_judge_profile_id: Optional[int] = None  # named ATS profile from library
-    optimizer_workflow_id: Optional[int] = None  # saved workflow (steps + default ATS)
+    ats_judge_profile_id: OptionalFormInt = None  # named ATS profile from library
+    optimizer_workflow_id: OptionalFormInt = None  # saved workflow (steps + default ATS)
     debug: Optional[bool] = None  # when True, log full prompts sent to LLM in agent logs
     workflow_steps: Optional[str] = None  # JSON array of step ids, e.g. ["writer","ats_judge","recruiter_judge"]
     loop_to: Optional[str] = None  # step to loop back to after last step; empty = single pass
-    score_threshold: Optional[int] = None  # exit when avg score >= this (0-100, default 85)
+    score_threshold: OptionalFormInt = None  # exit when avg score >= this (0-100, default 85)
     optimization_notes: Optional[str] = None
     pipeline_skills_json: Optional[str] = None
     job_highlights: Optional[str] = None
@@ -142,14 +158,14 @@ class FitCheckResponse(Schema):
 class RunStepRequest(Schema):
     step: str  # writer | ats_judge | recruiter_judge
     job_description: str
-    use_resume_id: Optional[int] = None
+    use_resume_id: OptionalFormInt = None
     optimized_resume: Optional[str] = None  # draft text; writer uses when non-empty. Judges: draft or file/use_resume_id (PDF text).
     feedback: Optional[str] = None  # for writer (comma-separated)
     prompt_writer: Optional[str] = None
     prompt_ats_judge: Optional[str] = None
     prompt_recruiter_judge: Optional[str] = None
-    ats_judge_profile_id: Optional[int] = None
-    optimizer_workflow_id: Optional[int] = None
+    ats_judge_profile_id: OptionalFormInt = None
+    optimizer_workflow_id: OptionalFormInt = None
     llm_provider: str
     llm_model: Optional[str] = None
     debug: Optional[bool] = None

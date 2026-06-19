@@ -2,6 +2,10 @@ from django.contrib import admin
 from .models import (
     AtsJudgeProfile,
     AppAutomationSettings,
+    ApplicantProfile,
+    ApplicationAttempt,
+    ApplicationAttemptStep,
+    AtsAutoSubmitStats,
     LLMAppUsageTotals,
     LLMUsageByModel,
     LLMUsageByQuery,
@@ -10,6 +14,7 @@ from .models import (
     JobListing,
     JobMatchResult,
     JobListingEmbedding,
+    SiteCredential,
     UserDisqualifier,
     OptimizerWorkflow,
     UserPromptProfile,
@@ -142,4 +147,38 @@ class OptimizerWorkflowAdmin(admin.ModelAdmin):
 @admin.register(UserPromptProfile)
 class UserPromptProfileAdmin(admin.ModelAdmin):
     list_display = ("id", "updated_at")
+    readonly_fields = ("updated_at",)
+
+
+@admin.register(ApplicantProfile)
+class ApplicantProfileAdmin(admin.ModelAdmin):
+    list_display = ("id", "full_name", "email", "updated_at")
+    readonly_fields = ("updated_at",)
+
+
+@admin.register(SiteCredential)
+class SiteCredentialAdmin(admin.ModelAdmin):
+    list_display = ("domain", "label", "username", "updated_at")
+    search_fields = ("domain", "label")
+    readonly_fields = ("created_at", "updated_at")
+
+
+class ApplicationAttemptStepInline(admin.TabularInline):
+    model = ApplicationAttemptStep
+    extra = 0
+    readonly_fields = ("step_name", "message", "screenshot_path", "created_at")
+    can_delete = False
+
+
+@admin.register(ApplicationAttempt)
+class ApplicationAttemptAdmin(admin.ModelAdmin):
+    list_display = ("id", "pipeline_entry", "status", "ats_type", "automation_mode", "error_code", "updated_at")
+    list_filter = ("status", "ats_type", "automation_mode")
+    readonly_fields = ("created_at", "updated_at", "started_at", "submitted_at", "last_heartbeat_at")
+    inlines = (ApplicationAttemptStepInline,)
+
+
+@admin.register(AtsAutoSubmitStats)
+class AtsAutoSubmitStatsAdmin(admin.ModelAdmin):
+    list_display = ("ats_type", "clean_submit_streak", "total_submits", "total_corrections", "full_auto_enabled")
     readonly_fields = ("updated_at",)

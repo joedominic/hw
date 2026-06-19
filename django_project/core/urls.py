@@ -4,10 +4,10 @@ from ninja import NinjaAPI
 
 from resume_app.api import router as resume_router
 from resume_app import views as resume_views
+from resume_app import apply_views
 
 api = NinjaAPI()
 api.add_router("/resume", resume_router)
-
 urlpatterns = [
     # Primary entry point: Django UI
     path("", resume_views.optimizer_view, name="home"),
@@ -42,6 +42,9 @@ urlpatterns = [
     ),
     path("jobs/applying/", resume_views.applying_view, name="applying"),
     path("jobs/done/", resume_views.done_view, name="done"),
+    path("jobs/apply-agent/", apply_views.apply_agent_dashboard_view, name="apply_agent"),
+    path("jobs/apply-agent/profile/", apply_views.apply_agent_profile_view, name="apply_agent_profile"),
+    path("jobs/apply-agent/<int:attempt_id>/", apply_views.apply_agent_review_view, name="apply_agent_review"),
     path("jobs/tracks/", resume_views.track_list_view, name="track_list"),
     path("jobs/tracks/<slug:slug>/delete/", resume_views.track_delete_view, name="track_delete"),
     path("jobs/automation/", resume_views.job_tasks_view, name="job_automation"),
@@ -82,3 +85,10 @@ urlpatterns = [
         name="focus_alignment",
     ),
 ]
+
+from django.conf import settings
+
+if settings.DEBUG:
+    from django.conf.urls.static import static
+
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

@@ -499,6 +499,58 @@ class AppAutomationSettings(models.Model):
         default="",
         help_text="Default supplemental accomplishments for the Resume Optimizer.",
     )
+
+    # --- Autonomous Apply Agent ---
+    apply_agent_enabled = models.BooleanField(
+        default=False,
+        help_text="Master switch for the Autonomous Apply Agent (browser automation).",
+    )
+    apply_automation_mode = models.CharField(
+        max_length=16,
+        choices=[("semi_auto", "Semi-auto (review before submit)"), ("full_auto", "Full-auto (submit without review)")],
+        default="semi_auto",
+        help_text="Semi-auto pauses for human approval before submitting; full-auto submits autonomously for graduated ATS adapters only.",
+    )
+    apply_min_optimizer_score = models.PositiveSmallIntegerField(
+        default=0,
+        help_text="Require optimized resume avg (ATS+recruiter) >= this before applying (0 = no gate).",
+    )
+    apply_allowed_ats = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="ATS slugs the agent is allowed to apply to (e.g. ['greenhouse', 'lever']). Empty = greenhouse + lever defaults.",
+    )
+    apply_generic_fallback_enabled = models.BooleanField(
+        default=True,
+        help_text="Use the browser-use generic agent for unknown ATS (always requires review; never auto-submits).",
+    )
+    apply_resume_upload_format = models.CharField(
+        max_length=8,
+        choices=[("pdf", "PDF"), ("docx", "Word (DOCX)")],
+        default="pdf",
+        help_text="File format used when the agent uploads the optimized resume. PDF is the stable default for v1.",
+    )
+    apply_full_auto_min_clean_submits = models.PositiveSmallIntegerField(
+        default=10,
+        help_text="An ATS may graduate to full-auto only after this many approved submissions with zero human corrections.",
+    )
+    apply_agent_llm_provider = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        help_text="Dedicated LLM provider for browser-use generic form fill. Blank = global active provider.",
+    )
+    apply_agent_llm_model = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+        help_text="Model for the apply-agent LLM. Blank = provider default from Settings.",
+    )
+    apply_browser_show_window = models.BooleanField(
+        default=False,
+        help_text="When True, show a visible Chromium window during apply-agent browser steps (dev; requires Huey on this machine).",
+    )
+
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -850,3 +902,296 @@ class JobSearchTaskRun(models.Model):
 
     def __str__(self):
         return f"{self.task_id} @ {self.started_at}"
+
+
+class ApplicantProfile(models.Model):
+    """
+    Singleton (use pk=1): the applicant's standing personal data used to fill
+    job application forms. Resume content is handled separately by the optimizer;
+    this holds contact details and reusable answers to screening questions.
+    """
+
+    full_name = models.CharField(max_length=255, blank=True, default="")
+    email = models.EmailField(blank=True, default="")
+    phone = models.CharField(max_length=64, blank=True, default="")
+    location = models.CharField(max_length=255, blank=True, default="")
+    linkedin_url = models.URLField(max_length=512, blank=True, default="")
+    website_url = models.URLField(max_length=512, blank=True, default="")
+    work_authorization = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="e.g. 'US Citizen', 'Green Card', 'H-1B'. Used for work-eligibility questions.",
+    )
+    requires_sponsorship = models.BooleanField(
+        default=False,
+        help_text="Answer to 'Do you require sponsorship?' style questions.",
+    )
+    salary_expectation = models.CharField(max_length=128, blank=True, default="")
+    cover_letter_template = models.TextField(
+        blank=True,
+        default="",
+        help_text="Optional default cover letter / message body. Placeholders like {company} and {title} are substituted.",
+    )
+    custom_qa_pairs = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Key/value answers for edge-case questions (e.g. {'GitHub URL': '...', 'Years with Django': '5'}).",
+    )
+    include_eeo = models.BooleanField(
+        default=False,
+        help_text="If false, the agent leaves voluntary EEO/demographic questions blank.",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Applicant profile"
+        verbose_name_plural = "Applicant profile"
+
+    def __str__(self):
+        return self.full_name or "Applicant profile"
+
+    @classmethod
+    def get_solo(cls):
+        obj, _created = cls.objects.get_or_create(pk=1)
+        return obj
+
+
+class SiteCredential(models.Model):
+    """
+    Encrypted login credentials and/or saved session cookies for a career-site
+    domain or ATS. Reused across application attempts so the agent does not have
+    to create accounts repeatedly. Secrets are encrypted at rest (Fernet).
+    """
+
+    domain = models.CharField(
+        max_length=255,
+        unique=True,
+        help_text="Host the credential applies to, e.g. 'boards.greenhouse.io' or 'acme.com'.",
+    )
+    label = models.CharField(max_length=255, blank=True, default="")
+    username = models.CharField(max_length=255, blank=True, default="")
+    encrypted_password = models.TextField(blank=True, default="")
+    encrypted_session_cookies = models.TextField(
+        blank=True,
+        default="",
+        help_text="Encrypted JSON blob of cookies for explicit injection into a fresh browser context.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["domain"]
+
+    def __str__(self):
+        return self.label or self.domain
+
+    def set_password(self, plain: str) -> None:
+        from .crypto import encrypt_api_key
+
+        self.encrypted_password = encrypt_api_key(plain or "")
+
+    def get_password(self) -> str:
+        from .crypto import decrypt_api_key
+
+        return decrypt_api_key(self.encrypted_password or "")
+
+    def set_session_cookies(self, cookies: list | dict) -> None:
+        import json
+
+        from .crypto import encrypt_api_key
+
+        self.encrypted_session_cookies = encrypt_api_key(json.dumps(cookies or []))
+
+    def get_session_cookies(self) -> list:
+        import json
+
+        from .crypto import decrypt_api_key
+
+        raw = decrypt_api_key(self.encrypted_session_cookies or "")
+        if not raw:
+            return []
+        try:
+            data = json.loads(raw)
+        except (ValueError, TypeError):
+            return []
+        return data if isinstance(data, list) else []
+
+
+class ApplicationAttempt(models.Model):
+    """
+    One run of the Autonomous Apply Agent for a single Applying-stage pipeline entry.
+
+    The agent advances this row through a state machine (see Status). Every step
+    persists resumable context to the DB so stateless Huey workers can resume after
+    a restart; the browser session itself is never kept alive between tasks.
+    """
+
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        OPTIMIZING = "optimizing", "Optimizing resume"
+        WAITING_OPTIMIZER = "waiting_optimizer", "Waiting for optimizer"
+        RESOLVE_AND_DETECT = "resolve_and_detect", "Resolving URL"
+        DRY_RUN_FILL = "dry_run_fill", "Dry-run fill"
+        AWAITING_APPROVAL = "awaiting_approval", "Awaiting approval"
+        SUBMITTING = "submitting", "Submitting"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+
+    # Non-terminal statuses the heartbeat sweeper should keep nudging forward.
+    ACTIVE_STATUSES = (
+        Status.QUEUED,
+        Status.OPTIMIZING,
+        Status.WAITING_OPTIMIZER,
+        Status.RESOLVE_AND_DETECT,
+        Status.DRY_RUN_FILL,
+        Status.SUBMITTING,
+    )
+
+    class Mode(models.TextChoices):
+        SEMI_AUTO = "semi_auto", "Semi-auto"
+        FULL_AUTO = "full_auto", "Full-auto"
+
+    # Error codes for failed attempts (drives UI messaging).
+    ERROR_AUTOMATION_TIMEOUT = "automation_timeout"
+    ERROR_SUBMIT_AMBIGUOUS = "submit_ambiguous"
+    ERROR_UNRESOLVED_URL = "unresolved_url"
+    ERROR_CAPTCHA = "captcha"
+    ERROR_NO_RESUME = "no_resume"
+    ERROR_NO_ADAPTER = "no_adapter"
+    ERROR_FILL_FAILED = "fill_failed"
+    ERROR_REJECTED = "rejected"
+    ERROR_OPTIMIZER_FAILED = "optimizer_failed"
+
+    pipeline_entry = models.ForeignKey(
+        "PipelineEntry",
+        on_delete=models.CASCADE,
+        related_name="application_attempts",
+    )
+    optimized_resume = models.ForeignKey(
+        "OptimizedResume",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="application_attempts",
+    )
+    status = models.CharField(max_length=24, choices=Status.choices, default=Status.QUEUED)
+    automation_mode = models.CharField(max_length=16, choices=Mode.choices, default=Mode.SEMI_AUTO)
+    apply_url = models.URLField(max_length=2048, blank=True, default="")
+    ats_type = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        help_text="Detected ATS slug, e.g. greenhouse, lever, workday, unknown.",
+    )
+    confidence = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="Adapter/agent confidence (0.0–1.0) that the form was filled correctly.",
+    )
+    fill_payload_json = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Semantic answer key captured in the dry run (field label -> value). Never stores CSRF/hidden tokens.",
+    )
+    session_state_json = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Optional login cookies/storage for explicit injection into a fresh context (not form anti-fraud tokens).",
+    )
+    resume_file_path = models.CharField(
+        max_length=1024,
+        blank=True,
+        default="",
+        help_text="Path to the exported optimized resume (PDF/DOCX) used for upload.",
+    )
+    error_code = models.CharField(max_length=32, blank=True, default="")
+    error_message = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    last_heartbeat_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Set when a worker begins processing a step; used to detect stuck attempts.",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["status", "-created_at"]),
+        ]
+
+    def __str__(self):
+        return f"ApplicationAttempt {self.id} ({self.status})"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in (self.Status.SUCCEEDED, self.Status.FAILED)
+
+    def mark_failed(self, error_code: str, message: str = "", save: bool = True) -> None:
+        self.status = self.Status.FAILED
+        self.error_code = error_code or ""
+        self.error_message = (message or "")[:4000]
+        if save:
+            self.save(update_fields=["status", "error_code", "error_message", "updated_at"])
+
+
+class ApplicationAttemptStep(models.Model):
+    """Audit log row for one step of an ApplicationAttempt (screenshots, actions, network)."""
+
+    attempt = models.ForeignKey(
+        ApplicationAttempt,
+        on_delete=models.CASCADE,
+        related_name="steps",
+    )
+    step_name = models.CharField(max_length=64)
+    message = models.TextField(blank=True, default="")
+    screenshot_path = models.CharField(max_length=1024, blank=True, default="")
+    action_snapshot = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Structured snapshot of actions taken / fields filled in this step.",
+    )
+    network_log = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="XHR/fetch responses observed during this step (catches silent ATS validation errors).",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+    def __str__(self):
+        return f"{self.attempt_id}: {self.step_name}"
+
+
+class AtsAutoSubmitStats(models.Model):
+    """
+    Per-ATS counters that gate graduation from semi-auto to full-auto.
+
+    Full-auto is enabled for an ATS only after `clean_submit_streak` reaches the
+    configured threshold (approved submissions with zero human corrections).
+    """
+
+    ats_type = models.CharField(max_length=32, unique=True)
+    clean_submit_streak = models.PositiveIntegerField(
+        default=0,
+        help_text="Consecutive approved submissions with no human corrections. Resets to 0 on any correction.",
+    )
+    total_submits = models.PositiveIntegerField(default=0)
+    total_corrections = models.PositiveIntegerField(default=0)
+    full_auto_enabled = models.BooleanField(
+        default=False,
+        help_text="When true (and global mode allows), this ATS may submit without review.",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "ATS auto-submit stats"
+        verbose_name_plural = "ATS auto-submit stats"
+
+    def __str__(self):
+        return f"{self.ats_type}: streak={self.clean_submit_streak} full_auto={self.full_auto_enabled}"
