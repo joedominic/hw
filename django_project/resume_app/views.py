@@ -1203,7 +1203,8 @@ def llm_test_view(request):
 
 def prompt_library_view(request):
     """
-    Prompt Library: edit Writer / Recruiter / Matching / Insights / JD cleanse templates.
+    Prompt Library: edit Writer / Recruiter / Matching / Insights / Cover letter /
+    Interview prep / JD cleanse templates.
     ATS judge prompts are managed as named AtsJudgeProfile rows.
     """
     from .models import AtsJudgeProfile
@@ -1333,6 +1334,16 @@ def prompt_library_view(request):
             jd_combined = request.POST.get("prompt_jd_cleanse_combined") or ""
             jd_leg, jd_sys, jd_usr = _prompt_triple(jd_sys, jd_usr, jd_combined)
 
+            cl_sys = request.POST.get("prompt_cover_letter_system") or ""
+            cl_usr = request.POST.get("prompt_cover_letter_user") or ""
+            cl_combined = request.POST.get("prompt_cover_letter_combined") or ""
+            cl_leg, cl_sys, cl_usr = _prompt_triple(cl_sys, cl_usr, cl_combined)
+
+            ip_sys = request.POST.get("prompt_interview_prep_system") or ""
+            ip_usr = request.POST.get("prompt_interview_prep_user") or ""
+            ip_combined = request.POST.get("prompt_interview_prep_combined") or ""
+            ip_leg, ip_sys, ip_usr = _prompt_triple(ip_sys, ip_usr, ip_combined)
+
             prompts = {
                 "writer": writer_leg,
                 "writer_system": writer_sys,
@@ -1349,10 +1360,16 @@ def prompt_library_view(request):
                 "jd_cleanse": jd_leg,
                 "jd_cleanse_system": jd_sys,
                 "jd_cleanse_user": jd_usr,
+                "cover_letter": cl_leg,
+                "cover_letter_system": cl_sys,
+                "cover_letter_user": cl_usr,
+                "interview_prep": ip_leg,
+                "interview_prep_system": ip_sys,
+                "interview_prep_user": ip_usr,
             }
             save_prompts_to_profile(request, prompts)
             prompts = get_effective_prompts(request)
-            messages.success(request, "Prompts saved. They will be used by the Resume Optimizer, Job Search, vetting, and JD cleansing.")
+            messages.success(request, "Prompts saved. They will be used by the Resume Optimizer, Job Search, vetting, cover letter, interview prep, and JD cleansing.")
             return redirect(reverse("prompt_library"))
         if action == "reset_prompts":
             try:

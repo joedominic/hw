@@ -119,6 +119,11 @@
                             {% if stage_label == "applying" %}
                             <a href="{% url 'resume_optimizer' %}?job_id={{ j.id }}{% if j.optimizer_user_resume_id %}&amp;resume_id={{ j.optimizer_user_resume_id }}{% endif %}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center rounded-concierge border border-violet-200 bg-white px-2 py-1 text-xs font-medium text-violet-900 hover:bg-violet-50" title="Open resume optimizer with this job and your track resume prefilled">Open optimizer</a>
                             {% endif %}
+                            {% if stage_label == "done" and j.pipeline_entry_id %}
+                            <button type="button" class="pipeline-interview-prep-btn inline-flex items-center rounded-concierge border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-900 hover:bg-indigo-100" data-entry-id="{{ j.pipeline_entry_id }}" data-job-title="{{ j.title|escape }}" title="Generate expected interview questions (uses resume you applied with + job description)">
+                                Interview prep{% if j.has_interview_prep %} <span class="text-emerald-700">✓</span>{% endif %}
+                            </button>
+                            {% endif %}
                         {% endif %}
                         <button type="submit" name="action" value="like" class="rounded-concierge border border-sky-200 bg-white px-2 py-1 text-xs font-medium text-sky-900 hover:bg-sky-50">Like</button>
                         <button type="submit" name="action" value="dislike" class="rounded-concierge border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-800 hover:bg-red-50">Dislike</button>
@@ -145,6 +150,26 @@
                 <pre id="local-desc-body" class="mb-4 max-h-[min(40vh,20rem)] overflow-auto whitespace-pre-wrap rounded-concierge border border-slate-200 bg-slate-50 p-3 text-xs text-slate-800"></pre>
                 <h3 class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">raw_json (JobSpy / source payload, if saved)</h3>
                 <pre id="local-desc-raw" class="max-h-[min(35vh,16rem)] overflow-auto whitespace-pre-wrap rounded-concierge border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] text-slate-800"></pre>
+            </div>
+        </div>
+    </dialog>
+
+    <dialog id="pipelineInterviewPrepDialog" class="concierge-dialog w-[min(100vw-2rem,52rem)] max-h-[90vh] overflow-hidden p-0" aria-labelledby="pipelineInterviewPrepTitle">
+        <div class="flex max-h-[90vh] flex-col rounded-concierge border border-slate-200 bg-white shadow-2xl">
+            <header class="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
+                <h2 id="pipelineInterviewPrepTitle" class="m-0 text-base font-semibold text-concierge-slate">Interview prep</h2>
+                <button type="button" id="pipelineInterviewPrepClose" class="rounded-concierge px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100">Close</button>
+            </header>
+            <div class="min-h-0 flex-1 overflow-y-auto bg-white px-4 py-3">
+                <p id="interview-prep-heading" class="mb-2 text-sm font-semibold text-concierge-slate"></p>
+                <div class="mb-3 flex flex-wrap items-center gap-2">
+                    <button type="button" id="interview-prep-generate-btn" class="inline-flex items-center gap-1.5 rounded-concierge bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700">
+                        <span id="interview-prep-btn-text">Generate interview questions</span>
+                        <span id="interview-prep-spinner" class="hidden h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-white/40 border-t-white" role="status" aria-hidden="true"></span>
+                    </button>
+                    <span id="interview-prep-status" class="text-xs text-slate-500" role="status" aria-live="polite"></span>
+                </div>
+                <div id="interview-prep-content" class="interview-prep-md max-h-[min(65vh,36rem)] overflow-y-auto rounded-concierge border border-slate-200 bg-slate-50 p-4 text-sm text-slate-800"></div>
             </div>
         </div>
     </dialog>
@@ -223,6 +248,94 @@
                         });
                 });
             });
+        })();
+        (function() {
+            var dlg = document.getElementById('pipelineInterviewPrepDialog');
+            var closeBtn = document.getElementById('pipelineInterviewPrepClose');
+            var heading = document.getElementById('interview-prep-heading');
+            var contentEl = document.getElementById('interview-prep-content');
+            var genBtn = document.getElementById('interview-prep-generate-btn');
+            var btnText = document.getElementById('interview-prep-btn-text');
+            var spinner = document.getElementById('interview-prep-spinner');
+            var statusEl = document.getElementById('interview-prep-status');
+            var apiBase = '/api/resume/jobs/pipeline-entry';
+            var activeEntryId = null;
+
+            function setBusy(busy) {
+                if (genBtn) genBtn.disabled = busy;
+                if (spinner) spinner.classList.toggle('hidden', !busy);
+                if (btnText) btnText.textContent = busy ? 'Generating…' : (contentEl && contentEl.textContent.trim() ? 'Regenerate' : 'Generate interview questions');
+            }
+            function renderMarkdown(md) {
+                if (!contentEl) return;
+                contentEl.classList.remove('interview-prep-md-fallback');
+                if (!md || !String(md).trim()) {
+                    contentEl.innerHTML = '<p class="text-slate-500">No interview prep yet. Click Generate when you have an interview scheduled.</p>';
+                    return;
+                }
+                if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
+                    try {
+                        if (typeof marked.use === 'function') {
+                            marked.use({ gfm: true, breaks: true });
+                        }
+                        var html = marked.parse(String(md), { gfm: true, breaks: true });
+                        contentEl.innerHTML = DOMPurify.sanitize(html, {
+                            ALLOWED_TAGS: ['p','br','strong','em','b','i','h2','h3','h4','ul','ol','li','code','pre','hr','blockquote'],
+                            ALLOWED_ATTR: []
+                        });
+                        return;
+                    } catch (e) {}
+                }
+                contentEl.classList.add('interview-prep-md-fallback');
+                contentEl.textContent = md;
+            }
+            function loadPrep(entryId) {
+                if (!entryId) return;
+                fetch(apiBase + '/' + entryId + '/interview-prep', { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+                    .then(function(r) { return r.ok ? r.json() : r.json().then(function(j) { throw new Error(j.detail || 'HTTP ' + r.status); }); })
+                    .then(function(data) {
+                        renderMarkdown(data.markdown || data.content || '');
+                        if (btnText) btnText.textContent = (data.markdown || data.content) ? 'Regenerate' : 'Generate interview questions';
+                    })
+                    .catch(function(err) {
+                        if (statusEl) statusEl.textContent = err.message || 'Could not load prep.';
+                    });
+            }
+            if (closeBtn && dlg) closeBtn.addEventListener('click', function() { if (dlg.open) dlg.close(); });
+            document.querySelectorAll('.pipeline-interview-prep-btn').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    activeEntryId = btn.getAttribute('data-entry-id');
+                    var title = btn.getAttribute('data-job-title') || 'Job';
+                    if (heading) heading.textContent = title;
+                    if (statusEl) statusEl.textContent = '';
+                    renderMarkdown('');
+                    try { dlg.showModal(); } catch (e) {}
+                    loadPrep(activeEntryId);
+                });
+            });
+            if (genBtn) {
+                genBtn.addEventListener('click', function() {
+                    if (!activeEntryId) return;
+                    setBusy(true);
+                    if (statusEl) statusEl.textContent = 'Calling LLM…';
+                    fetch(apiBase + '/' + activeEntryId + '/generate-interview-prep', {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                        body: JSON.stringify({})
+                    })
+                    .then(function(r) { return r.ok ? r.json() : r.json().then(function(j) { throw new Error(j.detail || 'HTTP ' + r.status); }); })
+                    .then(function(data) {
+                        renderMarkdown(data.markdown || data.content || '');
+                        if (statusEl) statusEl.textContent = 'Done.';
+                        setBusy(false);
+                    })
+                    .catch(function(err) {
+                        if (statusEl) statusEl.textContent = err.message || 'Generation failed.';
+                        setBusy(false);
+                    });
+                });
+            }
         })();
     </script>
 {% endif %}

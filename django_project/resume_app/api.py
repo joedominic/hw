@@ -17,6 +17,7 @@ from .models import (
     AgentLog,
     LLMProviderConfig,
     OptimizerWorkflow,
+    PipelineEntry,
 )
 from .jobs_api import router as jobs_router
 from .apply_api import router as apply_router
@@ -121,6 +122,10 @@ class StatusResponse(Schema):
     total_output_tokens: Optional[int] = None
     logs: List[dict] = []
     optimizer_context_snapshot: Optional[dict] = None
+    cover_letter: Optional[str] = None
+    cover_letter_generated_at: Optional[str] = None
+    pipeline_entry_id: Optional[int] = None
+    interview_prep_markdown: Optional[str] = None
 
 class PromptsResponse(Schema):
     writer: str
@@ -141,6 +146,12 @@ class PromptsResponse(Schema):
     jd_cleanse: str
     jd_cleanse_system: str = ""
     jd_cleanse_user: str = ""
+    cover_letter: str = ""
+    cover_letter_system: str = ""
+    cover_letter_user: str = ""
+    interview_prep: str = ""
+    interview_prep_system: str = ""
+    interview_prep_user: str = ""
 
 class FitCheckRequest(Schema):
     job_description: str
@@ -530,6 +541,12 @@ def get_prompts(request):
         DEFAULT_JD_CLEANSE_PROMPT,
         DEFAULT_JD_CLEANSE_SYSTEM,
         DEFAULT_JD_CLEANSE_USER,
+        DEFAULT_COVER_LETTER_PROMPT,
+        DEFAULT_COVER_LETTER_SYSTEM,
+        DEFAULT_COVER_LETTER_USER,
+        DEFAULT_INTERVIEW_PREP_PROMPT,
+        DEFAULT_INTERVIEW_PREP_SYSTEM,
+        DEFAULT_INTERVIEW_PREP_USER,
         DEFAULT_MATCHING_PROMPT,
         DEFAULT_MATCHING_SYSTEM,
         DEFAULT_MATCHING_USER,
@@ -559,6 +576,12 @@ def get_prompts(request):
         "jd_cleanse": DEFAULT_JD_CLEANSE_PROMPT,
         "jd_cleanse_system": DEFAULT_JD_CLEANSE_SYSTEM,
         "jd_cleanse_user": DEFAULT_JD_CLEANSE_USER,
+        "cover_letter": DEFAULT_COVER_LETTER_PROMPT,
+        "cover_letter_system": DEFAULT_COVER_LETTER_SYSTEM,
+        "cover_letter_user": DEFAULT_COVER_LETTER_USER,
+        "interview_prep": DEFAULT_INTERVIEW_PREP_PROMPT,
+        "interview_prep_system": DEFAULT_INTERVIEW_PREP_SYSTEM,
+        "interview_prep_user": DEFAULT_INTERVIEW_PREP_USER,
     }
 
 @router.post("/optimize")
@@ -719,6 +742,8 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
     return {"task_id": task_id, "resume_id": optimized.id}
 
 def get_status_data(resume_id: int):
+    from .job_prep import interview_prep_to_markdown
+
     optimized = get_object_or_404(OptimizedResume, id=resume_id)
     logs = AgentLog.objects.filter(optimized_resume=optimized).order_by('created_at')
 
@@ -732,6 +757,14 @@ def get_status_data(resume_id: int):
             if 'recruiter_score' in log.thought:
                 recruiter_score = log.thought['recruiter_score']
 
+    interview_prep_markdown = None
+    pipeline_entry_id = optimized.pipeline_entry_id
+    if pipeline_entry_id:
+        entry = PipelineEntry.objects.filter(pk=pipeline_entry_id).first()
+        if entry and (entry.interview_prep or "").strip():
+            interview_prep_markdown = interview_prep_to_markdown(entry.interview_prep)
+
+    cl_at = optimized.cover_letter_generated_at
     # "status" must stay the canonical workflow value (queued|running|completed|failed) so
     # the optimizer UI and templates can branch correctly. Human progress lives in status_display.
     return {
@@ -745,6 +778,10 @@ def get_status_data(resume_id: int):
         "total_output_tokens": optimized.total_output_tokens,
         "logs": [{"step": l.step_name, "thought": l.thought} for l in logs],
         "optimizer_context_snapshot": optimized.optimizer_context_snapshot,
+        "cover_letter": optimized.cover_letter or None,
+        "cover_letter_generated_at": cl_at.isoformat() if cl_at else None,
+        "pipeline_entry_id": pipeline_entry_id,
+        "interview_prep_markdown": interview_prep_markdown,
     }
 
 @router.get("/status/{resume_id}", response=StatusResponse)
@@ -776,6 +813,68 @@ def save_optimized_draft(request, resume_id: int, payload: SaveDraftRequest):
     except DraftSaveError as e:
         raise HttpError(e.status_code, e.message) from e
     return {"ok": True, "optimized_content": optimized.optimized_content or ""}
+
+
+class SaveCoverLetterRequest(Schema):
+    cover_letter: str
+
+
+class JobPrepGenerateRequest(Schema):
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
+
+
+class JobPrepGenerateResponse(Schema):
+    content: str
+    markdown: Optional[str] = None
+    provider: str = ""
+    model: str = ""
+    prompt: Optional[str] = None
+    generated_at: Optional[str] = None
+
+
+@router.post("/status/{resume_id}/generate-cover-letter", response=JobPrepGenerateResponse)
+def generate_cover_letter_api(request, resume_id: int, payload: JobPrepGenerateRequest):
+    """On-demand cover letter for a completed optimization."""
+    from .job_prep import JobPrepError, generate_cover_letter
+    from .jobs_api import _get_llm_from_request
+
+    optimized = get_object_or_404(OptimizedResume, id=resume_id)
+    try:
+        llm = _get_llm_from_request(provider=payload.llm_provider, model=payload.llm_model)
+    except HttpError:
+        raise
+    except Exception as e:
+        raise HttpError(400, str(e)) from e
+    try:
+        letter, prompt_text = generate_cover_letter(optimized, llm=llm)
+    except JobPrepError as e:
+        raise HttpError(e.status_code, e.message) from e
+    except LLMRequestsDisabled as e:
+        raise HttpError(503, str(e)) from e
+    except Exception as e:
+        logger.warning("Cover letter generation failed for resume %s: %s", resume_id, e)
+        raise HttpError(502, str(e)) from e
+    optimized.refresh_from_db()
+    gen_at = optimized.cover_letter_generated_at
+    return JobPrepGenerateResponse(
+        content=letter,
+        provider=payload.llm_provider or "",
+        model=payload.llm_model or "",
+        prompt=prompt_text,
+        generated_at=gen_at.isoformat() if gen_at else None,
+    )
+
+
+@router.post("/status/{resume_id}/save-cover-letter")
+def save_cover_letter_api(request, resume_id: int, payload: SaveCoverLetterRequest):
+    """Save manual edits to a generated cover letter."""
+    optimized = get_object_or_404(OptimizedResume, id=resume_id)
+    if optimized.status != OptimizedResume.STATUS_COMPLETED:
+        raise HttpError(400, "Optimization must be completed before saving a cover letter.")
+    optimized.cover_letter = payload.cover_letter or ""
+    optimized.save(update_fields=["cover_letter", "updated_at"])
+    return {"ok": True, "cover_letter": optimized.cover_letter or ""}
 
 
 @router.post("/status/{resume_id}/cancel")

@@ -118,6 +118,57 @@ DEFAULT_INSIGHTS_USER = """Job descriptions:
 {job_descriptions}
 """
 
+DEFAULT_COVER_LETTER_SYSTEM = """You are an expert cover letter writer. Write a tailored cover letter for the candidate applying to the role below.
+
+Strict rules:
+- Do not invent experience, employers, titles, or skills not supported by the tailored resume.
+- Length: roughly 250–400 words.
+- Professional, direct tone; address the hiring team when company name is known.
+- Output ONLY the cover letter body (no "Here is your cover letter", no subject line unless the role clearly expects one)."""
+
+DEFAULT_COVER_LETTER_USER = """Company: {company_name}
+Role: {job_title}
+
+Tailored resume (what the candidate is submitting):
+{optimized_resume}
+
+Job description:
+{job_description}
+
+Cover letter:"""
+
+DEFAULT_INTERVIEW_PREP_SYSTEM = """You are an expert interview coach. Based on the job description and the candidate's resume, predict likely interview questions and concise prep guidance.
+
+Return ONLY a single JSON object (no markdown fences) with this exact schema:
+{
+  "likely_questions": ["..."],
+  "themes_to_emphasize": ["..."],
+  "suggested_answers": [
+    {
+      "question": "...",
+      "talking_points": ["..."],
+      "resume_evidence": ["..."]
+    }
+  ]
+}
+
+Rules:
+- 8–12 likely_questions grounded in the JD.
+- 3–5 themes_to_emphasize.
+- suggested_answers: one entry per high-value question; talking_points and resume_evidence must cite only facts from the resume text provided.
+- Do not hallucinate credentials or projects."""
+
+DEFAULT_INTERVIEW_PREP_USER = """Company: {company_name}
+Role: {job_title}
+Job URL: {job_url}
+
+Resume (as submitted or best available):
+{resume_text}
+
+Job description:
+{job_description}
+"""
+
 # JD cleanse runs on Ollama Local (see jd_cleanser). Placeholders: {title}, {job_description}
 # (job_description is truncated to 8000 chars before formatting).
 DEFAULT_JD_CLEANSE_SYSTEM = """You extract core job signal from noisy postings. Stay faithful to the text; do not invent requirements or tools not supported by the description."""
@@ -156,6 +207,8 @@ DEFAULT_RECRUITER_JUDGE_PROMPT = DEFAULT_RECRUITER_JUDGE_SYSTEM + "\n\n" + DEFAU
 DEFAULT_FIT_CHECK_PROMPT = DEFAULT_FIT_CHECK_SYSTEM + "\n\n" + DEFAULT_FIT_CHECK_USER
 DEFAULT_MATCHING_PROMPT = DEFAULT_MATCHING_SYSTEM + "\n\n" + DEFAULT_MATCHING_USER
 DEFAULT_INSIGHTS_PROMPT = DEFAULT_INSIGHTS_SYSTEM + "\n\n" + DEFAULT_INSIGHTS_USER
+DEFAULT_COVER_LETTER_PROMPT = DEFAULT_COVER_LETTER_SYSTEM + "\n\n" + DEFAULT_COVER_LETTER_USER
+DEFAULT_INTERVIEW_PREP_PROMPT = DEFAULT_INTERVIEW_PREP_SYSTEM + "\n\n" + DEFAULT_INTERVIEW_PREP_USER
 DEFAULT_JD_CLEANSE_PROMPT = DEFAULT_JD_CLEANSE_SYSTEM + "\n\n" + DEFAULT_JD_CLEANSE_USER
 DEFAULT_PIPELINE_RESUME_REFINE_PROMPT = (
     DEFAULT_PIPELINE_RESUME_REFINE_SYSTEM + "\n\n" + DEFAULT_PIPELINE_RESUME_REFINE_USER

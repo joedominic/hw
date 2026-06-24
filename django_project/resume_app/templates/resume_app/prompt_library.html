@@ -7,7 +7,7 @@
     <div class="mb-8">
         <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Prompt library</h1>
         <p class="mt-1 text-sm text-slate-600">
-            Templates for the optimizer, matching, job insights, and JD cleansing (Ollama Local). Saved prompts apply on the next run.
+            Templates for the optimizer, matching, job insights, cover letter, interview prep, and JD cleansing (Ollama Local). Saved prompts apply on the next run.
         </p>
         <p class="mt-2 rounded-md border border-amber-100 bg-amber-50/80 px-3 py-2 text-xs text-amber-900">
             <strong>Prompt caching tip:</strong> Put stable rules in <strong>System</strong> and variable resume/JD data in <strong>User</strong>.
@@ -38,6 +38,10 @@
                                 class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">Insights</button>
                         <button type="button" role="tab" aria-selected="false" aria-controls="prompt-jd-cleanse-pane" id="prompt-jd-cleanse-tab" data-prompt-pane="prompt-jd-cleanse-pane"
                                 class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">JD cleanse</button>
+                        <button type="button" role="tab" aria-selected="false" aria-controls="prompt-cover-letter-pane" id="prompt-cover-letter-tab" data-prompt-pane="prompt-cover-letter-pane"
+                                class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">Cover letter</button>
+                        <button type="button" role="tab" aria-selected="false" aria-controls="prompt-interview-prep-pane" id="prompt-interview-prep-tab" data-prompt-pane="prompt-interview-prep-pane"
+                                class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">Interview prep</button>
                     </div>
                     <div class="rounded-b border border-t-0 border-slate-200 bg-slate-50/30 p-4" id="prompt-tab-content">
                         <div id="prompt-writer-pane" role="tabpanel" aria-labelledby="prompt-writer-tab">
@@ -130,6 +134,38 @@
                             <textarea name="prompt_jd_cleanse_combined" rows="3"
                                       class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs"
                                       placeholder="Optional single template">{{ prompts.jd_cleanse_legacy_combined }}</textarea>
+                        </div>
+                        <div id="prompt-cover-letter-pane" role="tabpanel" aria-labelledby="prompt-cover-letter-tab" class="hidden">
+                            <p class="mb-2 text-xs text-slate-600">Used when you click <strong>Generate cover letter</strong> on optimizer Results (external LLM). Requires a completed tailored resume.</p>
+                            <p class="mb-2 text-xs font-medium text-slate-600">System</p>
+                            <textarea name="prompt_cover_letter_system" rows="8"
+                                      class="mb-3 w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="Cover letter system">{{ prompts.cover_letter_system }}</textarea>
+                            <p class="mb-2 text-xs font-medium text-slate-600">User</p>
+                            <textarea name="prompt_cover_letter_user" rows="12"
+                                      class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="Cover letter user">{{ prompts.cover_letter_user }}</textarea>
+                            <p class="mt-2 text-xs text-slate-500">Placeholders: <code class="rounded bg-slate-100 px-1">{optimized_resume}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code>, <code class="rounded bg-slate-100 px-1">{company_name}</code>, <code class="rounded bg-slate-100 px-1">{job_title}</code></p>
+                            <p class="mt-3 text-xs font-medium text-slate-600">Combined (legacy, optional)</p>
+                            <textarea name="prompt_cover_letter_combined" rows="3"
+                                      class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs"
+                                      placeholder="Optional single template">{{ prompts.cover_letter_legacy_combined }}</textarea>
+                        </div>
+                        <div id="prompt-interview-prep-pane" role="tabpanel" aria-labelledby="prompt-interview-prep-tab" class="hidden">
+                            <p class="mb-2 text-xs text-slate-600">Used when you click <strong>Interview prep</strong> on the Done board (external LLM). Expects JSON output with likely questions and suggested answers.</p>
+                            <p class="mb-2 text-xs font-medium text-slate-600">System</p>
+                            <textarea name="prompt_interview_prep_system" rows="12"
+                                      class="mb-3 w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="Interview prep system">{{ prompts.interview_prep_system }}</textarea>
+                            <p class="mb-2 text-xs font-medium text-slate-600">User</p>
+                            <textarea name="prompt_interview_prep_user" rows="10"
+                                      class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
+                                      placeholder="Interview prep user">{{ prompts.interview_prep_user }}</textarea>
+                            <p class="mt-2 text-xs text-slate-500">Placeholders: <code class="rounded bg-slate-100 px-1">{resume_text}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code>, <code class="rounded bg-slate-100 px-1">{company_name}</code>, <code class="rounded bg-slate-100 px-1">{job_title}</code>, <code class="rounded bg-slate-100 px-1">{job_url}</code></p>
+                            <p class="mt-3 text-xs font-medium text-slate-600">Combined (legacy, optional)</p>
+                            <textarea name="prompt_interview_prep_combined" rows="3"
+                                      class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs"
+                                      placeholder="Optional single template">{{ prompts.interview_prep_legacy_combined }}</textarea>
                         </div>
                     </div>
                 </div>

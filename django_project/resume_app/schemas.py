@@ -38,6 +38,8 @@ class JobPayload(Schema):
     fetched_at: Optional[datetime] = None  # when we first ingested the job into the app
     optimized_resume_id: Optional[int] = None  # latest OptimizedResume for Applying board (pipeline-linked)
     optimizer_user_resume_id: Optional[int] = None  # UserResume id for "Open optimizer" prefill (Applying board)
+    pipeline_entry_id: Optional[int] = None  # PipelineEntry id for Done-board interview prep
+    has_interview_prep: Optional[bool] = None
 
 
 class JobDetailPayload(Schema):
@@ -197,4 +199,22 @@ class DisqualifierAddRequest(Schema):
 class DisqualifierPayload(Schema):
     id: int
     phrase: str
+
+
+class InterviewPrepGenerateRequest(Schema):
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
+
+
+class InterviewPrepResponse(Schema):
+    content: str = ""
+    markdown: str = ""
+    generated_at: Optional[str] = None
+    provider: str = ""
+    model: str = ""
+    prompt: Optional[str] = None
+
+
+class InterviewPrepSaveRequest(Schema):
+    interview_prep: str
 

@@ -448,6 +448,14 @@ def _enqueue_optimization(attempt: ApplicationAttempt) -> None:
         attempt.mark_failed(ApplicationAttempt.ERROR_OPTIMIZER_FAILED, str(result.get("message")))
 
 
+def _resolve_cover_letter(attempt: ApplicationAttempt, profile: ApplicantProfile) -> str:
+    """Prefer job-specific cover letter from optimization over global template."""
+    opt = attempt.optimized_resume or _latest_completed_optimization(attempt)
+    if opt and (opt.cover_letter or "").strip():
+        return opt.cover_letter
+    return profile.cover_letter_template
+
+
 def _build_context(attempt: ApplicationAttempt, page) -> ApplyContext:
     profile = ApplicantProfile.get_solo()
     job = attempt.pipeline_entry.job_listing
@@ -468,7 +476,7 @@ def _build_context(attempt: ApplicationAttempt, page) -> ApplyContext:
         work_authorization=profile.work_authorization,
         requires_sponsorship=profile.requires_sponsorship,
         salary_expectation=profile.salary_expectation,
-        cover_letter=profile.cover_letter_template,
+        cover_letter=_resolve_cover_letter(attempt, profile),
         custom_qa=profile.custom_qa_pairs or {},
         include_eeo=profile.include_eeo,
         apply_url=attempt.apply_url,

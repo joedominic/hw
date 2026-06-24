@@ -84,6 +84,9 @@ from .schemas import (
     ResumeOption,
     DisqualifierAddRequest,
     DisqualifierPayload,
+    InterviewPrepGenerateRequest,
+    InterviewPrepResponse,
+    InterviewPrepSaveRequest,
 )
 from .job_ranking import get_focus_breakdown, get_focus_sentence_alignment, rank_jobs_by_preference
 from .llm_services import LLM_PROVIDERS
@@ -484,6 +487,65 @@ def jobs_insights(request, payload: InsightsRequest):
         model=payload.llm_model,
         prompt=prompt_text,
     )
+
+
+@router.get("/pipeline-entry/{pipeline_entry_id}/interview-prep", response=InterviewPrepResponse)
+def pipeline_interview_prep_get(request, pipeline_entry_id: int):
+    """Return stored interview prep for a Done-stage pipeline entry."""
+    from .job_prep import interview_prep_to_markdown
+
+    entry = get_object_or_404(PipelineEntry, id=pipeline_entry_id)
+    stored = (entry.interview_prep or "").strip()
+    gen_at = entry.interview_prep_generated_at
+    return InterviewPrepResponse(
+        content=stored,
+        markdown=interview_prep_to_markdown(stored) if stored else "",
+        generated_at=gen_at.isoformat() if gen_at else None,
+    )
+
+
+@router.post("/pipeline-entry/{pipeline_entry_id}/generate-interview-prep", response=InterviewPrepResponse)
+def pipeline_interview_prep_generate(request, pipeline_entry_id: int, payload: InterviewPrepGenerateRequest):
+    """On-demand interview prep for a Done-stage job."""
+    from .job_prep import JobPrepError, generate_interview_prep
+
+    entry = get_object_or_404(PipelineEntry, id=pipeline_entry_id)
+    try:
+        llm = _get_llm_from_request(provider=payload.llm_provider, model=payload.llm_model)
+    except HttpError:
+        raise
+    except Exception as e:
+        raise HttpError(400, str(e)) from e
+    try:
+        stored, markdown, prompt_text = generate_interview_prep(entry, llm=llm)
+    except JobPrepError as e:
+        raise HttpError(e.status_code, e.message) from e
+    except LLMRequestsDisabled as e:
+        raise HttpError(503, str(e)) from e
+    except Exception as e:
+        logger.warning("Interview prep generation failed for entry %s: %s", pipeline_entry_id, e)
+        raise HttpError(502, str(e)) from e
+    entry.refresh_from_db()
+    gen_at = entry.interview_prep_generated_at
+    return InterviewPrepResponse(
+        content=stored,
+        markdown=markdown,
+        generated_at=gen_at.isoformat() if gen_at else None,
+        provider=payload.llm_provider or "",
+        model=payload.llm_model or "",
+        prompt=prompt_text,
+    )
+
+
+@router.post("/pipeline-entry/{pipeline_entry_id}/save-interview-prep")
+def pipeline_interview_prep_save(request, pipeline_entry_id: int, payload: InterviewPrepSaveRequest):
+    """Save manual edits to interview prep content."""
+    entry = get_object_or_404(PipelineEntry, id=pipeline_entry_id)
+    if entry.stage != PipelineEntry.Stage.DONE:
+        raise HttpError(400, "Interview prep can only be saved for Done-stage jobs.")
+    entry.interview_prep = payload.interview_prep or ""
+    entry.save(update_fields=["interview_prep"])
+    return {"ok": True, "interview_prep": entry.interview_prep or ""}
 
 
 @router.post("/pipeline-resume-summary/start", response=PipelineResumeSummaryStartResponse)

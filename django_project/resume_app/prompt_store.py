@@ -18,6 +18,12 @@ from .prompts import (
     DEFAULT_INSIGHTS_PROMPT,
     DEFAULT_INSIGHTS_SYSTEM,
     DEFAULT_INSIGHTS_USER,
+    DEFAULT_COVER_LETTER_PROMPT,
+    DEFAULT_COVER_LETTER_SYSTEM,
+    DEFAULT_COVER_LETTER_USER,
+    DEFAULT_INTERVIEW_PREP_PROMPT,
+    DEFAULT_INTERVIEW_PREP_SYSTEM,
+    DEFAULT_INTERVIEW_PREP_USER,
     DEFAULT_JD_CLEANSE_PROMPT,
     DEFAULT_JD_CLEANSE_SYSTEM,
     DEFAULT_JD_CLEANSE_USER,
@@ -38,10 +44,21 @@ DEFAULT_PROMPTS: Dict[str, str] = {
     "recruiter_judge": DEFAULT_RECRUITER_JUDGE_PROMPT,
     "matching": DEFAULT_MATCHING_PROMPT,
     "insights": DEFAULT_INSIGHTS_PROMPT,
+    "cover_letter": DEFAULT_COVER_LETTER_PROMPT,
+    "interview_prep": DEFAULT_INTERVIEW_PREP_PROMPT,
     "jd_cleanse": DEFAULT_JD_CLEANSE_PROMPT,
 }
 
-_LEGACY_FIELDS = ("writer", "ats_judge", "recruiter_judge", "matching", "insights", "jd_cleanse")
+_LEGACY_FIELDS = (
+    "writer",
+    "ats_judge",
+    "recruiter_judge",
+    "matching",
+    "insights",
+    "cover_letter",
+    "interview_prep",
+    "jd_cleanse",
+)
 
 _PROMPT_SPEC = {
     "writer": ("writer", "writer_system", "writer_user", DEFAULT_WRITER_SYSTEM, DEFAULT_WRITER_USER),
@@ -55,6 +72,20 @@ _PROMPT_SPEC = {
     ),
     "matching": ("matching", "matching_system", "matching_user", DEFAULT_MATCHING_SYSTEM, DEFAULT_MATCHING_USER),
     "insights": ("insights", "insights_system", "insights_user", DEFAULT_INSIGHTS_SYSTEM, DEFAULT_INSIGHTS_USER),
+    "cover_letter": (
+        "cover_letter",
+        "cover_letter_system",
+        "cover_letter_user",
+        DEFAULT_COVER_LETTER_SYSTEM,
+        DEFAULT_COVER_LETTER_USER,
+    ),
+    "interview_prep": (
+        "interview_prep",
+        "interview_prep_system",
+        "interview_prep_user",
+        DEFAULT_INTERVIEW_PREP_SYSTEM,
+        DEFAULT_INTERVIEW_PREP_USER,
+    ),
     "jd_cleanse": (
         "jd_cleanse",
         "jd_cleanse_system",

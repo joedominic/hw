@@ -33,6 +33,8 @@ USAGE_QUERY_OPTIMIZER_WRITER = "optimizer_writer"
 USAGE_QUERY_OPTIMIZER_ATS_JUDGE = "optimizer_ats_judge"
 USAGE_QUERY_OPTIMIZER_RECRUITER_JUDGE = "optimizer_recruiter_judge"
 USAGE_QUERY_JOB_INSIGHTS = "job_insights"
+USAGE_QUERY_COVER_LETTER = "cover_letter"
+USAGE_QUERY_INTERVIEW_PREP = "interview_prep"
 USAGE_QUERY_JOBS_AI_MATCH = "jobs_ai_match"
 USAGE_QUERY_KEYWORD_SEARCH_FIT = "keyword_search_fit"
 USAGE_QUERY_JOBS_MATCH_API = "jobs_match_api"
@@ -50,6 +52,8 @@ USAGE_QUERY_LABELS: dict[str, str] = {
     USAGE_QUERY_OPTIMIZER_ATS_JUDGE: "Resume optimizer — ATS judge",
     USAGE_QUERY_OPTIMIZER_RECRUITER_JUDGE: "Resume optimizer — recruiter judge",
     USAGE_QUERY_JOB_INSIGHTS: "Job search — batch insights",
+    USAGE_QUERY_COVER_LETTER: "Optimizer — cover letter",
+    USAGE_QUERY_INTERVIEW_PREP: "Done — interview prep",
     USAGE_QUERY_JOBS_AI_MATCH: "Job search — AI match",
     USAGE_QUERY_KEYWORD_SEARCH_FIT: "Job search — keyword search fit",
     USAGE_QUERY_JOBS_MATCH_API: "Job search — single job fit (API)",

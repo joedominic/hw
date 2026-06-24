@@ -3,10 +3,30 @@
 {% block title %}{{ board_page_title }} — ResumeElite{% endblock %}
 
 {% block extra_head %}
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js" crossorigin="anonymous"></script>
+<style>
+#interview-prep-content.interview-prep-md { line-height: 1.55; color: #0f172a; }
+#interview-prep-content.interview-prep-md h2 {
+    font-size: 1.05rem; font-weight: 700; margin: 1.25rem 0 0.5rem; padding-bottom: 0.25rem;
+    border-bottom: 1px solid #e2e8f0; color: #0f172a;
+}
+#interview-prep-content.interview-prep-md h2:first-child { margin-top: 0; }
+#interview-prep-content.interview-prep-md h3 {
+    font-size: 0.95rem; font-weight: 600; margin: 1rem 0 0.35rem; color: #334155;
+}
+#interview-prep-content.interview-prep-md p { margin: 0.375rem 0; }
+#interview-prep-content.interview-prep-md ul,
+#interview-prep-content.interview-prep-md ol {
+    margin: 0.375rem 0 0.75rem; padding-left: 1.35rem;
+}
+#interview-prep-content.interview-prep-md li { margin: 0.3rem 0; }
+#interview-prep-content.interview-prep-md strong { font-weight: 600; color: #0f172a; }
+#interview-prep-content.interview-prep-md hr { margin: 1rem 0; border: 0; border-top: 1px solid #e2e8f0; }
+#interview-prep-content.interview-prep-md-fallback { white-space: pre-wrap; line-height: 1.55; }
+</style>
 {% if show_pipeline_resume_summary %}
 <meta name="csrf-token" content="{{ csrf_token }}">
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
 <style>
 /* Inner panel is opaque; dialog.concierge-dialog in base.html forces transparent on <dialog>. */
 #pipelineResumeSummaryDialog .pipeline-summary-panel {

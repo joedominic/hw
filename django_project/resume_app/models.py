@@ -199,6 +199,12 @@ class OptimizedResume(models.Model):
         blank=True,
         help_text="Last run: writer JD/resume budgets, retrieval stats (debug).",
     )
+    cover_letter = models.TextField(
+        blank=True,
+        default="",
+        help_text="On-demand generated cover letter for this job optimization.",
+    )
+    cover_letter_generated_at = models.DateTimeField(null=True, blank=True)
 
 class AgentLog(models.Model):
     optimized_resume = models.ForeignKey(OptimizedResume, related_name='logs', on_delete=models.CASCADE)
@@ -286,6 +292,12 @@ class UserPromptProfile(models.Model):
     jd_cleanse = models.TextField(blank=True)
     jd_cleanse_system = models.TextField(blank=True)
     jd_cleanse_user = models.TextField(blank=True)
+    cover_letter = models.TextField(blank=True)
+    cover_letter_system = models.TextField(blank=True)
+    cover_letter_user = models.TextField(blank=True)
+    interview_prep = models.TextField(blank=True)
+    interview_prep_system = models.TextField(blank=True)
+    interview_prep_user = models.TextField(blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -830,6 +842,12 @@ class PipelineEntry(models.Model):
     vetting_interview_reasoning = models.TextField(null=True, blank=True)
     vetting_interview_resume_id = models.IntegerField(null=True, blank=True)
     vetting_interview_scored_at = models.DateTimeField(null=True, blank=True)
+    interview_prep = models.TextField(
+        blank=True,
+        default="",
+        help_text="On-demand generated interview prep (JSON or markdown) for Done-stage jobs.",
+    )
+    interview_prep_generated_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         unique_together = [("job_listing", "track")]

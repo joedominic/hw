@@ -185,6 +185,21 @@ class OrchestratorTests(TestCase):
         created = orchestrator.start_attempts_for_entries([self.entry.id])
         self.assertEqual(len(created), 0)
 
+    def test_build_context_prefers_generated_cover_letter(self):
+        opt = self._completed_optimization()
+        opt.cover_letter = "Dear Acme, I am excited to apply."
+        opt.save(update_fields=["cover_letter"])
+        ApplicantProfile.objects.filter(pk=1).update(cover_letter_template="Generic template.")
+        attempt = ApplicationAttempt.objects.create(
+            pipeline_entry=self.entry,
+            optimized_resume=opt,
+            status=ApplicationAttempt.Status.DRY_RUN_FILL,
+            apply_url="https://boards.greenhouse.io/acme/jobs/1",
+        )
+        ctx = orchestrator._build_context(attempt, page=None)
+        self.assertEqual(ctx.cover_letter, "Dear Acme, I am excited to apply.")
+        self.assertIn("Acme", ctx.rendered_cover_letter())
+
     def test_optimizing_waits_when_no_optimization(self):
         attempt = ApplicationAttempt.objects.create(
             pipeline_entry=self.entry, status=ApplicationAttempt.Status.OPTIMIZING

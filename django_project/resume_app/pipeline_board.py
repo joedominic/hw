@@ -48,8 +48,8 @@ def _attach_optimized_resume_ids_for_stage(pipeline_jobs, raw_track: str, stage:
         removed_at__isnull=True,
         job_listing_id__in=jids,
     )
-    pe_by_job = {e.job_listing_id: e.id for e in pe_rows}
-    entry_ids_list = list(pe_by_job.values())
+    pe_by_job = {e.job_listing_id: e for e in pe_rows}
+    entry_ids_list = [e.id for e in pe_by_job.values()]
     latest_by_entry: dict[int, int] = {}
     if entry_ids_list:
         for orow in OptimizedResume.objects.filter(
@@ -59,9 +59,12 @@ def _attach_optimized_resume_ids_for_stage(pipeline_jobs, raw_track: str, stage:
             if eid is not None and eid not in latest_by_entry:
                 latest_by_entry[eid] = orow.id
     for j in pipeline_jobs:
-        peid = pe_by_job.get(j.id)
-        if peid is not None and peid in latest_by_entry:
-            setattr(j, "optimized_resume_id", latest_by_entry[peid])
+        pe = pe_by_job.get(j.id)
+        if pe is not None:
+            setattr(j, "pipeline_entry_id", pe.id)
+            setattr(j, "has_interview_prep", bool((pe.interview_prep or "").strip()))
+            if pe.id in latest_by_entry:
+                setattr(j, "optimized_resume_id", latest_by_entry[pe.id])
 
 
 def _bulk_delete_msg(board_stage: str, count: int) -> str:

@@ -22,7 +22,7 @@ LLM_PROVIDERS = {
 DEFAULT_MODELS = {
     "OpenAI": "gpt-4o",
     "Anthropic": "claude-3-5-sonnet-latest",
-    "Groq": "llama3-70b-8192",
+    "Groq": "llama-3.3-70b-versatile",
     "Google AI Studio": "gemini-1.5-pro",
     "Ollama Cloud": "gpt-oss:120b",
     "Ollama Local": "llama3",
