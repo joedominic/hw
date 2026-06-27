@@ -16,7 +16,10 @@ An automated platform that uses multi-agent AI (LangGraph) to tailor resumes to 
 ### 2. Install Dependencies
 ```bash
 pip install -r requirements.txt
+pip install --no-deps -r requirements-jobspy.txt
+playwright install chromium
 ```
+JobSpy is a second step because its upstream pin on `markdownify<0.14` conflicts with `browser-use` (`markdownify>=1.2`); runtime deps are already in `requirements.txt`.
 
 ### 3. Database Setup
 ```bash

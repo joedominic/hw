@@ -1,0 +1,3 @@
+# JobSpy package only — install after requirements.txt with --no-deps to bypass the
+# stale markdownify<0.14 pin (speedyapply/JobSpy#349). Runtime deps are in requirements.txt.
+python-jobspy==1.1.82

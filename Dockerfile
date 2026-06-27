@@ -8,13 +8,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY requirements.txt requirements-jobspy.txt ./
 # libgomp1: PyTorch OpenMP; gcc/g++: compile wheels — removed after pip to shrink the image.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc g++ libffi-dev libgomp1 \
     && pip install --upgrade pip \
     && pip install torch --index-url https://download.pytorch.org/whl/cpu \
     && pip install -r requirements.txt \
+    && pip install --no-deps -r requirements-jobspy.txt \
+    && playwright install --with-deps chromium \
     && apt-get purge -y --auto-remove gcc g++ \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*

@@ -1,4 +1,9 @@
 # ResumeElite — direct dependencies only (transitive deps resolved by pip).
+#
+# Install (two steps — upstream conflict: jobspy pins markdownify<0.14, browser-use needs >=1.2):
+#   pip install -r requirements.txt
+#   pip install --no-deps -r requirements-jobspy.txt
+#
 # torch: not listed — Docker installs CPU wheels (see Dockerfile). Local dev: pip install torch
 # After install, run: playwright install chromium
 
@@ -36,9 +41,13 @@ numpy>=1.26.3,<2
 sentence-transformers>=2.2.0
 rank-bm25>=0.2.0
 
-# --- Job search ---
-python-jobspy>=1.1.70
+# --- Job search (python-jobspy installed separately — see requirements-jobspy.txt) ---
+beautifulsoup4>=4.12.2,<5.0.0
+tls-client>=1.0.1,<2.0.0
+pandas>=2.1.0,<3.0.0
+regex>=2024.4.28,<2025.0.0
 requests>=2.32.5
+markdownify>=1.2.0,<2.0.0
 
 # --- Document I/O (PDF parse, resume export) ---
 pdfplumber>=0.11.9
