@@ -11,14 +11,18 @@ Semantics:
 """
 from typing import Optional, Set
 
+from django.contrib.auth import get_user_model
+
 from django.db.models import Q
 
 from .models import JobListingAction, Track
 
+User = get_user_model()
 
-def normalize_track_slug(track: Optional[str]) -> str:
+
+def normalize_track_slug(track: Optional[str], user) -> str:
     t = (track or "").strip().lower()
-    return t if t else Track.get_default_slug()
+    return t if t else Track.get_default_slug(user)
 
 
 def q_disliked_rows_for_search(slug: str) -> Q:
@@ -31,10 +35,10 @@ def q_saved_rows_for_track(slug: str) -> Q:
     return Q(track=slug) | Q(track="")
 
 
-def q_preference_embedding_track(slug: str) -> Q:
+def q_preference_embedding_track(slug: str, user) -> Q:
     """Embedding rows that contribute to preference vectors for this track."""
     q = Q(track=slug)
-    if slug == Track.get_default_slug():
+    if slug == Track.get_default_slug(user):
         q |= Q(track="")
     return q
 
@@ -44,19 +48,21 @@ def q_clear_on_sentiment_change(slug: str) -> Q:
     return Q(track=slug) | Q(track="")
 
 
-def disliked_listing_id_set(track: Optional[str]) -> Set[int]:
-    slug = normalize_track_slug(track)
+def disliked_listing_id_set(user, track: Optional[str]) -> Set[int]:
+    slug = normalize_track_slug(track, user)
     return set(
-        JobListingAction.objects.filter(action=JobListingAction.ActionType.DISLIKED)
+        JobListingAction.objects.for_user(user)
+        .filter(action=JobListingAction.ActionType.DISLIKED)
         .filter(q_disliked_rows_for_search(slug))
         .values_list("job_listing_id", flat=True)
     )
 
 
-def saved_listing_id_set(track: Optional[str]) -> Set[int]:
-    slug = normalize_track_slug(track)
+def saved_listing_id_set(user, track: Optional[str]) -> Set[int]:
+    slug = normalize_track_slug(track, user)
     return set(
-        JobListingAction.objects.filter(action=JobListingAction.ActionType.SAVED)
+        JobListingAction.objects.for_user(user)
+        .filter(action=JobListingAction.ActionType.SAVED)
         .filter(q_saved_rows_for_track(slug))
         .values_list("job_listing_id", flat=True)
     )

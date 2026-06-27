@@ -22,7 +22,6 @@ from .preference import (
 from .job_ranking import gated_combined_score as _gated_combined_score
 from .job_ranking import rank_jobs_by_preference
 from .disqualifiers import (
-    get_disqualifier_phrases,
     build_disqualifier_pattern,
     job_matches_disqualifiers,
 )
@@ -68,6 +67,8 @@ def _tokenize_for_bm25(text: str) -> List[str]:
 
 
 def run_job_search_core(
+    *,
+    user,
     search_term: str,
     location: Optional[str] = None,
     track: Optional[str] = None,
@@ -86,9 +87,13 @@ def run_job_search_core(
 
     results_wanted = results_wanted or getattr(settings, "JOB_SEARCH_DEFAULT_RESULTS", 50)
     site_name = normalize_site_names(site_name)
-    norm_track = normalize_track_slug(track)
-    disliked_listing_ids = disliked_listing_id_set(norm_track)
-    disqualifier_pattern = build_disqualifier_pattern(get_disqualifier_phrases())
+    norm_track = normalize_track_slug(track, user)
+    disliked_listing_ids = disliked_listing_id_set(user, track)
+    from .models import UserDisqualifier
+
+    disqualifier_pattern = build_disqualifier_pattern(
+        list(UserDisqualifier.objects.for_user(user).values_list("phrase", flat=True))
+    )
     jobs_with_meta: List[Tuple[JobListing, JobPayload]] = []
 
     hours_old = getattr(settings, "JOB_SEARCH_HOURS_OLD", 168)
@@ -131,25 +136,27 @@ def run_job_search_core(
     jobs_after_filter = len(jobs_with_meta)
     logger.info("[job_search_core] After filter: %d jobs", jobs_after_filter)
 
-    jobs_out = rank_and_filter_jobs(jobs_with_meta, norm_track)
+    jobs_out = rank_and_filter_jobs(jobs_with_meta, norm_track, user=user)
     return (jobs_fetched, jobs_after_filter, jobs_out, refs_for_cache)
 
 
 def _rank_jobs_with_meta(
     jobs_with_meta: List[Tuple[JobListing, JobPayload]],
     track: Optional[str],
+    *,
+    user,
 ) -> List[JobPayload]:
     """Apply preference ranking and disliked penalty to (job, payload) list. Returns sorted list of JobPayload."""
-    prefs = get_preference_vectors(track=track)
+    prefs = get_preference_vectors(user=user, track=track)
     liked_jobs = (prefs[2] if prefs and len(prefs) > 2 else []) or []
     if prefs and not liked_jobs:
-        liked_jobs = get_liked_jobs_for_focus_reason(track=track)
+        liked_jobs = get_liked_jobs_for_focus_reason(user=user, track=track)
 
     jobs_out: List[JobPayload] = []
     if prefs and jobs_with_meta:
         try:
             jobs = [j for j, _ in jobs_with_meta]
-            result = rank_jobs_by_preference(jobs, track=track)
+            result = rank_jobs_by_preference(jobs, user=user, track=track)
             if result is None:
                 raise RuntimeError("rank_jobs_by_preference returned None")
             scores, title_vecs, full_vecs_per_job = result
@@ -269,9 +276,11 @@ def _rank_jobs_with_meta(
     return jobs_out
 
 
-def _apply_auto_dislike(ranked: List[JobPayload], track: Optional[str]) -> List[JobPayload]:
+def _apply_auto_dislike(
+    ranked: List[JobPayload], track: Optional[str], user
+) -> List[JobPayload]:
     """Apply auto-dislike for margin < -5; mutate DB and return filtered list (read-only ranking stays pure)."""
-    slug = normalize_track_slug(track)
+    slug = normalize_track_slug(track, user)
     out: List[JobPayload] = []
     for payload_obj in ranked:
         margin = getattr(payload_obj, "preference_margin_percent", None)
@@ -280,12 +289,13 @@ def _apply_auto_dislike(ranked: List[JobPayload], track: Optional[str]) -> List[
                 job_obj = JobListing.objects.filter(id=payload_obj.id).first()
                 if job_obj:
                     JobListingAction.objects.get_or_create(
+                        owner=user,
                         job_listing=job_obj,
                         action=JobListingAction.ActionType.DISLIKED,
                         track=slug,
                     )
-                    invalidate_preference_cache()
-                    invalidate_disliked_embeddings_cache()
+                    invalidate_preference_cache(user)
+                    invalidate_disliked_embeddings_cache(user)
             except Exception as e:
                 logger.warning("Auto-exclude (margin< -5) failed for job %s: %s", payload_obj.id, e)
             continue
@@ -296,10 +306,12 @@ def _apply_auto_dislike(ranked: List[JobPayload], track: Optional[str]) -> List[
 def _apply_disliked_penalty_and_final_sort(
     jobs_out: List[JobPayload],
     track: Optional[str],
+    *,
+    user,
 ) -> List[JobPayload]:
     """Apply disliked-similarity penalty and final sort by preference_margin_percent."""
     try:
-        disliked_embeddings = get_disliked_embeddings(track=track)
+        disliked_embeddings = get_disliked_embeddings(user=user, track=track)
     except Exception as e:
         logger.warning("Loading disliked embeddings failed, skipping penalty: %s", e)
         disliked_embeddings = []
@@ -365,15 +377,17 @@ def _apply_disliked_penalty_and_final_sort(
 def rank_and_filter_jobs(
     jobs_with_meta: List[Tuple[JobListing, JobPayload]],
     track: Optional[str],
+    *,
+    user,
 ) -> List[JobPayload]:
     """
     Single entry point for preference ranking: score, auto-dislike margin < -5,
     apply disliked penalty, and final sort. Used by run_job_search_core and by
     jobs_search cache path. Preserves preference_margin_percent as primary sort.
     """
-    ranked = _rank_jobs_with_meta(jobs_with_meta, track)
-    jobs_out = _apply_auto_dislike(ranked, track)
-    jobs_out = _apply_disliked_penalty_and_final_sort(jobs_out, track)
+    ranked = _rank_jobs_with_meta(jobs_with_meta, track, user=user)
+    jobs_out = _apply_auto_dislike(ranked, track, user)
+    jobs_out = _apply_disliked_penalty_and_final_sort(jobs_out, track, user=user)
 
     # NEW: Apply Ollama Guard to top 10 results to reduce noise (e.g. seniority mismatch)
     from django.conf import settings
@@ -392,6 +406,8 @@ def rank_and_filter_jobs(
 def recompute_preferences_for_jobs(
     job_listings: List[JobListing],
     track: Optional[str],
+    *,
+    user,
 ) -> Dict[int, dict]:
     """
     Compute focus %, post-penalty %, and preference margin for a batch of jobs.
@@ -408,7 +424,7 @@ def recompute_preferences_for_jobs(
     for job in job_listings:
         snippet = (job.description or "")[:300].replace("\n", " ")
         jobs_with_meta.append((job, _job_to_payload(job, snippet=snippet)))
-    ranked_payloads = _rank_jobs_with_meta(jobs_with_meta, track)
+    ranked_payloads = _rank_jobs_with_meta(jobs_with_meta, track, user=user)
     by_id: Dict[int, dict] = {}
     for payload in ranked_payloads:
         jid = payload.id
@@ -423,6 +439,8 @@ def recompute_preferences_for_jobs(
 def pipeline_jobs_to_payloads(
     job_listings: List[JobListing],
     track: Optional[str],
+    *,
+    user,
 ) -> List[JobPayload]:
     """
     Build JobPayload list for pipeline view.
@@ -430,6 +448,9 @@ def pipeline_jobs_to_payloads(
     Uses cached preference metrics from JobListingTrackMetrics only. Does not
     recompute preferences on demand; if metrics are missing, jobs are shown
     without Fit / Pref badges until the background task fills them.
+
+    ``user`` is required so that metric/pipeline lookups are scoped to the
+    owning tenant and never bleed between users sharing the same JobListing rows.
     """
     if not job_listings:
         return []
@@ -439,7 +460,7 @@ def pipeline_jobs_to_payloads(
     metrics_map: Dict[int, JobListingTrackMetrics] = {}
     if track_slug and job_ids:
         for m in JobListingTrackMetrics.objects.filter(
-            track=track_slug, job_listing_id__in=job_ids
+            owner=user, track=track_slug, job_listing_id__in=job_ids
         ):
             metrics_map[m.job_listing_id] = m
 
@@ -447,6 +468,7 @@ def pipeline_jobs_to_payloads(
     interview_map: Dict[int, PipelineEntry] = {}
     if track_slug and job_ids:
         for e in PipelineEntry.objects.filter(
+            owner=user,
             track=track_slug,
             job_listing_id__in=job_ids,
             stage=PipelineEntry.Stage.VETTING,

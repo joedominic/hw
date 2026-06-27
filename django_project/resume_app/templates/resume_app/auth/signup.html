@@ -1,0 +1,31 @@
+{% extends "resume_app/base.html" %}
+{% block title %}Create account — ResumeElite{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-md">
+    <h1 class="text-2xl font-bold text-concierge-slate">Create account</h1>
+    <p class="mt-1 text-sm text-slate-600">Start managing your job search in one place.</p>
+    <form method="post" class="mt-6 space-y-4 rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+        {% csrf_token %}
+        {% if form.non_field_errors %}
+        <div class="rounded-concierge border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+            {{ form.non_field_errors }}
+        </div>
+        {% endif %}
+        {% for field in form %}
+        <div>
+            <label for="{{ field.id_for_label }}" class="mb-1 block text-sm font-medium">{{ field.label }}</label>
+            {{ field }}
+            {% if field.help_text %}<p class="mt-1 text-xs text-slate-500">{{ field.help_text }}</p>{% endif %}
+            {% if field.errors %}<p class="mt-1 text-sm text-red-600">{{ field.errors.0 }}</p>{% endif %}
+        </div>
+        {% endfor %}
+        <button type="submit" class="w-full rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">
+            Create account
+        </button>
+    </form>
+    <p class="mt-4 text-center text-sm text-slate-600">
+        Already have an account?
+        <a href="{% url 'login' %}" class="font-medium text-concierge-slate underline">Sign in</a>
+    </p>
+</div>
+{% endblock %}

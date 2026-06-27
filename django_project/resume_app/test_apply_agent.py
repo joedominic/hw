@@ -24,6 +24,12 @@ from .models import (
     PipelineEntry,
     UserResume,
 )
+from .test_utils import TenantTestCase, create_user
+
+
+def _sync_browser_step(fn, attempt, *, default_error="fill_failed"):
+    """Run browser steps inline so SQLite test DB is not locked across threads."""
+    return fn()
 
 
 def _ctx(**overrides) -> ApplyContext:
@@ -145,8 +151,9 @@ def _fake_browser(**kwargs):
     yield object()
 
 
-class OrchestratorTests(TestCase):
+class OrchestratorTests(TenantTestCase):
     def setUp(self):
+        super().setUp()
         self.job = JobListing.objects.create(
             source="test",
             external_id="t1",
@@ -155,14 +162,21 @@ class OrchestratorTests(TestCase):
             url="https://boards.greenhouse.io/acme/jobs/1",
         )
         self.entry = PipelineEntry.objects.create(
-            job_listing=self.job, track="ic", stage=PipelineEntry.Stage.APPLYING
+            owner=self.user,
+            job_listing=self.job,
+            track="ic",
+            stage=PipelineEntry.Stage.APPLYING,
         )
-        ApplicantProfile.objects.create(pk=1, full_name="Jane Doe", email="jane@example.com")
+        profile = ApplicantProfile.get_for_user(self.user)
+        profile.full_name = "Jane Doe"
+        profile.email = "jane@example.com"
+        profile.save(update_fields=["full_name", "email"])
 
     def _completed_optimization(self):
-        ur = UserResume.objects.create(file="r.pdf", is_library=True)
+        ur = UserResume.objects.create(owner=self.user, file="r.pdf", is_library=True)
         jd = JobDescription.objects.create(content="JD")
         return OptimizedResume.objects.create(
+            owner=self.user,
             original_resume=ur,
             job_description=jd,
             status=OptimizedResume.STATUS_COMPLETED,
@@ -173,23 +187,25 @@ class OrchestratorTests(TestCase):
         )
 
     def test_start_creates_attempt_and_skips_duplicates(self):
-        created = orchestrator.start_attempts_for_entries([self.entry.id])
+        created = orchestrator.start_attempts_for_entries([self.entry.id], user_id=self.user.id)
         self.assertEqual(len(created), 1)
         # A second start while one is active is a no-op.
-        again = orchestrator.start_attempts_for_entries([self.entry.id])
+        again = orchestrator.start_attempts_for_entries([self.entry.id], user_id=self.user.id)
         self.assertEqual(len(again), 0)
 
     def test_start_skips_non_applying(self):
         self.entry.stage = PipelineEntry.Stage.VETTING
         self.entry.save()
-        created = orchestrator.start_attempts_for_entries([self.entry.id])
+        created = orchestrator.start_attempts_for_entries([self.entry.id], user_id=self.user.id)
         self.assertEqual(len(created), 0)
 
     def test_build_context_prefers_generated_cover_letter(self):
         opt = self._completed_optimization()
         opt.cover_letter = "Dear Acme, I am excited to apply."
         opt.save(update_fields=["cover_letter"])
-        ApplicantProfile.objects.filter(pk=1).update(cover_letter_template="Generic template.")
+        profile = ApplicantProfile.get_for_user(self.user)
+        profile.cover_letter_template = "Generic template."
+        profile.save(update_fields=["cover_letter_template"])
         attempt = ApplicationAttempt.objects.create(
             pipeline_entry=self.entry,
             optimized_resume=opt,
@@ -219,7 +235,8 @@ class OrchestratorTests(TestCase):
         )
         with patch.object(orchestrator, "_export_resume_file", return_value="/tmp/x.pdf"), \
              patch.object(orchestrator, "browser_session_factory", _fake_browser), \
-             patch.object(orchestrator, "get_adapter", return_value=_FakeAdapter()):
+             patch.object(orchestrator, "get_adapter", return_value=_FakeAdapter()), \
+             patch.object(orchestrator, "_run_browser_step", side_effect=_sync_browser_step):
             # optimizing -> resolve_and_detect (resume attached, exported)
             orchestrator.advance_attempt(attempt.id)
             attempt.refresh_from_db()
@@ -273,7 +290,8 @@ class OrchestratorTests(TestCase):
         )
         ambiguous = SubmitResult(ok=False, confirmed=False, error_code="submit_ambiguous", message="no confirm")
         with patch.object(orchestrator, "browser_session_factory", _fake_browser), \
-             patch.object(orchestrator, "get_adapter", return_value=_FakeAdapter(submit=ambiguous)):
+             patch.object(orchestrator, "get_adapter", return_value=_FakeAdapter(submit=ambiguous)), \
+             patch.object(orchestrator, "_run_browser_step", side_effect=_sync_browser_step):
             orchestrator.advance_attempt(attempt.id)
         attempt.refresh_from_db()
         self.assertEqual(attempt.status, ApplicationAttempt.Status.FAILED)
@@ -314,47 +332,56 @@ class OrchestratorTests(TestCase):
             apply_url="https://boards.greenhouse.io/acme/jobs/1",
         )
         with patch.object(orchestrator, "browser_session_factory", _fake_browser), \
-             patch.object(orchestrator, "get_adapter", return_value=_FakeAdapter()):
+             patch.object(orchestrator, "get_adapter", return_value=_FakeAdapter()), \
+             patch.object(orchestrator, "_run_browser_step", side_effect=_sync_browser_step):
             # No graduation yet -> still requires review.
             orchestrator.advance_attempt(attempt.id)
         attempt.refresh_from_db()
         self.assertEqual(attempt.status, ApplicationAttempt.Status.AWAITING_APPROVAL)
 
         # Graduate the ATS and retry.
-        AtsAutoSubmitStats.objects.create(ats_type="greenhouse", full_auto_enabled=True)
+        AtsAutoSubmitStats.objects.create(
+            owner=self.user, ats_type="greenhouse", full_auto_enabled=True
+        )
         attempt.status = ApplicationAttempt.Status.DRY_RUN_FILL
         attempt.save()
         with patch.object(orchestrator, "browser_session_factory", _fake_browser), \
-             patch.object(orchestrator, "get_adapter", return_value=_FakeAdapter()):
+             patch.object(orchestrator, "get_adapter", return_value=_FakeAdapter()), \
+             patch.object(orchestrator, "_run_browser_step", side_effect=_sync_browser_step):
             orchestrator.advance_attempt(attempt.id)
         attempt.refresh_from_db()
         self.assertEqual(attempt.status, ApplicationAttempt.Status.SUBMITTING)
 
 
-class FullAutoRampTests(TestCase):
+class FullAutoRampTests(TenantTestCase):
+    def setUp(self):
+        super().setUp()
+        settings = AppAutomationSettings.get_for_user(self.user)
+        settings.apply_full_auto_min_clean_submits = 3
+        settings.save(update_fields=["apply_full_auto_min_clean_submits"])
+
     def test_clean_submit_streak_enables_full_auto(self):
-        AppAutomationSettings.objects.create(pk=1, apply_full_auto_min_clean_submits=3)
         for _ in range(2):
-            orchestrator._record_clean_submit("greenhouse")
-        stats = AtsAutoSubmitStats.objects.get(ats_type="greenhouse")
+            orchestrator._record_clean_submit("greenhouse", self.user)
+        stats = AtsAutoSubmitStats.objects.get(owner=self.user, ats_type="greenhouse")
         self.assertFalse(stats.full_auto_enabled)
-        orchestrator._record_clean_submit("greenhouse")
+        orchestrator._record_clean_submit("greenhouse", self.user)
         stats.refresh_from_db()
         self.assertTrue(stats.full_auto_enabled)
         self.assertEqual(stats.clean_submit_streak, 3)
 
     def test_correction_resets_streak(self):
-        AppAutomationSettings.objects.create(pk=1, apply_full_auto_min_clean_submits=3)
-        orchestrator._record_clean_submit("greenhouse")
-        orchestrator._record_correction("greenhouse")
-        stats = AtsAutoSubmitStats.objects.get(ats_type="greenhouse")
+        orchestrator._record_clean_submit("greenhouse", self.user)
+        orchestrator._record_correction("greenhouse", self.user)
+        stats = AtsAutoSubmitStats.objects.get(owner=self.user, ats_type="greenhouse")
         self.assertEqual(stats.clean_submit_streak, 0)
         self.assertFalse(stats.full_auto_enabled)
         self.assertEqual(stats.total_corrections, 1)
 
 
-class MemoryLeakFixTests(TestCase):
+class MemoryLeakFixTests(TenantTestCase):
     def setUp(self):
+        super().setUp()
         self.job = JobListing.objects.create(
             source="test",
             external_id="t-mem",
@@ -363,9 +390,15 @@ class MemoryLeakFixTests(TestCase):
             url="https://boards.greenhouse.io/acme/jobs/1",
         )
         self.entry = PipelineEntry.objects.create(
-            job_listing=self.job, track="ic", stage=PipelineEntry.Stage.APPLYING
+            owner=self.user,
+            job_listing=self.job,
+            track="ic",
+            stage=PipelineEntry.Stage.APPLYING,
         )
-        ApplicantProfile.objects.create(pk=1, full_name="Jane Doe", email="jane@example.com")
+        profile = ApplicantProfile.get_for_user(self.user)
+        profile.full_name = "Jane Doe"
+        profile.email = "jane@example.com"
+        profile.save(update_fields=["full_name", "email"])
 
     def test_generic_fill_skips_playwright_session(self):
         attempt = ApplicationAttempt.objects.create(
@@ -393,6 +426,7 @@ class MemoryLeakFixTests(TestCase):
         ok_result = resolver.ResolveResult(ok=True, apply_url=self.job.url, ats_type="greenhouse")
         with patch.object(orchestrator, "_acquire_browser_slot", return_value=True) as acquire, \
              patch.object(orchestrator, "_release_browser_slot") as release, \
+             patch.object(orchestrator, "_run_browser_step", side_effect=_sync_browser_step), \
              patch.object(resolver, "resolve_and_detect", return_value=ok_result):
             orchestrator.advance_attempt(attempt.id)
         acquire.assert_called_once()
@@ -414,7 +448,8 @@ class MemoryLeakFixTests(TestCase):
             time.sleep(5)
             return "never"
 
-        with patch("resume_app.apply_agent.browser.kill_orphan_chromium") as kill_orphans:
+        with patch.object(orchestrator, "_browser_step_timeout_seconds", return_value=1), \
+             patch("resume_app.apply_agent.browser.kill_orphan_chromium") as kill_orphans:
             outcome = orchestrator._run_browser_step(_hang, attempt, default_error="fill_failed")
         self.assertIsNone(outcome)
         kill_orphans.assert_called()
@@ -435,23 +470,25 @@ class MemoryLeakFixTests(TestCase):
         rl._redis_client = None
 
 
-class ApplyAgentLlmSettingsTests(TestCase):
+class ApplyAgentLlmSettingsTests(TenantTestCase):
     def setUp(self):
+        super().setUp()
         from .crypto import encrypt_api_key
 
         self.cfg = LLMProviderConfig.objects.create(
+            owner=self.user,
             provider="Groq",
             encrypted_api_key=encrypt_api_key("test-key"),
             default_model="openai/gpt-oss-120b",
             is_active=True,
         )
-        self.settings_solo = AppAutomationSettings.get_solo()
+        self.settings_solo = AppAutomationSettings.get_for_user(self.user)
 
     def test_dedicated_provider_overrides_global(self):
         self.settings_solo.apply_agent_llm_provider = "Groq"
         self.settings_solo.apply_agent_llm_model = "openai/gpt-oss-120b"
         self.settings_solo.save()
-        cand = generic_agent.resolve_apply_agent_llm_candidate()
+        cand = generic_agent.resolve_apply_agent_llm_candidate(self.user)
         self.assertEqual(cand["provider"], "Groq")
         self.assertEqual(cand["model"], "openai/gpt-oss-120b")
 
@@ -459,7 +496,7 @@ class ApplyAgentLlmSettingsTests(TestCase):
         self.settings_solo.apply_agent_llm_provider = ""
         self.settings_solo.apply_agent_llm_model = ""
         self.settings_solo.save()
-        cand = generic_agent.resolve_apply_agent_llm_candidate()
+        cand = generic_agent.resolve_apply_agent_llm_candidate(self.user)
         self.assertEqual(cand["provider"], "Groq")
         self.assertTrue(cand["model"])
 
@@ -467,7 +504,7 @@ class ApplyAgentLlmSettingsTests(TestCase):
         self.settings_solo.apply_agent_llm_provider = "Anthropic"
         self.settings_solo.save()
         with self.assertRaises(ValueError):
-            generic_agent.resolve_apply_agent_llm_candidate()
+            generic_agent.resolve_apply_agent_llm_candidate(self.user)
 
 
 class StepCaptureTests(TestCase):
@@ -484,14 +521,16 @@ class StepCaptureTests(TestCase):
                 self.assertIn("/media/apply_agent/attempt_99/step_001.png", url.replace("\\", "/"))
 
 
-class ApplyBrowserHeadlessTests(TestCase):
+class ApplyBrowserHeadlessTests(TenantTestCase):
     @override_settings(APPLY_BROWSER_HEADLESS=True)
     def test_env_headless_true_by_default(self):
         from .apply_agent.browser import apply_browser_headless
 
-        AppAutomationSettings.get_solo().apply_browser_show_window = False
-        AppAutomationSettings.get_solo().save(update_fields=["apply_browser_show_window"])
-        self.assertTrue(apply_browser_headless())
+        settings = AppAutomationSettings.get_for_user(self.user)
+        settings.apply_browser_show_window = False
+        settings.save(update_fields=["apply_browser_show_window"])
+        with patch.object(AppAutomationSettings, "get_solo", return_value=settings):
+            self.assertTrue(apply_browser_headless())
 
     @override_settings(APPLY_BROWSER_HEADLESS=False)
     def test_env_headless_false_shows_window(self):
@@ -503,7 +542,8 @@ class ApplyBrowserHeadlessTests(TestCase):
     def test_profile_show_window_overrides_headless(self):
         from .apply_agent.browser import apply_browser_headless
 
-        solo = AppAutomationSettings.get_solo()
-        solo.apply_browser_show_window = True
-        solo.save(update_fields=["apply_browser_show_window"])
-        self.assertFalse(apply_browser_headless())
+        settings = AppAutomationSettings.get_for_user(self.user)
+        settings.apply_browser_show_window = True
+        settings.save(update_fields=["apply_browser_show_window"])
+        with patch.object(AppAutomationSettings, "get_solo", return_value=settings):
+            self.assertFalse(apply_browser_headless())

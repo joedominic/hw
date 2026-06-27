@@ -29,7 +29,7 @@ def gated_combined_score(title_sim: float, role_sim: float, alpha: float) -> flo
     return max(-1.0, min(1.0, raw))
 
 
-def get_focus_breakdown(job_listing_id: int, track: Optional[str] = None) -> Optional[dict]:
+def get_focus_breakdown(job_listing_id: int, *, user, track: Optional[str] = None) -> Optional[dict]:
     """
     Return detailed focus score breakdown for a job: title vs role (sentence-level) similarity
     vs preference and vs each liked job. Used by "Why?" debug view.
@@ -39,13 +39,13 @@ def get_focus_breakdown(job_listing_id: int, track: Optional[str] = None) -> Opt
         return None
     alpha = getattr(settings, "JOB_FOCUS_TITLE_WEIGHT", 0.55)
     top_k = getattr(settings, "JOB_FOCUS_ROLE_TOP_K", 5)
-    prefs = get_preference_vectors(track=track)
+    prefs = get_preference_vectors(user=user, track=track)
     if not prefs:
         return None
     # prefs returns (liked_centroid, disliked_centroid, liked_jobs)
     pref_like_centroid = prefs[0]
     pref_dislike_centroid = prefs[1] if len(prefs) > 1 else None
-    liked_jobs = (prefs[2] if len(prefs) > 2 else []) or get_liked_jobs_for_focus_reason(track=track)
+    liked_jobs = (prefs[2] if len(prefs) > 2 else []) or get_liked_jobs_for_focus_reason(user=user, track=track)
     if not liked_jobs:
         return None
     tvec = embedding_module.embed_title_only(job.title or "", job.company_name or "")
@@ -85,7 +85,7 @@ def get_focus_breakdown(job_listing_id: int, track: Optional[str] = None) -> Opt
     # --- Disliked jobs breakdown: how similar this job is to jobs you've disliked ---
     by_disliked = []
     try:
-        disliked_embeddings = get_disliked_embeddings(track=track)
+        disliked_embeddings = get_disliked_embeddings(user=user, track=track)
     except Exception as e:  # pragma: no cover - defensive
         logger.warning("[focus_breakdown] get_disliked_embeddings failed: %s", e)
         disliked_embeddings = []
@@ -270,6 +270,8 @@ def get_focus_sentence_alignment(job_listing_id: int, liked_job_id: int) -> Opti
 
 def rank_jobs_by_preference(
     jobs: Sequence[JobListing],
+    *,
+    user,
     track: Optional[str] = None,
 ) -> Optional[Tuple[List[float], List[Optional[List[float]]], List[List[Optional[List[float]]]]]]:
     """
@@ -287,7 +289,7 @@ def rank_jobs_by_preference(
 
     On failure or when preference data is missing, returns None.
     """
-    prefs = get_preference_vectors(track=track)
+    prefs = get_preference_vectors(user=user, track=track)
     if not prefs or not jobs:
         return None
 

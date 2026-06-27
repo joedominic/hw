@@ -17,6 +17,7 @@ import logging
 import os
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.utils import timezone
 
@@ -54,17 +55,18 @@ browser_session_factory = _default_browser_session
 # ---------------------------------------------------------------------------
 # Public entry points
 # ---------------------------------------------------------------------------
-def start_attempts_for_entries(entry_ids: list[int], *, mode: str | None = None) -> list[ApplicationAttempt]:
+def start_attempts_for_entries(entry_ids: list[int], *, user_id: int, mode: str | None = None) -> list[ApplicationAttempt]:
     """Create a queued ApplicationAttempt for each Applying-stage entry.
 
     Skips entries that already have a non-terminal attempt (no duplicate runs).
     """
-    settings_solo = AppAutomationSettings.get_solo()
+    user = get_user_model().objects.get(pk=int(user_id))
+    settings_solo = AppAutomationSettings.get_for_user(user)
     effective_mode = mode or settings_solo.apply_automation_mode or ApplicationAttempt.Mode.SEMI_AUTO
     created: list[ApplicationAttempt] = []
     for eid in entry_ids:
         try:
-            entry = PipelineEntry.objects.select_related("job_listing").get(
+            entry = PipelineEntry.objects.for_user(user).select_related("job_listing").get(
                 id=int(eid), removed_at__isnull=True
             )
         except (PipelineEntry.DoesNotExist, TypeError, ValueError):
@@ -97,7 +99,7 @@ def approve_attempt(attempt_id: int, *, corrected: bool = False) -> ApplicationA
     if not attempt or attempt.status != ApplicationAttempt.Status.AWAITING_APPROVAL:
         return attempt
     if corrected and attempt.ats_type:
-        _record_correction(attempt.ats_type)
+        _record_correction(attempt.ats_type, _attempt_user(attempt))
 
     if get_adapter(attempt.ats_type) is None:
         _log_step(
@@ -148,9 +150,9 @@ def set_override_url(attempt_id: int, url: str) -> ApplicationAttempt | None:
 # ---------------------------------------------------------------------------
 # State machine
 # ---------------------------------------------------------------------------
-def advance_attempt(attempt_id: int) -> dict:
+def advance_attempt(attempt_id: int, *, user_id: int | None = None) -> dict:
     """Perform one state-machine step for the given attempt."""
-    attempt = _get(attempt_id)
+    attempt = _get(attempt_id, user_id=user_id)
     if not attempt:
         return {"status": "error", "message": "attempt not found"}
     if attempt.is_terminal or attempt.status == ApplicationAttempt.Status.AWAITING_APPROVAL:
@@ -337,7 +339,7 @@ def _handle_submitting(attempt: ApplicationAttempt) -> None:
         attempt.submitted_at = timezone.now()
         attempt.save(update_fields=["status", "submitted_at", "updated_at"])
         attempt.pipeline_entry.mark_done()
-        _record_clean_submit(attempt.ats_type)
+        _record_clean_submit(attempt.ats_type, _attempt_user(attempt))
     else:
         # Ambiguous: never auto-retry (double-apply risk). Human verifies manually.
         attempt.mark_failed(
@@ -359,12 +361,17 @@ _HANDLERS = {
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _get(attempt_id: int) -> ApplicationAttempt | None:
-    return (
-        ApplicationAttempt.objects.select_related("pipeline_entry", "pipeline_entry__job_listing", "optimized_resume")
-        .filter(id=attempt_id)
-        .first()
-    )
+def _get(attempt_id: int, *, user_id: int | None = None) -> ApplicationAttempt | None:
+    qs = ApplicationAttempt.objects.select_related(
+        "pipeline_entry", "pipeline_entry__job_listing", "pipeline_entry__owner", "optimized_resume"
+    ).filter(id=attempt_id)
+    if user_id is not None:
+        qs = qs.filter(pipeline_entry__owner_id=int(user_id))
+    return qs.first()
+
+
+def _attempt_user(attempt: ApplicationAttempt):
+    return attempt.pipeline_entry.owner
 
 
 def _set_status(attempt: ApplicationAttempt, status: str) -> None:
@@ -375,7 +382,8 @@ def _set_status(attempt: ApplicationAttempt, status: str) -> None:
 def _enter_resolution(attempt: ApplicationAttempt) -> None:
     """Apply the optional min-score gate, export the resume, then resolve the URL."""
     optimized = attempt.optimized_resume
-    solo = AppAutomationSettings.get_solo()
+    user = _attempt_user(attempt)
+    solo = AppAutomationSettings.get_for_user(user)
     gate = int(solo.apply_min_optimizer_score or 0)
     if gate > 0 and optimized is not None:
         scores = [s for s in (optimized.ats_score, optimized.recruiter_score) if s is not None]
@@ -422,7 +430,7 @@ def _export_resume_file(attempt: ApplicationAttempt, fmt: str) -> str:
 
 def _latest_completed_optimization(attempt: ApplicationAttempt) -> OptimizedResume | None:
     return (
-        OptimizedResume.objects.filter(
+        OptimizedResume.objects.for_user(_attempt_user(attempt)).filter(
             pipeline_entry=attempt.pipeline_entry,
             status=OptimizedResume.STATUS_COMPLETED,
         )
@@ -433,7 +441,7 @@ def _latest_completed_optimization(attempt: ApplicationAttempt) -> OptimizedResu
 
 
 def _has_active_optimization(attempt: ApplicationAttempt) -> bool:
-    return OptimizedResume.objects.filter(
+    return OptimizedResume.objects.for_user(_attempt_user(attempt)).filter(
         pipeline_entry=attempt.pipeline_entry,
         status__in=(OptimizedResume.STATUS_QUEUED, OptimizedResume.STATUS_RUNNING),
     ).exists()
@@ -457,9 +465,9 @@ def _resolve_cover_letter(attempt: ApplicationAttempt, profile: ApplicantProfile
 
 
 def _build_context(attempt: ApplicationAttempt, page) -> ApplyContext:
-    profile = ApplicantProfile.get_solo()
+    profile = ApplicantProfile.get_for_user(_attempt_user(attempt))
     job = attempt.pipeline_entry.job_listing
-    credential = _resolve_credential(attempt.apply_url)
+    credential = _resolve_credential(attempt.apply_url, _attempt_user(attempt))
     cookies = credential.get_session_cookies() if credential else None
     if cookies and page is not None:
         try:
@@ -486,12 +494,13 @@ def _build_context(attempt: ApplicationAttempt, page) -> ApplyContext:
         page=page,
         credential=credential,
         attempt_id=attempt.id,
+        user=_attempt_user(attempt),
     )
     ctx._log_step = lambda step_name, **kw: _log_step(attempt, step_name, **kw)
     return ctx
 
 
-def _resolve_credential(url: str):
+def _resolve_credential(url: str, user):
     from urllib.parse import urlparse
 
     from ..models import SiteCredential
@@ -499,7 +508,7 @@ def _resolve_credential(url: str):
     host = (urlparse(url or "").hostname or "").lower()
     if not host:
         return None
-    return SiteCredential.objects.filter(domain=host).first()
+    return SiteCredential.objects.for_user(user).filter(domain=host).first()
 
 
 def _should_auto_submit(attempt: ApplicationAttempt, *, is_generic: bool, fill_ok: bool) -> bool:
@@ -509,7 +518,10 @@ def _should_auto_submit(attempt: ApplicationAttempt, *, is_generic: bool, fill_o
         return False  # generic path never auto-submits; incomplete fills need review
     if (attempt.confidence or 0) < AUTO_SUBMIT_MIN_CONFIDENCE:
         return False
-    stats = AtsAutoSubmitStats.objects.filter(ats_type=attempt.ats_type).first()
+    stats = AtsAutoSubmitStats.objects.filter(
+        owner=_attempt_user(attempt),
+        ats_type=attempt.ats_type,
+    ).first()
     return bool(stats and stats.full_auto_enabled)
 
 
@@ -525,12 +537,12 @@ def _log_step(attempt: ApplicationAttempt, step_name: str, *, message: str = "",
 
 
 # ----- full-auto graduation -------------------------------------------------
-def _record_clean_submit(ats_type: str) -> None:
+def _record_clean_submit(ats_type: str, user) -> None:
     if not ats_type:
         return
-    solo = AppAutomationSettings.get_solo()
+    solo = AppAutomationSettings.get_for_user(user)
     threshold = int(solo.apply_full_auto_min_clean_submits or 10)
-    stats, _ = AtsAutoSubmitStats.objects.get_or_create(ats_type=ats_type)
+    stats, _ = AtsAutoSubmitStats.objects.get_or_create(owner=user, ats_type=ats_type)
     stats.clean_submit_streak += 1
     stats.total_submits += 1
     if stats.clean_submit_streak >= threshold:
@@ -538,8 +550,8 @@ def _record_clean_submit(ats_type: str) -> None:
     stats.save()
 
 
-def _record_correction(ats_type: str) -> None:
-    stats, _ = AtsAutoSubmitStats.objects.get_or_create(ats_type=ats_type)
+def _record_correction(ats_type: str, user) -> None:
+    stats, _ = AtsAutoSubmitStats.objects.get_or_create(owner=user, ats_type=ats_type)
     stats.clean_submit_streak = 0
     stats.total_corrections += 1
     stats.full_auto_enabled = False

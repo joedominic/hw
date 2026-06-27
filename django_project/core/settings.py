@@ -39,6 +39,8 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "hijack",
+    "hijack.contrib.admin",
     "huey.contrib.djhuey",
     "resume_app",
 ]
@@ -49,6 +51,8 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "hijack.middleware.HijackUserMiddleware",
+    "resume_app.middleware.LoginRequiredMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -132,7 +136,28 @@ import os
 MEDIA_URL = "/media/"
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 
-# Optional simple auth for public APIs.
+# Production: set HUEY_IMMEDIATE=0 and configure Redis (HUEY_REDIS_*). Use SIGNUP_ENABLED=0 for invite-only.
+# Optional: DEFAULT_FILE_STORAGE for S3-compatible media when running multiple app instances.
+
+# --- Authentication ---
+LOGIN_URL = "/accounts/login/"
+LOGIN_REDIRECT_URL = "home"
+LOGOUT_REDIRECT_URL = "login"
+SIGNUP_ENABLED = env.bool("SIGNUP_ENABLED", default=True)
+LOGIN_EXEMPT_URL_PREFIXES = (
+    "/accounts/",
+    "/admin/",
+    "/static/",
+)
+
+# django-hijack: support staff impersonation
+HIJACK_PERMISSION_CHECK = "resume_app.hijack_permissions.can_hijack"
+HIJACK_INSERT_BEFORE = "<main"
+
+# Per-user LLM usage limits (0 = unlimited)
+LLM_USER_DAILY_REQUEST_LIMIT = env.int("LLM_USER_DAILY_REQUEST_LIMIT", default=0)
+
+# Optional simple auth for public APIs (deprecated; session auth is primary).
 # When API_ACCESS_TOKEN is set, API endpoints that call _require_api_auth
 # will require header X-Api-Token with this exact value. When unset, those
 # endpoints remain open (development/demo default).

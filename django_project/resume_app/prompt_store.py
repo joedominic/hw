@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from .models import AtsJudgeProfile, OptimizerWorkflow, UserPromptProfile
+from .tenancy import api_user
 from .prompts import (
     DEFAULT_ATS_JUDGE_PROMPT,
     DEFAULT_ATS_JUDGE_SYSTEM,
@@ -96,9 +97,8 @@ _PROMPT_SPEC = {
 }
 
 
-def _get_or_create_profile() -> UserPromptProfile:
-    obj, _ = UserPromptProfile.objects.get_or_create(pk=1)
-    return obj
+def _get_or_create_profile(user) -> UserPromptProfile:
+    return UserPromptProfile.get_for_user(user)
 
 
 def _profile_is_empty(profile: UserPromptProfile) -> bool:
@@ -143,24 +143,33 @@ def resolve_ats_judge_parts(profile: AtsJudgeProfile) -> Tuple[str, str, Optiona
     return (DEFAULT_ATS_JUDGE_SYSTEM, DEFAULT_ATS_JUDGE_USER, None)
 
 
-def get_default_ats_judge_profile() -> Optional[AtsJudgeProfile]:
-    """Global fallback ATS profile (is_default, slug default, or lowest pk)."""
+def get_default_ats_judge_profile(user=None) -> Optional[AtsJudgeProfile]:
+    """Per-user fallback ATS profile (is_default, slug default, or lowest pk)."""
+    qs = AtsJudgeProfile.objects.all()
+    if user is not None and getattr(user, "is_authenticated", False):
+        qs = qs.filter(owner=user)
     return (
-        AtsJudgeProfile.objects.filter(is_default=True).first()
-        or AtsJudgeProfile.objects.filter(slug="default").first()
-        or AtsJudgeProfile.objects.order_by("pk").first()
+        qs.filter(is_default=True).first()
+        or qs.filter(slug="default").first()
+        or qs.order_by("pk").first()
     )
 
 
-def list_ats_judge_profiles() -> List[AtsJudgeProfile]:
-    return list(AtsJudgeProfile.objects.all().order_by("name"))
+def list_ats_judge_profiles(user=None) -> List[AtsJudgeProfile]:
+    qs = AtsJudgeProfile.objects.all()
+    if user is not None and getattr(user, "is_authenticated", False):
+        qs = qs.filter(owner=user)
+    return list(qs.order_by("name"))
 
 
-def get_ats_judge_profile_by_id(profile_id: Optional[int]) -> Optional[AtsJudgeProfile]:
+def get_ats_judge_profile_by_id(profile_id: Optional[int], user=None) -> Optional[AtsJudgeProfile]:
     if not profile_id:
         return None
     try:
-        return AtsJudgeProfile.objects.get(pk=int(profile_id))
+        qs = AtsJudgeProfile.objects.all()
+        if user is not None and getattr(user, "is_authenticated", False):
+            qs = qs.filter(owner=user)
+        return qs.get(pk=int(profile_id))
     except (AtsJudgeProfile.DoesNotExist, ValueError, TypeError):
         return None
 
@@ -170,6 +179,7 @@ def resolve_effective_ats_judge_profile_id(
     ats_judge_profile_id: Optional[int] = None,
     workflow: Optional[OptimizerWorkflow] = None,
     workflow_ats_judge_profile_id: Optional[int] = None,
+    user=None,
 ) -> Optional[int]:
     """
     Per-run ATS selection priority:
@@ -184,7 +194,7 @@ def resolve_effective_ats_judge_profile_id(
         wf_id = workflow.ats_judge_profile_id
     if wf_id:
         return int(wf_id)
-    default = get_default_ats_judge_profile()
+    default = get_default_ats_judge_profile(user)
     return default.pk if default else None
 
 
@@ -274,7 +284,7 @@ def resolve_prompt_parts(
     return (def_sys, def_user, None)
 
 
-def get_effective_prompts(request: Optional[Any]) -> Dict[str, str]:
+def get_effective_prompts(request: Optional[Any], user=None) -> Dict[str, str]:
     """
     Return merged prompts for forms and display: legacy combined strings plus
     system/user fields. Keys: writer, writer_system, writer_user, ...
@@ -282,13 +292,20 @@ def get_effective_prompts(request: Optional[Any]) -> Dict[str, str]:
     System/user textareas show the effective templates (including code defaults when
     the profile row is still empty), so the Prompt Library matches runtime behavior.
     """
-    profile = _get_or_create_profile()
+    if user is None and request is not None:
+        user = api_user(request)
+    if user is None:
+        from django.contrib.auth import get_user_model
+        user = get_user_model().objects.order_by("pk").first()
+    if user is None:
+        return dict(DEFAULT_PROMPTS)
+    profile = _get_or_create_profile(user)
     if request is not None and hasattr(request, "session") and _profile_is_empty(profile):
         _migrate_session_to_profile(request, profile)
         profile.refresh_from_db()
 
     out: Dict[str, str] = {}
-    default_ats = get_default_ats_judge_profile()
+    default_ats = get_default_ats_judge_profile(user)
     for kind, (leg_a, sys_a, usr_a, def_sys, def_user) in _PROMPT_SPEC.items():
         if kind == "ats_judge" and default_ats is not None:
             out.update(get_ats_judge_profile_display(default_ats))
@@ -321,8 +338,9 @@ def get_effective_prompts(request: Optional[Any]) -> Dict[str, str]:
 
 
 def save_prompts_to_profile(request: Optional[Any], prompts: Dict[str, str]) -> None:
-    """Persist prompt dict to UserPromptProfile (pk=1). ATS judge uses AtsJudgeProfile library."""
-    profile = _get_or_create_profile()
+    """Persist prompt dict to the signed-in user's UserPromptProfile."""
+    user = api_user(request)
+    profile = _get_or_create_profile(user)
     for kind, (leg_a, sys_a, usr_a, _ds, _du) in _PROMPT_SPEC.items():
         if kind == "ats_judge":
             continue
@@ -340,7 +358,8 @@ def save_prompts_to_profile(request: Optional[Any], prompts: Dict[str, str]) -> 
 
 def clear_all_prompts_in_profile(request: Optional[Any]) -> None:
     """Clear every prompt field so code defaults (including system/user splits) apply."""
-    profile = _get_or_create_profile()
+    user = api_user(request)
+    profile = _get_or_create_profile(user)
     for _kind, (leg_a, sys_a, usr_a, _ds, _du) in _PROMPT_SPEC.items():
         setattr(profile, leg_a, "")
         setattr(profile, sys_a, "")
@@ -354,7 +373,7 @@ def clear_all_prompts_in_profile(request: Optional[Any]) -> None:
 def profile_for_llm(request: Optional[Any]) -> UserPromptProfile:
     """Fresh profile row for resolve_prompt_parts (after optional session migrate)."""
     get_effective_prompts(request)
-    return _get_or_create_profile()
+    return _get_or_create_profile(api_user(request))
 
 
 def _ats_judge_prompt_state(

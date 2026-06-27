@@ -32,8 +32,10 @@ def _apply_agent_llm_form_context(settings_solo: AppAutomationSettings) -> dict:
     from .llm_services import DEFAULT_MODELS, LLM_PROVIDERS
     from .pipeline_llm_skill_extract import resolve_provider_api_key
 
+    user = settings_solo.owner
     configured = list(
-        LLMProviderConfig.objects.exclude(encrypted_api_key="")
+        LLMProviderConfig.objects.for_user(user)
+        .exclude(encrypted_api_key="")
         .exclude(encrypted_api_key__isnull=True)
         .values_list("provider", flat=True)
         .distinct()
@@ -45,12 +47,12 @@ def _apply_agent_llm_form_context(settings_solo: AppAutomationSettings) -> dict:
     models_by_provider: dict[str, list[str]] = {}
     for provider in providers:
         models: list[str] = []
-        cfg = LLMProviderConfig.objects.filter(provider=provider).first()
+        cfg = LLMProviderConfig.objects.for_user(user).filter(provider=provider).first()
         if cfg and (cfg.default_model or "").strip():
             models.append(cfg.default_model.strip())
-        for row in LLMProviderPreference.objects.filter(provider_config__provider=provider).order_by(
-            "priority", "id"
-        ):
+        for row in LLMProviderPreference.objects.filter(
+            provider_config__owner=user, provider_config__provider=provider
+        ).order_by("priority", "id"):
             model = (row.model or "").strip()
             if model and model not in models:
                 models.append(model)
@@ -66,7 +68,7 @@ def _apply_agent_llm_form_context(settings_solo: AppAutomationSettings) -> dict:
     if not effective_provider and providers:
         from .llm_session import get_runtime_provider_candidates
 
-        runtime = get_runtime_provider_candidates()
+        runtime = get_runtime_provider_candidates(user)
         if runtime:
             effective_provider = runtime[0].get("provider") or ""
             effective_model = (
@@ -95,9 +97,9 @@ def apply_agent_dashboard_view(request):
                 return redirect(reverse("apply_agent"))
             from .tasks import run_apply_agent_step
 
-            attempts = orchestrator.start_attempts_for_entries([int(e) for e in entry_ids])
+            attempts = orchestrator.start_attempts_for_entries([int(e) for e in entry_ids], user_id=request.user.id)
             for attempt in attempts:
-                run_apply_agent_step(attempt.id)
+                run_apply_agent_step(request.user.id, attempt.id)
             if attempts:
                 messages.success(request, f"Started the apply agent for {len(attempts)} job(s).")
             else:
@@ -105,23 +107,27 @@ def apply_agent_dashboard_view(request):
             return redirect(reverse("apply_agent"))
         return redirect(reverse("apply_agent"))
 
-    settings_solo = AppAutomationSettings.get_solo()
-    profile = ApplicantProfile.get_solo()
+    settings_solo = AppAutomationSettings.get_for_user(request.user)
+    profile = ApplicantProfile.get_for_user(request.user)
 
     attempts = list(
-        ApplicationAttempt.objects.select_related("pipeline_entry__job_listing").all()[:100]
+        ApplicationAttempt.objects.select_related("pipeline_entry__job_listing").filter(
+            pipeline_entry__owner=request.user
+        )[:100]
     )
     in_progress = [a for a in attempts if a.status in _IN_PROGRESS]
     finished = [a for a in attempts if a.is_terminal]
 
     # Applying-stage entries without an active attempt are candidates to start.
     active_entry_ids = set(
-        ApplicationAttempt.objects.filter(status__in=_IN_PROGRESS).values_list(
+        ApplicationAttempt.objects.filter(
+            pipeline_entry__owner=request.user, status__in=_IN_PROGRESS
+        ).values_list(
             "pipeline_entry_id", flat=True
         )
     )
     candidates = (
-        PipelineEntry.objects.select_related("job_listing")
+        PipelineEntry.objects.for_user(request.user).select_related("job_listing")
         .filter(stage=PipelineEntry.Stage.APPLYING, removed_at__isnull=True)
         .exclude(id__in=active_entry_ids)
         .order_by("-added_at")[:100]
@@ -144,7 +150,7 @@ def apply_agent_dashboard_view(request):
 def apply_agent_review_view(request, attempt_id: int):
     attempt = (
         ApplicationAttempt.objects.select_related("pipeline_entry__job_listing", "optimized_resume")
-        .filter(id=attempt_id)
+        .filter(id=attempt_id, pipeline_entry__owner=request.user)
         .first()
     )
     if not attempt:
@@ -159,7 +165,7 @@ def apply_agent_review_view(request, attempt_id: int):
             if updated and updated.status == ApplicationAttempt.Status.SUBMITTING:
                 from .tasks import run_apply_agent_step
 
-                run_apply_agent_step(attempt_id)
+                run_apply_agent_step(request.user.id, attempt_id)
                 messages.success(request, "Approved. Submitting the application now.")
             elif updated and updated.status == ApplicationAttempt.Status.SUCCEEDED:
                 messages.success(request, "Marked as applied. Job moved to Done.")
@@ -176,7 +182,7 @@ def apply_agent_review_view(request, attempt_id: int):
                 from .tasks import run_apply_agent_step
 
                 orchestrator.set_override_url(attempt_id, url)
-                run_apply_agent_step(attempt_id)
+                run_apply_agent_step(request.user.id, attempt_id)
                 messages.success(request, "Apply URL updated; re-running the agent.")
         return redirect(reverse("apply_agent_review", args=[attempt_id]))
 
@@ -203,7 +209,7 @@ def apply_agent_review_view(request, attempt_id: int):
             if status >= 400 or status == 0:
                 network_errors.append({"step": step.step_name, **entry})
 
-    settings_solo = AppAutomationSettings.get_solo()
+    settings_solo = AppAutomationSettings.get_for_user(request.user)
     context = {
         "attempt": attempt,
         "job": attempt.pipeline_entry.job_listing,
@@ -224,8 +230,8 @@ def apply_agent_review_view(request, attempt_id: int):
 
 
 def apply_agent_profile_view(request):
-    profile = ApplicantProfile.get_solo()
-    settings_solo = AppAutomationSettings.get_solo()
+    profile = ApplicantProfile.get_for_user(request.user)
+    settings_solo = AppAutomationSettings.get_for_user(request.user)
 
     if request.method == "POST":
         action = request.POST.get("action")

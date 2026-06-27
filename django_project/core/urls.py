@@ -1,14 +1,22 @@
 from django.contrib import admin
-from django.urls import path
+from django.urls import path, include
 from ninja import NinjaAPI
+from ninja.security import django_auth
 
 from resume_app.api import router as resume_router
 from resume_app import views as resume_views
 from resume_app import apply_views
+from resume_app.auth_views import AppLoginView, AppLogoutView, SignupView
+from resume_app import staff_views
 
-api = NinjaAPI()
+api = NinjaAPI(auth=django_auth)
 api.add_router("/resume", resume_router)
 urlpatterns = [
+    path("accounts/login/", AppLoginView.as_view(), name="login"),
+    path("accounts/logout/", AppLogoutView.as_view(), name="logout"),
+    path("accounts/signup/", SignupView.as_view(), name="signup"),
+    path("hijack/", include("hijack.urls", namespace="hijack")),
+    path("staff/users/", staff_views.staff_users_view, name="staff_users"),
     # Primary entry point: Django UI
     path("", resume_views.optimizer_view, name="home"),
     path("admin/", admin.site.urls),
@@ -84,11 +92,10 @@ urlpatterns = [
         resume_views.focus_alignment_view,
         name="focus_alignment",
     ),
+    path("media/<path:path>", resume_views.serve_media_view, name="serve_media"),
 ]
 
 from django.conf import settings
 
 if settings.DEBUG:
-    from django.conf.urls.static import static
-
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    pass  # Media is served via authenticated serve_media_view (see above).
