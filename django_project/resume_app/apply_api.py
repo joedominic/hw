@@ -13,7 +13,8 @@ from typing import List, Optional
 from ninja import Router, Schema
 from ninja.errors import HttpError
 
-from .models import ApplicationAttempt
+from .models import ApplicationAttempt, PipelineEntry
+from .tenancy import api_user
 
 logger = logging.getLogger(__name__)
 
@@ -52,22 +53,50 @@ def _attempt_payload(attempt: ApplicationAttempt) -> dict:
     }
 
 
+def _get_user_attempt(user, attempt_id: int) -> ApplicationAttempt:
+    """Return attempt only when its pipeline entry belongs to the tenant user."""
+    attempt = (
+        ApplicationAttempt.objects.filter(
+            id=attempt_id,
+            pipeline_entry__owner=user,
+        )
+        .select_related("pipeline_entry")
+        .first()
+    )
+    if not attempt:
+        raise HttpError(404, "Attempt not found.")
+    return attempt
+
+
 @router.post("/start")
 def start(request, payload: StartApplyIn):
     """Create attempts for the given Applying-stage entries and kick off processing."""
     from .apply_agent import orchestrator
     from .tasks import run_apply_agent_step
 
+    user = api_user(request)
     if not payload.pipeline_entry_ids:
         raise HttpError(400, "No pipeline entries provided.")
     mode = payload.automation_mode
     if mode and mode not in (ApplicationAttempt.Mode.SEMI_AUTO, ApplicationAttempt.Mode.FULL_AUTO):
         raise HttpError(400, "Invalid automation_mode.")
 
-    attempts = orchestrator.start_attempts_for_entries(payload.pipeline_entry_ids, mode=mode)
+    valid_entry_ids = list(
+        PipelineEntry.objects.for_user(user)
+        .filter(
+            id__in=payload.pipeline_entry_ids,
+            stage=PipelineEntry.Stage.APPLYING,
+            removed_at__isnull=True,
+        )
+        .values_list("id", flat=True)
+    )
+    if not valid_entry_ids:
+        raise HttpError(400, "No valid pipeline entries provided.")
+
+    attempts = orchestrator.start_attempts_for_entries(valid_entry_ids, user_id=user.id, mode=mode)
     # Fast-path: enqueue the first step immediately (heartbeat remains primary).
     for attempt in attempts:
-        run_apply_agent_step(attempt.id)
+        run_apply_agent_step(user.id, attempt.id)
     return {
         "status": "ok",
         "created": len(attempts),
@@ -77,9 +106,8 @@ def start(request, payload: StartApplyIn):
 
 @router.get("/{attempt_id}")
 def get_attempt(request, attempt_id: int):
-    attempt = ApplicationAttempt.objects.filter(id=attempt_id).first()
-    if not attempt:
-        raise HttpError(404, "Attempt not found.")
+    user = api_user(request)
+    attempt = _get_user_attempt(user, attempt_id)
     steps = [
         {
             "step_name": s.step_name,
@@ -100,11 +128,13 @@ def approve(request, attempt_id: int, payload: ApproveIn):
     from .apply_agent import orchestrator
     from .tasks import run_apply_agent_step
 
+    user = api_user(request)
+    _get_user_attempt(user, attempt_id)
     attempt = orchestrator.approve_attempt(attempt_id, corrected=payload.corrected)
     if not attempt:
         raise HttpError(404, "Attempt not found.")
     if attempt.status == ApplicationAttempt.Status.SUBMITTING:
-        run_apply_agent_step(attempt.id)
+        run_apply_agent_step(user.id, attempt.id)
     return _attempt_payload(attempt)
 
 
@@ -112,6 +142,8 @@ def approve(request, attempt_id: int, payload: ApproveIn):
 def reject(request, attempt_id: int):
     from .apply_agent import orchestrator
 
+    user = api_user(request)
+    _get_user_attempt(user, attempt_id)
     attempt = orchestrator.reject_attempt(attempt_id)
     if not attempt:
         raise HttpError(404, "Attempt not found.")
@@ -123,8 +155,10 @@ def override_url(request, attempt_id: int, payload: OverrideUrlIn):
     from .apply_agent import orchestrator
     from .tasks import run_apply_agent_step
 
+    user = api_user(request)
+    _get_user_attempt(user, attempt_id)
     attempt = orchestrator.set_override_url(attempt_id, payload.url)
     if not attempt:
         raise HttpError(404, "Attempt not found.")
-    run_apply_agent_step(attempt.id)
+    run_apply_agent_step(user.id, attempt.id)
     return _attempt_payload(attempt)

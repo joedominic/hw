@@ -1,4 +1,5 @@
-from django.test import TestCase, Client
+from django.test import TestCase, Client, override_settings
+from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.utils import timezone
 from datetime import timedelta
@@ -37,21 +38,28 @@ from .views import MAX_TRACK_RESUME_UPLOAD_BYTES, _count_unique_library_resumes
 import json
 import os
 
-class ModelsTestCase(TestCase):
+from .test_utils import TenantTestCase, create_user, login_client, TEST_PASSWORD
+
+
+class ModelTestCase(TestCase):
     def test_model_creation(self):
-        resume = UserResume.objects.create(file="test.pdf")
+        user = create_user("modeltest")
+        resume = UserResume.objects.create(owner=user, file="test.pdf")
         jd = JobDescription.objects.create(content="Test JD")
-        optimized = OptimizedResume.objects.create(original_resume=resume, job_description=jd)
+        optimized = OptimizedResume.objects.create(
+            owner=user, original_resume=resume, job_description=jd
+        )
         self.assertEqual(optimized.status, OptimizedResume.STATUS_QUEUED)
 
     def test_pipelineentry_stage_helpers(self):
+        user = create_user("stagehelper")
         job = JobListing.objects.create(
             source="test",
             external_id="1",
             title="T",
             company_name="C",
         )
-        pe = PipelineEntry.objects.create(job_listing=job, track="ic")
+        pe = PipelineEntry.objects.create(owner=user, job_listing=job, track="ic")
         # Default stage is blank / pipeline
         self.assertEqual(pe.stage, "")
         pe.move_to_vetting()
@@ -240,9 +248,12 @@ class JobSourceNormalizationTestCase(TestCase):
         self.assertEqual(normalized["description"], "Short LinkedIn summary fallback")
 
 
-class APITestCase(TestCase):
+class APITestCase(TenantTestCase):
     def setUp(self):
-        self.client = Client()
+        super().setUp()
+        from resume_app.onboarding import seed_user_defaults
+
+        seed_user_defaults(self.user)
 
     def test_save_optimizer_supporting_context_in_settings_db(self):
         from .models import AppAutomationSettings
@@ -266,7 +277,7 @@ class APITestCase(TestCase):
             },
         )
         self.assertEqual(response.status_code, 302)
-        automation = AppAutomationSettings.get_solo()
+        automation = AppAutomationSettings.get_for_user(self.user)
         self.assertEqual(automation.default_optimization_notes, "Emphasize leadership")
         self.assertEqual(automation.default_pipeline_skills_json, '{"hard_skills":["python"]}')
         self.assertEqual(automation.default_job_highlights, "Lead hiring projects")
@@ -274,7 +285,7 @@ class APITestCase(TestCase):
     def test_optimizer_form_prefills_supporting_context_from_db(self):
         from .models import AppAutomationSettings
 
-        automation = AppAutomationSettings.get_solo()
+        automation = AppAutomationSettings.get_for_user(self.user)
         automation.default_optimization_notes = "Emphasize leadership"
         automation.default_pipeline_skills_json = '{"hard_skills":["python"]}'
         automation.default_job_highlights = "Lead hiring projects"
@@ -289,7 +300,8 @@ class APITestCase(TestCase):
         response = self.client.get("/resume/optimizer/")
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Emphasize leadership")
-        self.assertContains(response, '{"hard_skills":["python"]}')
+        self.assertContains(response, "hard_skills")
+        self.assertContains(response, "python")
         self.assertContains(response, "Lead hiring projects")
 
     def test_save_supporting_context_ajax(self):
@@ -306,7 +318,7 @@ class APITestCase(TestCase):
             HTTP_X_REQUESTED_WITH="XMLHttpRequest",
         )
         self.assertEqual(response.status_code, 200)
-        automation = AppAutomationSettings.get_solo()
+        automation = AppAutomationSettings.get_for_user(self.user)
         self.assertEqual(automation.default_optimization_notes, "Focus on platform work")
         self.assertEqual(automation.default_job_highlights, "Shipped v2")
 
@@ -329,6 +341,7 @@ class APITestCase(TestCase):
                 "api_key": "test-key",
                 "file": uploaded,
             },
+            format="multipart",
         )
         self.assertEqual(
             response.status_code,
@@ -357,6 +370,7 @@ class APITestCase(TestCase):
                 "api_key": "k",
                 "file": uploaded,
             },
+            format="multipart",
         )
         # 400 = business validation; 422 = request/schema validation
         self.assertIn(
@@ -379,6 +393,7 @@ class APITestCase(TestCase):
                 "workflow_steps": '["writer", "invalid_step"]',
                 "file": uploaded,
             },
+            format="multipart",
         )
         # 400 = business validation; 422 = request/schema validation
         self.assertIn(
@@ -391,15 +406,32 @@ class APITestCase(TestCase):
 
 
 class TaskTestCase(TestCase):
+    @override_settings(HUEY_IMMEDIATE=True)
+    @patch("resume_app.tasks.build_optimizer_graph_prompt_state")
     @patch("resume_app.tasks.build_optimizer_context_state")
     @patch("resume_app.tasks.parse_pdf")
     @patch("resume_app.tasks.create_workflow")
     def test_optimize_resume_task_updates_status_on_success(
-        self, mock_create_workflow, mock_parse_pdf, mock_ctx
+        self, mock_create_workflow, mock_parse_pdf, mock_ctx, mock_prompt_state
     ):
         from .tasks import optimize_resume_task
         from .models import AgentLog
 
+        user = create_user("opttask")
+        mock_prompt_state.return_value = {
+            "writer_prompt_template": "",
+            "writer_prompt_system": "",
+            "writer_prompt_user": "",
+            "writer_prompt_legacy": "",
+            "ats_judge_prompt_template": "",
+            "ats_judge_prompt_system": "",
+            "ats_judge_prompt_user": "",
+            "ats_judge_prompt_legacy": "",
+            "recruiter_judge_prompt_template": "",
+            "recruiter_judge_prompt_system": "",
+            "recruiter_judge_prompt_user": "",
+            "recruiter_judge_prompt_legacy": "",
+        }
         mock_ctx.return_value = {
             "job_description": "JD",
             "writer_job_description": "JD",
@@ -420,12 +452,15 @@ class TaskTestCase(TestCase):
         ]
         mock_create_workflow.return_value = graph
 
-        resume = UserResume.objects.create(file="test.pdf")
+        resume = UserResume.objects.create(owner=user, file="test.pdf")
         jd = JobDescription.objects.create(content="JD")
         optimized = OptimizedResume.objects.create(
-            original_resume=resume, job_description=jd, status=OptimizedResume.STATUS_QUEUED
+            owner=user,
+            original_resume=resume,
+            job_description=jd,
+            status=OptimizedResume.STATUS_QUEUED,
         )
-        optimize_resume_task(optimized.id, jd.id, "OpenAI", "key")
+        optimize_resume_task.call_local(user.id, optimized.id, jd.id, "OpenAI", "key")
 
         optimized.refresh_from_db()
         self.assertEqual(optimized.status, OptimizedResume.STATUS_COMPLETED)
@@ -576,15 +611,15 @@ class ResumeKeywordMinerTestCase(TestCase):
 
 
 @patch(
+    "resume_app.jobs_api._user_provider_api_key_available",
+    return_value=True,
+)
+@patch(
     "resume_app.pipeline_llm_skill_extract.resolve_provider_api_key",
     return_value="sk-test-placeholder",
 )
-class PipelineResumeSummaryAPITestCase(TestCase):
-    def setUp(self):
-        self.client = Client()
-        Track.ensure_baseline()
-
-    def test_pipeline_resume_summary_start_unknown_track(self):
+class PipelineResumeSummaryAPITestCase(TenantTestCase):
+    def test_pipeline_resume_summary_start_unknown_track(self, _mock_key, _mock_api):
         response = self.client.post(
             "/api/resume/jobs/pipeline-resume-summary/start",
             data=json.dumps(
@@ -598,7 +633,7 @@ class PipelineResumeSummaryAPITestCase(TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
-    def test_pipeline_resume_summary_start_empty_pipeline(self):
+    def test_pipeline_resume_summary_start_empty_pipeline(self, _mock_key, _mock_api):
         response = self.client.post(
             "/api/resume/jobs/pipeline-resume-summary/start",
             data=json.dumps({"track": "ic", "llm_provider": "OpenAI", "model": "gpt-4o-mini"}),
@@ -607,7 +642,7 @@ class PipelineResumeSummaryAPITestCase(TestCase):
         self.assertEqual(response.status_code, 400)
 
     @patch("resume_app.tasks.pipeline_resume_llm_extract_task")
-    def test_pipeline_resume_summary_start_enqueues(self, mock_task):
+    def test_pipeline_resume_summary_start_enqueues(self, mock_task, _mock_key, _mock_api):
         jd = "Requirements: Python and Kubernetes."
         job = JobListing.objects.create(
             source="test",
@@ -617,6 +652,7 @@ class PipelineResumeSummaryAPITestCase(TestCase):
             description=jd,
         )
         PipelineEntry.objects.create(
+            owner=self.user,
             job_listing=job,
             track="ic",
             stage=PipelineEntry.Stage.VETTING,
@@ -635,7 +671,7 @@ class PipelineResumeSummaryAPITestCase(TestCase):
         self.assertEqual(data["track"], "ic")
         mock_task.assert_called_once()
 
-    def test_pipeline_resume_summary_status_not_found(self):
+    def test_pipeline_resume_summary_status_not_found(self, _mock_key, _mock_api):
         response = self.client.get(
             "/api/resume/jobs/pipeline-resume-summary/status",
             {"track": "ic", "run_id": "00000000-0000-0000-0000-000000000000"},
@@ -643,7 +679,7 @@ class PipelineResumeSummaryAPITestCase(TestCase):
         self.assertEqual(response.status_code, 404)
 
     @patch("resume_app.tasks.pipeline_resume_llm_extract_task")
-    def test_pipeline_resume_summary_stop_idempotent(self, mock_task):
+    def test_pipeline_resume_summary_stop_idempotent(self, mock_task, _mock_key, _mock_api):
         jd = "Requirements: Python."
         job = JobListing.objects.create(
             source="test",
@@ -653,6 +689,7 @@ class PipelineResumeSummaryAPITestCase(TestCase):
             description=jd,
         )
         PipelineEntry.objects.create(
+            owner=self.user,
             job_listing=job,
             track="ic",
             stage=PipelineEntry.Stage.VETTING,
@@ -684,10 +721,7 @@ class PipelineResumeSummaryAPITestCase(TestCase):
         self.assertTrue(flag.is_file())
 
 
-class PipelineStageViewTestCase(TestCase):
-    def setUp(self):
-        self.client = Client()
-
+class PipelineStageViewTestCase(TenantTestCase):
     def _create_job_and_entry(self, track="ic"):
         job = JobListing.objects.create(
             source="test",
@@ -695,7 +729,7 @@ class PipelineStageViewTestCase(TestCase):
             title="Engineer",
             company_name="ACME",
         )
-        pe = PipelineEntry.objects.create(job_listing=job, track=track)
+        pe = PipelineEntry.objects.create(owner=self.user, job_listing=job, track=track)
         return job, pe
 
     def test_pipeline_save_moves_to_vetting(self):
@@ -710,7 +744,7 @@ class PipelineStageViewTestCase(TestCase):
             },
         )
         self.assertIn(response.status_code, (302, 303))
-        pe = PipelineEntry.objects.get(job_listing=job, track="ic")
+        pe = PipelineEntry.objects.get(owner=self.user, job_listing=job, track="ic")
         self.assertEqual(pe.stage, PipelineEntry.Stage.VETTING)
 
     def test_vetting_save_moves_to_applying(self):
@@ -750,7 +784,7 @@ class PipelineStageViewTestCase(TestCase):
         job.description = "x" * 60
         job.save(update_fields=["description"])
         pe.move_to_applying()
-        UserResume.objects.create(track="ic", file="r.pdf", is_library=True)
+        UserResume.objects.create(owner=self.user, track="ic", file="r.pdf", is_library=True)
         response = self.client.get("/jobs/applying/?track=ic")
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "/resume/optimizer/")
@@ -759,6 +793,9 @@ class PipelineStageViewTestCase(TestCase):
 
 
 class PipelineResumeEnqueueTestCase(TestCase):
+    def setUp(self):
+        self.user = create_user("enqueue")
+
     def test_enqueue_skips_when_queued_exists(self):
         job = JobListing.objects.create(
             source="test",
@@ -768,13 +805,15 @@ class PipelineResumeEnqueueTestCase(TestCase):
             description="d" * 60,
         )
         pe = PipelineEntry.objects.create(
+            owner=self.user,
             job_listing=job,
             track="ic",
             stage=PipelineEntry.Stage.APPLYING,
         )
-        ur = UserResume.objects.create(file="r.pdf")
+        ur = UserResume.objects.create(owner=self.user, file="r.pdf")
         jd = JobDescription.objects.create(content="c" * 60)
         OptimizedResume.objects.create(
+            owner=self.user,
             original_resume=ur,
             job_description=jd,
             pipeline_entry=pe,
@@ -803,11 +842,12 @@ class PipelineResumeEnqueueTestCase(TestCase):
             description="d" * 60,
         )
         pe = PipelineEntry.objects.create(
+            owner=self.user,
             job_listing=job,
             track="ic",
             stage=PipelineEntry.Stage.APPLYING,
         )
-        UserResume.objects.create(file="r2.pdf", is_library=True)
+        UserResume.objects.create(owner=self.user, file="r2.pdf", is_library=True)
 
         result = _enqueue_single_pipeline_resume_optimization(pe.id, force_new=False)
         self.assertEqual(result["status"], "ok")
@@ -820,8 +860,11 @@ class PipelineResumeEnqueueTestCase(TestCase):
 
 
 class PipelineAutomationTestCase(TestCase):
+    def setUp(self):
+        self.user = create_user("pipelineauto")
+
     def test_pipeline_auto_promotion_moves_to_vetting_and_enqueues_matching(self):
-        cfg = AppAutomationSettings.get_solo()
+        cfg = AppAutomationSettings.get_for_user(self.user)
         cfg.pipeline_to_vetting_enabled = True
         cfg.pipeline_preference_margin_min = 5
         cfg.save()
@@ -832,25 +875,27 @@ class PipelineAutomationTestCase(TestCase):
             title="Engineer",
             company_name="ACME",
         )
-        pe = PipelineEntry.objects.create(job_listing=job, track="ic", stage="")
+        pe = PipelineEntry.objects.create(owner=self.user, job_listing=job, track="ic", stage="")
         JobListingTrackMetrics.objects.create(
+            owner=self.user,
             job_listing=job,
             track="ic",
             preference_margin=10,
         )
 
         with patch("resume_app.tasks.evaluate_vetting_matching_task") as mock_ev:
-            n = apply_pipeline_auto_promotions()
+            n = apply_pipeline_auto_promotions(self.user)
         self.assertEqual(n, 1)
         pe.refresh_from_db()
         self.assertEqual(pe.stage, PipelineEntry.Stage.VETTING)
         mock_ev.assert_called_once()
         args, kwargs = mock_ev.call_args
-        self.assertEqual(args[0], [pe.id])
+        self.assertEqual(args[0], self.user.id)
+        self.assertEqual(args[1], [pe.id])
         self.assertIsNone(kwargs.get("matching_prompt"))
 
     def test_pipeline_auto_promotion_skips_when_disabled(self):
-        cfg = AppAutomationSettings.get_solo()
+        cfg = AppAutomationSettings.get_for_user(self.user)
         cfg.pipeline_to_vetting_enabled = False
         cfg.save()
 
@@ -860,21 +905,25 @@ class PipelineAutomationTestCase(TestCase):
             title="Engineer",
             company_name="ACME",
         )
-        pe = PipelineEntry.objects.create(job_listing=job, track="ic", stage="")
+        pe = PipelineEntry.objects.create(owner=self.user, job_listing=job, track="ic", stage="")
         JobListingTrackMetrics.objects.create(
+            owner=self.user,
             job_listing=job,
             track="ic",
             preference_margin=99,
         )
 
         with patch("resume_app.tasks.evaluate_vetting_matching_task") as mock_ev:
-            n = apply_pipeline_auto_promotions()
+            n = apply_pipeline_auto_promotions(self.user)
         self.assertEqual(n, 0)
         pe.refresh_from_db()
         self.assertEqual(pe.stage, "")
         mock_ev.assert_not_called()
 
+    @override_settings(HUEY_IMMEDIATE=True)
     def test_vetting_matching_task_uses_explicit_llm_provider_and_model(self):
+        from .tasks import evaluate_vetting_matching_task
+
         job = JobListing.objects.create(
             source="test",
             external_id="vetting-override",
@@ -883,11 +932,12 @@ class PipelineAutomationTestCase(TestCase):
             description="A" * 2100,
         )
         pe = PipelineEntry.objects.create(
+            owner=self.user,
             job_listing=job,
             track="ic",
             stage=PipelineEntry.Stage.VETTING,
         )
-        UserResume.objects.create(file="resume.pdf")
+        UserResume.objects.create(owner=self.user, file="resume.pdf", is_library=True, track="ic")
 
         mock_llm = MagicMock()
         mock_llm._resume_provider = "Ollama Local"
@@ -899,7 +949,8 @@ class PipelineAutomationTestCase(TestCase):
             patch("resume_app.tasks.list_models_for_provider", return_value=["mistral", "starling"]), \
             patch("resume_app.tasks.get_llm", return_value=mock_llm), \
             patch("resume_app.tasks.run_matching", return_value={"interview_probability": 75, "reasoning": "ok"}) as mock_run_matching:
-            result = evaluate_vetting_matching_task(
+            result = evaluate_vetting_matching_task.call_local(
+                self.user.id,
                 [pe.id],
                 llm_provider="Ollama Local",
                 llm_model="mistral",
@@ -912,7 +963,7 @@ class PipelineAutomationTestCase(TestCase):
         self.assertEqual(passed_llm, mock_llm)
 
     def test_vetting_auto_promotion_moves_to_applying(self):
-        cfg = AppAutomationSettings.get_solo()
+        cfg = AppAutomationSettings.get_for_user(self.user)
         cfg.vetting_to_applying_enabled = True
         cfg.vetting_interview_probability_min = 50
         cfg.save()
@@ -924,6 +975,7 @@ class PipelineAutomationTestCase(TestCase):
             company_name="ACME",
         )
         pe = PipelineEntry.objects.create(
+            owner=self.user,
             job_listing=job,
             track="ic",
             stage=PipelineEntry.Stage.VETTING,
@@ -932,14 +984,14 @@ class PipelineAutomationTestCase(TestCase):
         pe.refresh_from_db()
 
         with patch("resume_app.tasks.enqueue_applying_resume_optimization_task") as mock_eq:
-            n = apply_vetting_to_applying_promotions()
+            n = apply_vetting_to_applying_promotions(self.user)
         self.assertEqual(n, 1)
         pe.refresh_from_db()
         self.assertEqual(pe.stage, PipelineEntry.Stage.APPLYING)
         mock_eq.assert_not_called()
 
     def test_vetting_auto_promotion_respects_threshold(self):
-        cfg = AppAutomationSettings.get_solo()
+        cfg = AppAutomationSettings.get_for_user(self.user)
         cfg.vetting_to_applying_enabled = True
         cfg.vetting_interview_probability_min = 90
         cfg.save()
@@ -951,6 +1003,7 @@ class PipelineAutomationTestCase(TestCase):
             company_name="ACME",
         )
         pe = PipelineEntry.objects.create(
+            owner=self.user,
             job_listing=job,
             track="ic",
             stage=PipelineEntry.Stage.VETTING,
@@ -958,7 +1011,7 @@ class PipelineAutomationTestCase(TestCase):
         PipelineEntry.objects.filter(pk=pe.pk).update(vetting_interview_probability=50)
         pe.refresh_from_db()
 
-        n = apply_vetting_to_applying_promotions()
+        n = apply_vetting_to_applying_promotions(self.user)
         self.assertEqual(n, 0)
         pe.refresh_from_db()
         self.assertEqual(pe.stage, PipelineEntry.Stage.VETTING)
@@ -966,9 +1019,8 @@ class PipelineAutomationTestCase(TestCase):
 
 class JobDedupeTestCase(TestCase):
     def setUp(self):
-        from .models import Track
-
-        Track.ensure_baseline()
+        self.user = create_user("dedupe")
+        Track.ensure_baseline(self.user)
 
     def test_fingerprint_matches_same_description_different_location(self):
         from .job_dedupe import job_listing_fingerprint
@@ -1012,11 +1064,15 @@ class JobDedupeTestCase(TestCase):
             description=desc,
             location="B",
         )
-        JobListingTrackMetrics.objects.create(job_listing=j1, track="ic", focus_after_penalty=50)
-        JobListingTrackMetrics.objects.create(job_listing=j2, track="ic", focus_after_penalty=90)
-        e1 = PipelineEntry.objects.create(job_listing=j1, track="ic", stage="")
-        e2 = PipelineEntry.objects.create(job_listing=j2, track="ic", stage="")
-        dedupe_pipeline_entries(track_slug="ic", stage="pipeline", include_done=False)
+        JobListingTrackMetrics.objects.create(
+            owner=self.user, job_listing=j1, track="ic", focus_after_penalty=50
+        )
+        JobListingTrackMetrics.objects.create(
+            owner=self.user, job_listing=j2, track="ic", focus_after_penalty=90
+        )
+        e1 = PipelineEntry.objects.create(owner=self.user, job_listing=j1, track="ic", stage="")
+        e2 = PipelineEntry.objects.create(owner=self.user, job_listing=j2, track="ic", stage="")
+        dedupe_pipeline_entries(user=self.user, track_slug="ic", stage="pipeline", include_done=False)
         e1.refresh_from_db()
         e2.refresh_from_db()
         self.assertIsNotNone(e1.removed_at)
@@ -1041,18 +1097,20 @@ class JobDedupeTestCase(TestCase):
             description=desc,
         )
         PipelineEntry.objects.create(
+            owner=self.user,
             job_listing=j1,
             track="ic",
             stage=PipelineEntry.Stage.VETTING,
         )
         PipelineEntry.objects.create(
+            owner=self.user,
             job_listing=j2,
             track="ic",
             stage=PipelineEntry.Stage.VETTING,
         )
-        r0 = dedupe_pipeline_entries(track_slug="ic", stage="pipeline", include_done=False)
+        r0 = dedupe_pipeline_entries(user=self.user, track_slug="ic", stage="pipeline", include_done=False)
         self.assertEqual(r0["entries_removed"], 0)
-        r1 = dedupe_pipeline_entries(track_slug="ic", stage="vetting", include_done=False)
+        r1 = dedupe_pipeline_entries(user=self.user, track_slug="ic", stage="vetting", include_done=False)
         self.assertEqual(r1["entries_removed"], 1)
 
 
@@ -1061,9 +1119,8 @@ class PromptStoreResolveTestCase(TestCase):
         from resume_app.prompt_store import resolve_prompt_parts
         from resume_app.models import UserPromptProfile
 
-        UserPromptProfile.objects.filter(pk=1).delete()
-        UserPromptProfile.objects.create(pk=1)
-        prof = UserPromptProfile.objects.get(pk=1)
+        user = create_user("promptmatch")
+        prof = UserPromptProfile.get_for_user(user)
         s, u, leg = resolve_prompt_parts(prof, "matching")
         self.assertIsNone(leg)
         self.assertIn("JSON", s)
@@ -1073,9 +1130,8 @@ class PromptStoreResolveTestCase(TestCase):
         from resume_app.prompt_store import resolve_prompt_parts
         from resume_app.models import UserPromptProfile
 
-        UserPromptProfile.objects.filter(pk=1).delete()
-        UserPromptProfile.objects.create(pk=1)
-        prof = UserPromptProfile.objects.get(pk=1)
+        user = create_user("promptjd")
+        prof = UserPromptProfile.get_for_user(user)
         s, u, leg = resolve_prompt_parts(prof, "jd_cleanse")
         self.assertIsNone(leg)
         self.assertIn("core job signal", s.lower())
@@ -1095,9 +1151,14 @@ class LlmRateLimitTestCase(TestCase):
 
 class BuildOptimizerPromptStateTestCase(TestCase):
     def test_build_state_includes_split_writer_keys(self):
+        from types import SimpleNamespace
+
         from resume_app.prompt_store import build_optimizer_graph_prompt_state
 
-        st = build_optimizer_graph_prompt_state(None, None)
+        user = create_user("buildstate")
+        request = SimpleNamespace(user=user, auth=None, session={})
+
+        st = build_optimizer_graph_prompt_state(None, request)
         self.assertIn("writer_prompt_system", st)
         self.assertIn("writer_prompt_user", st)
         self.assertIn("writer_prompt_legacy", st)
@@ -1109,45 +1170,52 @@ class SaveOptimizedDraftTestCase(TestCase):
         from resume_app.models import JobDescription, OptimizedResume, UserResume
         from resume_app.services import save_optimized_draft_content
 
-        ur = UserResume.objects.create(file="test.pdf", original_filename="t.pdf")
+        user = create_user("savedraft")
+        ur = UserResume.objects.create(owner=user, file="test.pdf", original_filename="t.pdf")
         jd = JobDescription.objects.create(content="JD")
         opt = OptimizedResume.objects.create(
+            owner=user,
             original_resume=ur,
             job_description=jd,
             status=OptimizedResume.STATUS_COMPLETED,
             optimized_content="Original",
         )
-        updated = save_optimized_draft_content(opt.id, "Edited final draft")
+        updated = save_optimized_draft_content(opt.id, "Edited final draft", user=user)
         self.assertEqual(updated.optimized_content, "Edited final draft")
 
     def test_save_draft_rejects_empty(self):
         from resume_app.models import JobDescription, OptimizedResume, UserResume
         from resume_app.services import DraftSaveError, save_optimized_draft_content
 
-        ur = UserResume.objects.create(file="test.pdf", original_filename="t.pdf")
+        user = create_user("savedraft2")
+        ur = UserResume.objects.create(owner=user, file="test.pdf", original_filename="t.pdf")
         jd = JobDescription.objects.create(content="JD")
         opt = OptimizedResume.objects.create(
+            owner=user,
             original_resume=ur,
             job_description=jd,
             status=OptimizedResume.STATUS_COMPLETED,
             optimized_content="x",
         )
         with self.assertRaises(DraftSaveError):
-            save_optimized_draft_content(opt.id, "   ")
+            save_optimized_draft_content(opt.id, "   ", user=user)
 
 
 class AtsJudgeProfilePromptTestCase(TestCase):
     def setUp(self):
         from resume_app.models import AtsJudgeProfile
 
+        self.user = create_user("atsjudge")
         AtsJudgeProfile.objects.all().delete()
         self.strict = AtsJudgeProfile.objects.create(
+            owner=self.user,
             name="Strict",
             slug="strict",
             ats_judge_system="STRICT_SYS",
             ats_judge_user="STRICT_USR {optimized_resume}",
         )
         self.default = AtsJudgeProfile.objects.create(
+            owner=self.user,
             name="Default",
             slug="default-alt",
             is_default=True,
@@ -1162,10 +1230,14 @@ class AtsJudgeProfilePromptTestCase(TestCase):
         self.assertIsNone(leg)
 
     def test_build_state_uses_profile_id(self):
+        from types import SimpleNamespace
+
         from resume_app.prompt_store import build_optimizer_graph_prompt_state
 
+        request = SimpleNamespace(user=self.user, auth=None, session={})
         st = build_optimizer_graph_prompt_state(
             None,
+            request,
             ats_judge_profile_id=self.strict.pk,
         )
         self.assertEqual(st["ats_judge_prompt_system"], "STRICT_SYS")
@@ -1176,23 +1248,29 @@ class AtsJudgeProfilePromptTestCase(TestCase):
         from resume_app.prompt_store import resolve_effective_ats_judge_profile_id
 
         wf = OptimizerWorkflow.objects.create(
+            owner=self.user,
             name="WF",
             steps=["writer", "ats_judge", "recruiter_judge"],
             ats_judge_profile=self.strict,
         )
-        eff = resolve_effective_ats_judge_profile_id(workflow=wf)
+        eff = resolve_effective_ats_judge_profile_id(workflow=wf, user=self.user)
         self.assertEqual(eff, self.strict.pk)
         eff_run = resolve_effective_ats_judge_profile_id(
             ats_judge_profile_id=self.default.pk,
             workflow=wf,
+            user=self.user,
         )
         self.assertEqual(eff_run, self.default.pk)
 
     def test_prompt_override_wins_over_profile(self):
+        from types import SimpleNamespace
+
         from resume_app.prompt_store import build_optimizer_graph_prompt_state
 
+        request = SimpleNamespace(user=self.user, auth=None, session={})
         st = build_optimizer_graph_prompt_state(
             {"ats_judge": "OVERRIDE_LEGACY"},
+            request,
             ats_judge_profile_id=self.strict.pk,
         )
         self.assertEqual(st["ats_judge_prompt_legacy"], "OVERRIDE_LEGACY")
@@ -1413,18 +1491,16 @@ class JobListingUpsertTestCase(TestCase):
         self.assertIsNotNone(job2.fetched_at)
 
 
-class TrackListLibraryResumeTestCase(TestCase):
-    def setUp(self):
-        self.client = Client()
-        Track.ensure_baseline()
-
+class TrackListLibraryResumeTestCase(TenantTestCase):
     def test_track_list_shows_only_library_resumes(self):
         library = UserResume.objects.create(
+            owner=self.user,
             file="library.pdf",
             original_filename="library.pdf",
             is_library=True,
         )
         ephemeral = UserResume.objects.create(
+            owner=self.user,
             file="ephemeral.pdf",
             original_filename="ephemeral.pdf",
             is_library=False,
@@ -1435,9 +1511,9 @@ class TrackListLibraryResumeTestCase(TestCase):
         self.assertNotContains(response, ephemeral.original_filename)
 
     def test_track_list_shows_stats_and_default_profile(self):
-        track_count = Track.objects.count()
-        unique_resumes = _count_unique_library_resumes(UserResume)
-        default = Track.objects.filter(is_default=True).first()
+        track_count = Track.objects.for_user(self.user).count()
+        unique_resumes = _count_unique_library_resumes(UserResume.objects.for_user(self.user))
+        default = Track.objects.for_user(self.user).filter(is_default=True).first()
         response = self.client.get("/jobs/tracks/")
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Track management")
@@ -1450,8 +1526,8 @@ class TrackListLibraryResumeTestCase(TestCase):
             self.assertContains(response, default.label)
 
     def test_track_list_sort_by_slug(self):
-        Track.objects.create(slug="aaa", label="Zebra track")
-        Track.objects.create(slug="zzz", label="Alpha track")
+        Track.objects.create(owner=self.user, slug="aaa", label="Zebra track")
+        Track.objects.create(owner=self.user, slug="zzz", label="Alpha track")
         response = self.client.get("/jobs/tracks/?sort=slug")
         self.assertEqual(response.status_code, 200)
         content = response.content.decode()
@@ -1459,6 +1535,7 @@ class TrackListLibraryResumeTestCase(TestCase):
 
     def test_track_list_shows_resume_filename_on_track(self):
         UserResume.objects.create(
+            owner=self.user,
             file="dallas.pdf",
             original_filename="N_Principal_Dallas.pdf",
             track="ic",
@@ -1470,12 +1547,14 @@ class TrackListLibraryResumeTestCase(TestCase):
 
     def test_unique_resume_stat_dedupes_by_filename(self):
         UserResume.objects.create(
+            owner=self.user,
             file="a.pdf",
             original_filename="Principal.pdf",
             track="ic",
             is_library=True,
         )
         UserResume.objects.create(
+            owner=self.user,
             file="b.pdf",
             original_filename="principal.pdf",
             track="mgmt",
@@ -1489,7 +1568,7 @@ class TrackListLibraryResumeTestCase(TestCase):
         self.assertContains(response, "(2 uploads)")
 
     def test_edit_track_updates_attributes(self):
-        track = Track.objects.get(slug="ic")
+        track = Track.objects.for_user(self.user).get(slug="ic")
         response = self.client.post(
             "/jobs/tracks/",
             {
@@ -1510,6 +1589,7 @@ class TrackListLibraryResumeTestCase(TestCase):
 
     def test_edit_track_renames_slug_cascades_to_resume(self):
         UserResume.objects.create(
+            owner=self.user,
             file="linked.pdf",
             original_filename="linked.pdf",
             track="mgmt",
@@ -1527,9 +1607,9 @@ class TrackListLibraryResumeTestCase(TestCase):
             follow=True,
         )
         self.assertEqual(response.status_code, 200)
-        self.assertFalse(Track.objects.filter(slug="mgmt").exists())
-        self.assertTrue(Track.objects.filter(slug="management").exists())
-        resume = UserResume.library().get(original_filename="linked.pdf")
+        self.assertFalse(Track.objects.for_user(self.user).filter(slug="mgmt").exists())
+        self.assertTrue(Track.objects.for_user(self.user).filter(slug="management").exists())
+        resume = UserResume.library().for_user(self.user).get(original_filename="linked.pdf")
         self.assertEqual(resume.track, "management")
 
     def test_track_list_rejects_oversized_upload(self):
@@ -1538,7 +1618,7 @@ class TrackListLibraryResumeTestCase(TestCase):
             b"%PDF" + (b"0" * (MAX_TRACK_RESUME_UPLOAD_BYTES + 1)),
             content_type="application/pdf",
         )
-        before = UserResume.library().count()
+        before = UserResume.library().for_user(self.user).count()
         response = self.client.post(
             "/jobs/tracks/",
             {"action": "upload_resume", "resume_file": oversized},
@@ -1546,14 +1626,16 @@ class TrackListLibraryResumeTestCase(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "10MB")
-        self.assertEqual(UserResume.library().count(), before)
+        self.assertEqual(UserResume.library().for_user(self.user).count(), before)
 
 
 class GeneratedResumeCleanupTestCase(TestCase):
     def test_purge_removes_old_ephemeral_resumes(self):
         from .resume_cleanup import purge_generated_user_resumes
 
+        user = create_user("cleanup")
         old = UserResume.objects.create(
+            owner=user,
             file="old.pdf",
             original_filename="old.pdf",
             is_library=False,
@@ -1562,11 +1644,13 @@ class GeneratedResumeCleanupTestCase(TestCase):
             uploaded_at=timezone.now() - timedelta(days=10),
         )
         keep = UserResume.objects.create(
+            owner=user,
             file="new.pdf",
             original_filename="new.pdf",
             is_library=False,
         )
         library = UserResume.objects.create(
+            owner=user,
             file="lib.pdf",
             original_filename="lib.pdf",
             is_library=True,

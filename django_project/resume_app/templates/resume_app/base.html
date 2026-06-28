@@ -36,6 +36,14 @@
     {% block extra_head %}{% endblock %}
 </head>
 <body class="concierge-app min-h-full bg-concierge-canvas text-concierge-slate antialiased">
+{% load hijack %}
+{% if request.user.is_hijacked %}
+<div class="sticky top-0 z-[60] border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-sm text-amber-950">
+    Viewing as <strong>{{ request.user.get_username }}</strong>
+    {% if request.user.email %}({{ request.user.email }}){% endif %}
+    — <form method="post" action="{% url 'hijack:release' %}" class="inline">{% csrf_token %}<button type="submit" class="font-semibold underline">Release</button></form>
+</div>
+{% endif %}
 {% with url_name=request.resolver_match.url_name %}
 <div class="flex min-h-screen">
     {# Mobile sidebar overlay #}
@@ -92,10 +100,12 @@
                    class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'job_automation' or url_name == 'job_task_create' or url_name == 'job_task_edit' or url_name == 'job_task_run_now' or url_name == 'job_task_toggle_active' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
                     Searches
                 </a>
+                {% if request.user.is_staff %}
                 <a href="{% url 'huey_dashboard' %}"
                    class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'huey_dashboard' or url_name == 'huey_periodic_revoke' or url_name == 'huey_periodic_restore' or url_name == 'huey_flush_queue' or url_name == 'huey_run_cleanup_now' or url_name == 'huey_task_run_now' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
                     Monitor
                 </a>
+                {% endif %}
             </div>
 
             <p class="mt-4 px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">System</p>
@@ -103,6 +113,12 @@
                class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'settings' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
                 Settings
             </a>
+            {% if perms.resume_app.can_impersonate_users %}
+            <a href="{% url 'staff_users' %}"
+               class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'staff_users' %}bg-slate-100 text-concierge-slate{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
+                Staff
+            </a>
+            {% endif %}
 
             <div class="mt-auto border-t border-slate-100 pt-4">
                 <div class="mx-1 rounded-concierge bg-concierge-slate px-3 py-3 text-white">
@@ -110,7 +126,7 @@
                     <p class="mt-1 text-sm font-semibold">Job search management</p>
                     <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
                         <a href="{% url 'job_automation' %}" class="text-emerald-300 hover:text-emerald-200">Searches →</a>
-                        <a href="{% url 'huey_dashboard' %}" class="text-emerald-300 hover:text-emerald-200">Monitor →</a>
+                        {% if request.user.is_staff %}<a href="{% url 'huey_dashboard' %}" class="text-emerald-300 hover:text-emerald-200">Monitor →</a>{% endif %}
                     </div>
                 </div>
             </div>
@@ -132,11 +148,20 @@
                 <a href="{% url 'pipeline' %}" class="rounded-concierge px-2 py-1 {% if url_name == 'pipeline' or url_name == 'vetting' or url_name == 'applying' or url_name == 'done' %}bg-slate-100 text-concierge-slate{% else %}hover:bg-slate-50 hover:text-concierge-slate{% endif %}">Dashboard</a>
                 <span class="hidden px-1 text-slate-300 sm:inline" aria-hidden="true">|</span>
                 <a href="{% url 'job_automation' %}" class="rounded-concierge px-2 py-1 {% if url_name == 'job_automation' or url_name == 'job_task_create' or url_name == 'job_task_edit' or url_name == 'job_task_run_now' or url_name == 'job_task_toggle_active' %}bg-slate-100 text-concierge-slate{% else %}hover:bg-slate-50 hover:text-concierge-slate{% endif %}">Searches</a>
-                <a href="{% url 'huey_dashboard' %}" class="rounded-concierge px-2 py-1 {% if url_name == 'huey_dashboard' or url_name == 'huey_periodic_revoke' or url_name == 'huey_periodic_restore' or url_name == 'huey_flush_queue' or url_name == 'huey_run_cleanup_now' or url_name == 'huey_task_run_now' %}bg-slate-100 text-concierge-slate{% else %}hover:bg-slate-50 hover:text-concierge-slate{% endif %}">Monitor</a>
+                {% if request.user.is_staff %}<a href="{% url 'huey_dashboard' %}" class="rounded-concierge px-2 py-1 {% if url_name == 'huey_dashboard' or url_name == 'huey_periodic_revoke' or url_name == 'huey_periodic_restore' or url_name == 'huey_flush_queue' or url_name == 'huey_run_cleanup_now' or url_name == 'huey_task_run_now' %}bg-slate-100 text-concierge-slate{% else %}hover:bg-slate-50 hover:text-concierge-slate{% endif %}">Monitor</a>{% endif %}
                 <a href="{% url 'track_list' %}" class="rounded-concierge px-2 py-1 {% if url_name == 'track_list' or url_name == 'track_delete' %}bg-slate-100 text-concierge-slate{% else %}hover:bg-slate-50 hover:text-concierge-slate{% endif %}" title="Tracks">Tracks</a>
                 <a href="{% url 'workflow_list' %}" class="rounded-concierge px-2 py-1 {% if url_name == 'workflow_list' or url_name == 'workflow_create' or url_name == 'workflow_edit' or url_name == 'workflow_delete' %}bg-slate-100 text-concierge-slate{% else %}hover:bg-slate-50 hover:text-concierge-slate{% endif %}">Workflows</a>
             </nav>
             <div class="flex items-center gap-2">
+                {% if user.is_authenticated %}
+                <span class="hidden text-sm text-slate-600 sm:inline">{{ user.get_username }}</span>
+                <form method="post" action="{% url 'logout' %}" class="inline">
+                    {% csrf_token %}
+                    <button type="submit" class="rounded-concierge px-2 py-1 text-sm font-medium text-slate-600 hover:bg-slate-100">Log out</button>
+                </form>
+                {% else %}
+                <a href="{% url 'login' %}" class="rounded-concierge px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100">Sign in</a>
+                {% endif %}
                 <a href="{% url 'settings' %}" class="rounded-concierge p-2 text-slate-500 hover:bg-slate-100 hover:text-concierge-slate" title="Settings">
                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
                 </a>

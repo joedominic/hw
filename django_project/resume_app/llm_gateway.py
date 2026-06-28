@@ -111,12 +111,13 @@ def record_llm_usage(
     cached_tokens: int,
     tokens_estimated: bool,
     *,
+    user,
     query_kind: str | None = None,
 ) -> None:
     prov, mkey = normalize_usage_model_key(provider, model)
     try:
-        solo = LLMAppUsageTotals.get_solo()
-        LLMAppUsageTotals.objects.filter(pk=solo.pk).update(
+        totals = LLMAppUsageTotals.get_for_user(user)
+        LLMAppUsageTotals.objects.filter(pk=totals.pk).update(
             total_input_tokens=F("total_input_tokens") + max(0, int(input_tokens)),
             total_output_tokens=F("total_output_tokens") + max(0, int(output_tokens)),
             total_requests=F("total_requests") + 1,
@@ -126,6 +127,7 @@ def record_llm_usage(
         logger.warning("record_llm_usage totals failed: %s", e)
     try:
         row, _created = LLMUsageByModel.objects.get_or_create(
+            owner=user,
             provider=prov,
             model=mkey,
             defaults={
@@ -147,6 +149,7 @@ def record_llm_usage(
     qk = ((query_kind or "").strip() or USAGE_QUERY_UNSPECIFIED)[:64]
     try:
         qrow, _ = LLMUsageByQuery.objects.get_or_create(
+            owner=user,
             query_kind=qk,
             provider=prov,
             model=mkey,
@@ -168,10 +171,11 @@ def record_llm_usage(
         logger.warning("record_llm_usage by-query failed: %s", e)
 
 
-def _preference_candidates() -> list[dict]:
+def _preference_candidates(user) -> list[dict]:
     rows = (
         LLMProviderPreference.objects.select_related("provider_config")
         .filter(
+            provider_config__owner=user,
             provider_config__encrypted_api_key__isnull=False,
         )
         .exclude(provider_config__encrypted_api_key="")
@@ -209,8 +213,8 @@ def _preference_candidates() -> list[dict]:
     return out
 
 
-def preference_candidates_available() -> bool:
-    return bool(_preference_candidates())
+def preference_candidates_available(user) -> bool:
+    return bool(_preference_candidates(user))
 
 
 def _parse_pin(raw: str | None) -> tuple[str | None, str | None]:
@@ -275,11 +279,12 @@ def _tier_pick_index(job_cache_key: str | None, priority: int, pref_ids: list[in
 
 
 def _ordered_eligible_candidates(
+    user,
     job_cache_key: str | None,
     prefer_local: bool = True,
     only_local: bool = False,
 ) -> list[dict]:
-    raw = _preference_candidates()
+    raw = _preference_candidates(user)
     eligible = []
     for c in raw:
         if is_llm_on_cooldown(c["provider"], c["model_get_llm"]):
@@ -339,6 +344,7 @@ def _finalize_usage(
     model_gl,
     *,
     query_kind: str | None = None,
+    user=None,
 ) -> None:
     in_tok, out_tok, cached_tok, estimated = est, 0, 0, True
     reconcile_val = est
@@ -368,12 +374,14 @@ def _finalize_usage(
         cached_tok,
         estimated,
         query_kind=query_kind,
+        user=user,
     )
 
 
 def invoke_llm_messages(
     messages,
     *,
+    user,
     job_cache_key: str | None = None,
     structured_schema=None,
     config: dict | None = None,
@@ -390,8 +398,10 @@ def invoke_llm_messages(
     """
     from .agents import _normalize_token_usage
     from .models import AppAutomationSettings
+    from .rate_limits import check_user_llm_rate_limit
 
-    if AppAutomationSettings.get_solo().stop_llm_requests:
+    check_user_llm_rate_limit(user)
+    if AppAutomationSettings.get_for_user(user).stop_llm_requests:
         raise LLMRequestsDisabled("LLM requests are disabled. Turn off 'Stop LLM requests' in Settings → LLM.")
 
     if llm_override is not None:
@@ -403,10 +413,11 @@ def invoke_llm_messages(
             _normalize_token_usage=_normalize_token_usage,
             job_cache_key=job_cache_key,
             usage_query_kind=usage_query_kind,
+            user=user,
         )
 
     candidates = _ordered_eligible_candidates(
-        job_cache_key, prefer_local=prefer_local, only_local=only_local
+        user, job_cache_key, prefer_local=prefer_local, only_local=only_local
     )
     if not candidates:
         raise RuntimeError(
@@ -473,12 +484,13 @@ def invoke_llm_messages(
                         provider,
                         model_gl,
                         query_kind=usage_query_kind,
+                        user=user,
                     )
                 except Exception as ex:
                     logger.debug("token reconcile/record skipped: %s", ex)
                 if job_cache_key:
                     _set_pin(job_cache_key, provider, mkey)
-                return raw
+                    return raw
         continue
 
     if last_exc:
@@ -505,6 +517,7 @@ def _invoke_single_llm(
     _normalize_token_usage,
     job_cache_key: str | None = None,
     usage_query_kind: str | None = None,
+    user=None,
 ) -> Any:
     provider = getattr(llm, "_resume_provider", None) or "unknown"
     model_gl = getattr(llm, "_resume_model", None)
@@ -539,6 +552,7 @@ def _invoke_single_llm(
             provider,
             model_gl,
             query_kind=usage_query_kind,
+            user=user,
         )
     except Exception as ex:
         logger.debug("token reconcile/record skipped: %s", ex)
@@ -548,6 +562,7 @@ def _invoke_single_llm(
 def invoke_llm_messages_with_retry(
     messages,
     *,
+    user,
     job_cache_key: str | None = None,
     structured_schema=None,
     config=None,
@@ -558,6 +573,7 @@ def invoke_llm_messages_with_retry(
     """Same as invoke_llm_messages; retry wrapper reserved for future use."""
     return call_invoke_llm_messages(
         messages,
+        user=user,
         job_cache_key=job_cache_key,
         structured_schema=structured_schema,
         config=config,

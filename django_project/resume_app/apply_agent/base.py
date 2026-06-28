@@ -38,6 +38,7 @@ class ApplyContext:
     page: Any = None
     credential: Any = None
     attempt_id: int | None = None
+    user: Any = None  # owning User; required for owner-scoped LLM resolution
     _log_step: Optional[Callable[..., None]] = None
 
     def log(

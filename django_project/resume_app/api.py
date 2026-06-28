@@ -6,7 +6,6 @@ Mounted with the app’s `/api/resume/` prefix. Job search and pipeline JSON liv
 from ninja import Router, File, Schema, Form
 from ninja.files import UploadedFile
 from ninja.errors import HttpError
-from django.shortcuts import get_object_or_404
 from django.http import FileResponse
 from django.utils import timezone
 from .models import (
@@ -49,7 +48,7 @@ from .llm_services import list_models_for_provider, is_auth_error, DEFAULT_MODEL
 from typing import Annotated, List, Optional
 
 from pydantic import BeforeValidator
-from django.conf import settings
+from .tenancy import api_user, get_owned_or_404
 import json
 import io
 import tempfile
@@ -81,17 +80,10 @@ def _optional_int_from_form(value: object) -> object:
 OptionalFormInt = Annotated[Optional[int], BeforeValidator(_optional_int_from_form)]
 
 
-def _require_api_auth(request):
-    """
-    Simple optional auth: if settings.API_ACCESS_TOKEN is set, require
-    header X-Api-Token to match. If not set, no auth is enforced.
-    """
-    token = getattr(settings, "API_ACCESS_TOKEN", None)
-    if not token:
-        return
-    provided = request.headers.get("X-Api-Token") or request.META.get("HTTP_X_API_TOKEN")
-    if not provided or provided != token:
-        raise HttpError(401, "Missing or invalid API access token.")
+def _user_llm_config(user, provider: str):
+    """Per-user LLM provider config row."""
+    return LLMProviderConfig.objects.for_user(user).filter(provider=provider).first()
+
 
 class OptimizeRequest(Schema):
     job_description: str
@@ -210,7 +202,7 @@ class LlmCompleteResponse(Schema):
 @router.post("/llm/complete", response=LlmCompleteResponse)
 def llm_complete(request, payload: LlmCompleteRequest):
     """Invoke the central LLM gateway with system + user strings (optional provider override)."""
-    _require_api_auth(request)
+    user = api_user(request)
     u_text = (payload.user or "").strip()
     if not u_text:
         raise HttpError(400, "user is required")
@@ -223,7 +215,7 @@ def llm_complete(request, payload: LlmCompleteRequest):
         prov = payload.llm_provider.strip()
         if prov not in LLM_PROVIDERS:
             raise HttpError(400, f"llm_provider must be one of: {', '.join(sorted(LLM_PROVIDERS))}")
-        config = LLMProviderConfig.objects.filter(provider=prov).first()
+        config = _user_llm_config(user, prov)
         if not config or not config.encrypted_api_key:
             raise HttpError(400, f"API key required for {prov}.")
         api_key = decrypt_api_key(config.encrypted_api_key)
@@ -232,6 +224,7 @@ def llm_complete(request, payload: LlmCompleteRequest):
     try:
         raw = call_invoke_llm_messages(
             messages,
+            user=user,
             job_cache_key=(payload.job_cache_key or "").strip() or None,
             llm_override=llm_override,
             usage_query_kind=USAGE_QUERY_API_LLM_COMPLETE,
@@ -259,6 +252,7 @@ def run_step(
     file: Optional[UploadedFile] = File(None),
 ):
     """Run a single optimizer step (writer, ats_judge, or recruiter_judge) and return its output."""
+    user = api_user(request)
     step = (payload.step or "").strip().lower()
     logger.warning("[run_step] step=%s, job_desc_len=%s, optimized_resume_len=%s", step, len(payload.job_description or ""), len(payload.optimized_resume or ""))
     if step not in ("writer", "ats_judge", "recruiter_judge"):
@@ -270,7 +264,7 @@ def run_step(
 
     # Resolve API key and model
     api_key = None
-    config = LLMProviderConfig.objects.filter(provider=payload.llm_provider).first()
+    config = _user_llm_config(user, payload.llm_provider)
     if config and config.encrypted_api_key:
         api_key = decrypt_api_key(config.encrypted_api_key)
     if not api_key:
@@ -290,7 +284,9 @@ def run_step(
         _ov["recruiter_judge"] = payload.prompt_recruiter_judge.strip()
     workflow = None
     if payload.optimizer_workflow_id:
-        workflow = OptimizerWorkflow.objects.filter(pk=int(payload.optimizer_workflow_id)).first()
+        workflow = OptimizerWorkflow.objects.for_user(user).filter(
+            pk=int(payload.optimizer_workflow_id)
+        ).first()
     _graph_prompts = build_optimizer_graph_prompt_state(
         _ov if _ov else None,
         request,
@@ -323,7 +319,7 @@ def run_step(
                 except OSError:
                     pass
         if payload.use_resume_id:
-            ur = get_object_or_404(UserResume.library(), id=payload.use_resume_id)
+            ur = get_owned_or_404(UserResume, user, id=payload.use_resume_id, is_library=True)
             return parse_pdf(ur.file.path)
         return None
 
@@ -475,7 +471,7 @@ def run_step(
 @router.post("/fit-check", response=FitCheckResponse)
 def fit_check(request, payload: FitCheckRequest = Form(...), file: UploadedFile = File(...)):
     """Assess candidate-job fit (0-100). If score < 50, UI should ask user whether to proceed with optimization."""
-    _require_api_auth(request)
+    user = api_user(request)
     if payload.llm_provider not in LLM_PROVIDERS:
         raise HttpError(400, f"llm_provider must be one of: {', '.join(sorted(LLM_PROVIDERS))}")
     if len(payload.job_description) > MAX_JOB_DESCRIPTION_LENGTH:
@@ -487,7 +483,7 @@ def fit_check(request, payload: FitCheckRequest = Form(...), file: UploadedFile 
 
     api_key = payload.api_key
     if not api_key:
-        config = LLMProviderConfig.objects.filter(provider=payload.llm_provider).first()
+        config = _user_llm_config(user, payload.llm_provider)
         if config and config.encrypted_api_key:
             api_key = decrypt_api_key(config.encrypted_api_key)
         if not api_key:
@@ -495,7 +491,7 @@ def fit_check(request, payload: FitCheckRequest = Form(...), file: UploadedFile 
 
     model = payload.llm_model
     if not model:
-        config = LLMProviderConfig.objects.filter(provider=payload.llm_provider).first()
+        config = _user_llm_config(user, payload.llm_provider)
         model = config.default_model if config else None
     model = model or None
 
@@ -521,7 +517,8 @@ def fit_check(request, payload: FitCheckRequest = Form(...), file: UploadedFile 
             resume_text,
             payload.job_description,
             llm,
-            prompt_template,
+            user=user,
+            prompt_template=prompt_template,
             usage_query_kind=USAGE_QUERY_API_RESUME_FIT,
         )
     except LLMRequestsDisabled as e:
@@ -586,7 +583,7 @@ def get_prompts(request):
 
 @router.post("/optimize")
 def optimize_resume(request, payload: OptimizeRequest = Form(...), file: UploadedFile = File(...)):
-    _require_api_auth(request)
+    user = api_user(request)
     # Validation
     if payload.llm_provider not in LLM_PROVIDERS:
         raise HttpError(400, f"llm_provider must be one of: {', '.join(sorted(LLM_PROVIDERS))}")
@@ -606,6 +603,7 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
         original_name = original_name.split("/")[-1]
     original_name = (original_name or "resume.pdf")[:255]
     user_resume = UserResume.objects.create(
+        owner=user,
         file=file,
         original_filename=original_name,
         is_library=False,
@@ -617,20 +615,24 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
     workflow = None
     if payload.optimizer_workflow_id:
         try:
-            workflow = OptimizerWorkflow.objects.get(pk=int(payload.optimizer_workflow_id))
+            workflow = OptimizerWorkflow.objects.for_user(user).get(pk=int(payload.optimizer_workflow_id))
         except (OptimizerWorkflow.DoesNotExist, ValueError, TypeError):
             workflow = None
 
-    from .prompt_store import resolve_effective_ats_judge_profile_id, get_ats_judge_profile_by_id
+    from .prompt_store import resolve_effective_ats_judge_profile_id
 
     effective_ats_id = resolve_effective_ats_judge_profile_id(
         ats_judge_profile_id=payload.ats_judge_profile_id,
         workflow=workflow,
+        user=user,
     )
-    ats_profile = get_ats_judge_profile_by_id(effective_ats_id)
+    ats_profile = None
+    if effective_ats_id:
+        ats_profile = get_owned_or_404(AtsJudgeProfile, user, id=effective_ats_id)
 
     # 3. Create OptimizedResume record
     optimized = OptimizedResume.objects.create(
+        owner=user,
         original_resume=user_resume,
         job_description=job_desc,
         status=OptimizedResume.STATUS_QUEUED,
@@ -644,7 +646,7 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
     # Resolve API key: request > stored config > env
     api_key = payload.api_key
     if not api_key:
-        config = LLMProviderConfig.objects.filter(provider=payload.llm_provider).first()
+        config = _user_llm_config(user, payload.llm_provider)
         if config and config.encrypted_api_key:
             api_key = decrypt_api_key(config.encrypted_api_key)
         if not api_key:
@@ -652,7 +654,7 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
 
     model = payload.llm_model
     if not model:
-        config = LLMProviderConfig.objects.filter(provider=payload.llm_provider).first()
+        config = _user_llm_config(user, payload.llm_provider)
         model = config.default_model if config else None
     model = model or None
 
@@ -724,6 +726,7 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
             score_t_val = max(0, min(100, int(workflow.score_threshold)))
 
     result = optimize_resume_task(
+        user.id,
         optimized.id,
         job_desc.id,
         payload.llm_provider,
@@ -741,10 +744,10 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
     task_id = result.id if result else None
     return {"task_id": task_id, "resume_id": optimized.id}
 
-def get_status_data(resume_id: int):
+def get_status_data(resume_id: int, user):
     from .job_prep import interview_prep_to_markdown
 
-    optimized = get_object_or_404(OptimizedResume, id=resume_id)
+    optimized = get_owned_or_404(OptimizedResume, user, id=resume_id)
     logs = AgentLog.objects.filter(optimized_resume=optimized).order_by('created_at')
 
     # Use stored scores; fall back to last log for backward compat
@@ -760,7 +763,7 @@ def get_status_data(resume_id: int):
     interview_prep_markdown = None
     pipeline_entry_id = optimized.pipeline_entry_id
     if pipeline_entry_id:
-        entry = PipelineEntry.objects.filter(pk=pipeline_entry_id).first()
+        entry = PipelineEntry.objects.for_user(user).filter(pk=pipeline_entry_id).first()
         if entry and (entry.interview_prep or "").strip():
             interview_prep_markdown = interview_prep_to_markdown(entry.interview_prep)
 
@@ -786,8 +789,8 @@ def get_status_data(resume_id: int):
 
 @router.get("/status/{resume_id}", response=StatusResponse)
 def get_status(request, resume_id: int):
-    _require_api_auth(request)
-    return get_status_data(resume_id)
+    user = api_user(request)
+    return get_status_data(resume_id, user)
 
 
 CANCELLED_MESSAGE = "Cancelled by user"
@@ -807,9 +810,12 @@ def save_optimized_draft(request, resume_id: int, payload: SaveDraftRequest):
     """Save manual edits to the optimized resume draft before PDF/Word export."""
     from .services import DraftSaveError, save_optimized_draft_content
 
-    _require_api_auth(request)
+    user = api_user(request)
+    get_owned_or_404(OptimizedResume, user, id=resume_id)
     try:
-        optimized = save_optimized_draft_content(resume_id, payload.optimized_content or "")
+        optimized = save_optimized_draft_content(
+            resume_id, payload.optimized_content or "", user=user
+        )
     except DraftSaveError as e:
         raise HttpError(e.status_code, e.message) from e
     return {"ok": True, "optimized_content": optimized.optimized_content or ""}
@@ -837,11 +843,29 @@ class JobPrepGenerateResponse(Schema):
 def generate_cover_letter_api(request, resume_id: int, payload: JobPrepGenerateRequest):
     """On-demand cover letter for a completed optimization."""
     from .job_prep import JobPrepError, generate_cover_letter
-    from .jobs_api import _get_llm_from_request
 
-    optimized = get_object_or_404(OptimizedResume, id=resume_id)
+    user = api_user(request)
+    optimized = get_owned_or_404(OptimizedResume, user, id=resume_id)
     try:
-        llm = _get_llm_from_request(provider=payload.llm_provider, model=payload.llm_model)
+        prov = payload.llm_provider
+        if not prov:
+            config = LLMProviderConfig.objects.for_user(user).filter(
+                encrypted_api_key__isnull=False
+            ).exclude(encrypted_api_key="").first()
+            if not config:
+                raise HttpError(400, "No LLM configured. Set up an API key in LLM Config first.")
+            prov = config.provider
+            model = payload.llm_model or config.default_model
+            api_key = decrypt_api_key(config.encrypted_api_key)
+        else:
+            if prov not in LLM_PROVIDERS:
+                raise HttpError(400, f"llm_provider must be one of: {', '.join(sorted(LLM_PROVIDERS))}")
+            config = _user_llm_config(user, prov)
+            if not config or not config.encrypted_api_key:
+                raise HttpError(400, f"API key required for {prov}.")
+            api_key = decrypt_api_key(config.encrypted_api_key)
+            model = payload.llm_model or (config.default_model if config else None)
+        llm = get_llm(prov, api_key, model)
     except HttpError:
         raise
     except Exception as e:
@@ -869,7 +893,8 @@ def generate_cover_letter_api(request, resume_id: int, payload: JobPrepGenerateR
 @router.post("/status/{resume_id}/save-cover-letter")
 def save_cover_letter_api(request, resume_id: int, payload: SaveCoverLetterRequest):
     """Save manual edits to a generated cover letter."""
-    optimized = get_object_or_404(OptimizedResume, id=resume_id)
+    user = api_user(request)
+    optimized = get_owned_or_404(OptimizedResume, user, id=resume_id)
     if optimized.status != OptimizedResume.STATUS_COMPLETED:
         raise HttpError(400, "Optimization must be completed before saving a cover letter.")
     optimized.cover_letter = payload.cover_letter or ""
@@ -880,8 +905,8 @@ def save_cover_letter_api(request, resume_id: int, payload: SaveCoverLetterReque
 @router.post("/status/{resume_id}/cancel")
 def cancel_optimization(request, resume_id: int):
     """Mark a running or queued optimization as cancelled. The background task will stop on its next check."""
-    _require_api_auth(request)
-    optimized = get_object_or_404(OptimizedResume, id=resume_id)
+    user = api_user(request)
+    optimized = get_owned_or_404(OptimizedResume, user, id=resume_id)
     if optimized.status not in (OptimizedResume.STATUS_QUEUED, OptimizedResume.STATUS_RUNNING):
         return {"success": False, "message": "Optimization is not running or queued."}
     optimized.status = OptimizedResume.STATUS_FAILED
@@ -971,11 +996,11 @@ def _ats_profile_to_detail(p: AtsJudgeProfile) -> dict:
     }
 
 
-def _resolve_ats_profile_fk(profile_id: Optional[int]) -> Optional[AtsJudgeProfile]:
+def _resolve_ats_profile_fk(user, profile_id: Optional[int]) -> Optional[AtsJudgeProfile]:
     if profile_id is None:
         return None
     try:
-        return AtsJudgeProfile.objects.get(pk=int(profile_id))
+        return AtsJudgeProfile.objects.for_user(user).get(pk=int(profile_id))
     except (AtsJudgeProfile.DoesNotExist, ValueError, TypeError):
         raise HttpError(400, f"Invalid ats_judge_profile_id: {profile_id}")
 
@@ -991,7 +1016,7 @@ def _validate_workflow_steps(steps: list) -> None:
 @router.get("/ats-judge-profiles", response=List[AtsJudgeProfileListItem])
 def list_ats_judge_profiles_api(request):
     """List named ATS judge prompt profiles."""
-    _require_api_auth(request)
+    user = api_user(request)
     return [
         {
             "id": p.id,
@@ -1000,30 +1025,35 @@ def list_ats_judge_profiles_api(request):
             "is_builtin": p.is_builtin,
             "is_default": p.is_default,
         }
-        for p in AtsJudgeProfile.objects.all().order_by("name")
+        for p in AtsJudgeProfile.objects.for_user(user).order_by("name")
     ]
 
 
 @router.get("/ats-judge-profiles/{profile_id}", response=AtsJudgeProfileDetail)
 def get_ats_judge_profile_api(request, profile_id: int):
-    _require_api_auth(request)
-    p = get_object_or_404(AtsJudgeProfile, id=profile_id)
+    user = api_user(request)
+    p = get_owned_or_404(AtsJudgeProfile, user, id=profile_id)
     return _ats_profile_to_detail(p)
 
 
 @router.post("/ats-judge-profiles", response=AtsJudgeProfileDetail)
 def create_ats_judge_profile_api(request, payload: AtsJudgeProfileCreateUpdate):
-    _require_api_auth(request)
+    user = api_user(request)
     from .prompt_store import save_ats_judge_profile
 
     name = (payload.name or "").strip()
     if not name:
         raise HttpError(400, "name is required")
     slug = (payload.slug or "").strip() or None
-    if slug and AtsJudgeProfile.objects.filter(slug=slug).exists():
+    if slug and AtsJudgeProfile.objects.filter(owner=user, slug=slug).exists():
         raise HttpError(400, f"slug already exists: {slug}")
     leg = (payload.ats_judge_legacy_combined or payload.ats_judge or "").strip()
-    p = AtsJudgeProfile(name=name, slug=slug or "", is_default=bool(payload.is_default))
+    p = AtsJudgeProfile(
+        owner=user,
+        name=name,
+        slug=slug or "",
+        is_default=bool(payload.is_default),
+    )
     if slug:
         p.slug = slug
     save_ats_judge_profile(
@@ -1040,15 +1070,15 @@ def create_ats_judge_profile_api(request, payload: AtsJudgeProfileCreateUpdate):
 
 @router.put("/ats-judge-profiles/{profile_id}", response=AtsJudgeProfileDetail)
 def update_ats_judge_profile_api(request, profile_id: int, payload: AtsJudgeProfileCreateUpdate):
-    _require_api_auth(request)
+    user = api_user(request)
     from .prompt_store import save_ats_judge_profile
 
-    p = get_object_or_404(AtsJudgeProfile, id=profile_id)
+    p = get_owned_or_404(AtsJudgeProfile, user, id=profile_id)
     name = (payload.name or "").strip()
     if not name:
         raise HttpError(400, "name is required")
     slug = (payload.slug or "").strip()
-    if slug and slug != p.slug and AtsJudgeProfile.objects.filter(slug=slug).exclude(pk=p.pk).exists():
+    if slug and slug != p.slug and AtsJudgeProfile.objects.filter(owner=user, slug=slug).exclude(pk=p.pk).exists():
         raise HttpError(400, f"slug already exists: {slug}")
     if slug:
         p.slug = slug
@@ -1068,14 +1098,14 @@ def update_ats_judge_profile_api(request, profile_id: int, payload: AtsJudgeProf
 
 @router.delete("/ats-judge-profiles/{profile_id}")
 def delete_ats_judge_profile_api(request, profile_id: int):
-    _require_api_auth(request)
-    p = get_object_or_404(AtsJudgeProfile, id=profile_id)
-    if p.is_builtin and AtsJudgeProfile.objects.count() <= 1:
+    user = api_user(request)
+    p = get_owned_or_404(AtsJudgeProfile, user, id=profile_id)
+    if p.is_builtin and AtsJudgeProfile.objects.for_user(user).count() <= 1:
         raise HttpError(400, "Cannot delete the only built-in ATS profile.")
     was_default = p.is_default
     p.delete()
     if was_default:
-        fallback = AtsJudgeProfile.objects.order_by("pk").first()
+        fallback = AtsJudgeProfile.objects.for_user(user).order_by("pk").first()
         if fallback:
             fallback.is_default = True
             fallback.save()
@@ -1085,17 +1115,20 @@ def delete_ats_judge_profile_api(request, profile_id: int):
 @router.get("/workflows", response=List[WorkflowSchema])
 def list_workflows(request):
     """List all saved optimizer workflows."""
-    return [_workflow_to_schema(w) for w in OptimizerWorkflow.objects.all()]
+    user = api_user(request)
+    return [_workflow_to_schema(w) for w in OptimizerWorkflow.objects.for_user(user)]
 
 
 @router.get("/workflows/{workflow_id}", response=WorkflowSchema)
 def get_workflow(request, workflow_id: int):
-    w = get_object_or_404(OptimizerWorkflow, id=workflow_id)
+    user = api_user(request)
+    w = get_owned_or_404(OptimizerWorkflow, user, id=workflow_id)
     return _workflow_to_schema(w)
 
 
 @router.post("/workflows", response=WorkflowSchema)
 def create_workflow_api(request, payload: WorkflowCreateUpdate):
+    user = api_user(request)
     _validate_workflow_steps(payload.steps)
     loop_to = (payload.loop_to or "").strip() or ""
     if loop_to and loop_to not in VALID_STEP_IDS:
@@ -1105,19 +1138,21 @@ def create_workflow_api(request, payload: WorkflowCreateUpdate):
     score_t = payload.score_threshold if payload.score_threshold is not None else 85
     score_t = max(0, min(100, score_t))
     w = OptimizerWorkflow.objects.create(
+        owner=user,
         name=payload.name.strip(),
         steps=payload.steps,
         loop_to=loop_to,
         max_iterations=max_it,
         score_threshold=score_t,
-        ats_judge_profile=_resolve_ats_profile_fk(payload.ats_judge_profile_id),
+        ats_judge_profile=_resolve_ats_profile_fk(user, payload.ats_judge_profile_id),
     )
     return _workflow_to_schema(w)
 
 
 @router.put("/workflows/{workflow_id}", response=WorkflowSchema)
 def update_workflow(request, workflow_id: int, payload: WorkflowCreateUpdate):
-    w = get_object_or_404(OptimizerWorkflow, id=workflow_id)
+    user = api_user(request)
+    w = get_owned_or_404(OptimizerWorkflow, user, id=workflow_id)
     _validate_workflow_steps(payload.steps)
     loop_to = (payload.loop_to or "").strip() or ""
     if loop_to and loop_to not in VALID_STEP_IDS:
@@ -1132,7 +1167,7 @@ def update_workflow(request, workflow_id: int, payload: WorkflowCreateUpdate):
     w.max_iterations = max_it
     w.score_threshold = score_t
     w.ats_judge_profile = (
-        _resolve_ats_profile_fk(payload.ats_judge_profile_id)
+        _resolve_ats_profile_fk(user, payload.ats_judge_profile_id)
         if payload.ats_judge_profile_id
         else None
     )
@@ -1142,7 +1177,8 @@ def update_workflow(request, workflow_id: int, payload: WorkflowCreateUpdate):
 
 @router.delete("/workflows/{workflow_id}")
 def delete_workflow(request, workflow_id: int):
-    w = get_object_or_404(OptimizerWorkflow, id=workflow_id)
+    user = api_user(request)
+    w = get_owned_or_404(OptimizerWorkflow, user, id=workflow_id)
     w.delete()
     return {"success": True}
 
@@ -1157,6 +1193,7 @@ class ConnectRequest(Schema):
 @router.post("/llm/connect")
 def llm_connect(request, payload: ConnectRequest):
     """Validate API key by listing models; on success save key (encrypted) and return models."""
+    user = api_user(request)
     if payload.provider not in LLM_PROVIDERS:
         raise HttpError(400, f"provider must be one of: {', '.join(sorted(LLM_PROVIDERS))}")
     if not payload.api_key or not payload.api_key.strip():
@@ -1166,10 +1203,14 @@ def llm_connect(request, payload: ConnectRequest):
     except Exception as e:
         err = str(e)
         if is_auth_error(e):
-            LLMProviderConfig.objects.filter(provider=payload.provider).delete()
+            LLMProviderConfig.objects.filter(owner=user, provider=payload.provider).delete()
             raise HttpError(401, f"Invalid API key: {err}")
         raise HttpError(400, err)
-    config, _ = LLMProviderConfig.objects.get_or_create(provider=payload.provider, defaults={"encrypted_api_key": ""})
+    config, _ = LLMProviderConfig.objects.get_or_create(
+        owner=user,
+        provider=payload.provider,
+        defaults={"encrypted_api_key": ""},
+    )
     config.encrypted_api_key = encrypt_api_key(payload.api_key.strip())
     config.last_validated_at = timezone.now()
     config.save(update_fields=["encrypted_api_key", "last_validated_at", "updated_at"])
@@ -1179,9 +1220,10 @@ def llm_connect(request, payload: ConnectRequest):
 @router.get("/llm/models")
 def llm_models(request, provider: str):
     """Return list of models for provider using stored API key or env fallback. 401 if no key or key invalid."""
+    user = api_user(request)
     if provider not in LLM_PROVIDERS:
         raise HttpError(400, f"provider must be one of: {', '.join(sorted(LLM_PROVIDERS))}")
-    config = LLMProviderConfig.objects.filter(provider=provider).first()
+    config = _user_llm_config(user, provider)
     api_key = None
     if config and config.encrypted_api_key:
         api_key = decrypt_api_key(config.encrypted_api_key)
@@ -1217,9 +1259,10 @@ def llm_models(request, provider: str):
 @router.post("/llm/set-default-model")
 def llm_set_default_model(request, provider: str, model: str):
     """Set default model for provider (stored config)."""
+    user = api_user(request)
     if provider not in LLM_PROVIDERS:
         raise HttpError(400, "Invalid provider")
-    config = LLMProviderConfig.objects.filter(provider=provider).first()
+    config = _user_llm_config(user, provider)
     if not config:
         raise HttpError(404, "Connect with an API key first")
     config.default_model = model
@@ -1517,7 +1560,8 @@ def _apply_export_replacements(content: str, request) -> str:
 @router.get("/export/{resume_id}/pdf")
 def export_pdf(request, resume_id: int):
     """Export optimized resume as PDF. Returns 404 if not found or not completed."""
-    optimized = get_object_or_404(OptimizedResume, id=resume_id)
+    user = api_user(request)
+    optimized = get_owned_or_404(OptimizedResume, user, id=resume_id)
     if optimized.status != OptimizedResume.STATUS_COMPLETED or not optimized.optimized_content:
         raise HttpError(404, "Optimized resume not ready for export")
     content = _apply_export_replacements(optimized.optimized_content, request)
@@ -1530,7 +1574,8 @@ def export_pdf(request, resume_id: int):
 @router.get("/export/{resume_id}/docx")
 def export_docx(request, resume_id: int):
     """Export optimized resume as Word. Returns 404 if not found or not completed."""
-    optimized = get_object_or_404(OptimizedResume, id=resume_id)
+    user = api_user(request)
+    optimized = get_owned_or_404(OptimizedResume, user, id=resume_id)
     if optimized.status != OptimizedResume.STATUS_COMPLETED or not optimized.optimized_content:
         raise HttpError(404, "Optimized resume not ready for export")
     content = _apply_export_replacements(optimized.optimized_content, request)

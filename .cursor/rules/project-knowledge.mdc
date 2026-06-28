@@ -1,0 +1,18 @@
+---
+description: Project knowledge base for ResumeElite
+alwaysApply: true
+---
+
+# Project Knowledge
+
+Before changing site behavior, routes, models, background jobs, LLM flows, or apply-agent automation, consult the root docs knowledge base:
+
+- `docs/README.md`
+- `docs/site-functionality.md`
+- `docs/architecture.md`
+- `docs/data-model.md`
+- `docs/api-reference.md`
+- `docs/operations.md`
+- `docs/agent-guide.md`
+
+Keep these docs updated when behavior changes. Preserve owner-scoped access patterns, Huey-backed long-running work, `llm_gateway.py` for LLM calls, and the apply-agent state machine.

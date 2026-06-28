@@ -1,128 +1,62 @@
-amqp==5.3.1
-annotated-types==0.7.0
-anthropic==0.84.0
-anyio==4.12.1
-asgiref==3.11.1
-attrs==25.4.0
-billiard==4.2.4
-blinker==1.9.0
-cachetools==6.2.6
-certifi==2026.2.25
-cffi==2.0.0
-charset-normalizer==3.4.4
-click==8.3.1
-click-didyoumean==0.3.1
-click-plugins==1.1.1.2
-click-repl==0.3.0
-croniter==3.0.0
-cryptography==46.0.5
-distro==1.9.0
+# ResumeElite — direct dependencies only (transitive deps resolved by pip).
+#
+# Install (two steps — upstream conflict: jobspy pins markdownify<0.14, browser-use needs >=1.2):
+#   pip install -r requirements.txt
+#   pip install --no-deps -r requirements-jobspy.txt
+#
+# torch: not listed — Docker installs CPU wheels (see Dockerfile). Local dev: pip install torch
+# After install, run: playwright install chromium
+
+# --- Web stack ---
 Django==5.2.11
-django-environ==0.13.0
-django-ninja==1.5.3
-docstring_parser==0.17.0
-filetype==1.2.0
-google-ai-generativelanguage==0.10.0
-google-api-core==2.30.0
-google-api-python-client==2.190.0
-google-auth==2.48.0
-google-auth-httplib2==0.3.0
-google-genai==1.65.0
-googleapis-common-protos==1.72.0
-greenlet==3.3.0
-groq==0.37.1
-grpcio==1.78.0
-grpcio-status==1.62.3
-h11==0.16.0
-httpcore==1.0.9
-httplib2==0.31.2
-httpx==0.28.1
-idna==3.11
-Jinja2==3.1.6
-jiter==0.13.0
-jsonpatch==1.33
-jsonpointer==3.0.0
-jsonschema==4.26.0
-jsonschema-specifications==2025.9.1
-kombu==5.6.2
-langchain==0.3.27
-langchain-anthropic==0.3.22
-langchain-core==0.3.83
-langchain-google-genai==2.1.12
-langchain-groq==0.3.8
-langchain-openai==0.3.35
-langchain-text-splitters==0.3.11
-langgraph==1.0.1
-langgraph-checkpoint==3.0.1
-langgraph-prebuilt==1.0.1
-langgraph-sdk==0.2.15
-langsmith==0.7.9
-MarkupSafe==3.0.3
-numpy==1.26.3
-openai==2.24.0
-orjson==3.11.7
-ormsgpack==1.12.2
-packaging==23.2
-pandas==2.3.3
-pdfminer.six==20251230
-pdfplumber==0.11.9
-pillow==12.1.1
-python-jobspy>=1.1.70
-prompt_toolkit==3.0.52
-proto-plus==1.27.1
-protobuf==4.25.8
-pyarrow==23.0.1
-pyasn1==0.6.2
-pyasn1_modules==0.4.2
-pycparser==3.0
-pydantic==2.12.5
-pydantic_core==2.41.5
-pyparsing==3.3.2
-pypdfium2==5.5.0
-python-dateutil==2.9.0.post0
-python-dotenv==1.2.1
-pytz==2025.2
-PyYAML==6.0.3
-referencing==0.37.0
-regex==2024.4.28
-reportlab==4.2.5
-python-docx==1.1.2
-requests==2.32.5
-requests-toolbelt==1.0.0
-rpds-py==0.30.0
-rsa==4.9.1
-six==1.17.0
-sniffio==1.3.1
-SQLAlchemy==2.0.47
-sqlparse==0.5.5
-tenacity==8.5.0
-tiktoken==0.12.0
-toml==0.10.2
-tornado==6.5.4
-tqdm==4.67.3
-typing-inspection==0.4.2
-typing_extensions==4.15.0
-tzdata==2025.3
-tzlocal==5.3.1
-uritemplate==4.2.0
-urllib3==2.6.3
-uuid_utils==0.14.1
-vine==5.1.0
-watchdog==6.0.0
-wcwidth==0.6.0
-websockets==16.0
-xxhash==3.6.0
-zstandard==0.25.0
-ollama>=0.3.0
-# torch: not listed here — Docker installs CPU wheels (see Dockerfile). Local dev: pip install torch
-sentence-transformers>=2.2.0
-rank-bm25>=0.2.0
+django-environ>=0.13.0
+django-hijack>=3.7.4
+django-ninja>=1.5.3
+gunicorn>=22.0.0
+
+# --- Background tasks (Huey + Redis) ---
 huey>=2.6.0
 redis>=5.0.0
-gunicorn>=22.0.0
-# Autonomous Apply Agent (browser automation). Run `playwright install chromium`
-# after install. browser-use powers the generic fallback for unknown ATS.
-playwright>=1.44.0
-playwright-stealth>=1.0.6
-browser-use>=0.13.0
+croniter>=3.0.0
+
+# --- Security / validation ---
+cryptography>=46.0.5
+pydantic>=2.12.0,<3
+
+# --- LLM orchestration (LangGraph resume optimizer + vetting) ---
+langchain-core>=0.3.83,<0.4
+langgraph>=1.0.1,<2
+langchain-openai>=0.3.35,<0.4
+langchain-groq>=0.3.8,<0.4
+langchain-google-genai>=2.1.12,<3
+# Anthropic: langchain-anthropic pulls the `anthropic` SDK; also used directly in llm_services.py
+langchain-anthropic>=0.3.22,<0.4
+openai>=2.16.0,<3
+groq>=0.30.0,<1.0.0
+tiktoken>=0.12.0
+ollama>=0.3.0
+
+# --- Embeddings & job ranking ---
+numpy>=1.26.3,<2
+sentence-transformers>=2.2.0
+rank-bm25>=0.2.0
+
+# --- Job search (python-jobspy installed separately — see requirements-jobspy.txt) ---
+beautifulsoup4>=4.12.2,<5.0.0
+tls-client>=1.0.1,<2.0.0
+pandas>=2.1.0,<3.0.0
+regex>=2024.4.28,<2025.0.0
+requests>=2.32.5
+markdownify>=1.2.0,<2.0.0
+
+# --- Document I/O (PDF parse, resume export) ---
+pdfplumber>=0.11.9
+reportlab>=4.2.5
+python-docx>=1.1.2
+pillow>=12.1.1
+
+# --- Apply agent (ATS adapters + browser-use fallback) ---
+# browser-use 0.13.x pins groq==1.0.0 which conflicts with langchain-groq (<1.0.0).
+browser-use>=0.11.7,<0.12.0
+playwright>=1.49.0
 psutil>=5.9.0

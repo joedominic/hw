@@ -13,11 +13,11 @@ Redis is **external** (not in compose). Default host: `192.168.2.174:6379` — s
 
 - Docker Engine + Docker Compose v2
 - Reachable Redis on your LAN (or `host.docker.internal` if Redis is on the Docker host)
-- `JobApp-Jules/.env` — copy from [`.env.example`](../.env.example)
+- `JobApp-Main/.env` — copy from [`.env.example`](../.env.example)
 
 ## Quick start (dev)
 
-From the repo root (`JobApp-Jules/`):
+From the repo root (`JobApp-Main/`):
 
 ```bash
 cp .env.example .env
@@ -140,7 +140,7 @@ After `docker compose up --build`:
 
 - Base: `python:3.12-slim-bookworm`; CPU-only PyTorch from `download.pytorch.org/whl/cpu`
 - `playwright` / `altair` / `GitPython` omitted from `requirements.txt` (unused by the Django app)
-- Build context: repo root (`JobApp-Jules/`)
+- Build context: repo root (`JobApp-Main/`)
 - Compose `env_file: .env` injects variables into the container environment (optional file; copy from `.env.example`)
 
 ## Follow-ups (not in v1)

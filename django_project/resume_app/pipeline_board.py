@@ -29,20 +29,20 @@ from .utils import format_job_source_label
 BOARD_STAGES = ("pipeline", "vetting", "applying", "done")
 
 
-def _attach_optimizer_user_resume_id(pipeline_jobs, raw_track: str) -> None:
+def _attach_optimizer_user_resume_id(user, pipeline_jobs, raw_track: str) -> None:
     """Track default UserResume id for Tailor / Open optimizer links (same resolution as pipeline enqueue)."""
-    ur = _resolve_user_resume_for_track(raw_track)
+    ur = _resolve_user_resume_for_track(user, raw_track)
     rid = ur.id if ur else None
     for j in pipeline_jobs:
         setattr(j, "optimizer_user_resume_id", rid)
 
 
-def _attach_optimized_resume_ids_for_stage(pipeline_jobs, raw_track: str, stage: str) -> None:
+def _attach_optimized_resume_ids_for_stage(user, pipeline_jobs, raw_track: str, stage: str) -> None:
     """Set each payload's optimized_resume_id from the latest OptimizedResume for its pipeline entry."""
     if not pipeline_jobs:
         return
     jids = [j.id for j in pipeline_jobs]
-    pe_rows = PipelineEntry.objects.filter(
+    pe_rows = PipelineEntry.objects.for_user(user).filter(
         track=raw_track,
         stage=stage,
         removed_at__isnull=True,
@@ -52,7 +52,7 @@ def _attach_optimized_resume_ids_for_stage(pipeline_jobs, raw_track: str, stage:
     entry_ids_list = [e.id for e in pe_by_job.values()]
     latest_by_entry: dict[int, int] = {}
     if entry_ids_list:
-        for orow in OptimizedResume.objects.filter(
+        for orow in OptimizedResume.objects.for_user(user).filter(
             pipeline_entry_id__in=entry_ids_list
         ).order_by("-created_at"):
             eid = orow.pipeline_entry_id
@@ -119,13 +119,14 @@ def _apply_save_action(entry: PipelineEntry | None, board_stage: str, request) -
 
             pe = get_effective_prompts(request)
             matching_prompt = pe.get("matching")
-            llm_provider = get_active_llm_provider(request)
+            llm_provider = get_active_llm_provider(request.user, request)
             llm_model = (
                 request.session.get("job_search_llm_model")
                 or request.session.get("optimizer_llm_model")
                 or None
             )
             evaluate_vetting_matching_task(
+                request.user.id,
                 [entry.id],
                 llm_provider=llm_provider,
                 llm_model=llm_model,
@@ -154,11 +155,12 @@ def pipeline_board_view(request, board_stage: str):
     if board_stage not in BOARD_STAGES:
         raise ValueError("invalid board_stage")
 
-    tracks_qs = Track.ensure_baseline()
+    user = request.user
+    tracks_qs = Track.ensure_baseline(user)
     available_slugs = set(tracks_qs.values_list("slug", flat=True))
     raw_track = (request.GET.get("track") or request.session.get("job_search_track") or "").strip().lower()
     if not raw_track or raw_track not in available_slugs:
-        raw_track = Track.get_default_slug()
+        raw_track = Track.get_default_slug(user)
     request.session["job_search_track"] = raw_track
     request.session.modified = True
 
@@ -183,7 +185,7 @@ def pipeline_board_view(request, board_stage: str):
                     jid_int = int(jid)
                 except (ValueError, TypeError):
                     continue
-                entry = PipelineEntry.objects.filter(
+                entry = PipelineEntry.objects.for_user(user).filter(
                     job_listing_id=jid_int,
                     track=track_from_form,
                     stage=PipelineEntry.Stage.APPLYING,
@@ -195,9 +197,9 @@ def pipeline_board_view(request, board_stage: str):
                 from .apply_agent import orchestrator
                 from .tasks import run_apply_agent_step
 
-                attempts = orchestrator.start_attempts_for_entries(entry_ids)
+                attempts = orchestrator.start_attempts_for_entries(entry_ids, user_id=user.id)
                 for attempt in attempts:
-                    run_apply_agent_step(attempt.id)
+                    run_apply_agent_step(user.id, attempt.id)
                 if attempts:
                     messages.success(
                         request,
@@ -218,7 +220,7 @@ def pipeline_board_view(request, board_stage: str):
                         jid_int = int(jid)
                     except (ValueError, TypeError):
                         continue
-                    entries = PipelineEntry.objects.filter(
+                    entries = PipelineEntry.objects.for_user(user).filter(
                         job_listing_id=jid_int,
                         track=track_from_form,
                         removed_at__isnull=True,
@@ -240,7 +242,7 @@ def pipeline_board_view(request, board_stage: str):
                             api_jobs_like(request, job_listing_id=jid_int, track=track_from_form)
                         else:
                             api_jobs_dislike(request, job_listing_id=jid_int, track=track_from_form)
-                            entries = PipelineEntry.objects.filter(
+                            entries = PipelineEntry.objects.for_user(user).filter(
                                 job_listing_id=jid_int,
                                 track=track_from_form,
                                 removed_at__isnull=True,
@@ -260,7 +262,7 @@ def pipeline_board_view(request, board_stage: str):
         if action == "delete" and job_id:
             try:
                 jid_int = int(job_id)
-                entries = PipelineEntry.objects.filter(
+                entries = PipelineEntry.objects.for_user(user).filter(
                     job_listing_id=jid_int,
                     track=track_from_form,
                     removed_at__isnull=True,
@@ -279,7 +281,7 @@ def pipeline_board_view(request, board_stage: str):
                     messages.success(request, "Job liked.")
                 elif action == "dislike":
                     api_jobs_dislike(request, job_listing_id=jid_int, track=track_from_form)
-                    entries = PipelineEntry.objects.filter(
+                    entries = PipelineEntry.objects.for_user(user).filter(
                         job_listing_id=jid_int,
                         track=track_from_form,
                         removed_at__isnull=True,
@@ -289,7 +291,7 @@ def pipeline_board_view(request, board_stage: str):
                     messages.success(request, _single_dislike_msg(board_stage))
                 elif action == "save":
                     api_jobs_save(request, job_listing_id=jid_int)
-                    entry = PipelineEntry.objects.filter(
+                    entry = PipelineEntry.objects.for_user(user).filter(
                         job_listing_id=jid_int,
                         track=track_from_form,
                         removed_at__isnull=True,
@@ -304,7 +306,7 @@ def pipeline_board_view(request, board_stage: str):
     if board_stage == "pipeline":
         saved_ids = saved_listing_id_set(raw_track)
 
-    entries_qs = PipelineEntry.objects.filter(track=raw_track, removed_at__isnull=True)
+    entries_qs = PipelineEntry.objects.for_user(user).filter(track=raw_track, removed_at__isnull=True)
     if board_stage == "pipeline":
         entries_qs = (
             entries_qs.filter(models.Q(stage="") | models.Q(stage=PipelineEntry.Stage.PIPELINE))
@@ -319,7 +321,7 @@ def pipeline_board_view(request, board_stage: str):
 
     entries = entries_qs.select_related("job_listing").order_by("-added_at")
     job_listings = [e.job_listing for e in entries]
-    pipeline_jobs_full = pipeline_jobs_to_payloads(job_listings, track=raw_track)
+    pipeline_jobs_full = pipeline_jobs_to_payloads(job_listings, track=raw_track, user=user)
     pipeline_stage_total = len(pipeline_jobs_full)
 
     # Distinct sources for filter dropdown (raw `source` matches JobListing.source)
@@ -364,7 +366,7 @@ def pipeline_board_view(request, board_stage: str):
 
     pipeline_count_before_text_search = len(pipeline_jobs)
 
-    base_qs = PipelineEntry.objects.filter(track=raw_track, removed_at__isnull=True)
+    base_qs = PipelineEntry.objects.for_user(user).filter(track=raw_track, removed_at__isnull=True)
     stage_counts = {
         "pipeline": base_qs.filter(models.Q(stage="") | models.Q(stage=PipelineEntry.Stage.PIPELINE)).count(),
         "vetting": base_qs.filter(stage=PipelineEntry.Stage.VETTING).count(),
@@ -389,13 +391,13 @@ def pipeline_board_view(request, board_stage: str):
     )
 
     if board_stage == "applying":
-        _attach_optimizer_user_resume_id(pipeline_jobs, raw_track)
+        _attach_optimizer_user_resume_id(user, pipeline_jobs, raw_track)
         _attach_optimized_resume_ids_for_stage(
-            pipeline_jobs, raw_track, PipelineEntry.Stage.APPLYING
+            user, pipeline_jobs, raw_track, PipelineEntry.Stage.APPLYING
         )
     elif board_stage == "done":
         _attach_optimized_resume_ids_for_stage(
-            pipeline_jobs, raw_track, PipelineEntry.Stage.DONE
+            user, pipeline_jobs, raw_track, PipelineEntry.Stage.DONE
         )
 
     job_tasks_url = reverse("job_automation")

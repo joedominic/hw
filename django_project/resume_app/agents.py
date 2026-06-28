@@ -130,6 +130,8 @@ def _is_rate_limit_error(exc: Exception) -> bool:
 def _llm_invoke_with_retry(
     llm,
     messages,
+    *,
+    user,
     max_attempts=2,
     config=None,
     structured_schema=None,
@@ -140,8 +142,14 @@ def _llm_invoke_with_retry(
 ):
     from .llm_gateway import call_invoke_llm_messages
 
+    if user is None:
+        user = getattr(llm, "_resume_user", None)
+    if user is None:
+        raise ValueError("user is required for LLM gateway invoke")
+
     return call_invoke_llm_messages(
         messages,
+        user=user,
         job_cache_key=job_cache_key,
         structured_schema=structured_schema,
         config=config,
@@ -151,6 +159,16 @@ def _llm_invoke_with_retry(
         prefer_local=prefer_local,
         only_local=only_local,
     )
+
+
+def _state_user(state: dict):
+    """Resolve owning User from optimizer workflow state (user_id set by Huey task)."""
+    uid = _state_get(state, "user_id")
+    if not uid:
+        return None
+    from django.contrib.auth import get_user_model
+
+    return get_user_model().objects.filter(pk=int(uid)).first()
 
 
 def _extract_json_object(content: str) -> Optional[dict]:
@@ -279,6 +297,8 @@ def run_fit_check(
     resume_text: str,
     job_description: str,
     llm,
+    *,
+    user,
     prompt_template: str = None,
     prompt_system: str = None,
     prompt_user: str = None,
@@ -316,6 +336,7 @@ def run_fit_check(
         result = _llm_invoke_with_retry(
             llm,
             messages,
+            user=user,
             structured_schema=FitCheckResult,
             job_cache_key=job_cache_key,
             usage_query_kind=_qk,
@@ -327,7 +348,7 @@ def run_fit_check(
     except Exception as e:
         logger.warning("fit_check structured output failed: %s", e)
         raw = _llm_invoke_with_retry(
-            llm, messages, job_cache_key=job_cache_key, usage_query_kind=_qk
+            llm, messages, user=user, job_cache_key=job_cache_key, usage_query_kind=_qk
         )
         content = raw.content if hasattr(raw, "content") else str(raw)
         parsed = _parse_fit_check_fallback_from_parsers(content)
@@ -338,13 +359,14 @@ def run_matching(
     resume_text: str,
     job_description: str,
     llm,
+    *,
+    user,
     prompt_template: str = None,
     prompt_system: str = None,
     prompt_user: str = None,
     prompt_legacy: str = None,
     job_cache_key: str | None = None,
     usage_query_kind: str | None = None,
-    *,
     return_debug: bool = False,
 ) -> dict:
     """Returns { score: int, reasoning: str, interview_probability: int|None }. Score 0-100.
@@ -377,7 +399,7 @@ def run_matching(
     dbg = "\n\n---\n\n".join(f"{type(m).__name__}:{getattr(m, 'content', '')}" for m in messages)
     logger.info("[matching] messages=%s total_chars=%s", len(messages), len(dbg))
     raw = _llm_invoke_with_retry(
-        llm, messages, job_cache_key=job_cache_key, usage_query_kind=_qk
+        llm, messages, user=user, job_cache_key=job_cache_key, usage_query_kind=_qk
     )
     content = getattr(raw, "content", None)
     if content is None:
@@ -425,6 +447,7 @@ class AgentState(_AgentStateBase, total=False):
     job_highlights: str
     retrieval_context: str
     optimizer_context_budget: dict  # Char counts / retrieval debug for UI
+    user_id: int  # Owner for tenant-scoped LLM gateway calls
     writer_prompt_system: str
     writer_prompt_user: str
     writer_prompt_legacy: str
@@ -447,7 +470,7 @@ _STATE_KEYS = frozenset({
     "recruiter_judge_prompt_system", "recruiter_judge_prompt_user", "recruiter_judge_prompt_legacy",
     "debug", "max_iterations", "score_threshold", "job_cache_key",
     "writer_job_description", "optimization_notes", "pipeline_skills_json", "job_highlights",
-    "retrieval_context", "optimizer_context_budget",
+    "retrieval_context", "optimizer_context_budget", "user_id",
 })
 
 
@@ -528,6 +551,7 @@ def writer_node(state: AgentState):
     response = _llm_invoke_with_retry(
         llm,
         messages,
+        user=_state_user(state),
         job_cache_key=_state_get(state, "job_cache_key"),
         usage_query_kind=USAGE_QUERY_OPTIMIZER_WRITER,
         prefer_local=False,
@@ -549,6 +573,7 @@ def _unstructured_judge_invoke(
     llm,
     messages,
     *,
+    user,
     label: str,
     structured_schema: type,
     parse_fallback,
@@ -563,6 +588,7 @@ def _unstructured_judge_invoke(
     raw = _llm_invoke_with_retry(
         llm,
         messages,
+        user=user,
         config=config,
         structured_schema=None,
         job_cache_key=job_cache_key,
@@ -668,11 +694,13 @@ def _judge_node(
     usage_callback = TokenUsageCallback()
     invoke_config = {"callbacks": [usage_callback]}
     data: ScoreFeedback | AtsJudgeResult
+    owner_user = _state_user(state)
 
     if not use_structured_output:
         data, last_json, raw, parse_info = _unstructured_judge_invoke(
             llm,
             messages,
+            user=owner_user,
             label=label,
             structured_schema=structured_schema,
             parse_fallback=parse_fallback,
@@ -687,6 +715,7 @@ def _judge_node(
             structured_result = _llm_invoke_with_retry(
                 llm,
                 messages,
+                user=owner_user,
                 config=invoke_config,
                 structured_schema=structured_schema,
                 job_cache_key=_state_get(state, "job_cache_key"),
@@ -709,6 +738,7 @@ def _judge_node(
                 data, last_json, raw, parse_info = _unstructured_judge_invoke(
                     llm,
                     messages,
+                    user=owner_user,
                     label=label,
                     structured_schema=structured_schema,
                     parse_fallback=parse_fallback,
@@ -730,6 +760,7 @@ def _judge_node(
                     data, last_json, raw, parse_info = _unstructured_judge_invoke(
                         llm,
                         messages,
+                        user=owner_user,
                         label=label,
                         structured_schema=structured_schema,
                         parse_fallback=parse_fallback,
@@ -748,6 +779,7 @@ def _judge_node(
             data, last_json, raw, parse_info = _unstructured_judge_invoke(
                 llm,
                 messages,
+                user=owner_user,
                 label=label,
                 structured_schema=structured_schema,
                 parse_fallback=parse_fallback,

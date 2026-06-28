@@ -3,6 +3,9 @@ Cluster pipeline rows that are the same job (same title, company, description bo
 posted at different locations/URLs, and soft-delete duplicates per track.
 
 Fingerprint ignores location and job URL so multi-location postings collapse to one row.
+
+All operations are **owner-scoped**. Pass the owning ``user`` so that entries from
+one tenant can never be deleted by a different tenant's dedupe run.
 """
 from __future__ import annotations
 
@@ -10,6 +13,7 @@ import hashlib
 import logging
 from collections import defaultdict
 
+from django.contrib.auth import get_user_model
 from django.db import models
 
 from .models import JobListingTrackMetrics, PipelineEntry, Track
@@ -80,15 +84,16 @@ def _winner_sort_key(
 
 def dedupe_pipeline_entries(
     *,
+    user,
     track_slug: str | None,
     stage: str,
     include_done: bool,
 ) -> dict[str, object]:
     """
-    Soft-delete duplicate PipelineEntry rows within each fingerprint group.
+    Soft-delete duplicate PipelineEntry rows within each fingerprint group for *user*.
 
     - Clustering is per track (never merges across tracks).
-    - `track_slug`: None or '*' / 'all' → every known track (Track table).
+    - `track_slug`: None or '*' / 'all' → every known track for this user (Track table).
     - `stage`: 'all' or '*' for all stages (see include_done for Done).
     Returns summary dict with counts.
     """
@@ -98,7 +103,7 @@ def dedupe_pipeline_entries(
     if track_slug and str(track_slug).strip().lower() not in ("*", "all", ""):
         tracks = [str(track_slug).strip().lower()]
     else:
-        tracks = list(Track.ensure_baseline().values_list("slug", flat=True))
+        tracks = list(Track.ensure_baseline(user).values_list("slug", flat=True))
 
     total_removed = 0
     total_groups = 0
@@ -106,7 +111,8 @@ def dedupe_pipeline_entries(
 
     for tslug in tracks:
         base = (
-            PipelineEntry.objects.filter(track=tslug, removed_at__isnull=True)
+            PipelineEntry.objects.for_user(user)
+            .filter(track=tslug, removed_at__isnull=True)
             .filter(st_q)
             .select_related("job_listing")
         )
@@ -116,7 +122,7 @@ def dedupe_pipeline_entries(
             continue
 
         job_ids = {e.job_listing_id for e in entries}
-        metrics_list = JobListingTrackMetrics.objects.filter(
+        metrics_list = JobListingTrackMetrics.objects.for_user(user).filter(
             track=tslug,
             job_listing_id__in=job_ids,
         )
@@ -145,7 +151,8 @@ def dedupe_pipeline_entries(
         per_track[tslug] = {"removed": removed_here, "duplicate_groups": groups_here}
         if removed_here:
             logger.info(
-                "[dedupe_pipeline_entries] track=%s removed=%d duplicate_groups=%d",
+                "[dedupe_pipeline_entries] user=%s track=%s removed=%d duplicate_groups=%d",
+                getattr(user, "id", user),
                 tslug,
                 removed_here,
                 groups_here,
@@ -158,3 +165,40 @@ def dedupe_pipeline_entries(
         "entries_removed": total_removed,
         "per_track": per_track,
     }
+
+
+def dedupe_pipeline_entries_all_users(
+    *,
+    track_slug: str | None = "*",
+    stage: str = "all",
+    include_done: bool = False,
+) -> dict[str, object]:
+    """
+    Staff / admin helper: run ``dedupe_pipeline_entries`` for every active user.
+
+    Never called from user-facing flows. Used by the Huey admin task
+    (``dedupe_pipeline_jobs_task``) and the management command.
+    """
+    User = get_user_model()
+    combined: dict[str, object] = {
+        "status": "success",
+        "tracks_processed": 0,
+        "duplicate_groups": 0,
+        "entries_removed": 0,
+        "per_user": {},
+    }
+    for user in User.objects.filter(is_active=True):
+        try:
+            result = dedupe_pipeline_entries(
+                user=user,
+                track_slug=track_slug,
+                stage=stage,
+                include_done=include_done,
+            )
+            combined["tracks_processed"] = int(combined["tracks_processed"]) + int(result.get("tracks_processed") or 0)
+            combined["duplicate_groups"] = int(combined["duplicate_groups"]) + int(result.get("duplicate_groups") or 0)
+            combined["entries_removed"] = int(combined["entries_removed"]) + int(result.get("entries_removed") or 0)
+            combined["per_user"][str(user.id)] = result  # type: ignore[index]
+        except Exception as e:
+            logger.exception("[dedupe_all_users] failed user=%s: %s", user.id, e)
+    return combined

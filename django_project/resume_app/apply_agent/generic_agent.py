@@ -76,19 +76,23 @@ def _build_task_instructions(ctx: ApplyContext) -> str:
     )
 
 
-def resolve_apply_agent_llm_candidate() -> dict:
-    """Return provider/model/config for browser-use, honoring Apply Agent LLM settings."""
+def resolve_apply_agent_llm_candidate(user) -> dict:
+    """Return provider/model/config for browser-use, honoring Apply Agent LLM settings.
+
+    ``user`` is required to scope LLM provider lookups to the owning tenant.
+    """
     from ..llm_services import DEFAULT_MODELS
     from ..llm_session import get_runtime_provider_candidates
     from ..models import AppAutomationSettings, LLMProviderConfig
 
-    solo = AppAutomationSettings.get_solo()
+    solo = AppAutomationSettings.get_for_user(user)
     provider = (solo.apply_agent_llm_provider or "").strip()
     model = (solo.apply_agent_llm_model or "").strip()
 
     if provider:
         cfg = (
-            LLMProviderConfig.objects.filter(provider=provider)
+            LLMProviderConfig.objects.for_user(user)
+            .filter(provider=provider)
             .exclude(encrypted_api_key="")
             .exclude(encrypted_api_key__isnull=True)
             .first()
@@ -103,7 +107,7 @@ def resolve_apply_agent_llm_candidate() -> dict:
             raise ValueError(f"No model selected for Apply Agent LLM provider {provider!r}.")
         return {"provider": provider, "model": effective_model, "config": cfg}
 
-    candidates = get_runtime_provider_candidates()
+    candidates = get_runtime_provider_candidates(user)
     if not candidates:
         raise ValueError("No LLM provider configured. Add an API key in Settings.")
     cand = candidates[0]
@@ -114,12 +118,12 @@ def resolve_apply_agent_llm_candidate() -> dict:
     return {"provider": provider, "model": effective_model, "config": cand["config"]}
 
 
-def _build_browser_use_llm() -> Any:
+def _build_browser_use_llm(user) -> Any:
     """Build a browser-use ``BaseChatModel`` for generic form fill."""
     from ..crypto import decrypt_api_key
     from ..llm_factory import _normalize_ollama_local_host
 
-    cand = resolve_apply_agent_llm_candidate()
+    cand = resolve_apply_agent_llm_candidate(user)
     provider = cand["provider"]
     model = cand["model"]
     cfg = cand["config"]
@@ -316,7 +320,7 @@ def _drive_browser_use(ctx: ApplyContext) -> bool:
     """Run a bounded browser-use agent. Returns True if it completed without error."""
     from browser_use import Agent
 
-    llm = _build_browser_use_llm()
+    llm = _build_browser_use_llm(ctx.user)
     task = _build_task_instructions(ctx)
     on_step = _make_browser_step_callback(ctx)
     from browser_use import BrowserProfile

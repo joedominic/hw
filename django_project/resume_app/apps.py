@@ -5,6 +5,9 @@ class ResumeAppConfig(AppConfig):
     name = "resume_app"
 
     def ready(self):
+        import resume_app.onboarding  # noqa: F401 — seed defaults on signup
+        import resume_app.hijack_handlers  # noqa: F401 — impersonation audit
+
         # Reduce "database is locked" when Huey and the dev server share SQLite.
         from django.db.backends.signals import connection_created
 

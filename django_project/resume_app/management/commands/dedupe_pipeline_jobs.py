@@ -30,14 +30,14 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        from resume_app.job_dedupe import dedupe_pipeline_entries
+        from resume_app.job_dedupe import dedupe_pipeline_entries_all_users
 
         track = (options["track"] or "*").strip().lower()
         stage = (options["stage"] or "all").strip().lower()
         include_done = bool(options["include_done"])
 
         try:
-            result = dedupe_pipeline_entries(
+            result = dedupe_pipeline_entries_all_users(
                 track_slug=track,
                 stage=stage,
                 include_done=include_done,

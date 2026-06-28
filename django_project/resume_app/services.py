@@ -46,13 +46,17 @@ class DraftSaveError(Exception):
         self.status_code = status_code
 
 
-def save_optimized_draft_content(resume_id: int, content: str):
+def save_optimized_draft_content(resume_id: int, content: str, *, user):
     """
     Persist user-edited optimized resume text before PDF/Word export.
+
+    ``user`` is required to enforce ownership — any authenticated user who
+    guesses a valid ``resume_id`` must not be able to overwrite another
+    tenant's draft.
     """
     from .models import OptimizedResume
 
-    optimized = OptimizedResume.objects.filter(pk=int(resume_id)).first()
+    optimized = OptimizedResume.objects.for_user(user).filter(pk=int(resume_id)).first()
     if not optimized:
         raise DraftSaveError("Optimized resume not found.", status_code=404)
     if optimized.status not in (

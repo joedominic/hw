@@ -27,13 +27,12 @@ from .models import (
 )
 from .job_sources import fetch_jobs, normalize_site_names, upsert_job_listing_from_fetch
 from .job_search_core import rank_and_filter_jobs, run_job_search_core, pipeline_jobs_to_payloads
+from .tenancy import api_user, get_owned_or_404
 from .track_actions import (
-    disliked_listing_id_set,
     normalize_track_slug,
     q_clear_on_sentiment_change,
     q_disliked_rows_for_search,
     q_saved_rows_for_track,
-    saved_listing_id_set,
 )
 from .services import parse_pdf
 from .crypto import decrypt_api_key
@@ -92,7 +91,6 @@ from .job_ranking import get_focus_breakdown, get_focus_sentence_alignment, rank
 from .llm_services import LLM_PROVIDERS
 from .utils import format_job_source_label
 from .disqualifiers import (
-    get_disqualifier_phrases,
     build_disqualifier_pattern,
     job_matches_disqualifiers,
 )
@@ -134,10 +132,11 @@ def _job_to_payload(job: JobListing, *, snippet: Optional[str] = None) -> JobPay
     )
 
 
-def _get_llm_from_request(provider: Optional[str] = None, model: Optional[str] = None):
-    """Resolve LLM using stored config. Prefer provided provider/model."""
+def _get_llm_from_request(user, provider: Optional[str] = None, model: Optional[str] = None):
+    """Resolve LLM using stored config for the authenticated user."""
+    config_qs = LLMProviderConfig.objects.for_user(user)
     if not provider:
-        config = LLMProviderConfig.objects.filter(encrypted_api_key__isnull=False).exclude(encrypted_api_key="").first()
+        config = config_qs.filter(encrypted_api_key__isnull=False).exclude(encrypted_api_key="").first()
         if not config:
             raise HttpError(400, "No LLM configured. Set up an API key in LLM Config (Resume Optimizer tab) first.")
         provider = config.provider
@@ -147,7 +146,7 @@ def _get_llm_from_request(provider: Optional[str] = None, model: Optional[str] =
     else:
         if provider not in LLM_PROVIDERS:
             raise HttpError(400, f"llm_provider must be one of: {', '.join(sorted(LLM_PROVIDERS))}")
-        config = LLMProviderConfig.objects.filter(provider=provider).first()
+        config = config_qs.filter(provider=provider).first()
         if not config or not config.encrypted_api_key:
             raise HttpError(401, f"No API key stored for {provider}. Connect in LLM Config first.")
         api_key = decrypt_api_key(config.encrypted_api_key)
@@ -156,11 +155,59 @@ def _get_llm_from_request(provider: Optional[str] = None, model: Optional[str] =
     return get_llm(provider, api_key, model)
 
 
-def _resolve_track(track: Optional[str], session_track: Optional[str] = None) -> str:
+def _user_library_resumes(user):
+    """Library resumes owned by the authenticated user."""
+    return UserResume.objects.for_user(user).filter(is_library=True)
+
+
+def _disliked_listing_id_set(user, track: Optional[str]):
+    slug = normalize_track_slug(track, user)
+    return set(
+        JobListingAction.objects.for_user(user)
+        .filter(action=JobListingAction.ActionType.DISLIKED)
+        .filter(q_disliked_rows_for_search(slug))
+        .values_list("job_listing_id", flat=True)
+    )
+
+
+def _saved_listing_id_set(user, track: Optional[str]):
+    slug = normalize_track_slug(track, user)
+    return set(
+        JobListingAction.objects.for_user(user)
+        .filter(action=JobListingAction.ActionType.SAVED)
+        .filter(q_saved_rows_for_track(slug))
+        .values_list("job_listing_id", flat=True)
+    )
+
+
+def _get_disqualifier_phrases(user) -> List[str]:
+    return list(UserDisqualifier.objects.for_user(user).values_list("phrase", flat=True))
+
+
+def _user_provider_api_key_available(user, provider: str) -> bool:
+    """True if the user has a stored key or an env fallback exists for the provider."""
+    if LLMProviderConfig.objects.for_user(user).filter(provider=provider).exclude(encrypted_api_key="").exists():
+        return True
+    from django.conf import settings
+
+    env_keys = {
+        "OpenAI": getattr(settings, "OPENAI_API_KEY", None),
+        "Anthropic": getattr(settings, "ANTHROPIC_API_KEY", None),
+        "Groq": getattr(settings, "GROQ_API_KEY", None),
+        "Google AI Studio": getattr(settings, "GOOGLE_API_KEY", None),
+        "Ollama Cloud": getattr(settings, "OLLAMA_API_KEY", None),
+        "Ollama Local": getattr(settings, "OLLAMA_LOCAL_HOST", None) or getattr(settings, "OLLAMA_HOST", None),
+        "OpenRouter": getattr(settings, "OPENROUTER_API_KEY", None),
+    }
+    key = env_keys.get(provider)
+    return bool(str(key).strip()) if key else False
+
+
+def _resolve_track(user, track: Optional[str], session_track: Optional[str] = None) -> str:
     """
     Normalize track slug from explicit param or session, falling back to default.
     """
-    return (track or session_track or "").strip().lower() or Track.get_default_slug()
+    return (track or session_track or "").strip().lower() or Track.get_default_slug(user)
 
 
 # --- Endpoints ---
@@ -170,7 +217,8 @@ def _resolve_track(track: Optional[str], session_track: Optional[str] = None) ->
 @router.get("/resumes", response=List[ResumeOption])
 def jobs_list_resumes(request):
     """List uploaded resumes for dropdown (e.g. Keyword search tab)."""
-    resumes = UserResume.library().order_by("-uploaded_at")[:100]
+    user = api_user(request)
+    resumes = _user_library_resumes(user).order_by("-uploaded_at")[:100]
     return [
         ResumeOption(
             id=r.id,
@@ -185,24 +233,27 @@ def jobs_list_resumes(request):
 @router.get("/pipeline", response=JobSearchResponse)
 def pipeline_list(request, track: str = "ic"):
     """List pipeline jobs for a track (focus % computed at view time). Excludes saved jobs."""
-    track = (track or "").strip().lower() or Track.get_default_slug()
-    saved_ids = saved_listing_id_set(track)
+    user = api_user(request)
+    track = (track or "").strip().lower() or Track.get_default_slug(user)
+    saved_ids = _saved_listing_id_set(user, track)
     entries = (
-        PipelineEntry.objects.filter(track=track, removed_at__isnull=True)
+        PipelineEntry.objects.for_user(user)
+        .filter(track=track, removed_at__isnull=True)
         .exclude(job_listing_id__in=saved_ids)
         .select_related("job_listing")
         .order_by("-added_at")
     )
     job_listings = [e.job_listing for e in entries]
-    jobs_out = pipeline_jobs_to_payloads(job_listings, track=track)
+    jobs_out = pipeline_jobs_to_payloads(job_listings, track=track, user=user)
     return JobSearchResponse(jobs=jobs_out, total=len(jobs_out))
 
 
 @router.post("/pipeline/delete")
 def pipeline_delete(request, job_listing_id: int, track: str = "ic"):
     """Soft-delete a job from the pipeline (set removed_at). It will not be re-added by future task runs."""
-    track = (track or "").strip().lower() or Track.get_default_slug()
-    entries = PipelineEntry.objects.filter(
+    user = api_user(request)
+    track = (track or "").strip().lower() or Track.get_default_slug(user)
+    entries = PipelineEntry.objects.for_user(user).filter(
         job_listing_id=job_listing_id, track=track, removed_at__isnull=True
     )
     if not entries.exists():
@@ -219,20 +270,21 @@ def _jobs_search_site_key(site_name: Optional[List[str]]) -> tuple:
     return tuple(sorted(str(s).strip().lower() for s in sites if str(s).strip()))
 
 
-def _jobs_search_cache_key(payload: JobSearchRequest) -> tuple:
+def _jobs_search_cache_key(user, payload: JobSearchRequest) -> tuple:
     """Cache key for external fetch only. resume_id is not included so switching resume does not re-fetch."""
     return (
         (payload.search_term or "").strip(),
         (payload.location or "").strip(),
         payload.results_wanted or 50,
         _jobs_search_site_key(payload.site_name),
-        normalize_track_slug(payload.track),
+        normalize_track_slug(payload.track, user),
     )
 
 
 @router.post("/search", response=JobSearchResponse)
 def jobs_search(request, payload: JobSearchRequest):
     """Fetch jobs via JobSpy (or use session cache when params unchanged), upsert JobListing, return list."""
+    user = api_user(request)
     try:
         payload_dict = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
     except Exception:
@@ -243,12 +295,12 @@ def jobs_search(request, payload: JobSearchRequest):
         raise HttpError(400, "search_term is required")
 
     resume_id = payload.resume_id
-    search_track = normalize_track_slug(payload.track)
-    disliked_listing_ids = disliked_listing_id_set(search_track)
-    disqualifier_pattern = build_disqualifier_pattern(get_disqualifier_phrases())
+    search_track = normalize_track_slug(payload.track, user)
+    disliked_listing_ids = _disliked_listing_id_set(user, search_track)
+    disqualifier_pattern = build_disqualifier_pattern(_get_disqualifier_phrases(user))
     jobs_with_meta = []  # (job, JobPayload)
 
-    cache_key = _jobs_search_cache_key(payload)
+    cache_key = _jobs_search_cache_key(user, payload)
     session = getattr(request, "session", None)
     cached = session.get("job_search_cache") if session else None
     use_cache = (
@@ -279,6 +331,7 @@ def jobs_search(request, payload: JobSearchRequest):
     else:
         try:
             _jobs_fetched, _jobs_after_filter, jobs_out_from_core, refs_for_cache = run_job_search_core(
+                user=user,
                 search_term=payload.search_term.strip(),
                 location=payload.location.strip() if payload.location else None,
                 track=payload.track,
@@ -302,12 +355,12 @@ def jobs_search(request, payload: JobSearchRequest):
         return JobSearchResponse(jobs=jobs_out, total=len(jobs_out))
 
     # Cache path: single ranking pipeline from job_search_core (preference + auto-dislike + penalty + sort)
-    jobs_out = rank_and_filter_jobs(jobs_with_meta, search_track)
+    jobs_out = rank_and_filter_jobs(jobs_with_meta, search_track, user=user)
 
     # Keep resume_id_for_match for AI Match step later
     resume_id_for_match = payload.resume_id
     if resume_id_for_match is None and jobs_out:
-        latest = UserResume.library().order_by("-uploaded_at").first()
+        latest = _user_library_resumes(user).order_by("-uploaded_at").first()
         if latest:
             resume_id_for_match = latest.id
 
@@ -332,16 +385,17 @@ def _job_llm_match_session_key(job_listing_id: int, resume_id: int) -> str:
 @router.post("/ai-match", response=AiMatchResponse)
 def jobs_ai_match(request, payload: AiMatchRequest):
     """Run LLM Matching for selected jobs (one at a time). Stores score+reasoning in session for Why? page."""
+    user = api_user(request)
     if not payload.job_listing_ids:
         return AiMatchResponse(results=[], errors=[])
-    resume = UserResume.library().filter(id=payload.resume_id).first()
-    if not resume or not resume.file:
+    resume = get_owned_or_404(UserResume, user, id=payload.resume_id, is_library=True)
+    if not resume.file:
         raise HttpError(400, "Resume not found or file missing.")
     resume_text = parse_pdf(resume.file.path) or ""
     if not resume_text:
         raise HttpError(400, "Could not extract text from resume.")
     try:
-        llm = _get_llm_from_request(provider=payload.llm_provider, model=payload.llm_model)
+        llm = _get_llm_from_request(user, provider=payload.llm_provider, model=payload.llm_model)
     except HttpError:
         raise
     except Exception as e:
@@ -380,6 +434,7 @@ def jobs_ai_match(request, payload: AiMatchRequest):
                 resume_snippet,
                 jd,
                 llm,
+                user=user,
                 prompt_system=ms,
                 prompt_user=mu,
                 prompt_legacy=ml or None,
@@ -421,11 +476,12 @@ INSIGHTS_JD_MAX_TOTAL_CHARS = 50000
 @router.post("/insights", response=InsightsResponse)
 def jobs_insights(request, payload: InsightsRequest):
     """Run Insights prompt over concatenated descriptions of selected jobs; return LLM response in modal."""
+    user = api_user(request)
     logger.info("[insights] Request: job_listing_ids=%s, llm_provider=%s, llm_model=%s", payload.job_listing_ids, payload.llm_provider, payload.llm_model)
     if not payload.job_listing_ids:
         raise HttpError(400, "job_listing_ids is required and must not be empty.")
     try:
-        llm = _get_llm_from_request(provider=payload.llm_provider, model=payload.llm_model)
+        llm = _get_llm_from_request(user, provider=payload.llm_provider, model=payload.llm_model)
     except HttpError:
         raise
     except Exception as e:
@@ -494,7 +550,8 @@ def pipeline_interview_prep_get(request, pipeline_entry_id: int):
     """Return stored interview prep for a Done-stage pipeline entry."""
     from .job_prep import interview_prep_to_markdown
 
-    entry = get_object_or_404(PipelineEntry, id=pipeline_entry_id)
+    user = api_user(request)
+    entry = get_owned_or_404(PipelineEntry, user, id=pipeline_entry_id)
     stored = (entry.interview_prep or "").strip()
     gen_at = entry.interview_prep_generated_at
     return InterviewPrepResponse(
@@ -509,9 +566,10 @@ def pipeline_interview_prep_generate(request, pipeline_entry_id: int, payload: I
     """On-demand interview prep for a Done-stage job."""
     from .job_prep import JobPrepError, generate_interview_prep
 
-    entry = get_object_or_404(PipelineEntry, id=pipeline_entry_id)
+    user = api_user(request)
+    entry = get_owned_or_404(PipelineEntry, user, id=pipeline_entry_id)
     try:
-        llm = _get_llm_from_request(provider=payload.llm_provider, model=payload.llm_model)
+        llm = _get_llm_from_request(user, provider=payload.llm_provider, model=payload.llm_model)
     except HttpError:
         raise
     except Exception as e:
@@ -540,7 +598,8 @@ def pipeline_interview_prep_generate(request, pipeline_entry_id: int, payload: I
 @router.post("/pipeline-entry/{pipeline_entry_id}/save-interview-prep")
 def pipeline_interview_prep_save(request, pipeline_entry_id: int, payload: InterviewPrepSaveRequest):
     """Save manual edits to interview prep content."""
-    entry = get_object_or_404(PipelineEntry, id=pipeline_entry_id)
+    user = api_user(request)
+    entry = get_owned_or_404(PipelineEntry, user, id=pipeline_entry_id)
     if entry.stage != PipelineEntry.Stage.DONE:
         raise HttpError(400, "Interview prep can only be saved for Done-stage jobs.")
     entry.interview_prep = payload.interview_prep or ""
@@ -553,15 +612,16 @@ def pipeline_resume_summary_start(request, payload: PipelineResumeSummaryStartRe
     """
     Start async LLM batch extraction over Vetting + Applying job descriptions for a track.
     """
-    from .pipeline_llm_skill_extract import resolve_provider_api_key, run_directory, write_initial_run_files
+    from .pipeline_llm_skill_extract import run_directory, write_initial_run_files
     from .tasks import pipeline_resume_llm_extract_task
 
+    user = api_user(request)
     llm_provider = (payload.llm_provider or "").strip()
     if not llm_provider:
         raise HttpError(400, "llm_provider is required.")
     if llm_provider not in LLM_PROVIDERS:
         raise HttpError(400, f"llm_provider must be one of: {', '.join(sorted(LLM_PROVIDERS))}")
-    if not resolve_provider_api_key(llm_provider):
+    if not _user_provider_api_key_available(user, llm_provider):
         raise HttpError(
             400,
             f"No API key available for {llm_provider!r}. Connect that provider in LLM settings or env.",
@@ -571,14 +631,15 @@ def pipeline_resume_summary_start(request, payload: PipelineResumeSummaryStartRe
     if not model:
         raise HttpError(400, "model is required.")
 
-    Track.ensure_baseline()
-    norm_track = normalize_track_slug(payload.track)
-    valid_slugs = set(Track.objects.values_list("slug", flat=True))
+    Track.ensure_baseline(user)
+    norm_track = normalize_track_slug(payload.track, user)
+    valid_slugs = set(Track.objects.for_user(user).values_list("slug", flat=True))
     if norm_track not in valid_slugs:
         raise HttpError(400, f"Unknown track: {payload.track!r}.")
 
     entries = list(
-        PipelineEntry.objects.filter(
+        PipelineEntry.objects.for_user(user)
+        .filter(
             track=norm_track,
             removed_at__isnull=True,
             stage__in=(PipelineEntry.Stage.VETTING, PipelineEntry.Stage.APPLYING),
@@ -617,8 +678,9 @@ def pipeline_resume_summary_status(request, track: str, run_id: str):
     """Poll extraction progress and aggregated skills (partial while running)."""
     from .pipeline_llm_skill_extract import read_run_status
 
-    Track.ensure_baseline()
-    norm_track = normalize_track_slug(track)
+    user = api_user(request)
+    Track.ensure_baseline(user)
+    norm_track = normalize_track_slug(track, user)
     rid = (run_id or "").strip()
     if not rid:
         raise HttpError(400, "run_id is required.")
@@ -656,8 +718,9 @@ def pipeline_resume_summary_stop(request, payload: PipelineResumeSummaryStopRequ
     """Request graceful stop (worker observes stop_signal.flag before each batch)."""
     from .pipeline_llm_skill_extract import run_directory, touch_stop_signal
 
-    Track.ensure_baseline()
-    norm_track = normalize_track_slug(payload.track)
+    user = api_user(request)
+    Track.ensure_baseline(user)
+    norm_track = normalize_track_slug(payload.track, user)
     rid = (payload.run_id or "").strip()
     if not rid:
         raise HttpError(400, "run_id is required.")
@@ -671,7 +734,8 @@ def pipeline_resume_summary_stop(request, payload: PipelineResumeSummaryStopRequ
 @router.get("/matches", response=List[JobMatchPayload])
 def jobs_matches(request, resume_id: Optional[int] = None, min_score: Optional[int] = None, status: Optional[str] = None):
     """List analyzed jobs (JobMatchResult) with optional filters."""
-    qs = JobMatchResult.objects.select_related("job_listing", "resume").order_by("-analyzed_at")
+    user = api_user(request)
+    qs = JobMatchResult.objects.for_user(user).select_related("job_listing", "resume").order_by("-analyzed_at")
     if resume_id is not None:
         qs = qs.filter(resume_id=resume_id)
     if min_score is not None:
@@ -703,6 +767,7 @@ def jobs_matches(request, resume_id: Optional[int] = None, min_score: Optional[i
 @router.post("/run-keyword-search", response=RunKeywordSearchResponse)
 def jobs_run_keyword_search(request, payload: RunKeywordSearchRequest):
     """For each (keyword, resume_id): fetch jobs, then for each job without existing JobMatchResult run fit check and save."""
+    user = api_user(request)
     if not payload.entries:
         raise HttpError(400, "entries is required (list of { keyword, resume_id })")
     location = (payload.location or "").strip() or None
@@ -717,9 +782,8 @@ def jobs_run_keyword_search(request, payload: RunKeywordSearchRequest):
             errors.append("Empty keyword skipped")
             continue
         resume_id = entry.resume_id
-        try:
-            resume = UserResume.library().get(id=resume_id)
-        except UserResume.DoesNotExist:
+        resume = _user_library_resumes(user).filter(id=resume_id).first()
+        if not resume:
             errors.append(f"Resume id {resume_id} not found for keyword '{keyword}'")
             continue
         try:
@@ -734,11 +798,13 @@ def jobs_run_keyword_search(request, payload: RunKeywordSearchRequest):
             continue
 
         existing = set(
-            JobMatchResult.objects.filter(resume_id=resume_id).values_list("job_listing_id", flat=True)
+            JobMatchResult.objects.for_user(user)
+            .filter(resume_id=resume_id)
+            .values_list("job_listing_id", flat=True)
         )
-        eff_track = normalize_track_slug(payload.track or resume.track or None)
-        disliked_ids = disliked_listing_id_set(eff_track)
-        disqualifier_pattern = build_disqualifier_pattern(get_disqualifier_phrases())
+        eff_track = normalize_track_slug(payload.track or resume.track or None, user)
+        disliked_ids = _disliked_listing_id_set(user, eff_track)
+        disqualifier_pattern = build_disqualifier_pattern(_get_disqualifier_phrases(user))
         candidates = []  # (job, resume, keyword)
         for r in raw:
             job, _ = upsert_job_listing_from_fetch(r)
@@ -747,11 +813,11 @@ def jobs_run_keyword_search(request, payload: RunKeywordSearchRequest):
             candidates.append((job, resume, keyword))
             existing.add(job.id)
 
-        prefs = get_preference_vectors(track=eff_track)
+        prefs = get_preference_vectors(user=user, track=eff_track)
         if prefs and candidates:
             try:
                 jobs_for_rank = [j for j, _, _ in candidates]
-                result = rank_jobs_by_preference(jobs_for_rank, track=eff_track)
+                result = rank_jobs_by_preference(jobs_for_rank, user=user, track=eff_track)
                 if result is None:
                     raise RuntimeError("rank_jobs_by_preference returned None")
                 scores, _title_vecs, _role_vecs = result
@@ -776,7 +842,8 @@ def jobs_run_keyword_search(request, payload: RunKeywordSearchRequest):
                     resume_text,
                     job.description or "",
                     None,
-                    None,
+                    user=user,
+                    prompt_template=None,
                     job_cache_key=f"keyword-fit:{job.id}:{res.id}",
                     usage_query_kind=USAGE_QUERY_KEYWORD_SEARCH_FIT,
                 )
@@ -784,6 +851,7 @@ def jobs_run_keyword_search(request, payload: RunKeywordSearchRequest):
                 errors.append(f"Job {job.id}: {e}")
                 continue
             match_result, _ = JobMatchResult.objects.update_or_create(
+                owner=user,
                 job_listing=job,
                 resume=res,
                 defaults={
@@ -815,14 +883,16 @@ def jobs_run_keyword_search(request, payload: RunKeywordSearchRequest):
 @router.get("/saved", response=JobSearchResponse)
 def jobs_saved(request, track: Optional[str] = None):
     """List saved (favourite) job listings for the active track (session or query param)."""
+    user = api_user(request)
     session_track = (
         getattr(getattr(request, "session", None), "get", lambda *_: None)("job_search_track")
         if hasattr(getattr(request, "session", None), "get")
         else None
     )
-    slug = normalize_track_slug(_resolve_track(track, session_track))
+    slug = normalize_track_slug(_resolve_track(user, track, session_track), user)
     saved = (
-        JobListingAction.objects.filter(action=JobListingAction.ActionType.SAVED)
+        JobListingAction.objects.for_user(user)
+        .filter(action=JobListingAction.ActionType.SAVED)
         .filter(q_saved_rows_for_track(slug))
         .select_related("job_listing")
         .order_by("-created_at")
@@ -838,14 +908,16 @@ def jobs_saved(request, track: Optional[str] = None):
 @router.get("/disliked", response=JobSearchResponse)
 def jobs_disliked(request, track: Optional[str] = None):
     """List disliked job listings for the active track (session or query param)."""
+    user = api_user(request)
     session_track = (
         getattr(getattr(request, "session", None), "get", lambda *_: None)("job_search_track")
         if hasattr(getattr(request, "session", None), "get")
         else None
     )
-    slug = normalize_track_slug(_resolve_track(track, session_track))
+    slug = normalize_track_slug(_resolve_track(user, track, session_track), user)
     disliked = (
-        JobListingAction.objects.filter(action=JobListingAction.ActionType.DISLIKED)
+        JobListingAction.objects.for_user(user)
+        .filter(action=JobListingAction.ActionType.DISLIKED)
         .filter(q_disliked_rows_for_search(slug))
         .select_related("job_listing")
         .order_by("-created_at")
@@ -859,20 +931,22 @@ def jobs_disliked(request, track: Optional[str] = None):
 @router.post("/disqualifiers", response=DisqualifierPayload)
 def disqualifiers_add(request, payload: DisqualifierAddRequest):
     """Add a disqualifier phrase (async-friendly). Jobs containing this phrase (word-boundary) are hidden."""
+    user = api_user(request)
     phrase = (payload.phrase or "").strip()
     if not phrase or len(phrase) < 2:
         raise HttpError(400, "Phrase must be at least 2 characters.")
     norm = " ".join(phrase.lower().split())
     if not norm:
         raise HttpError(400, "Phrase is empty after normalizing.")
-    obj, created = UserDisqualifier.objects.get_or_create(phrase=norm)
+    obj, created = UserDisqualifier.objects.get_or_create(owner=user, phrase=norm)
     return DisqualifierPayload(id=obj.id, phrase=obj.phrase)
 
 
 @router.delete("/disqualifiers/{disqualifier_id}")
 def disqualifiers_remove(request, disqualifier_id: int):
     """Remove a disqualifier by id (async-friendly)."""
-    deleted, _ = UserDisqualifier.objects.filter(id=disqualifier_id).delete()
+    user = api_user(request)
+    deleted, _ = UserDisqualifier.objects.for_user(user).filter(id=disqualifier_id).delete()
     if not deleted:
         raise HttpError(404, "Disqualifier not found.")
     return {"ok": True}
@@ -881,7 +955,11 @@ def disqualifiers_remove(request, disqualifier_id: int):
 @router.get("/disqualifiers", response=List[DisqualifierPayload])
 def disqualifiers_list(request):
     """List all disqualifier phrases (for syncing UI)."""
-    return [DisqualifierPayload(id=d.id, phrase=d.phrase) for d in UserDisqualifier.objects.all().order_by("phrase")]
+    user = api_user(request)
+    return [
+        DisqualifierPayload(id=d.id, phrase=d.phrase)
+        for d in UserDisqualifier.objects.for_user(user).order_by("phrase")
+    ]
 # Path-parameter routes last so they don't capture "search", "matches", "resumes", "run-keyword-search", "saved", "disliked"
 
 
@@ -893,8 +971,8 @@ def jobs_focus_breakdown(request, job_listing_id: int, track: Optional[str] = No
         if hasattr(getattr(request, "session", None), "get")
         else None
     )
-    slug = normalize_track_slug(_resolve_track(track, session_track))
-    data = get_focus_breakdown(job_listing_id, track=slug)
+    slug = normalize_track_slug(_resolve_track(user, track, session_track), user)
+    data = get_focus_breakdown(job_listing_id, user=user, track=slug)
     if data is None:
         raise HttpError(404, "Job not found or no preference data (like some jobs first).")
     return data
@@ -924,16 +1002,17 @@ def jobs_get(request, job_listing_id: int):
 @router.post("/{job_listing_id}/match", response=MatchResponse)
 def jobs_match(request, job_listing_id: int, payload: MatchRequest):
     """Run fit check for (job_listing, resume), save JobMatchResult, return score/reasoning/thoughts."""
+    user = api_user(request)
     job = get_object_or_404(JobListing, id=job_listing_id)
     resume_id = payload.resume_id
     if not resume_id:
-        latest = UserResume.library().order_by("-uploaded_at").first()
+        latest = _user_library_resumes(user).order_by("-uploaded_at").first()
         if not latest:
             raise HttpError(400, "No resume uploaded. Upload a resume first or pass resume_id.")
         resume_id = latest.id
-    resume = get_object_or_404(UserResume.library(), id=resume_id)
+    resume = get_owned_or_404(UserResume, user, id=resume_id, is_library=True)
 
-    llm = _get_llm_from_request(payload.llm_provider, payload.llm_model)
+    llm = _get_llm_from_request(user, payload.llm_provider, payload.llm_model)
     try:
         resume_text = parse_pdf(resume.file.path)
     except Exception as e:
@@ -944,7 +1023,8 @@ def jobs_match(request, job_listing_id: int, payload: MatchRequest):
             resume_text,
             job.description or "",
             llm,
-            None,
+            user=user,
+            prompt_template=None,
             job_cache_key=f"match:{job.id}:{resume.id}",
             usage_query_kind=USAGE_QUERY_JOBS_MATCH_API,
         )
@@ -954,6 +1034,7 @@ def jobs_match(request, job_listing_id: int, payload: MatchRequest):
     reasoning = result.get("reasoning", "")
 
     JobMatchResult.objects.update_or_create(
+        owner=user,
         job_listing=job,
         resume=resume,
         defaults={
@@ -974,9 +1055,10 @@ def jobs_match(request, job_listing_id: int, payload: MatchRequest):
 @router.post("/{job_listing_id}/mark-applied")
 def jobs_mark_applied(request, job_listing_id: int, payload: MarkAppliedRequest):
     """Set JobMatchResult.status = applied for (job_listing, resume)."""
+    user = api_user(request)
     job = get_object_or_404(JobListing, id=job_listing_id)
-    resume = get_object_or_404(UserResume.library(), id=payload.resume_id)
-    updated = JobMatchResult.objects.filter(job_listing=job, resume=resume).update(
+    resume = get_owned_or_404(UserResume, user, id=payload.resume_id, is_library=True)
+    updated = JobMatchResult.objects.for_user(user).filter(job_listing=job, resume=resume).update(
         status=JobMatchResult.STATUS_APPLIED, analyzed_at=timezone.now()
     )
     if not updated:
@@ -987,48 +1069,53 @@ def jobs_mark_applied(request, job_listing_id: int, payload: MarkAppliedRequest)
 @router.post("/{job_listing_id}/like")
 def jobs_like(request, job_listing_id: int, track: Optional[str] = None):
     """Mark job as liked (preference signal). Store embedding for preference ranking. Optional track (ic/mgmt) overrides session."""
+    user = api_user(request)
     job = get_object_or_404(JobListing, id=job_listing_id)
     session_track = (
         getattr(getattr(request, "session", None), "get", lambda *_: None)("job_search_track")
         if hasattr(getattr(request, "session", None), "get")
         else None
     )
-    raw_track = _resolve_track(track, session_track)
+    raw_track = _resolve_track(user, track, session_track)
     JobListingAction.objects.get_or_create(
+        owner=user,
         job_listing=job,
         action=JobListingAction.ActionType.LIKED,
         track=raw_track,
     )
-    JobListingAction.objects.filter(
+    JobListingAction.objects.for_user(user).filter(
         job_listing=job, action=JobListingAction.ActionType.DISLIKED
     ).filter(q_clear_on_sentiment_change(raw_track)).delete()
-    JobListingEmbedding.objects.filter(
+    JobListingEmbedding.objects.for_user(user).filter(
         job_listing=job, embedding_type=JobListingEmbedding.EmbeddingType.DISLIKED
     ).filter(q_clear_on_sentiment_change(raw_track)).delete()
     vec = embedding_module.embed_job_text(job.title or "", job.description or "")
     if vec is not None:
         JobListingEmbedding.objects.update_or_create(
+            owner=user,
             job_listing=job,
             embedding_type=JobListingEmbedding.EmbeddingType.LIKED,
             track=raw_track,
             defaults={"embedding": vec, "track": raw_track},
         )
-    invalidate_preference_cache()
-    invalidate_disliked_embeddings_cache()
+    invalidate_preference_cache(user)
+    invalidate_disliked_embeddings_cache(user)
     return {"success": True}
 
 
 @router.post("/{job_listing_id}/save")
 def jobs_save(request, job_listing_id: int, track: Optional[str] = None):
     """Save job to favourites (saved list). Track-aware so saved jobs can be scoped to a track."""
+    user = api_user(request)
     job = get_object_or_404(JobListing, id=job_listing_id)
     session_track = (
         getattr(getattr(request, "session", None), "get", lambda *_: None)("job_search_track")
         if hasattr(getattr(request, "session", None), "get")
         else None
     )
-    raw_track = _resolve_track(track, session_track)
+    raw_track = _resolve_track(user, track, session_track)
     JobListingAction.objects.get_or_create(
+        owner=user,
         job_listing=job,
         action=JobListingAction.ActionType.SAVED,
         track=raw_track,
@@ -1039,13 +1126,14 @@ def jobs_save(request, job_listing_id: int, track: Optional[str] = None):
 @router.post("/{job_listing_id}/unsave")
 def jobs_unsave(request, job_listing_id: int, track: Optional[str] = None):
     """Remove job from saved list for this track (session or param), including legacy global saved rows."""
+    user = api_user(request)
     session_track = (
         getattr(getattr(request, "session", None), "get", lambda *_: None)("job_search_track")
         if hasattr(getattr(request, "session", None), "get")
         else None
     )
-    slug = normalize_track_slug(_resolve_track(track, session_track))
-    JobListingAction.objects.filter(
+    slug = normalize_track_slug(_resolve_track(user, track, session_track), user)
+    JobListingAction.objects.for_user(user).filter(
         job_listing_id=job_listing_id, action=JobListingAction.ActionType.SAVED
     ).filter(q_saved_rows_for_track(slug)).delete()
     return {"success": True}
@@ -1054,30 +1142,33 @@ def jobs_unsave(request, job_listing_id: int, track: Optional[str] = None):
 @router.post("/{job_listing_id}/dislike")
 def jobs_dislike(request, job_listing_id: int, track: Optional[str] = None):
     """Mark job as disliked; it will be excluded from future search results. Optional track (ic/mgmt) overrides session."""
+    user = api_user(request)
     job = get_object_or_404(JobListing, id=job_listing_id)
     session_track = (
         getattr(getattr(request, "session", None), "get", lambda *_: None)("job_search_track")
         if hasattr(getattr(request, "session", None), "get")
         else None
     )
-    raw_track = _resolve_track(track, session_track)
+    raw_track = _resolve_track(user, track, session_track)
     JobListingAction.objects.get_or_create(
+        owner=user,
         job_listing=job,
         action=JobListingAction.ActionType.DISLIKED,
         track=raw_track,
     )
-    JobListingAction.objects.filter(
+    JobListingAction.objects.for_user(user).filter(
         job_listing=job, action__in=[JobListingAction.ActionType.LIKED, JobListingAction.ActionType.SAVED]
     ).filter(q_clear_on_sentiment_change(raw_track)).delete()
-    JobListingEmbedding.objects.filter(job_listing=job).filter(q_clear_on_sentiment_change(raw_track)).delete()
+    JobListingEmbedding.objects.for_user(user).filter(job_listing=job).filter(q_clear_on_sentiment_change(raw_track)).delete()
     vec = embedding_module.embed_full(job.title or "", job.description or "")
     if vec is not None:
         JobListingEmbedding.objects.update_or_create(
+            owner=user,
             job_listing=job,
             embedding_type=JobListingEmbedding.EmbeddingType.DISLIKED,
             track=raw_track,
             defaults={"embedding": vec, "track": raw_track},
         )
-    invalidate_preference_cache()
-    invalidate_disliked_embeddings_cache()
+    invalidate_preference_cache(user)
+    invalidate_disliked_embeddings_cache(user)
     return {"success": True}

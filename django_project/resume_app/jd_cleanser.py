@@ -12,7 +12,14 @@ class JDCleanserService:
     """
 
     @staticmethod
-    def cleanse(description: str, title: str = "", max_chars: int = 5000, use_llm: bool = False) -> str:
+    def cleanse(
+        description: str,
+        title: str = "",
+        max_chars: int = 5000,
+        use_llm: bool = False,
+        *,
+        user=None,
+    ) -> str:
         """
         Main entry point for cleansing a job description.
         """
@@ -20,15 +27,15 @@ class JDCleanserService:
             return ""
 
         # If explicitly requested, try the LLM-based extraction first.
-        if use_llm:
-            llm_result = JDCleanserService.cleanse_with_llm(description, title)
+        if use_llm and user is not None:
+            llm_result = JDCleanserService.cleanse_with_llm(description, title, user=user)
             if llm_result:
                 return llm_result[:max_chars].strip()
 
         return JDCleanserService.cleanse_heuristically(description, title, max_chars)
 
     @staticmethod
-    def cleanse_with_llm(description: str, title: str = "") -> Optional[str]:
+    def cleanse_with_llm(description: str, title: str = "", *, user) -> Optional[str]:
         """
         Use LLM to extract core job information, preferring local models.
         """
@@ -46,6 +53,7 @@ class JDCleanserService:
 
             response = invoke_llm_messages(
                 [HumanMessage(content=prompt)],
+                user=user,
                 prefer_local=True,
                 only_local=True,
             )

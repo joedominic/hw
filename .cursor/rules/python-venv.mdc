@@ -1,0 +1,72 @@
+---
+description: Run all Python and pip commands inside the project virtual environment
+alwaysApply: true
+---
+
+# Python Virtual Environment
+
+Never run `python`, `python3`, `pip`, or `pip3` against the system interpreter. Use this repo's virtual environment for every install, script, test, and Django command.
+
+## Location
+
+- **Venv path**: `.venv` at the git root (`JobApp-Jules/.venv`)
+- **Django cwd**: `django_project/` (where `manage.py` lives)
+
+Create the venv once if missing:
+
+```powershell
+# From repo root (JobApp-Jules/)
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+```bash
+# macOS / Linux
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+## Before every shell command
+
+1. Activate the venv (or use the venv's executable directly).
+2. Confirm with `python -c "import sys; print(sys.prefix)"` — prefix should point under `.venv`, not a global install.
+
+**PowerShell (Windows):**
+
+```powershell
+cd D:\Workshop\JobApp-Jules   # or repo root
+.\.venv\Scripts\Activate.ps1
+cd django_project
+python manage.py <command>
+```
+
+**Direct invocation (no activation) — acceptable when activation is awkward:**
+
+```powershell
+.\.venv\Scripts\python.exe django_project\manage.py migrate
+.\.venv\Scripts\pip.exe install -r requirements.txt
+```
+
+## Agent shell rules
+
+- **Do**: `.\.venv\Scripts\python.exe`, `.\.venv\Scripts\pip.exe`, or activate then `python` / `pip`.
+- **Do not**: bare `python`, `py`, or `pip` without verifying they resolve to `.venv`.
+- If a command fails with "module not found", check venv activation first before changing code.
+- For tests: `.\.venv\Scripts\python.exe manage.py test` from `django_project/`, or `pytest` only after the venv is active.
+
+## Examples
+
+```powershell
+# ❌ BAD — system Python
+python manage.py runserver
+pip install django
+
+# ✅ GOOD
+.\.venv\Scripts\Activate.ps1
+python manage.py runserver
+
+# ✅ GOOD — explicit venv binary
+.\.venv\Scripts\python.exe manage.py test resume_app
+```

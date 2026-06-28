@@ -1,6 +1,9 @@
+from django.conf import settings
 from django.db import models
 from django.utils import timezone
 from django.utils.text import slugify
+
+from .tenancy import OwnedManager, user_resume_upload_to
 
 
 class Track(models.Model):
@@ -11,9 +14,13 @@ class Track(models.Model):
     models (JobSearchTask.track, PipelineEntry.track, etc.).
     """
 
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="tracks",
+    )
     slug = models.SlugField(
         max_length=32,
-        unique=True,
         help_text="Short code used in URLs and tasks, e.g. 'ic', 'mgmt', 'eu_ic'.",
     )
     label = models.CharField(
@@ -27,46 +34,46 @@ class Track(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = OwnedManager()
+
     class Meta:
         ordering = ["slug"]
+        unique_together = [("owner", "slug")]
 
     def __str__(self):
         return self.label or self.slug
 
     @classmethod
-    def ensure_baseline(cls):
+    def ensure_baseline(cls, user):
         """
-        Ensure there is at least one track so old installs keep working.
+        Ensure there is at least one track for this user.
 
-        If no Track rows exist yet, seed the original two defaults (ic, mgmt).
-        On subsequent calls it returns existing tracks without recreating any
-        that were intentionally deleted by the user.
+        If no Track rows exist yet for the user, seed the original two defaults (ic, mgmt).
         """
-        if not cls.objects.exists():
+        qs = cls.objects.for_user(user)
+        if not qs.exists():
             baseline = [
                 ("ic", "IC (Principal / Staff)"),
                 ("mgmt", "Management (Manager / Director)"),
             ]
             for slug, label in baseline:
-                cls.objects.get_or_create(slug=slug, defaults={"label": label})
-            if not cls.objects.filter(is_default=True).exists():
-                cls.objects.filter(slug="ic").update(is_default=True)
-        return cls.objects.all()
+                cls.objects.get_or_create(owner=user, slug=slug, defaults={"label": label})
+            if not qs.filter(is_default=True).exists():
+                qs.filter(slug="ic").update(is_default=True)
+        return qs.all()
 
     @classmethod
-    def get_default_slug(cls) -> str:
-        """
-        Best-effort default track slug. If no tracks exist, create a simple
-        default 'ic' track so callers always have something usable.
-        """
-        default = cls.objects.filter(is_default=True).first()
+    def get_default_slug(cls, user) -> str:
+        """Best-effort default track slug for a user."""
+        qs = cls.objects.for_user(user)
+        default = qs.filter(is_default=True).first()
         if default:
             return default.slug
-        first = cls.objects.order_by("id").first()
+        first = qs.order_by("id").first()
         if first:
             return first.slug
-        # No tracks yet: create a minimal default IC track.
         obj, _created = cls.objects.get_or_create(
+            owner=user,
             slug="ic",
             defaults={"label": "IC (Principal / Staff)", "is_default": True},
         )
@@ -74,7 +81,12 @@ class Track(models.Model):
 
 
 class UserResume(models.Model):
-    file = models.FileField(upload_to='resumes/')
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="resumes",
+    )
+    file = models.FileField(upload_to=user_resume_upload_to)
     original_filename = models.CharField(max_length=255, blank=True, help_text="Original name of the uploaded file")
     track = models.CharField(
         max_length=32,
@@ -88,9 +100,11 @@ class UserResume(models.Model):
     )
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
+    objects = OwnedManager()
+
     class Meta:
         indexes = [
-            models.Index(fields=["is_library", "-uploaded_at"]),
+            models.Index(fields=["owner", "is_library", "-uploaded_at"]),
         ]
 
     def __str__(self):
@@ -132,6 +146,11 @@ class JobDescription(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
 class OptimizedResume(models.Model):
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="optimized_resumes",
+    )
     STATUS_QUEUED = "queued"
     STATUS_RUNNING = "running"
     STATUS_COMPLETED = "completed"
@@ -206,6 +225,9 @@ class OptimizedResume(models.Model):
     )
     cover_letter_generated_at = models.DateTimeField(null=True, blank=True)
 
+    objects = OwnedManager()
+
+
 class AgentLog(models.Model):
     optimized_resume = models.ForeignKey(OptimizedResume, related_name='logs', on_delete=models.CASCADE)
     step_name = models.CharField(max_length=100)
@@ -219,10 +241,17 @@ class AtsJudgeProfile(models.Model):
     OptimizerWorkflow may set a default profile for that workflow.
     """
 
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="ats_judge_profiles",
+        help_text="Null for global built-in seed profiles copied on signup.",
+    )
     name = models.CharField(max_length=255)
     slug = models.SlugField(
         max_length=64,
-        unique=True,
         help_text="Stable identifier for API and defaults (e.g. 'default').",
     )
     ats_judge = models.TextField(blank=True)
@@ -239,10 +268,13 @@ class AtsJudgeProfile(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = OwnedManager()
+
     class Meta:
         ordering = ["name"]
         verbose_name = "ATS judge profile"
         verbose_name_plural = "ATS judge profiles"
+        unique_together = [("owner", "slug")]
 
     def __str__(self) -> str:
         return self.name
@@ -253,27 +285,29 @@ class AtsJudgeProfile(models.Model):
             candidate = base
             n = 2
             while (
-                AtsJudgeProfile.objects.filter(slug=candidate)
+                AtsJudgeProfile.objects.filter(slug=candidate, owner=self.owner)
                 .exclude(pk=self.pk)
                 .exists()
             ):
                 candidate = f"{base}-{n}"
                 n += 1
             self.slug = candidate
-        if self.is_default:
-            AtsJudgeProfile.objects.exclude(pk=self.pk).update(is_default=False)
+        if self.is_default and self.owner_id:
+            AtsJudgeProfile.objects.filter(owner=self.owner).exclude(pk=self.pk).update(is_default=False)
         super().save(*args, **kwargs)
 
 
 class UserPromptProfile(models.Model):
     """
-    Singleton-style profile (use id=1) for edited Writer / Judge / Matching / Insights / JD cleanse prompts.
+    Per-user edited Writer / Judge / Matching / Insights / JD cleanse prompts.
     Empty string for a field means fall back to the code default in prompts.py.
-
-    When *_system / *_user are both empty but the legacy single field (e.g. writer) is set,
-    the app uses one HumanMessage with that legacy template (backward compatible).
     """
 
+    owner = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="prompt_profile",
+    )
     writer = models.TextField(blank=True)
     writer_system = models.TextField(blank=True)
     writer_user = models.TextField(blank=True)
@@ -305,12 +339,22 @@ class UserPromptProfile(models.Model):
         verbose_name_plural = "User prompt profiles"
 
     def __str__(self):
-        return "Prompt profile"
+        return f"Prompt profile ({self.owner_id})"
+
+    @classmethod
+    def get_for_user(cls, user):
+        obj, _created = cls.objects.get_or_create(owner=user)
+        return obj
 
 
 class LLMProviderConfig(models.Model):
     """Stored API key and default model per provider. Key is encrypted at rest."""
-    provider = models.CharField(max_length=64, unique=True)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="llm_provider_configs",
+    )
+    provider = models.CharField(max_length=64)
     encrypted_api_key = models.TextField(blank=True)
     default_model = models.CharField(max_length=128, blank=True)
     is_active = models.BooleanField(
@@ -325,9 +369,12 @@ class LLMProviderConfig(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = OwnedManager()
+
     class Meta:
         verbose_name = "LLM Provider Config"
         verbose_name_plural = "LLM Provider Configs"
+        unique_together = [("owner", "provider")]
 
     def has_key(self) -> bool:
         return bool((self.encrypted_api_key or "").strip())
@@ -376,8 +423,13 @@ class LLMProviderPreference(models.Model):
 
 
 class LLMAppUsageTotals(models.Model):
-    """Singleton (pk=1): aggregate LLM token usage across the app."""
+    """Per-user aggregate LLM token usage."""
 
+    owner = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="llm_usage_totals",
+    )
     total_input_tokens = models.BigIntegerField(default=0)
     total_output_tokens = models.BigIntegerField(default=0)
     total_requests = models.PositiveIntegerField(default=0)
@@ -395,14 +447,30 @@ class LLMAppUsageTotals(models.Model):
         return "LLM usage totals"
 
     @classmethod
-    def get_solo(cls):
-        obj, _created = cls.objects.get_or_create(pk=1)
+    def get_for_user(cls, user):
+        obj, _created = cls.objects.get_or_create(owner=user)
         return obj
+
+    @classmethod
+    def get_solo(cls):
+        """Deprecated: use get_for_user(user). Kept for transitional call sites."""
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        user = User.objects.order_by("pk").first()
+        if user is None:
+            raise User.DoesNotExist("No users exist; create one before using LLM totals.")
+        return cls.get_for_user(user)
 
 
 class LLMUsageByModel(models.Model):
     """Per provider + model usage counters (normalized model key)."""
 
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="llm_usage_by_model",
+    )
     provider = models.CharField(max_length=64, db_index=True)
     model = models.CharField(
         max_length=128,
@@ -415,10 +483,12 @@ class LLMUsageByModel(models.Model):
     sum_cached_tokens = models.BigIntegerField(default=0)
     last_used_at = models.DateTimeField(null=True, blank=True)
 
+    objects = OwnedManager()
+
     class Meta:
         verbose_name = "LLM usage by model"
         verbose_name_plural = "LLM usage by model"
-        unique_together = [("provider", "model")]
+        unique_together = [("owner", "provider", "model")]
 
     def __str__(self):
         return f"{self.provider} / {self.model}"
@@ -427,6 +497,11 @@ class LLMUsageByModel(models.Model):
 class LLMUsageByQuery(models.Model):
     """Per logical LLM use-case, provider, and model (gateway-recorded only)."""
 
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="llm_usage_by_query",
+    )
     query_kind = models.CharField(max_length=64, db_index=True)
     provider = models.CharField(max_length=64, db_index=True)
     model = models.CharField(
@@ -440,10 +515,12 @@ class LLMUsageByQuery(models.Model):
     sum_cached_tokens = models.BigIntegerField(default=0)
     last_used_at = models.DateTimeField(null=True, blank=True)
 
+    objects = OwnedManager()
+
     class Meta:
         verbose_name = "LLM usage by query"
         verbose_name_plural = "LLM usage by query"
-        unique_together = [("query_kind", "provider", "model")]
+        unique_together = [("owner", "query_kind", "provider", "model")]
 
     def __str__(self):
         return f"{self.query_kind} / {self.provider} / {self.model}"
@@ -451,9 +528,14 @@ class LLMUsageByQuery(models.Model):
 
 class AppAutomationSettings(models.Model):
     """
-    Singleton (use pk=1): pipeline / vetting automation thresholds.
+    Per-user pipeline / vetting automation thresholds.
     """
 
+    owner = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="automation_settings",
+    )
     pipeline_to_vetting_enabled = models.BooleanField(default=False)
     pipeline_preference_margin_min = models.IntegerField(
         default=0,
@@ -573,9 +655,9 @@ class AppAutomationSettings(models.Model):
         return "App automation settings"
 
     @classmethod
-    def get_solo(cls):
+    def get_for_user(cls, user):
         obj, _created = cls.objects.get_or_create(
-            pk=1,
+            owner=user,
             defaults={
                 "pipeline_to_vetting_enabled": False,
                 "pipeline_preference_margin_min": 0,
@@ -590,6 +672,17 @@ class AppAutomationSettings(models.Model):
             },
         )
         return obj
+
+    @classmethod
+    def get_solo(cls):
+        """Deprecated: use get_for_user(user)."""
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        user = User.objects.order_by("pk").first()
+        if user is None:
+            raise User.DoesNotExist("No users exist.")
+        return cls.get_for_user(user)
 
 
 class JobListing(models.Model):
@@ -622,6 +715,11 @@ class JobListing(models.Model):
 class JobListingAction(models.Model):
     """User actions on job listings: liked, disliked, saved."""
 
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="job_listing_actions",
+    )
     class ActionType(models.TextChoices):
         LIKED = "liked", "Liked"
         DISLIKED = "disliked", "Disliked"
@@ -637,10 +735,10 @@ class JobListingAction(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = OwnedManager()
+
     class Meta:
-        # Allow the same job to be liked/saved in multiple tracks independently.
-        # Legacy rows without track will keep working because track="".
-        unique_together = [("job_listing", "action", "track")]
+        unique_together = [("owner", "job_listing", "action", "track")]
 
 
 class JobListingEmbedding(models.Model):
@@ -648,6 +746,11 @@ class JobListingEmbedding(models.Model):
         LIKED = "liked", "Liked"
         DISLIKED = "disliked", "Disliked"
 
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="job_listing_embeddings",
+    )
     job_listing = models.ForeignKey(JobListing, on_delete=models.CASCADE)
     embedding_type = models.CharField(
         max_length=16,
@@ -663,8 +766,10 @@ class JobListingEmbedding(models.Model):
     embedding = models.JSONField(help_text="List of floats, e.g. 384-dim from sentence-transformers")
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = OwnedManager()
+
     class Meta:
-        unique_together = [("job_listing", "embedding_type", "track")]
+        unique_together = [("owner", "job_listing", "embedding_type", "track")]
 
 
 class JobListingTrackMetrics(models.Model):
@@ -675,6 +780,11 @@ class JobListingTrackMetrics(models.Model):
     beyond the original IC / Management split.
     """
 
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="job_listing_track_metrics",
+    )
     job_listing = models.ForeignKey(JobListing, on_delete=models.CASCADE)
     track = models.CharField(
         max_length=32,
@@ -685,10 +795,12 @@ class JobListingTrackMetrics(models.Model):
     preference_margin = models.IntegerField(null=True, blank=True)
     last_scored_at = models.DateTimeField(null=True, blank=True)
 
+    objects = OwnedManager()
+
     class Meta:
-        unique_together = [("job_listing", "track")]
+        unique_together = [("owner", "job_listing", "track")]
         indexes = [
-            models.Index(fields=["track", "job_listing"]),
+            models.Index(fields=["owner", "track", "job_listing"]),
         ]
 
 def _normalize_disqualifier_phrase(phrase: str) -> str:
@@ -701,14 +813,20 @@ def _normalize_disqualifier_phrase(phrase: str) -> str:
 class UserDisqualifier(models.Model):
     """
     Words or phrases the user wants to avoid in job descriptions.
-    Chosen from disliked jobs; any job whose description contains one of these
-    is excluded first (before other filters).
     """
-    phrase = models.CharField(max_length=500, unique=True)  # stored normalized (lower, collapsed space)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="disqualifiers",
+    )
+    phrase = models.CharField(max_length=500)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = OwnedManager()
 
     class Meta:
         ordering = ["phrase"]
+        unique_together = [("owner", "phrase")]
 
     def save(self, *args, **kwargs):
         self.phrase = _normalize_disqualifier_phrase(self.phrase)
@@ -716,7 +834,12 @@ class UserDisqualifier(models.Model):
 
 
 class OptimizerWorkflow(models.Model):
-    """Saved custom workflow for Resume Optimization: step order, loop target, exit condition."""
+    """Saved custom workflow for Resume Optimization."""
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="optimizer_workflows",
+    )
     name = models.CharField(max_length=255)
     steps = models.JSONField(
         help_text="Ordered list of step ids, e.g. ['writer', 'ats_judge', 'recruiter_judge']"
@@ -735,6 +858,8 @@ class OptimizerWorkflow(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = OwnedManager()
+
     class Meta:
         ordering = ["name"]
 
@@ -743,7 +868,12 @@ class OptimizerWorkflow(models.Model):
 
 
 class JobMatchResult(models.Model):
-    """Fit-check result for a (job_listing, resume) pair. One per job per resume."""
+    """Fit-check result for a (job_listing, resume) pair. One per job per resume per user."""
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="job_match_results",
+    )
     STATUS_ANALYZED = "analyzed"
     STATUS_APPLIED = "applied"
     STATUS_DISMISSED = "dismissed"
@@ -760,8 +890,10 @@ class JobMatchResult(models.Model):
     analyzed_at = models.DateTimeField(auto_now_add=True)
     status = models.CharField(max_length=32, default=STATUS_ANALYZED, choices=STATUS_CHOICES)
 
+    objects = OwnedManager()
+
     class Meta:
-        unique_together = [("job_listing", "resume")]
+        unique_together = [("owner", "job_listing", "resume")]
         ordering = ["-analyzed_at"]
 
     def __str__(self):
@@ -770,6 +902,11 @@ class JobMatchResult(models.Model):
 
 class JobSearchTask(models.Model):
     """Scheduled job search: runs on cron, accumulates results into pipeline by track."""
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="job_search_tasks",
+    )
     name = models.CharField(max_length=255, blank=True, help_text="Optional label for this task")
     search_term = models.CharField(max_length=512)
     location = models.CharField(max_length=512, blank=True)
@@ -794,6 +931,8 @@ class JobSearchTask(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = OwnedManager()
+
     class Meta:
         ordering = ["name", "id"]
 
@@ -814,6 +953,11 @@ class JobSearchTask(models.Model):
 class PipelineEntry(models.Model):
     """Links a JobListing to a track for pipeline display. removed_at = soft-deleted (task won't re-add)."""
 
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="pipeline_entries",
+    )
     class Stage(models.TextChoices):
         PIPELINE = "pipeline", "Pipeline"
         VETTING = "vetting", "Vetting"
@@ -849,8 +993,10 @@ class PipelineEntry(models.Model):
     )
     interview_prep_generated_at = models.DateTimeField(null=True, blank=True)
 
+    objects = OwnedManager()
+
     class Meta:
-        unique_together = [("job_listing", "track")]
+        unique_together = [("owner", "job_listing", "track")]
         ordering = ["-added_at"]
 
     def __str__(self):
@@ -924,11 +1070,14 @@ class JobSearchTaskRun(models.Model):
 
 class ApplicantProfile(models.Model):
     """
-    Singleton (use pk=1): the applicant's standing personal data used to fill
-    job application forms. Resume content is handled separately by the optimizer;
-    this holds contact details and reusable answers to screening questions.
+    Per-user applicant personal data used to fill job application forms.
     """
 
+    owner = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="applicant_profile",
+    )
     full_name = models.CharField(max_length=255, blank=True, default="")
     email = models.EmailField(blank=True, default="")
     phone = models.CharField(max_length=64, blank=True, default="")
@@ -970,9 +1119,20 @@ class ApplicantProfile(models.Model):
         return self.full_name or "Applicant profile"
 
     @classmethod
-    def get_solo(cls):
-        obj, _created = cls.objects.get_or_create(pk=1)
+    def get_for_user(cls, user):
+        obj, _created = cls.objects.get_or_create(owner=user)
         return obj
+
+    @classmethod
+    def get_solo(cls):
+        """Deprecated: use get_for_user(user)."""
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        user = User.objects.order_by("pk").first()
+        if user is None:
+            raise User.DoesNotExist("No users exist.")
+        return cls.get_for_user(user)
 
 
 class SiteCredential(models.Model):
@@ -982,9 +1142,13 @@ class SiteCredential(models.Model):
     to create accounts repeatedly. Secrets are encrypted at rest (Fernet).
     """
 
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="site_credentials",
+    )
     domain = models.CharField(
         max_length=255,
-        unique=True,
         help_text="Host the credential applies to, e.g. 'boards.greenhouse.io' or 'acme.com'.",
     )
     label = models.CharField(max_length=255, blank=True, default="")
@@ -998,8 +1162,11 @@ class SiteCredential(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = OwnedManager()
+
     class Meta:
         ordering = ["domain"]
+        unique_together = [("owner", "domain")]
 
     def __str__(self):
         return self.label or self.domain
@@ -1188,13 +1355,15 @@ class ApplicationAttemptStep(models.Model):
 
 class AtsAutoSubmitStats(models.Model):
     """
-    Per-ATS counters that gate graduation from semi-auto to full-auto.
-
-    Full-auto is enabled for an ATS only after `clean_submit_streak` reaches the
-    configured threshold (approved submissions with zero human corrections).
+    Per-user per-ATS counters that gate graduation from semi-auto to full-auto.
     """
 
-    ats_type = models.CharField(max_length=32, unique=True)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="ats_auto_submit_stats",
+    )
+    ats_type = models.CharField(max_length=32)
     clean_submit_streak = models.PositiveIntegerField(
         default=0,
         help_text="Consecutive approved submissions with no human corrections. Resets to 0 on any correction.",
@@ -1207,9 +1376,40 @@ class AtsAutoSubmitStats(models.Model):
     )
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = OwnedManager()
+
     class Meta:
         verbose_name = "ATS auto-submit stats"
         verbose_name_plural = "ATS auto-submit stats"
+        unique_together = [("owner", "ats_type")]
 
     def __str__(self):
         return f"{self.ats_type}: streak={self.clean_submit_streak} full_auto={self.full_auto_enabled}"
+
+
+class ImpersonationAuditLog(models.Model):
+    """Audit trail for support staff login-as-user sessions."""
+
+    hijacker = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="impersonations_started",
+    )
+    target = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="impersonations_received",
+    )
+    started_at = models.DateTimeField(auto_now_add=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    reason = models.CharField(max_length=500, blank=True, default="")
+
+    class Meta:
+        ordering = ["-started_at"]
+        permissions = [
+            ("can_impersonate_users", "Can impersonate users for support"),
+        ]
+
+    def __str__(self):
+        return f"{self.hijacker_id} → {self.target_id} @ {self.started_at}"

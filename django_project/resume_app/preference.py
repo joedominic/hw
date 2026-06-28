@@ -14,15 +14,20 @@ from .track_actions import normalize_track_slug, q_preference_embedding_track
 logger = logging.getLogger(__name__)
 
 
-def get_preference_vector_cache_key(track: Optional[str] = None) -> str:
+def get_preference_vector_cache_key(user, track: Optional[str] = None) -> str:
     from django.conf import settings
     base = getattr(settings, "PREFERENCE_VECTOR_CACHE_KEY", "job_preference_vector")
+    uid = getattr(user, "pk", user)
     if track:
-        return f"{base}:{track}"
-    return base
+        return f"{base}:u{uid}:{track}"
+    return f"{base}:u{uid}"
 
 
-def get_preference_vectors(track: Optional[str] = None) -> Optional[Tuple[List[float], List[float], List[tuple]]]:
+def get_preference_vectors(
+    *,
+    user,
+    track: Optional[str] = None,
+) -> Optional[Tuple[List[float], List[float], List[tuple]]]:
     """
     Return (liked_centroid, disliked_centroid, liked_jobs) computed from JobListingEmbedding.
 
@@ -33,7 +38,7 @@ def get_preference_vectors(track: Optional[str] = None) -> Optional[Tuple[List[f
 
     Returns None if there are no liked embeddings.
     """
-    key = get_preference_vector_cache_key(track)
+    key = get_preference_vector_cache_key(user, track)
     cached = cache.get(key)
     if cached is not None and isinstance(cached, dict):
         liked = cached.get("liked_centroid")
@@ -45,15 +50,17 @@ def get_preference_vectors(track: Optional[str] = None) -> Optional[Tuple[List[f
     from . import embeddings as embedding_module
 
     liked_qs = JobListingEmbedding.objects.filter(
-        embedding_type=JobListingEmbedding.EmbeddingType.LIKED
+        owner=user,
+        embedding_type=JobListingEmbedding.EmbeddingType.LIKED,
     ).select_related("job_listing")
     disliked_qs = JobListingEmbedding.objects.filter(
-        embedding_type=JobListingEmbedding.EmbeddingType.DISLIKED
+        owner=user,
+        embedding_type=JobListingEmbedding.EmbeddingType.DISLIKED,
     ).select_related("job_listing")
     if track:
-        slug = normalize_track_slug(track)
-        liked_qs = liked_qs.filter(q_preference_embedding_track(slug))
-        disliked_qs = disliked_qs.filter(q_preference_embedding_track(slug))
+        slug = normalize_track_slug(track, user)
+        liked_qs = liked_qs.filter(q_preference_embedding_track(slug, user))
+        disliked_qs = disliked_qs.filter(q_preference_embedding_track(slug, user))
 
     liked_vecs: List[List[float]] = []
     disliked_vecs: List[List[float]] = []
@@ -97,59 +104,60 @@ def get_preference_vectors(track: Optional[str] = None) -> Optional[Tuple[List[f
     return liked_centroid, disliked_centroid, liked_jobs
 
 
-def get_preference_vector(track: Optional[str] = None) -> Optional[List[float]]:
+def get_preference_vector(*, user, track: Optional[str] = None) -> Optional[List[float]]:
     """
     Backwards-compatible helper: return liked_centroid only.
     """
-    pv = get_preference_vectors(track=track)
+    pv = get_preference_vectors(user=user, track=track)
     if pv is None:
         return None
     return pv[0]
 
 
-def get_liked_jobs_for_focus_reason(track: Optional[str] = None):
+def get_liked_jobs_for_focus_reason(*, user, track: Optional[str] = None):
     """
     Return liked jobs with embeddings for focus explanations.
 
     Shape: list of (job_listing_id, title, company_name, embedding, role_vecs?)
     """
-    pv = get_preference_vectors(track=track)
+    pv = get_preference_vectors(user=user, track=track)
     if pv is None or len(pv) < 3:
         return []
     return pv[2]
 
 
-def invalidate_preference_cache() -> None:
+def invalidate_preference_cache(user) -> None:
     """Call when user likes or dislikes a job."""
-    # Invalidate global key and all track-specific keys.
-    cache.delete(get_preference_vector_cache_key())
-    for slug in Track.objects.values_list("slug", flat=True):
-        cache.delete(get_preference_vector_cache_key(slug))
+    cache.delete(get_preference_vector_cache_key(user))
+    for slug in Track.objects.for_user(user).values_list("slug", flat=True):
+        cache.delete(get_preference_vector_cache_key(user, slug))
 
 
-def get_disliked_embeddings_cache_key(track: Optional[str] = None) -> str:
+def get_disliked_embeddings_cache_key(user, track: Optional[str] = None) -> str:
     from django.conf import settings
     base = getattr(settings, "DISLIKED_EMBEDDINGS_CACHE_KEY", "job_disliked_embeddings")
+    uid = getattr(user, "pk", user)
     if track:
-        return f"{base}:{track}"
-    return base
+        return f"{base}:u{uid}:{track}"
+    return f"{base}:u{uid}"
 
 
-def get_disliked_embeddings(track: Optional[str] = None) -> List[Tuple[int, List[float]]]:
+def get_disliked_embeddings(*, user, track: Optional[str] = None) -> List[Tuple[int, List[float]]]:
     """
     Return list of (job_listing_id, embedding) for all disliked jobs.
     Cached; invalidate on like/dislike.
     """
-    key = get_disliked_embeddings_cache_key(track)
+    key = get_disliked_embeddings_cache_key(user, track)
     cached = cache.get(key)
     if cached is not None and isinstance(cached, list):
         return cached
     qs = JobListingEmbedding.objects.filter(
-        embedding_type=JobListingEmbedding.EmbeddingType.DISLIKED
+        owner=user,
+        embedding_type=JobListingEmbedding.EmbeddingType.DISLIKED,
     ).select_related("job_listing")
     if track:
-        slug = normalize_track_slug(track)
-        qs = qs.filter(q_preference_embedding_track(slug))
+        slug = normalize_track_slug(track, user)
+        qs = qs.filter(q_preference_embedding_track(slug, user))
     out: List[Tuple[int, List[float]]] = []
     for row in qs:
         job = row.job_listing
@@ -161,16 +169,15 @@ def get_disliked_embeddings(track: Optional[str] = None) -> List[Tuple[int, List
     return out
 
 
-def invalidate_disliked_embeddings_cache() -> None:
+def invalidate_disliked_embeddings_cache(user) -> None:
     """Call when user likes or dislikes a job."""
-    # Invalidate cache for all tracks (including default/global key).
-    cache.delete(get_disliked_embeddings_cache_key())
-    for slug in Track.objects.values_list("slug", flat=True):
-        cache.delete(get_disliked_embeddings_cache_key(slug))
+    cache.delete(get_disliked_embeddings_cache_key(user))
+    for slug in Track.objects.for_user(user).values_list("slug", flat=True):
+        cache.delete(get_disliked_embeddings_cache_key(user, slug))
 
 
-def get_liked_jobs_with_embeddings(track: Optional[str] = None):
+def get_liked_jobs_with_embeddings(*, user, track: Optional[str] = None):
     """
     Backwards-compatible helper: return liked_jobs list used by focus reasoning.
     """
-    return get_liked_jobs_for_focus_reason(track=track)
+    return get_liked_jobs_for_focus_reason(user=user, track=track)
