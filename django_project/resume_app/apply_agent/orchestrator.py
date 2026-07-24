@@ -61,6 +61,16 @@ def start_attempts_for_entries(entry_ids: list[int], *, user_id: int, mode: str 
     Skips entries that already have a non-terminal attempt (no duplicate runs).
     """
     user = get_user_model().objects.get(pk=int(user_id))
+    from ..entitlements import METRIC_APPLY_RUNS, QuotaExceeded, check_quota, consume_quota
+    from ..storage_quota import check_storage_quota
+
+    try:
+        check_quota(user, METRIC_APPLY_RUNS)
+        check_storage_quota(user, additional_bytes=0)
+    except QuotaExceeded as exc:
+        logger.warning("apply quota/storage exceeded user=%s: %s", user_id, exc)
+        return []
+
     settings_solo = AppAutomationSettings.get_for_user(user)
     effective_mode = mode or settings_solo.apply_automation_mode or ApplicationAttempt.Mode.SEMI_AUTO
     created: list[ApplicationAttempt] = []
@@ -79,6 +89,10 @@ def start_attempts_for_entries(entry_ids: list[int], *, user_id: int, mode: str 
         ).exists()
         if has_active:
             continue
+        try:
+            consume_quota(user, METRIC_APPLY_RUNS, 1)
+        except QuotaExceeded:
+            break
         attempt = ApplicationAttempt.objects.create(
             pipeline_entry=entry,
             automation_mode=effective_mode,
@@ -207,6 +221,13 @@ def _handle_waiting_optimizer(attempt: ApplicationAttempt) -> None:
         )
 
 
+def _allowed_ats_list(user) -> list[str]:
+    """Return ATS slugs the agent may automate; empty setting → greenhouse + lever."""
+    solo = AppAutomationSettings.get_for_user(user)
+    allowed = [str(a).strip().lower() for a in (solo.apply_allowed_ats or []) if str(a).strip()]
+    return allowed or ["greenhouse", "lever"]
+
+
 def _handle_resolve_and_detect(attempt: ApplicationAttempt) -> None:
     job_url = (attempt.pipeline_entry.job_listing.url or "").strip()
     if attempt.apply_url:
@@ -216,7 +237,11 @@ def _handle_resolve_and_detect(attempt: ApplicationAttempt) -> None:
     else:
         mode = "mock map" if resolver.use_mock_resolver() else "live browser"
         _log_step(attempt, "resolve", message=f"Resolving apply URL from job listing ({mode}): {job_url}")
-        needs_browser = not resolver.use_mock_resolver()
+        # Known ATS hosts short-circuit without Playwright; only aggregators need a browser.
+        needs_browser = (
+            not resolver.use_mock_resolver()
+            and detect_ats_from_url(job_url) == ATS_UNKNOWN
+        )
         if needs_browser and not _acquire_browser_slot():
             _log_step(attempt, "resolve", message="Waiting for a free browser slot…")
             return  # heartbeat will retry when a slot frees up
@@ -249,12 +274,38 @@ def _handle_resolve_and_detect(attempt: ApplicationAttempt) -> None:
         _log_step(attempt, "handoff", message=f"{attempt.ats_type} requires manual apply (assistive handoff).")
         _set_status(attempt, ApplicationAttempt.Status.AWAITING_APPROVAL)
         return
+
+    user = _attempt_user(attempt)
+    solo = AppAutomationSettings.get_for_user(user)
+    allowed = _allowed_ats_list(user)
+    has_adapter = get_adapter(attempt.ats_type) is not None
+    if has_adapter and attempt.ats_type not in allowed:
+        attempt.mark_failed(
+            ApplicationAttempt.ERROR_NO_ADAPTER,
+            f"ATS {attempt.ats_type!r} is not in your allowed list ({', '.join(allowed)}).",
+        )
+        return
+    if not has_adapter and not solo.apply_generic_fallback_enabled:
+        attempt.mark_failed(
+            ApplicationAttempt.ERROR_NO_ADAPTER,
+            f"No adapter for ATS {attempt.ats_type or ATS_UNKNOWN!r} and generic fallback is disabled.",
+        )
+        return
+
     _set_status(attempt, ApplicationAttempt.Status.DRY_RUN_FILL)
 
 
 def _handle_dry_run_fill(attempt: ApplicationAttempt) -> None:
     adapter = get_adapter(attempt.ats_type)
     use_generic = adapter is None
+    if use_generic:
+        solo = AppAutomationSettings.get_for_user(_attempt_user(attempt))
+        if not solo.apply_generic_fallback_enabled:
+            attempt.mark_failed(
+                ApplicationAttempt.ERROR_NO_ADAPTER,
+                "Generic browser-use fallback is disabled and no deterministic adapter matched.",
+            )
+            return
 
     def _do_fill():
         if use_generic:
@@ -419,12 +470,26 @@ def _export_resume_file(attempt: ApplicationAttempt, fmt: str) -> str:
     if buf is None:
         return ""
 
+    payload = buf.getvalue()
+    user = _attempt_user(attempt)
+    try:
+        from ..storage_quota import check_storage_quota
+
+        check_storage_quota(user, additional_bytes=len(payload))
+    except Exception as exc:
+        from ..entitlements import QuotaExceeded
+
+        if isinstance(exc, QuotaExceeded):
+            logger.warning("storage quota blocked resume export attempt=%s: %s", attempt.id, exc)
+            return ""
+        raise
+
     media_root = getattr(settings, "MEDIA_ROOT", "") or os.path.join(os.getcwd(), "media")
     out_dir = os.path.join(media_root, "apply_agent")
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"attempt_{attempt.id}_resume.{ext}")
     with open(path, "wb") as fh:
-        fh.write(buf.getvalue())
+        fh.write(payload)
     return path
 
 
@@ -566,7 +631,7 @@ def _browser_concurrency() -> int:
 def _browser_kwargs(attempt: ApplicationAttempt) -> dict:
     from .browser import apply_browser_headless
 
-    return {"headless": apply_browser_headless()}
+    return {"headless": apply_browser_headless(user=_attempt_user(attempt))}
 
 
 def _browser_step_timeout_seconds() -> int:

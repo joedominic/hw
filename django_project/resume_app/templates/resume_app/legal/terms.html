@@ -1,0 +1,41 @@
+{% extends "resume_app/auth/base_public.html" %}
+{% block title %}Terms of Service — ResumeElite{% endblock %}
+{% block header_nav %}
+<a href="{% url 'landing' %}" class="rounded-concierge px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100">Home</a>
+<a href="{% url 'privacy' %}" class="rounded-concierge px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100">Privacy</a>
+{% endblock %}
+{% block content %}
+<article class="mx-auto max-w-2xl prose prose-slate">
+    <h1 class="text-3xl font-bold text-concierge-slate">Terms of Service</h1>
+    <p class="mt-2 text-sm text-slate-500">Last updated: {% now "F j, Y" %}</p>
+    <div class="mt-8 space-y-6 text-sm leading-relaxed text-slate-700">
+        <p>
+            These Terms govern use of ResumeElite. This is a product placeholder — have counsel review and
+            replace it before offering paid plans to the public.
+        </p>
+        <h2 class="text-lg font-semibold text-concierge-slate">The service</h2>
+        <p>
+            ResumeElite helps you search for jobs, tailor resumes, and (optionally) automate applications.
+            Features and quotas depend on your plan. We may change or discontinue features with reasonable notice.
+        </p>
+        <h2 class="text-lg font-semibold text-concierge-slate">Your responsibilities</h2>
+        <ul class="list-disc space-y-1 pl-5">
+            <li>Provide accurate account information and keep credentials secure.</li>
+            <li>Use the service lawfully and only for your own job search (or accounts you are authorized to manage).</li>
+            <li>Do not abuse automation, scrape in violation of third-party terms, or attempt to bypass quotas or security controls.</li>
+        </ul>
+        <h2 class="text-lg font-semibold text-concierge-slate">Billing</h2>
+        <p>
+            Paid plans are billed through Stripe. Failed payments may reduce entitlements to the Free plan until
+            payment succeeds. You can manage or cancel via the billing portal when Stripe is configured.
+        </p>
+        <h2 class="text-lg font-semibold text-concierge-slate">Disclaimer</h2>
+        <p>
+            The service is provided “as is.” Job listings, AI outputs, and automated applications may be
+            incomplete or incorrect; you are responsible for reviewing materials before submitting them to employers.
+        </p>
+        <h2 class="text-lg font-semibold text-concierge-slate">Contact</h2>
+        <p>Questions about these terms: use the support channel for your deployment.</p>
+    </div>
+</article>
+{% endblock %}

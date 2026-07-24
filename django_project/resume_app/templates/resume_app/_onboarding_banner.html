@@ -1,0 +1,15 @@
+{% if onboarding.show_banner and not onboarding.completed %}
+<div class="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-brand/15 bg-brand-mist px-4 py-3.5 text-sm text-brand-ink">
+    <p>
+        <strong>Complete your profile</strong> to unlock AI-powered job matching
+        {% if not onboarding.resume_done %}
+            — start by uploading your resume
+        {% elif not onboarding.search_done %}
+            — run your first search below
+        {% endif %}.
+    </p>
+    <a href="{% url 'getting_started' %}" class="shrink-0 font-semibold text-brand underline decoration-brand/30 underline-offset-2 hover:decoration-brand">
+        Finish Setup
+    </a>
+</div>
+{% endif %}

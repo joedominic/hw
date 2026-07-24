@@ -1,5 +1,5 @@
 """
-Track-scoped job listing actions (likes, dislikes, saves).
+Track-scoped job listing actions (likes, dislikes, hides, saves).
 
 Semantics:
 - Rows with track="" are legacy "global" actions from before per-track storage.
@@ -8,6 +8,8 @@ Semantics:
 - Preference centroids (liked/disliked embeddings) fold legacy rows into the *default*
   track only, so old likes/dislikes still shape the default-track model without
   polluting other tracks.
+- ``disliked`` feeds FIT / preference ranking and also excludes from search.
+- ``hidden`` excludes from search only and does not affect FIT.
 """
 from typing import Optional, Set
 
@@ -26,7 +28,7 @@ def normalize_track_slug(track: Optional[str], user) -> str:
 
 
 def q_disliked_rows_for_search(slug: str) -> Q:
-    """Dislikes that exclude a job from search results for this track context."""
+    """Track scope for actions that exclude a job from search results."""
     return Q(track=slug) | Q(track="")
 
 
@@ -49,11 +51,39 @@ def q_clear_on_sentiment_change(slug: str) -> Q:
 
 
 def disliked_listing_id_set(user, track: Optional[str]) -> Set[int]:
+    """Jobs disliked for FIT preference (also excluded from search)."""
     slug = normalize_track_slug(track, user)
     return set(
         JobListingAction.objects.for_user(user)
         .filter(action=JobListingAction.ActionType.DISLIKED)
         .filter(q_disliked_rows_for_search(slug))
+        .values_list("job_listing_id", flat=True)
+    )
+
+
+def hidden_listing_id_set(user, track: Optional[str]) -> Set[int]:
+    """Jobs hidden from search only (no FIT impact)."""
+    slug = normalize_track_slug(track, user)
+    return set(
+        JobListingAction.objects.for_user(user)
+        .filter(action=JobListingAction.ActionType.HIDDEN)
+        .filter(q_disliked_rows_for_search(slug))
+        .values_list("job_listing_id", flat=True)
+    )
+
+
+def excluded_listing_id_set(user, track: Optional[str]) -> Set[int]:
+    """Jobs that must not appear in search results (hidden ∪ disliked)."""
+    return disliked_listing_id_set(user, track) | hidden_listing_id_set(user, track)
+
+
+def liked_listing_id_set(user, track: Optional[str]) -> Set[int]:
+    """Liked job IDs for this track (plus legacy global likes)."""
+    slug = normalize_track_slug(track, user)
+    return set(
+        JobListingAction.objects.for_user(user)
+        .filter(action=JobListingAction.ActionType.LIKED)
+        .filter(q_saved_rows_for_track(slug))
         .values_list("job_listing_id", flat=True)
     )
 

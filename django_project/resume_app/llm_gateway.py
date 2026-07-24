@@ -1,5 +1,7 @@
 """
 Central LLM invoke path: kill switch, preference order, job pinning, cooldowns, usage stats.
+
+Canonical docs: ``resume_app/docs/LLM_GATEWAY.md`` (quotas, policy, concurrency, timeouts).
 """
 from __future__ import annotations
 
@@ -14,6 +16,16 @@ from django.utils import timezone
 
 from .crypto import decrypt_api_key
 from .llm_factory import get_llm
+from .llm_policy import (
+    LLMConcurrencyLimitExceeded,
+    LLMInvokeTimeout,
+    LLMRequestsDisabled,
+    LLMTokenBudgetExceeded,
+    check_token_budget,
+    consume_token_budget,
+    run_with_invoke_timeout,
+    user_llm_concurrency,
+)
 from .llm_rate_limit import (
     acquire_llm_slot,
     estimate_tokens_from_messages,
@@ -25,6 +37,21 @@ from .llm_rate_limit import (
 from .models import LLMProviderPreference, LLMAppUsageTotals, LLMUsageByModel, LLMUsageByQuery
 
 logger = logging.getLogger(__name__)
+
+# Re-export for callers that import kill-switch from the gateway.
+__all__ = [
+    "LLMRequestsDisabled",
+    "LLMTokenBudgetExceeded",
+    "LLMConcurrencyLimitExceeded",
+    "LLMInvokeTimeout",
+    "LLMUnavailableError",
+    "NO_CLOUD_LLM_MESSAGE",
+    "invoke_llm_messages",
+    "call_invoke_llm_messages",
+    "log_llm_invoke",
+    "provider_is_local",
+    "cloud_llm_available",
+]
 
 # Keys for `usage_query_kind` / `LLMUsageByQuery.query_kind` (Settings → Usage labels in USAGE_QUERY_LABELS).
 USAGE_QUERY_FIT_CHECK = "fit_check"
@@ -40,6 +67,9 @@ USAGE_QUERY_KEYWORD_SEARCH_FIT = "keyword_search_fit"
 USAGE_QUERY_JOBS_MATCH_API = "jobs_match_api"
 USAGE_QUERY_PIPELINE_VETTING = "pipeline_vetting_matching"
 USAGE_QUERY_PIPELINE_RESUME_REFINE = "pipeline_resume_refine"
+USAGE_QUERY_PIPELINE_SKILL_EXTRACT = "pipeline_skill_extract"
+USAGE_QUERY_JD_CLEANSE = "jd_cleanse"
+USAGE_QUERY_APPLY_AGENT = "apply_agent"
 USAGE_QUERY_API_LLM_COMPLETE = "api_llm_complete"
 USAGE_QUERY_API_RESUME_FIT = "api_resume_fit"
 USAGE_QUERY_UNSPECIFIED = "unspecified"
@@ -59,6 +89,9 @@ USAGE_QUERY_LABELS: dict[str, str] = {
     USAGE_QUERY_JOBS_MATCH_API: "Job search — single job fit (API)",
     USAGE_QUERY_PIPELINE_VETTING: "Pipeline — vetting match",
     USAGE_QUERY_PIPELINE_RESUME_REFINE: "Pipeline — resume keyword refine",
+    USAGE_QUERY_PIPELINE_SKILL_EXTRACT: "Pipeline — resume skill extract",
+    USAGE_QUERY_JD_CLEANSE: "Pipeline — JD cleanse",
+    USAGE_QUERY_APPLY_AGENT: "Apply agent — browser-use LLM",
     USAGE_QUERY_API_LLM_COMPLETE: "HTTP API — LLM complete",
     USAGE_QUERY_API_RESUME_FIT: "HTTP API — resume fit (multipart)",
 }
@@ -67,9 +100,43 @@ PIN_PREFIX = "llm:pin:v1:"
 RR_PREFIX = "llm:rr:v1:"
 PIN_TTL_SECONDS = 86400 * 2
 
+# Shown when optimizer (or other allow_local=False callers) have no remote candidates.
+NO_CLOUD_LLM_MESSAGE = (
+    "No cloud LLM available. Connect a remote provider in Settings "
+    "(Groq, OpenAI, Anthropic, Gemini, Ollama Cloud, etc.). "
+    "Ollama Local cannot be used for resume optimization."
+)
 
-class LLMRequestsDisabled(Exception):
-    """Raised when AppAutomationSettings.stop_llm_requests is True."""
+
+class LLMUnavailableError(RuntimeError):
+    """Raised when no eligible (usually cloud) LLM candidates remain for a call."""
+
+
+def provider_is_local(provider: str | None, *, preference_is_local: bool = False) -> bool:
+    """True for preference-marked local rows and inherent local providers (Ollama Local)."""
+    if preference_is_local:
+        return True
+    name = (provider or "").strip().lower()
+    return name == "ollama local"
+
+
+def log_llm_invoke(
+    provider: str | None,
+    model: str | None,
+    *,
+    query: str | None = None,
+    via: str = "gateway",
+    extra: str = "",
+) -> None:
+    """Log provider/model for every product LLM call (gateway, browser-use, direct pings)."""
+    logger.warning(
+        "[llm] invoking %s/%s (query=%s via=%s%s)",
+        (provider or "").strip() or "unknown",
+        (model or "").strip() or "default",
+        query or USAGE_QUERY_UNSPECIFIED,
+        via,
+        f" {extra}" if extra else "",
+    )
 
 
 def _redis_client():
@@ -204,7 +271,7 @@ def _preference_candidates(user) -> list[dict]:
                 "model_get_llm": resolved_get_llm,
                 "model_key": mkey,
                 "priority": int(row.priority),
-                "is_local": bool(row.is_local),
+                "is_local": provider_is_local(prov, preference_is_local=bool(row.is_local)),
                 "preference_id": row.id,
                 "config": cfg,
                 "api_key": api_key,
@@ -215,6 +282,17 @@ def _preference_candidates(user) -> list[dict]:
 
 def preference_candidates_available(user) -> bool:
     return bool(_preference_candidates(user))
+
+
+def cloud_llm_available(user) -> bool:
+    """True when at least one non-local preference candidate is configured and not on cooldown."""
+    for c in _preference_candidates(user):
+        if c.get("is_local"):
+            continue
+        if is_llm_on_cooldown(c["provider"], c["model_get_llm"], user=user):
+            continue
+        return True
+    return False
 
 
 def _parse_pin(raw: str | None) -> tuple[str | None, str | None]:
@@ -283,13 +361,16 @@ def _ordered_eligible_candidates(
     job_cache_key: str | None,
     prefer_local: bool = True,
     only_local: bool = False,
+    allow_local: bool = True,
 ) -> list[dict]:
     raw = _preference_candidates(user)
     eligible = []
     for c in raw:
-        if is_llm_on_cooldown(c["provider"], c["model_get_llm"]):
+        if is_llm_on_cooldown(c["provider"], c["model_get_llm"], user=user):
             continue
         if only_local and not c.get("is_local"):
+            continue
+        if not allow_local and c.get("is_local"):
             continue
         eligible.append(c)
     if not eligible:
@@ -316,14 +397,28 @@ def _ordered_eligible_candidates(
         rest.sort(key=lambda x: (x["priority"], x["preference_id"]))
         return list(tier_rot) + rest
 
+    locals_in = [c for c in eligible if c.get("is_local")]
+    remotes_in = [c for c in eligible if not c.get("is_local")]
     if prefer_local:
-        locals_in = [c for c in eligible if c.get("is_local")]
-        remotes_in = [c for c in eligible if not c.get("is_local")]
+        # Local first, then remote failover.
         ordered = _sort_and_rotate(locals_in) + _sort_and_rotate(remotes_in)
     else:
-        ordered = _sort_and_rotate(eligible)
+        # Remote/cloud first whenever available. prefer_local=False used to leave
+        # preference priority alone, so a top-ranked Ollama row still won heavy
+        # workloads (e.g. optimizer Writer). Demote local unless no remotes exist.
+        ordered = _sort_and_rotate(remotes_in) + _sort_and_rotate(locals_in)
 
     if pinned is not None and pinned in ordered:
+        # Do not let a prior local pin override remote-first routing when remotes exist.
+        if (
+            not prefer_local
+            and pinned.get("is_local")
+            and remotes_in
+        ):
+            return ordered
+        # Never promote a local pin when local is disallowed.
+        if not allow_local and pinned.get("is_local"):
+            return ordered
         ordered.remove(pinned)
         ordered.insert(0, pinned)
     return ordered
@@ -376,6 +471,10 @@ def _finalize_usage(
         query_kind=query_kind,
         user=user,
     )
+    try:
+        consume_token_budget(user, int(in_tok) + int(out_tok), provider=provider)
+    except Exception as ex:
+        logger.debug("token budget consume skipped: %s", ex)
 
 
 def invoke_llm_messages(
@@ -390,111 +489,162 @@ def invoke_llm_messages(
     usage_query_kind: str | None = None,
     prefer_local: bool = True,
     only_local: bool = False,
+    allow_local: bool = True,
 ) -> Any:
     """
     Invoke LangChain chat messages through the central gateway.
 
     When llm_override is set, selection and pinning are skipped; rate limits still apply via acquire_llm_slot.
+    When allow_local=False, local providers (including Ollama Local) are excluded; if none remain,
+    raises LLMUnavailableError.
     """
     from .agents import _normalize_token_usage
-    from .models import AppAutomationSettings
-    from .rate_limits import check_user_llm_rate_limit
+    from .llm_policy import assert_llm_kill_switch
+    from .rate_limits import check_user_llm_rate_limit, record_llm_request
 
     check_user_llm_rate_limit(user)
-    if AppAutomationSettings.get_for_user(user).stop_llm_requests:
-        raise LLMRequestsDisabled("LLM requests are disabled. Turn off 'Stop LLM requests' in Settings → LLM.")
+    assert_llm_kill_switch(user)
+
+    est = estimate_tokens_from_messages(messages)
 
     if llm_override is not None:
-        return _invoke_single_llm(
-            llm_override,
-            messages,
-            structured_schema=structured_schema,
-            config=config,
-            _normalize_token_usage=_normalize_token_usage,
-            job_cache_key=job_cache_key,
-            usage_query_kind=usage_query_kind,
-            user=user,
-        )
+        provider_hint = getattr(llm_override, "_resume_provider", None) or ""
+        if not allow_local and provider_is_local(provider_hint):
+            raise LLMUnavailableError(NO_CLOUD_LLM_MESSAGE)
+        check_token_budget(user, estimated_tokens=est, provider=provider_hint)
+        record_llm_request(user)
+        with user_llm_concurrency(user):
+            return _invoke_single_llm(
+                llm_override,
+                messages,
+                structured_schema=structured_schema,
+                config=config,
+                _normalize_token_usage=_normalize_token_usage,
+                job_cache_key=job_cache_key,
+                usage_query_kind=usage_query_kind,
+                user=user,
+                via="gateway-override",
+            )
 
     candidates = _ordered_eligible_candidates(
-        user, job_cache_key, prefer_local=prefer_local, only_local=only_local
+        user,
+        job_cache_key,
+        prefer_local=prefer_local,
+        only_local=only_local,
+        allow_local=allow_local,
     )
     if not candidates:
+        if not allow_local:
+            raise LLMUnavailableError(NO_CLOUD_LLM_MESSAGE)
         raise RuntimeError(
             "No eligible LLM candidates (check provider keys, preferences, and cooldowns)."
         )
 
-    est = estimate_tokens_from_messages(messages)
+    logger.warning(
+        "[llm] candidate order for query=%s prefer_local=%s only_local=%s allow_local=%s: %s",
+        usage_query_kind or USAGE_QUERY_UNSPECIFIED,
+        prefer_local,
+        only_local,
+        allow_local,
+        ", ".join(
+            f"{c['provider']}/{c.get('model_get_llm') or c.get('model_key')}"
+            + (" (local)" if c.get("is_local") else "")
+            for c in candidates[:5]
+        )
+        + (" ..." if len(candidates) > 5 else ""),
+    )
+
+    # Budget check against the first candidate's billing scope (BYOK vs platform).
+    check_token_budget(user, estimated_tokens=est, provider=candidates[0]["provider"])
+    record_llm_request(user)
     last_exc: Exception | None = None
 
-    for cand in candidates:
-        provider = cand["provider"]
-        model_gl = cand["model_get_llm"]
-        mkey = cand["model_key"]
-        reconcile, release = try_acquire_llm_slot(
-            provider, model_gl, est, prefer_failover=True
-        )
-        if reconcile is None:
-            logger.warning(
-                "Skipping %s/%s: rate limit bucket full (try next candidate)",
-                provider,
-                model_gl,
+    with user_llm_concurrency(user):
+        for cand in candidates:
+            provider = cand["provider"]
+            model_gl = cand["model_get_llm"]
+            mkey = cand["model_key"]
+            reconcile, release = try_acquire_llm_slot(
+                provider, model_gl, est, user=user, prefer_failover=True
             )
-            cd_s = get_cooldown_seconds_for_provider_model(provider, model_gl)
-            set_llm_cooldown(provider, model_gl, cd_s)
-            _clear_pin(job_cache_key)
-            continue
+            if reconcile is None:
+                logger.warning(
+                    "Skipping %s/%s: rate limit bucket full (try next candidate)",
+                    provider,
+                    model_gl,
+                )
+                cd_s = get_cooldown_seconds_for_provider_model(provider, model_gl, user=user)
+                set_llm_cooldown(provider, model_gl, cd_s, user=user)
+                _clear_pin(job_cache_key)
+                continue
 
-        llm = _build_llm_callable(cand)
-        invoke_llm = (
-            llm.with_structured_output(structured_schema)
-            if structured_schema is not None
-            else llm
-        )
-        for attempt in range(max_attempts_per_model):
-            try:
-                if config is not None:
-                    raw = invoke_llm.invoke(messages, config=config)
-                else:
-                    raw = invoke_llm.invoke(messages)
-            except Exception as e:
-                release()
-                last_exc = e
-                if _is_rate_limit_error(e):
-                    cd_s = get_cooldown_seconds_for_provider_model(provider, model_gl)
-                    set_llm_cooldown(provider, model_gl, cd_s)
-                    _clear_pin(job_cache_key)
-                    logger.warning(
-                        "429/quota on %s/%s; cooldown %ss",
-                        provider,
-                        model_gl,
-                        cd_s,
-                    )
-                    break
-                raise
-            else:
+            log_llm_invoke(
+                provider,
+                model_gl or mkey,
+                query=usage_query_kind,
+                via="gateway",
+                extra="local" if cand.get("is_local") else "",
+            )
+            llm = _build_llm_callable(cand)
+            invoke_llm = (
+                llm.with_structured_output(structured_schema)
+                if structured_schema is not None
+                else llm
+            )
+            for attempt in range(max_attempts_per_model):
                 try:
-                    _finalize_usage(
-                        reconcile,
-                        raw,
-                        structured_schema,
-                        config,
-                        est,
-                        _normalize_token_usage,
-                        provider,
-                        model_gl,
-                        query_kind=usage_query_kind,
-                        user=user,
-                    )
-                except Exception as ex:
-                    logger.debug("token reconcile/record skipped: %s", ex)
-                if job_cache_key:
-                    _set_pin(job_cache_key, provider, mkey)
+
+                    def _do_invoke(_invoke_llm=invoke_llm, _config=config):
+                        if _config is not None:
+                            return _invoke_llm.invoke(messages, config=_config)
+                        return _invoke_llm.invoke(messages)
+
+                    raw = run_with_invoke_timeout(_do_invoke)
+                except LLMInvokeTimeout:
+                    release()
+                    raise
+                except Exception as e:
+                    release()
+                    last_exc = e
+                    if _is_rate_limit_error(e):
+                        cd_s = get_cooldown_seconds_for_provider_model(
+                            provider, model_gl, user=user
+                        )
+                        set_llm_cooldown(provider, model_gl, cd_s, user=user)
+                        _clear_pin(job_cache_key)
+                        logger.warning(
+                            "429/quota on %s/%s; cooldown %ss",
+                            provider,
+                            model_gl,
+                            cd_s,
+                        )
+                        break
+                    raise
+                else:
+                    try:
+                        _finalize_usage(
+                            reconcile,
+                            raw,
+                            structured_schema,
+                            config,
+                            est,
+                            _normalize_token_usage,
+                            provider,
+                            model_gl,
+                            query_kind=usage_query_kind,
+                            user=user,
+                        )
+                    except Exception as ex:
+                        logger.debug("token reconcile/record skipped: %s", ex)
+                    if job_cache_key:
+                        _set_pin(job_cache_key, provider, mkey)
                     return raw
-        continue
+            continue
 
     if last_exc:
         raise last_exc
+    if not allow_local:
+        raise LLMUnavailableError(NO_CLOUD_LLM_MESSAGE)
     raise RuntimeError("All LLM candidates exhausted.")
 
 
@@ -518,26 +668,32 @@ def _invoke_single_llm(
     job_cache_key: str | None = None,
     usage_query_kind: str | None = None,
     user=None,
+    via: str = "gateway-override",
 ) -> Any:
     provider = getattr(llm, "_resume_provider", None) or "unknown"
     model_gl = getattr(llm, "_resume_model", None)
+    log_llm_invoke(provider, model_gl, query=usage_query_kind, via=via)
     est = estimate_tokens_from_messages(messages)
-    reconcile, release = acquire_llm_slot(provider, model_gl, est)
+    reconcile, release = acquire_llm_slot(provider, model_gl, est, user=user)
     invoke_llm = (
         llm.with_structured_output(structured_schema) if structured_schema is not None else llm
     )
     try:
-        if config is not None:
-            raw = invoke_llm.invoke(messages, config=config)
-        else:
-            raw = invoke_llm.invoke(messages)
+
+        def _do_invoke():
+            if config is not None:
+                return invoke_llm.invoke(messages, config=config)
+            return invoke_llm.invoke(messages)
+
+        raw = run_with_invoke_timeout(_do_invoke)
     except Exception as e:
         release()
         if _is_rate_limit_error(e):
             set_llm_cooldown(
                 provider,
                 model_gl,
-                get_cooldown_seconds_for_provider_model(provider, model_gl),
+                get_cooldown_seconds_for_provider_model(provider, model_gl, user=user),
+                user=user,
             )
             _clear_pin(job_cache_key)
         raise

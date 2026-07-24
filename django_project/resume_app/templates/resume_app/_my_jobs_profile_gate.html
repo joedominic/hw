@@ -1,0 +1,32 @@
+{# Shown to normal users who have not saved a search profile yet. #}
+<div class="mx-auto max-w-lg py-8">
+    <div class="rounded-2xl border border-slate-200/90 bg-white p-6 shadow-sm sm:p-8">
+        <div class="mb-6 flex h-12 w-12 items-center justify-center rounded-xl bg-brand-mist text-brand" aria-hidden="true">
+            <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M11 18a7 7 0 100-14 7 7 0 000 14z"/>
+            </svg>
+        </div>
+        <h2 class="text-xl font-bold tracking-tight text-concierge-slate">Set up your first search profile</h2>
+        <p class="mt-2 text-sm leading-relaxed text-slate-600">
+            My jobs organizes roles by search profile. Create one on Find jobs so saved and shortlisted jobs land in the right place.
+        </p>
+        <ol class="mt-6 space-y-3 text-sm text-slate-700">
+            <li class="flex gap-3">
+                <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-600">1</span>
+                <span>Go to <strong>Find jobs</strong> and search for roles you want.</span>
+            </li>
+            <li class="flex gap-3">
+                <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-600">2</span>
+                <span>In the sidebar, click <strong>Save search</strong> and give it a name (e.g. FinCrimes, Remote Python).</span>
+            </li>
+            <li class="flex gap-3">
+                <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-semibold text-slate-600">3</span>
+                <span>Return here—your profile will be ready and jobs you save will show up by stage.</span>
+            </li>
+        </ol>
+        <a href="{{ jobs_search_url }}"
+           class="mt-8 inline-flex w-full items-center justify-center rounded-xl bg-brand px-5 py-3 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover sm:w-auto">
+            Go to Find jobs
+        </a>
+    </div>
+</div>

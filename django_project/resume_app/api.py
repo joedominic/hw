@@ -35,13 +35,21 @@ from .agents import (
     writer_node,
     ats_judge_node,
     recruiter_judge_node,
+    jd_cleanse_node,
 )
+from django.conf import settings
+
+from .entitlements import EntitlementDenied, require_api_access
 from .llm_gateway import (
     call_invoke_llm_messages,
+    LLMConcurrencyLimitExceeded,
+    LLMInvokeTimeout,
     LLMRequestsDisabled,
+    LLMTokenBudgetExceeded,
     USAGE_QUERY_API_LLM_COMPLETE,
     USAGE_QUERY_API_RESUME_FIT,
 )
+from .rate_limits import LLMUserRateLimitExceeded
 from .services import parse_pdf
 from .crypto import encrypt_api_key, decrypt_api_key
 from .llm_services import list_models_for_provider, is_auth_error, DEFAULT_MODELS, LLM_PROVIDERS
@@ -113,6 +121,7 @@ class StatusResponse(Schema):
     total_input_tokens: Optional[int] = None
     total_output_tokens: Optional[int] = None
     logs: List[dict] = []
+    show_agent_thoughts: bool = False
     optimizer_context_snapshot: Optional[dict] = None
     cover_letter: Optional[str] = None
     cover_letter_generated_at: Optional[str] = None
@@ -201,14 +210,28 @@ class LlmCompleteResponse(Schema):
 
 @router.post("/llm/complete", response=LlmCompleteResponse)
 def llm_complete(request, payload: LlmCompleteRequest):
-    """Invoke the central LLM gateway with system + user strings (optional provider override)."""
+    """Invoke the central LLM gateway with system + user strings (optional provider override).
+
+    Requires plan ``api_access`` (Pro+). Input size is capped by ``LLM_COMPLETE_MAX_INPUT_CHARS``.
+    """
     user = api_user(request)
+    try:
+        require_api_access(user)
+    except EntitlementDenied as e:
+        raise HttpError(403, str(e)) from e
     u_text = (payload.user or "").strip()
     if not u_text:
         raise HttpError(400, "user is required")
+    system_text = (payload.system or "").strip()
+    max_chars = int(getattr(settings, "LLM_COMPLETE_MAX_INPUT_CHARS", 16_000) or 16_000)
+    if max_chars > 0 and (len(system_text) + len(u_text)) > max_chars:
+        raise HttpError(
+            400,
+            f"system+user exceeds LLM_COMPLETE_MAX_INPUT_CHARS ({max_chars}).",
+        )
     messages = []
-    if (payload.system or "").strip():
-        messages.append(SystemMessage(content=payload.system.strip()))
+    if system_text:
+        messages.append(SystemMessage(content=system_text))
     messages.append(HumanMessage(content=u_text))
     llm_override = None
     if payload.llm_provider:
@@ -231,6 +254,14 @@ def llm_complete(request, payload: LlmCompleteRequest):
         )
     except LLMRequestsDisabled as e:
         raise HttpError(503, str(e)) from e
+    except LLMUserRateLimitExceeded as e:
+        raise HttpError(429, str(e)) from e
+    except LLMTokenBudgetExceeded as e:
+        raise HttpError(429, str(e)) from e
+    except LLMConcurrencyLimitExceeded as e:
+        raise HttpError(429, str(e)) from e
+    except LLMInvokeTimeout as e:
+        raise HttpError(504, str(e)) from e
     from .agents import _normalize_token_usage
 
     content = getattr(raw, "content", None) if raw is not None else None
@@ -251,12 +282,12 @@ def run_step(
     payload: RunStepRequest = Form(...),
     file: Optional[UploadedFile] = File(None),
 ):
-    """Run a single optimizer step (writer, ats_judge, or recruiter_judge) and return its output."""
+    """Run a single optimizer step (writer, ats_judge, recruiter_judge, or jd_cleanse) and return its output."""
     user = api_user(request)
     step = (payload.step or "").strip().lower()
     logger.warning("[run_step] step=%s, job_desc_len=%s, optimized_resume_len=%s", step, len(payload.job_description or ""), len(payload.optimized_resume or ""))
-    if step not in ("writer", "ats_judge", "recruiter_judge"):
-        raise HttpError(400, "step must be one of: writer, ats_judge, recruiter_judge")
+    if step not in ("writer", "ats_judge", "recruiter_judge", "jd_cleanse"):
+        raise HttpError(400, "step must be one of: writer, ats_judge, recruiter_judge, jd_cleanse")
     if not (payload.job_description or "").strip():
         raise HttpError(400, "job_description is required")
     if payload.llm_provider not in LLM_PROVIDERS:
@@ -272,9 +303,10 @@ def run_step(
     model = payload.llm_model or (config.default_model if config else None) or None
     llm = get_llm(payload.llm_provider, api_key, model)
 
-    from .prompt_store import build_optimizer_graph_prompt_state, get_effective_prompts, save_prompts_to_profile
+    from .prompt_store import build_optimizer_graph_prompt_state
     from .optimizer_budget import build_optimizer_context_state_raw
 
+    # Per-request overrides only (system Prompt Library is the source of truth).
     _ov = {}
     if payload.prompt_writer and str(payload.prompt_writer).strip():
         _ov["writer"] = payload.prompt_writer.strip()
@@ -284,9 +316,9 @@ def run_step(
         _ov["recruiter_judge"] = payload.prompt_recruiter_judge.strip()
     workflow = None
     if payload.optimizer_workflow_id:
-        workflow = OptimizerWorkflow.objects.for_user(user).filter(
-            pk=int(payload.optimizer_workflow_id)
-        ).first()
+        from .prompt_store import get_optimizer_workflow_by_id
+
+        workflow = get_optimizer_workflow_by_id(payload.optimizer_workflow_id, user)
     _graph_prompts = build_optimizer_graph_prompt_state(
         _ov if _ov else None,
         request,
@@ -295,16 +327,6 @@ def run_step(
     )
     # Step-by-step always runs in debug mode
     debug = True
-    # Persist edited prompts to UserPromptProfile
-    if hasattr(request, "session"):
-        merged = get_effective_prompts(request)
-        merged.update(
-            {
-                "writer": payload.prompt_writer or "",
-                "recruiter_judge": payload.prompt_recruiter_judge or "",
-            }
-        )
-        save_prompts_to_profile(request, merged)
 
     def _get_resume_text():
         if file and getattr(file, "size", 0) and getattr(file, "name", "").strip().lower().endswith(PDF_EXTENSION):
@@ -325,6 +347,40 @@ def run_step(
 
     jkey = (payload.job_cache_key or "").strip() or None
     try:
+        if step == "jd_cleanse":
+            state = {
+                "resume_text": "",
+                "job_description": payload.job_description,
+                "job_title": (getattr(payload, "job_title", None) or "").strip(),
+                "optimized_resume": "",
+                "ats_score": 0,
+                "recruiter_score": 0,
+                "feedback": [],
+                "iteration_count": 0,
+                "llm": llm,
+                "job_cache_key": jkey,
+                "debug": debug,
+                "max_iterations": 3,
+                "user_id": user.id,
+            }
+            out = jd_cleanse_node(state)
+            return RunStepResponse(
+                step="jd_cleanse",
+                output={
+                    "job_description": out.get("job_description", ""),
+                    "writer_job_description": out.get("writer_job_description", ""),
+                    "judge_job_description": out.get("judge_job_description", ""),
+                    "jd_cleansed": out.get("jd_cleansed"),
+                    "parse_info": out.get("parse_info"),
+                    "debug_prompt": out.get("debug_prompt"),
+                    "debug_messages": out.get("debug_messages"),
+                    "debug_format_summary": out.get("debug_format_summary"),
+                    "input_tokens": out.get("input_tokens"),
+                    "output_tokens": out.get("output_tokens"),
+                    "tokens_estimated": out.get("tokens_estimated"),
+                },
+            )
+
         if step == "writer":
             resume_text = _get_resume_text()
             if not resume_text:
@@ -368,6 +424,8 @@ def run_step(
                 output={
                     "optimized_resume": out.get("optimized_resume", ""),
                     "debug_prompt": out.get("debug_prompt"),
+                    "debug_messages": out.get("debug_messages"),
+                    "debug_format_summary": out.get("debug_format_summary"),
                     "input_tokens": out.get("input_tokens"),
                     "output_tokens": out.get("output_tokens"),
                     "tokens_estimated": out.get("tokens_estimated"),
@@ -424,6 +482,8 @@ def run_step(
                     "ats_score": out.get("ats_score"),
                     "feedback": fb,
                     "debug_prompt": out.get("debug_prompt"),
+                    "debug_messages": out.get("debug_messages"),
+                    "debug_format_summary": out.get("debug_format_summary"),
                     "raw_llm_response": out.get("raw_llm_response"),
                     "raw_llm_response_retry": out.get("raw_llm_response_retry"),
                     "parse_info": out.get("parse_info"),
@@ -445,6 +505,8 @@ def run_step(
                     "recruiter_score": out.get("recruiter_score"),
                     "feedback": fb,
                     "debug_prompt": out.get("debug_prompt"),
+                    "debug_messages": out.get("debug_messages"),
+                    "debug_format_summary": out.get("debug_format_summary"),
                     "raw_llm_response": out.get("raw_llm_response"),
                     "raw_llm_response_retry": out.get("raw_llm_response_retry"),
                     "parse_info": out.get("parse_info"),
@@ -597,6 +659,14 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
     if content_type and content_type.lower() not in ALLOWED_CONTENT_TYPES:
         raise HttpError(400, "Resume file must have content type application/pdf")
 
+    from .entitlements import QuotaExceeded
+    from .storage_quota import assert_upload_allowed
+
+    try:
+        assert_upload_allowed(user, file)
+    except QuotaExceeded as exc:
+        raise HttpError(403, str(exc)) from exc
+
     # 1. Save Resume (retain original filename for display)
     original_name = (getattr(file, "name", "") or "resume.pdf").strip()
     if original_name and "/" in original_name:
@@ -614,21 +684,30 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
 
     workflow = None
     if payload.optimizer_workflow_id:
+        from .prompt_store import get_optimizer_workflow_by_id
+
         try:
-            workflow = OptimizerWorkflow.objects.for_user(user).get(pk=int(payload.optimizer_workflow_id))
-        except (OptimizerWorkflow.DoesNotExist, ValueError, TypeError):
+            workflow = get_optimizer_workflow_by_id(int(payload.optimizer_workflow_id), user)
+        except (ValueError, TypeError):
             workflow = None
 
-    from .prompt_store import resolve_effective_ats_judge_profile_id
+    from .prompt_store import (
+        get_ats_judge_profile_by_id,
+        get_default_ats_judge_profile,
+        resolve_effective_ats_judge_profile_id,
+    )
 
     effective_ats_id = resolve_effective_ats_judge_profile_id(
         ats_judge_profile_id=payload.ats_judge_profile_id,
         workflow=workflow,
         user=user,
     )
-    ats_profile = None
-    if effective_ats_id:
-        ats_profile = get_owned_or_404(AtsJudgeProfile, user, id=effective_ats_id)
+    ats_profile = get_ats_judge_profile_by_id(effective_ats_id, user=user) if effective_ats_id else None
+    if ats_profile is None and payload.ats_judge_profile_id:
+        raise HttpError(400, f"Invalid ats_judge_profile_id: {payload.ats_judge_profile_id}")
+    if ats_profile is None:
+        ats_profile = get_default_ats_judge_profile(user)
+        effective_ats_id = ats_profile.pk if ats_profile else None
 
     # 3. Create OptimizedResume record
     optimized = OptimizedResume.objects.create(
@@ -744,7 +823,12 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
     task_id = result.id if result else None
     return {"task_id": task_id, "resume_id": optimized.id}
 
-def get_status_data(resume_id: int, user):
+def get_status_data(resume_id: int, user, request=None):
+    from .agents import (
+        can_view_optimizer_llm_debug,
+        format_agent_log_thought,
+        redact_agent_log_thought,
+    )
     from .job_prep import interview_prep_to_markdown
 
     optimized = get_owned_or_404(OptimizedResume, user, id=resume_id)
@@ -767,6 +851,22 @@ def get_status_data(resume_id: int, user):
         if entry and (entry.interview_prep or "").strip():
             interview_prep_markdown = interview_prep_to_markdown(entry.interview_prep)
 
+    # Prompt/token debug is secret sauce — staff (incl. hijack) only.
+    include_prompt_debug = can_view_optimizer_llm_debug(request) if request is not None else False
+    log_rows = []
+    if include_prompt_debug:
+        for log in logs:
+            thought = redact_agent_log_thought(log.thought, include_prompt_debug=True)
+            step_in = thought.get("input_tokens") if "input_tokens" in thought else thought.get("input")
+            step_out = thought.get("output_tokens") if "output_tokens" in thought else thought.get("output")
+            log_rows.append({
+                "step": log.step_name,
+                "thought": thought,
+                "thought_text": format_agent_log_thought(thought, include_prompt_debug=True),
+                "step_in": step_in,
+                "step_out": step_out,
+            })
+
     cl_at = optimized.cover_letter_generated_at
     # "status" must stay the canonical workflow value (queued|running|completed|failed) so
     # the optimizer UI and templates can branch correctly. Human progress lives in status_display.
@@ -779,7 +879,8 @@ def get_status_data(resume_id: int, user):
         "error_message": optimized.error_message,
         "total_input_tokens": optimized.total_input_tokens,
         "total_output_tokens": optimized.total_output_tokens,
-        "logs": [{"step": l.step_name, "thought": l.thought} for l in logs],
+        "logs": log_rows,
+        "show_agent_thoughts": include_prompt_debug,
         "optimizer_context_snapshot": optimized.optimizer_context_snapshot,
         "cover_letter": optimized.cover_letter or None,
         "cover_letter_generated_at": cl_at.isoformat() if cl_at else None,
@@ -790,7 +891,7 @@ def get_status_data(resume_id: int, user):
 @router.get("/status/{resume_id}", response=StatusResponse)
 def get_status(request, resume_id: int):
     user = api_user(request)
-    return get_status_data(resume_id, user)
+    return get_status_data(resume_id, user, request=request)
 
 
 CANCELLED_MESSAGE = "Cancelled by user"
@@ -1013,10 +1114,18 @@ def _validate_workflow_steps(steps: list) -> None:
         raise HttpError(400, f"Invalid step id(s): {invalid}. Allowed: {sorted(VALID_STEP_IDS)}")
 
 
+def _require_staff_api(request) -> None:
+    user = api_user(request)
+    if not user or not getattr(user, "is_staff", False):
+        raise HttpError(403, "Staff access required.")
+
+
 @router.get("/ats-judge-profiles", response=List[AtsJudgeProfileListItem])
 def list_ats_judge_profiles_api(request):
-    """List named ATS judge prompt profiles."""
-    user = api_user(request)
+    """List system-wide ATS judge prompt profiles."""
+    api_user(request)  # auth required
+    from .prompt_store import list_ats_judge_profiles
+
     return [
         {
             "id": p.id,
@@ -1025,31 +1134,35 @@ def list_ats_judge_profiles_api(request):
             "is_builtin": p.is_builtin,
             "is_default": p.is_default,
         }
-        for p in AtsJudgeProfile.objects.for_user(user).order_by("name")
+        for p in list_ats_judge_profiles()
     ]
 
 
 @router.get("/ats-judge-profiles/{profile_id}", response=AtsJudgeProfileDetail)
 def get_ats_judge_profile_api(request, profile_id: int):
-    user = api_user(request)
-    p = get_owned_or_404(AtsJudgeProfile, user, id=profile_id)
+    api_user(request)
+    from .prompt_store import get_ats_judge_profile_by_id
+
+    p = get_ats_judge_profile_by_id(profile_id)
+    if p is None:
+        raise HttpError(404, "ATS judge profile not found.")
     return _ats_profile_to_detail(p)
 
 
 @router.post("/ats-judge-profiles", response=AtsJudgeProfileDetail)
 def create_ats_judge_profile_api(request, payload: AtsJudgeProfileCreateUpdate):
-    user = api_user(request)
+    _require_staff_api(request)
     from .prompt_store import save_ats_judge_profile
 
     name = (payload.name or "").strip()
     if not name:
         raise HttpError(400, "name is required")
     slug = (payload.slug or "").strip() or None
-    if slug and AtsJudgeProfile.objects.filter(owner=user, slug=slug).exists():
+    if slug and AtsJudgeProfile.objects.filter(owner__isnull=True, slug=slug).exists():
         raise HttpError(400, f"slug already exists: {slug}")
     leg = (payload.ats_judge_legacy_combined or payload.ats_judge or "").strip()
     p = AtsJudgeProfile(
-        owner=user,
+        owner=None,
         name=name,
         slug=slug or "",
         is_default=bool(payload.is_default),
@@ -1070,15 +1183,21 @@ def create_ats_judge_profile_api(request, payload: AtsJudgeProfileCreateUpdate):
 
 @router.put("/ats-judge-profiles/{profile_id}", response=AtsJudgeProfileDetail)
 def update_ats_judge_profile_api(request, profile_id: int, payload: AtsJudgeProfileCreateUpdate):
-    user = api_user(request)
-    from .prompt_store import save_ats_judge_profile
+    _require_staff_api(request)
+    from .prompt_store import get_ats_judge_profile_by_id, save_ats_judge_profile
 
-    p = get_owned_or_404(AtsJudgeProfile, user, id=profile_id)
+    p = get_ats_judge_profile_by_id(profile_id)
+    if p is None:
+        raise HttpError(404, "ATS judge profile not found.")
     name = (payload.name or "").strip()
     if not name:
         raise HttpError(400, "name is required")
     slug = (payload.slug or "").strip()
-    if slug and slug != p.slug and AtsJudgeProfile.objects.filter(owner=user, slug=slug).exclude(pk=p.pk).exists():
+    if (
+        slug
+        and slug != p.slug
+        and AtsJudgeProfile.objects.filter(owner__isnull=True, slug=slug).exclude(pk=p.pk).exists()
+    ):
         raise HttpError(400, f"slug already exists: {slug}")
     if slug:
         p.slug = slug
@@ -1098,14 +1217,19 @@ def update_ats_judge_profile_api(request, profile_id: int, payload: AtsJudgeProf
 
 @router.delete("/ats-judge-profiles/{profile_id}")
 def delete_ats_judge_profile_api(request, profile_id: int):
-    user = api_user(request)
-    p = get_owned_or_404(AtsJudgeProfile, user, id=profile_id)
-    if p.is_builtin and AtsJudgeProfile.objects.for_user(user).count() <= 1:
+    _require_staff_api(request)
+    from .prompt_store import get_ats_judge_profile_by_id
+
+    p = get_ats_judge_profile_by_id(profile_id)
+    if p is None:
+        raise HttpError(404, "ATS judge profile not found.")
+    global_count = AtsJudgeProfile.objects.filter(owner__isnull=True).count()
+    if p.is_builtin and global_count <= 1:
         raise HttpError(400, "Cannot delete the only built-in ATS profile.")
     was_default = p.is_default
     p.delete()
     if was_default:
-        fallback = AtsJudgeProfile.objects.for_user(user).order_by("pk").first()
+        fallback = AtsJudgeProfile.objects.filter(owner__isnull=True).order_by("pk").first()
         if fallback:
             fallback.is_default = True
             fallback.save()
@@ -1114,21 +1238,29 @@ def delete_ats_judge_profile_api(request, profile_id: int):
 
 @router.get("/workflows", response=List[WorkflowSchema])
 def list_workflows(request):
-    """List all saved optimizer workflows."""
+    """List system-wide optimizer workflows available to all subscribers."""
+    from .prompt_store import list_optimizer_workflows
+
     user = api_user(request)
-    return [_workflow_to_schema(w) for w in OptimizerWorkflow.objects.for_user(user)]
+    return [_workflow_to_schema(w) for w in list_optimizer_workflows(user)]
 
 
 @router.get("/workflows/{workflow_id}", response=WorkflowSchema)
 def get_workflow(request, workflow_id: int):
+    from .prompt_store import get_optimizer_workflow_by_id
+
     user = api_user(request)
-    w = get_owned_or_404(OptimizerWorkflow, user, id=workflow_id)
+    w = get_optimizer_workflow_by_id(workflow_id, user)
+    if w is None:
+        raise HttpError(404, "Workflow not found")
     return _workflow_to_schema(w)
 
 
 @router.post("/workflows", response=WorkflowSchema)
 def create_workflow_api(request, payload: WorkflowCreateUpdate):
     user = api_user(request)
+    if not getattr(user, "is_staff", False):
+        raise HttpError(403, "Staff access required")
     _validate_workflow_steps(payload.steps)
     loop_to = (payload.loop_to or "").strip() or ""
     if loop_to and loop_to not in VALID_STEP_IDS:
@@ -1138,7 +1270,7 @@ def create_workflow_api(request, payload: WorkflowCreateUpdate):
     score_t = payload.score_threshold if payload.score_threshold is not None else 85
     score_t = max(0, min(100, score_t))
     w = OptimizerWorkflow.objects.create(
-        owner=user,
+        owner=None,
         name=payload.name.strip(),
         steps=payload.steps,
         loop_to=loop_to,
@@ -1151,8 +1283,14 @@ def create_workflow_api(request, payload: WorkflowCreateUpdate):
 
 @router.put("/workflows/{workflow_id}", response=WorkflowSchema)
 def update_workflow(request, workflow_id: int, payload: WorkflowCreateUpdate):
+    from .prompt_store import get_optimizer_workflow_by_id
+
     user = api_user(request)
-    w = get_owned_or_404(OptimizerWorkflow, user, id=workflow_id)
+    if not getattr(user, "is_staff", False):
+        raise HttpError(403, "Staff access required")
+    w = get_optimizer_workflow_by_id(workflow_id, user)
+    if w is None:
+        raise HttpError(404, "Workflow not found")
     _validate_workflow_steps(payload.steps)
     loop_to = (payload.loop_to or "").strip() or ""
     if loop_to and loop_to not in VALID_STEP_IDS:
@@ -1177,8 +1315,14 @@ def update_workflow(request, workflow_id: int, payload: WorkflowCreateUpdate):
 
 @router.delete("/workflows/{workflow_id}")
 def delete_workflow(request, workflow_id: int):
+    from .prompt_store import get_optimizer_workflow_by_id
+
     user = api_user(request)
-    w = get_owned_or_404(OptimizerWorkflow, user, id=workflow_id)
+    if not getattr(user, "is_staff", False):
+        raise HttpError(403, "Staff access required")
+    w = get_optimizer_workflow_by_id(workflow_id, user)
+    if w is None:
+        raise HttpError(404, "Workflow not found")
     w.delete()
     return {"success": True}
 
@@ -1235,7 +1379,7 @@ def llm_models(request, provider: str):
     if not api_key:
         from .pipeline_llm_skill_extract import resolve_provider_api_key
 
-        api_key = resolve_provider_api_key(provider)
+        api_key = resolve_provider_api_key(provider, user=user)
     if not api_key:
         raise HttpError(401, "No API key stored. Enter key and click Connect, or set env for this provider.")
     had_stored_key = bool(config and config.encrypted_api_key)
@@ -1271,18 +1415,25 @@ def llm_set_default_model(request, provider: str, model: str):
 
 
 def _parse_markdown_blocks(content: str):
-    """Yield (block_type, text). block_type: heading1, heading2, bullet, paragraph."""
+    """Yield (block_type, text).
+
+    block_type: heading1..heading6, bullet, paragraph.
+    Heading markers must be checked longest-first so ### / #### are not left as plain text.
+    """
+    import re
+
     if not content:
         return
+    heading_re = re.compile(r"^(#{1,6})\s+(.+)$")
     for line in (content or "").replace("\r", "").split("\n"):
         raw = line
         line = line.strip()
         if not line:
             continue
-        if line.startswith("# "):
-            yield ("heading1", line[2:].strip())
-        elif line.startswith("## "):
-            yield ("heading2", line[3:].strip())
+        heading_match = heading_re.match(line)
+        if heading_match:
+            level = len(heading_match.group(1))
+            yield (f"heading{level}", heading_match.group(2).strip())
         elif line.startswith("- ") or line.startswith("* "):
             yield ("bullet", line[2:].strip())
         else:
@@ -1414,20 +1565,28 @@ def _build_export_pdf(content: str) -> io.BytesIO:
         text_width = width - 2 * inch
         heading_color = (31/255, 78/255, 121/255)
         
+        heading_styles = {
+            "heading1": {"font_size": 18, "block_height": 26, "space_after": body_line_height / 3},
+            "heading2": {"font_size": 13, "block_height": 22, "space_after": body_line_height / 3},
+            "heading3": {"font_size": 12, "block_height": 20, "space_after": body_line_height / 4},
+            "heading4": {"font_size": 11, "block_height": 18, "space_after": body_line_height / 5},
+            "heading5": {"font_size": 11, "block_height": 18, "space_after": body_line_height / 5},
+            "heading6": {"font_size": 11, "block_height": 18, "space_after": body_line_height / 5},
+        }
+
         for block_type, text in _parse_markdown_blocks(content):
+            heading_style = heading_styles.get(block_type)
             block_height = body_line_height
-            if block_type == "heading1":
-                block_height = 26
-            elif block_type == "heading2":
-                block_height = 22
+            if heading_style:
+                block_height = heading_style["block_height"]
             elif block_type == "bullet":
                 block_height = 20
-            
+
             if y < inch + block_height * 3:
                 c.showPage()
                 y = height - inch
-            
-            if block_type == "heading1":
+
+            if heading_style:
                 y -= body_line_height / 4
                 y = _draw_rich_text(
                     c,
@@ -1436,25 +1595,11 @@ def _build_export_pdf(content: str) -> io.BytesIO:
                     text_width,
                     _split_style_spans(text),
                     block_height,
-                    font_size=18,
+                    font_size=heading_style["font_size"],
                     default_font_name="Times-Bold",
                     text_color=heading_color,
                 )
-                y -= body_line_height / 3
-            elif block_type == "heading2":
-                y -= body_line_height / 4
-                y = _draw_rich_text(
-                    c,
-                    inch,
-                    y,
-                    text_width,
-                    _split_style_spans(text),
-                    block_height,
-                    font_size=13,
-                    default_font_name="Times-Bold",
-                    text_color=heading_color,
-                )
-                y -= body_line_height / 3
+                y -= heading_style["space_after"]
             elif block_type == "bullet":
                 c.setFont("Times-Roman", 11)
                 c.setFillColor(colors.black)
@@ -1483,7 +1628,7 @@ def _build_export_pdf(content: str) -> io.BytesIO:
                     default_font_name="Times-Roman",
                 )
                 y -= body_line_height / 5
-        
+
         c.save()
         buf.seek(0)
         return buf
@@ -1498,13 +1643,19 @@ def _build_export_docx(content: str) -> io.BytesIO:
         from docx import Document
         from docx.shared import Pt
         doc = Document()
+        # python-docx heading levels are 0..9; map markdown #..###### -> 0..5.
+        heading_levels = {
+            "heading1": 0,
+            "heading2": 1,
+            "heading3": 2,
+            "heading4": 3,
+            "heading5": 4,
+            "heading6": 5,
+        }
         for block_type, text in _parse_markdown_blocks(content):
-            if block_type == "heading1":
-                p = doc.add_heading(text, level=0)
-                p.paragraph_format.space_after = Pt(8)
-            elif block_type == "heading2":
-                p = doc.add_heading(text, level=1)
-                p.paragraph_format.space_after = Pt(6)
+            if block_type in heading_levels:
+                p = doc.add_heading(text, level=heading_levels[block_type])
+                p.paragraph_format.space_after = Pt(8 if block_type == "heading1" else 6)
             elif block_type == "bullet":
                 p = doc.add_paragraph(style="List Bullet")
                 for is_bold, is_italic, segment in _split_style_spans(text):
@@ -1542,7 +1693,11 @@ def _apply_export_replacements(content: str, request) -> str:
         replacements.append((value, replacement))
 
     if not replacements:
-        raw_replacements = request.session.get("export_replacements") or []
+        from .models import AppAutomationSettings
+
+        raw_replacements = AppAutomationSettings.get_for_user(request.user).export_replacements or []
+        if not raw_replacements:
+            raw_replacements = request.session.get("export_replacements") or []
         for entry in raw_replacements:
             if not isinstance(entry, dict):
                 continue

@@ -90,47 +90,69 @@ def check_job_listing_active(job: JobListing, timeout_seconds: float = 8.0) -> J
 def purge_inactive_pipeline_entries(
     *,
     limit: int = 500,
+    per_owner_limit: int | None = None,
 ) -> dict[str, int]:
     """
-    Check active applying rows and soft-delete ones that are clearly inactive.
+    Check applying-stage rows and soft-delete ones whose job listing is inactive.
+
+    Fairly distributes the check budget across owners so one tenant cannot
+    monopolize the batch (and so cleanup remains tenant-aware).
     """
-    qs = (
+    base = (
         PipelineEntry.objects.filter(removed_at__isnull=True)
         .filter(stage=PipelineEntry.Stage.APPLYING)
         .select_related("job_listing")
-        .order_by("-added_at")
     )
-    entries = list(qs[: max(1, int(limit))])
+    owner_ids = list(base.values_list("owner_id", flat=True).distinct().order_by("owner_id"))
+    if not owner_ids:
+        return {"checked": 0, "removed_inactive": 0, "active": 0, "unknown": 0, "owners": 0}
+
+    total_limit = max(1, int(limit))
+    if per_owner_limit is None:
+        # Equal share, at least 1 per owner, capped by remaining budget.
+        per_owner_limit = max(1, total_limit // max(1, len(owner_ids)))
+    else:
+        per_owner_limit = max(1, int(per_owner_limit))
 
     checked = 0
     removed = 0
     unknown = 0
     active = 0
     progress_every = 25
-    for entry in entries:
-        checked += 1
-        result = check_job_listing_active(entry.job_listing)
-        if result.active is False:
-            entry.mark_deleted(save=True)
-            removed += 1
-        elif result.active is True:
-            active += 1
-        else:
-            unknown += 1
-        if checked % progress_every == 0:
-            logger.info(
-                "[purge_inactive_pipeline_entries] progress checked=%d/%d removed_inactive=%d active=%d unknown=%d",
-                checked,
-                len(entries),
-                removed,
-                active,
-                unknown,
-            )
+
+    for owner_id in owner_ids:
+        if checked >= total_limit:
+            break
+        remaining = total_limit - checked
+        take = min(per_owner_limit, remaining)
+        entries = list(base.filter(owner_id=owner_id).order_by("-added_at")[:take])
+        for entry in entries:
+            checked += 1
+            result = check_job_listing_active(entry.job_listing)
+            if result.active is False:
+                entry.mark_deleted(save=True)
+                removed += 1
+            elif result.active is True:
+                active += 1
+            else:
+                unknown += 1
+            if checked % progress_every == 0:
+                logger.info(
+                    "[purge_inactive_pipeline_entries] progress checked=%d/%d "
+                    "removed_inactive=%d active=%d unknown=%d owners=%d",
+                    checked,
+                    total_limit,
+                    removed,
+                    active,
+                    unknown,
+                    len(owner_ids),
+                )
 
     return {
         "checked": checked,
         "removed_inactive": removed,
         "active": active,
         "unknown": unknown,
+        "owners": len(owner_ids),
     }
 

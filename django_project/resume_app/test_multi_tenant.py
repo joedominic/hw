@@ -6,6 +6,7 @@ from django.test import Client, TestCase
 from resume_app.models import (
     ApplicantProfile,
     AppAutomationSettings,
+    AtsJudgeProfile,
     JobDescription,
     JobListing,
     LLMProviderConfig,
@@ -68,7 +69,7 @@ class MultiTenantIsolationTests(TestCase):
         Track.ensure_baseline(user)
         self.assertTrue(ApplicantProfile.objects.filter(owner=user).exists())
         self.assertTrue(AppAutomationSettings.objects.filter(owner=user).exists())
-        self.assertGreaterEqual(Track.objects.for_user(user).count(), 2)
+        self.assertGreaterEqual(Track.objects.for_user(user).count(), 1)
 
     # ------------------------------------------------------------------
     # LLM provider isolation
@@ -252,3 +253,134 @@ class MonitorAccessControlTests(TestCase):
         resp = client.get("/jobs/huey/")
         # 200 OK or redirect-to-login are both acceptable; 403 is not
         self.assertNotEqual(resp.status_code, 403)
+
+
+class FocusBreakdownStaffOnlyTests(TestCase):
+    """Focus-score breakdown pages/API expose ranking internals — staff only."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="regular_fit", password="pass12345!")
+        self.staff = User.objects.create_user(
+            username="admin_fit", password="pass12345!", is_staff=True
+        )
+        Track.ensure_baseline(self.user)
+        Track.ensure_baseline(self.staff)
+        self.job = JobListing.objects.create(
+            title="Staff Gate Test Role",
+            company_name="Acme",
+            description="Build things.",
+            source="test",
+            external_id="focus-staff-gate-1",
+        )
+
+    def test_regular_user_cannot_open_focus_breakdown_page(self):
+        client = Client()
+        client.login(username="regular_fit", password="pass12345!")
+        resp = client.get(f"/jobs/{self.job.id}/focus-breakdown/")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_regular_user_cannot_call_focus_breakdown_api(self):
+        client = Client()
+        client.login(username="regular_fit", password="pass12345!")
+        resp = client.get(f"/api/resume/jobs/focus-breakdown/{self.job.id}")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_staff_user_is_not_forbidden_from_focus_breakdown_page(self):
+        client = Client()
+        client.login(username="admin_fit", password="pass12345!")
+        resp = client.get(f"/jobs/{self.job.id}/focus-breakdown/")
+        self.assertNotEqual(resp.status_code, 403)
+
+
+class OptimizerAtsProfileScopingTests(TestCase):
+    """Optimizer must only list/select ATS profiles owned by the current user."""
+
+    def setUp(self):
+        self.user_a = User.objects.create_user(username="alice_opt", password="pass12345!")
+        self.user_b = User.objects.create_user(username="bob_opt", password="pass12345!")
+        self.profile_a = AtsJudgeProfile.objects.filter(owner=self.user_a).first()
+        if self.profile_a is None:
+            self.profile_a = AtsJudgeProfile.objects.create(
+                owner=self.user_a,
+                name="Alice Default",
+                slug="alice-default",
+                is_default=True,
+                ats_judge_system="A_SYS",
+                ats_judge_user="A_USR",
+            )
+        else:
+            self.profile_a.is_default = True
+            self.profile_a.save(update_fields=["is_default"])
+        self.profile_b = AtsJudgeProfile.objects.create(
+            owner=self.user_b,
+            name="Bob Workday",
+            slug="bob-workday",
+            is_default=True,
+            ats_judge_system="B_SYS",
+            ats_judge_user="B_USR",
+        )
+
+    def test_optimizer_page_only_lists_own_ats_profiles(self):
+        client = Client()
+        client.login(username="alice_opt", password="pass12345!")
+        resp = client.get("/resume/optimizer/")
+        self.assertEqual(resp.status_code, 200)
+        profiles = resp.context["ats_profiles"]
+        ids = {p.pk for p in profiles}
+        self.assertIn(self.profile_a.pk, ids)
+        self.assertNotIn(self.profile_b.pk, ids)
+        self.assertEqual(resp.context["selected_ats_profile_id"], self.profile_a.pk)
+
+    def test_optimizer_ignores_stale_session_ats_id_from_other_user(self):
+        client = Client()
+        client.login(username="alice_opt", password="pass12345!")
+        session = client.session
+        session["optimizer_ats_judge_profile_id"] = self.profile_b.pk
+        session.save()
+        resp = client.get("/resume/optimizer/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.context["selected_ats_profile_id"], self.profile_a.pk)
+
+
+class LandingPageTests(TestCase):
+    def test_anonymous_user_sees_landing(self):
+        resp = Client().get("/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Land your next role")
+        self.assertContains(resp, 'href="/accounts/login/"')
+        self.assertContains(resp, 'href="/accounts/signup/"')
+
+    def test_authenticated_user_redirects_to_getting_started(self):
+        user = User.objects.create_user(username="landing", password="pass12345!")
+        client = Client()
+        client.login(username=user.username, password="pass12345!")
+        resp = client.get("/")
+        self.assertRedirects(resp, "/getting-started/", fetch_redirect_response=False)
+
+
+class LegalPagesTests(TestCase):
+    def test_privacy_and_terms_are_public(self):
+        client = Client()
+        self.assertEqual(client.get("/legal/privacy/").status_code, 200)
+        self.assertEqual(client.get("/legal/terms/").status_code, 200)
+        self.assertContains(client.get("/legal/privacy/"), "Privacy Policy")
+        self.assertContains(client.get("/legal/terms/"), "Terms of Service")
+
+
+class SetStaffUserCommandTests(TestCase):
+    def test_grant_and_revoke_staff_and_support(self):
+        from django.core.management import call_command
+
+        user = User.objects.create_user(username="ops", password="pass12345!")
+        self.assertFalse(user.is_staff)
+
+        call_command("set_staff_user", "ops")
+        user.refresh_from_db()
+        self.assertTrue(user.is_staff)
+        self.assertTrue(user.groups.filter(name="Support").exists())
+        self.assertTrue(user.has_perm("resume_app.can_impersonate_users"))
+
+        call_command("set_staff_user", "ops", "--remove")
+        user.refresh_from_db()
+        self.assertFalse(user.is_staff)
+        self.assertFalse(user.groups.filter(name="Support").exists())

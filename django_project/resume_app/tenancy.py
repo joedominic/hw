@@ -20,6 +20,7 @@ IMPERSONATION_SESSION_KEYS = (
     "optimizer_llm_model",
     "optimizer_llm_provider",
     "job_search_track",
+    "job_search_profile_slug",
     "job_search_resume_id",
     "optimizer_workflow_id",
     "optimizer_ats_judge_profile_id",
@@ -92,17 +93,31 @@ def api_user(request: HttpRequest) -> AbstractBaseUser:
 
 
 def get_real_user(request: HttpRequest) -> Optional[AbstractBaseUser]:
-    """Actual signed-in user (support admin during hijack)."""
-    try:
-        from hijack.helpers import get_hijacker
+    """
+    Actual signed-in user (support admin during hijack).
 
-        hijacker = get_hijacker(request.user)
-        if hijacker is not None:
-            return hijacker
-    except ImportError:
-        pass
+    django-hijack 3.x stores prior user PKs in ``session['hijack_history']``
+    (a stack). There is no ``hijack.helpers.get_hijacker`` in 3.7 — resolve
+    the original hijacker from that history instead.
+    """
     user = getattr(request, "user", None)
-    if user is not None and user.is_authenticated:
+    session = getattr(request, "session", None)
+    history = None
+    if session is not None:
+        try:
+            history = session.get("hijack_history") or []
+        except Exception:
+            history = []
+    if history:
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        # Original admin who started the impersonation chain.
+        try:
+            return User.objects.get(pk=history[0])
+        except (User.DoesNotExist, TypeError, ValueError):
+            pass
+    if user is not None and getattr(user, "is_authenticated", False):
         return user
     return None
 

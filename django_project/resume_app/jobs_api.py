@@ -9,6 +9,7 @@ import re
 from typing import List, Optional
 
 from django.conf import settings
+from django.db import OperationalError, connection, transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from ninja import Router
@@ -26,13 +27,25 @@ from .models import (
     Track,
 )
 from .job_sources import fetch_jobs, normalize_site_names, upsert_job_listing_from_fetch
-from .job_search_core import rank_and_filter_jobs, run_job_search_core, pipeline_jobs_to_payloads
+from .job_search_core import (
+    annotate_saved_flags,
+    rank_and_filter_jobs,
+    run_job_search_core,
+    pipeline_jobs_to_payloads,
+)
 from .tenancy import api_user, get_owned_or_404
 from .track_actions import (
     normalize_track_slug,
     q_clear_on_sentiment_change,
     q_disliked_rows_for_search,
     q_saved_rows_for_track,
+    excluded_listing_id_set,
+)
+from .search_profile_scope import (
+    dual_write_track_fields,
+    ensure_pipeline_entry_on_manual_save,
+    remove_pipeline_entry_on_unsave,
+    resolve_active_profile_slug,
 )
 from .services import parse_pdf
 from .crypto import decrypt_api_key
@@ -62,6 +75,8 @@ from .schemas import (
     JobSearchRequest,
     JobPayload,
     JobDetailPayload,
+    FetchJobDescriptionRequest,
+    FetchJobDescriptionResponse,
     JobSearchResponse,
     MatchRequest,
     MatchResponse,
@@ -160,24 +175,152 @@ def _user_library_resumes(user):
     return UserResume.objects.for_user(user).filter(is_library=True)
 
 
+def _upsert_feedback_embedding(
+    *,
+    user,
+    job: JobListing,
+    embedding_type: str,
+    track: str,
+    search_profile,
+    vector,
+) -> None:
+    """
+    Persist a like/dislike embedding without ``update_or_create``'s ``select_for_update``.
+
+    SQLite + long embedding work often hits ``database is locked``; callers should treat
+    this as best-effort after the JobListingAction is already saved.
+    """
+    if vector is None:
+        return
+    defaults = {
+        "embedding": vector,
+        "track": track,
+        "search_profile": search_profile,
+    }
+    qs = JobListingEmbedding.objects.filter(
+        owner=user,
+        job_listing=job,
+        embedding_type=embedding_type,
+        track=track,
+    )
+    existing = qs.first()
+    if existing:
+        for key, value in defaults.items():
+            setattr(existing, key, value)
+        existing.save(update_fields=list(defaults.keys()))
+        return
+    try:
+        JobListingEmbedding.objects.create(
+            owner=user,
+            job_listing=job,
+            embedding_type=embedding_type,
+            **defaults,
+        )
+    except Exception:
+        # Race: another request inserted the same row; update it.
+        existing = qs.first()
+        if existing is None:
+            raise
+        for key, value in defaults.items():
+            setattr(existing, key, value)
+        existing.save(update_fields=list(defaults.keys()))
+
+
+def _store_feedback_embedding_best_effort(
+    *,
+    user,
+    job: JobListing,
+    embedding_type: str,
+    track: str,
+    search_profile,
+    embed_fn,
+) -> None:
+    """Compute and store preference embedding; log and continue on failure."""
+    try:
+        # Release any open SQLite write lock before slow embedding work.
+        connection.close()
+        vector = embed_fn(job.title or "", job.description or "")
+        _upsert_feedback_embedding(
+            user=user,
+            job=job,
+            embedding_type=embedding_type,
+            track=track,
+            search_profile=search_profile,
+            vector=vector,
+        )
+    except OperationalError as exc:
+        logger.warning(
+            "Feedback embedding DB lock for job %s (%s): %s",
+            job.id,
+            embedding_type,
+            exc,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Feedback embedding failed for job %s (%s): %s",
+            job.id,
+            embedding_type,
+            exc,
+        )
+
+
+def _store_feedback_embedding_async(
+    *,
+    user,
+    job: JobListing,
+    embedding_type: str,
+    track: str,
+    search_profile,
+    embed_fn,
+) -> None:
+    """
+    Queue preference embedding off the request thread.
+
+    Like/dislike exclusion is already persisted via JobListingAction; embeddings only
+    improve ranking. Running them inline often hits SQLite ``database is locked`` while
+    the search page / Huey also write.
+    """
+    import threading
+
+    user_id = user.pk
+    job_id = job.pk
+
+    def _run() -> None:
+        from django.contrib.auth import get_user_model
+        from django.db import close_old_connections
+
+        close_old_connections()
+        try:
+            owner = get_user_model().objects.get(pk=user_id)
+            listing = JobListing.objects.get(pk=job_id)
+            _store_feedback_embedding_best_effort(
+                user=owner,
+                job=listing,
+                embedding_type=embedding_type,
+                track=track,
+                search_profile=search_profile,
+                embed_fn=embed_fn,
+            )
+            if embedding_type == JobListingEmbedding.EmbeddingType.LIKED:
+                invalidate_preference_cache(owner)
+            else:
+                invalidate_disliked_embeddings_cache(owner)
+        except Exception as exc:
+            logger.warning(
+                "Async feedback embedding failed for job %s (%s): %s",
+                job_id,
+                embedding_type,
+                exc,
+            )
+        finally:
+            close_old_connections()
+
+    threading.Thread(target=_run, daemon=True, name=f"feedback-embed-{job_id}").start()
+
+
 def _disliked_listing_id_set(user, track: Optional[str]):
-    slug = normalize_track_slug(track, user)
-    return set(
-        JobListingAction.objects.for_user(user)
-        .filter(action=JobListingAction.ActionType.DISLIKED)
-        .filter(q_disliked_rows_for_search(slug))
-        .values_list("job_listing_id", flat=True)
-    )
-
-
-def _saved_listing_id_set(user, track: Optional[str]):
-    slug = normalize_track_slug(track, user)
-    return set(
-        JobListingAction.objects.for_user(user)
-        .filter(action=JobListingAction.ActionType.SAVED)
-        .filter(q_saved_rows_for_track(slug))
-        .values_list("job_listing_id", flat=True)
-    )
+    """Jobs excluded from search (hidden ∪ disliked). Name kept for call-site compatibility."""
+    return excluded_listing_id_set(user, track)
 
 
 def _get_disqualifier_phrases(user) -> List[str]:
@@ -203,11 +346,46 @@ def _user_provider_api_key_available(user, provider: str) -> bool:
     return bool(str(key).strip()) if key else False
 
 
-def _resolve_track(user, track: Optional[str], session_track: Optional[str] = None) -> str:
-    """
-    Normalize track slug from explicit param or session, falling back to default.
-    """
-    return (track or session_track or "").strip().lower() or Track.get_default_slug(user)
+def _session_profile_keys(request) -> tuple[Optional[str], Optional[str]]:
+    session = getattr(request, "session", None)
+    if not session or not hasattr(session, "get"):
+        return None, None
+    return session.get("job_search_profile_slug"), session.get("job_search_track")
+
+
+def _resolve_track(
+    user,
+    track: Optional[str],
+    session_track: Optional[str] = None,
+    *,
+    profile: Optional[str] = None,
+    session_profile: Optional[str] = None,
+) -> str:
+    """Normalize profile slug from explicit param or session, falling back to default."""
+    return resolve_active_profile_slug(
+        user,
+        profile=profile,
+        track=track,
+        session_profile=session_profile,
+        session_track=session_track,
+    )
+
+
+def _resolve_track_from_request(
+    user,
+    request,
+    *,
+    track: Optional[str] = None,
+    profile: Optional[str] = None,
+) -> str:
+    session_profile, session_track = _session_profile_keys(request)
+    return _resolve_track(
+        user,
+        track,
+        session_track,
+        profile=profile,
+        session_profile=session_profile,
+    )
 
 
 # --- Endpoints ---
@@ -232,14 +410,12 @@ def jobs_list_resumes(request):
 
 @router.get("/pipeline", response=JobSearchResponse)
 def pipeline_list(request, track: str = "ic"):
-    """List pipeline jobs for a track (focus % computed at view time). Excludes saved jobs."""
+    """List pipeline jobs for a track (focus % computed at view time)."""
     user = api_user(request)
     track = (track or "").strip().lower() or Track.get_default_slug(user)
-    saved_ids = _saved_listing_id_set(user, track)
     entries = (
         PipelineEntry.objects.for_user(user)
         .filter(track=track, removed_at__isnull=True)
-        .exclude(job_listing_id__in=saved_ids)
         .select_related("job_listing")
         .order_by("-added_at")
     )
@@ -311,6 +487,12 @@ def jobs_search(request, payload: JobSearchRequest):
     )
 
     if use_cache:
+        from .entitlements import METRIC_JOB_SEARCHES, QuotaExceeded, consume_quota
+
+        try:
+            consume_quota(user, METRIC_JOB_SEARCHES, 1)
+        except QuotaExceeded as e:
+            raise HttpError(429, str(e)) from e
         logger.info("[jobs/search] Using cache: %d refs", len(cached["refs"]))
         for ref in cached["refs"]:
             job = JobListing.objects.filter(
@@ -351,6 +533,7 @@ def jobs_search(request, payload: JobSearchRequest):
         if payload.results_wanted is not None and payload.results_wanted > 0:
             display_limit = min(display_limit, payload.results_wanted)
         jobs_out = jobs_out_from_core[:display_limit]
+        annotate_saved_flags(user, search_track, jobs_out)
         logger.info("[jobs/search] Returning %d jobs (from core, display_limit=%d)", len(jobs_out), display_limit)
         return JobSearchResponse(jobs=jobs_out, total=len(jobs_out))
 
@@ -369,6 +552,7 @@ def jobs_search(request, payload: JobSearchRequest):
         display_limit = min(display_limit, payload.results_wanted)
     before_slice = len(jobs_out)
     jobs_out = jobs_out[:display_limit]
+    annotate_saved_flags(user, search_track, jobs_out)
     logger.info("[jobs/search] Returning %d jobs (before slice=%d, display_limit=%d)", len(jobs_out), before_slice, display_limit)
     return JobSearchResponse(jobs=jobs_out, total=len(jobs_out))
 
@@ -526,6 +710,7 @@ def jobs_insights(request, payload: InsightsRequest):
         raw = _llm_invoke_with_retry(
             llm,
             messages,
+            user=user,
             job_cache_key="insights:" + ",".join(str(i) for i in payload.job_listing_ids),
             usage_query_kind=USAGE_QUERY_JOB_INSIGHTS,
         )
@@ -662,6 +847,7 @@ def pipeline_resume_summary_start(request, payload: PipelineResumeSummaryStartRe
     run_dir = run_directory(norm_track, run_id)
     write_initial_run_files(
         run_dir,
+        owner_id=user.pk,
         track=norm_track,
         provider=llm_provider,
         model=model,
@@ -907,7 +1093,7 @@ def jobs_saved(request, track: Optional[str] = None):
 
 @router.get("/disliked", response=JobSearchResponse)
 def jobs_disliked(request, track: Optional[str] = None):
-    """List disliked job listings for the active track (session or query param)."""
+    """List hidden + disliked jobs for the active track (Hidden tab)."""
     user = api_user(request)
     session_track = (
         getattr(getattr(request, "session", None), "get", lambda *_: None)("job_search_track")
@@ -915,16 +1101,25 @@ def jobs_disliked(request, track: Optional[str] = None):
         else None
     )
     slug = normalize_track_slug(_resolve_track(user, track, session_track), user)
-    disliked = (
+    excluded = (
         JobListingAction.objects.for_user(user)
-        .filter(action=JobListingAction.ActionType.DISLIKED)
+        .filter(
+            action__in=[
+                JobListingAction.ActionType.DISLIKED,
+                JobListingAction.ActionType.HIDDEN,
+            ]
+        )
         .filter(q_disliked_rows_for_search(slug))
         .select_related("job_listing")
         .order_by("-created_at")
     )
+    seen: set[int] = set()
     jobs_out = []
-    for d in disliked:
-        job = d.job_listing
+    for row in excluded:
+        job = row.job_listing
+        if job.id in seen:
+            continue
+        seen.add(job.id)
         snippet = (job.description or "")[:300].replace("\n", " ")
         jobs_out.append(_job_to_payload(job, snippet=snippet))
     return JobSearchResponse(jobs=jobs_out, total=len(jobs_out))
@@ -963,9 +1158,117 @@ def disqualifiers_list(request):
 # Path-parameter routes last so they don't capture "search", "matches", "resumes", "run-keyword-search", "saved", "disliked"
 
 
+@router.post("/fetch-description", response=FetchJobDescriptionResponse)
+def jobs_fetch_description(request, payload: FetchJobDescriptionRequest):
+    """
+    Fetch a full job description from a supported board URL (Dice or Levels.fyi).
+
+    Optionally updates an existing JobListing when job_listing_id is provided.
+    """
+    url = (payload.url or "").strip()
+    if not url:
+        raise HttpError(400, "url is required")
+
+    from .dice_client import extract_dice_guid, fetch_dice_job_detail, enrich_dice_job_listing_description
+    from .levels_client import (
+        extract_levels_job_id,
+        fetch_levels_job_detail,
+        enrich_levels_job_listing_description,
+    )
+
+    job = None
+    if payload.job_listing_id:
+        job = get_object_or_404(JobListing, id=int(payload.job_listing_id))
+
+    if extract_dice_guid(url) or (job and (job.source or "").lower() == "dice"):
+        try:
+            if job is not None:
+                if not (job.url or "").strip():
+                    JobListing.objects.filter(pk=job.pk).update(url=url)
+                    job.url = url
+                description = enrich_dice_job_listing_description(job)
+                job.refresh_from_db()
+                if not description:
+                    detail = fetch_dice_job_detail(url)
+                    description = detail["description"]
+                else:
+                    detail = {
+                        "title": job.title,
+                        "company_name": job.company_name,
+                        "location": job.location or "",
+                        "job_url": job.url or url,
+                    }
+            else:
+                detail = fetch_dice_job_detail(url)
+                description = detail["description"]
+        except ValueError as e:
+            raise HttpError(400, str(e)) from e
+        except RuntimeError as e:
+            raise HttpError(502, str(e)) from e
+
+        return FetchJobDescriptionResponse(
+            description=description,
+            title=detail.get("title"),
+            company_name=detail.get("company_name"),
+            location=detail.get("location"),
+            source="dice",
+            url=detail.get("job_url") or url,
+            job_listing_id=job.id if job else None,
+        )
+
+    levels_job_id = extract_levels_job_id(url) or (
+        extract_levels_job_id(job.external_id or "") if job else None
+    )
+    if levels_job_id or (job and (job.source or "").lower() == "levels"):
+        try:
+            if job is not None:
+                if not (job.url or "").strip() and url:
+                    JobListing.objects.filter(pk=job.pk).update(url=url)
+                    job.url = url
+                description = enrich_levels_job_listing_description(job)
+                job.refresh_from_db()
+                if not description:
+                    detail = fetch_levels_job_detail(levels_job_id or job.external_id or url)
+                    description = detail["description"]
+                else:
+                    detail = {
+                        "title": job.title,
+                        "company_name": job.company_name,
+                        "location": job.location or "",
+                        "job_url": job.url or url,
+                    }
+            else:
+                detail = fetch_levels_job_detail(levels_job_id or url)
+                description = detail["description"]
+        except ValueError as e:
+            raise HttpError(400, str(e)) from e
+        except RuntimeError as e:
+            raise HttpError(502, str(e)) from e
+
+        return FetchJobDescriptionResponse(
+            description=description,
+            title=detail.get("title"),
+            company_name=detail.get("company_name"),
+            location=detail.get("location"),
+            source="levels",
+            url=detail.get("job_url") or url,
+            job_listing_id=job.id if job else None,
+        )
+
+    raise HttpError(
+        400,
+        "Unsupported job URL. Currently Auto-fill supports Dice job-detail links "
+        "(https://www.dice.com/job-detail/...) and Levels.fyi job links "
+        "(https://www.levels.fyi/jobs?jobId=...).",
+    )
+
+
 @router.get("/focus-breakdown/{job_listing_id}")
 def jobs_focus_breakdown(request, job_listing_id: int, track: Optional[str] = None):
-    """Return detailed focus score breakdown (title vs role) for debugging why a job matched."""
+    """Staff-only: detailed focus score breakdown (scoring internals / debug)."""
+    user = api_user(request)
+    if not getattr(user, "is_staff", False):
+        raise HttpError(403, "Staff access required.")
     session_track = (
         getattr(getattr(request, "session", None), "get", lambda *_: None)("job_search_track")
         if hasattr(getattr(request, "session", None), "get")
@@ -982,7 +1285,14 @@ def jobs_focus_breakdown(request, job_listing_id: int, track: Optional[str] = No
 def jobs_get(request, job_listing_id: int):
     """Get a single job listing (full stored description + metadata; e.g. optimizer pre-fill, Local desc)."""
     job = get_object_or_404(JobListing, id=job_listing_id)
-    desc = job.description or ""
+    from .dice_client import enrich_dice_job_listing_description
+    from .levels_client import enrich_levels_job_listing_description
+
+    desc = enrich_dice_job_listing_description(job)
+    if not desc:
+        desc = enrich_levels_job_listing_description(job)
+    desc = desc or (job.description or "")
+    job.refresh_from_db()
     return JobDetailPayload(
         id=job.id,
         title=job.title,
@@ -1067,108 +1377,226 @@ def jobs_mark_applied(request, job_listing_id: int, payload: MarkAppliedRequest)
 
 
 @router.post("/{job_listing_id}/like")
-def jobs_like(request, job_listing_id: int, track: Optional[str] = None):
-    """Mark job as liked (preference signal). Store embedding for preference ranking. Optional track (ic/mgmt) overrides session."""
+def jobs_like(request, job_listing_id: int, track: Optional[str] = None, profile: Optional[str] = None):
+    """Mark job as liked (preference signal). Store embedding for preference ranking."""
     user = api_user(request)
     job = get_object_or_404(JobListing, id=job_listing_id)
-    session_track = (
-        getattr(getattr(request, "session", None), "get", lambda *_: None)("job_search_track")
-        if hasattr(getattr(request, "session", None), "get")
-        else None
-    )
-    raw_track = _resolve_track(user, track, session_track)
-    JobListingAction.objects.get_or_create(
-        owner=user,
-        job_listing=job,
-        action=JobListingAction.ActionType.LIKED,
-        track=raw_track,
-    )
-    JobListingAction.objects.for_user(user).filter(
-        job_listing=job, action=JobListingAction.ActionType.DISLIKED
-    ).filter(q_clear_on_sentiment_change(raw_track)).delete()
-    JobListingEmbedding.objects.for_user(user).filter(
-        job_listing=job, embedding_type=JobListingEmbedding.EmbeddingType.DISLIKED
-    ).filter(q_clear_on_sentiment_change(raw_track)).delete()
-    vec = embedding_module.embed_job_text(job.title or "", job.description or "")
-    if vec is not None:
-        JobListingEmbedding.objects.update_or_create(
+    raw_track = _resolve_track_from_request(user, request, track=track, profile=profile)
+    dw = dual_write_track_fields(user=user, slug=raw_track)
+    with transaction.atomic():
+        JobListingAction.objects.get_or_create(
             owner=user,
             job_listing=job,
-            embedding_type=JobListingEmbedding.EmbeddingType.LIKED,
-            track=raw_track,
-            defaults={"embedding": vec, "track": raw_track},
+            action=JobListingAction.ActionType.LIKED,
+            track=dw["track"],
+            defaults={"search_profile": dw["search_profile"]},
         )
+        JobListingAction.objects.for_user(user).filter(
+            job_listing=job,
+            action__in=[
+                JobListingAction.ActionType.DISLIKED,
+                JobListingAction.ActionType.HIDDEN,
+            ],
+        ).filter(q_clear_on_sentiment_change(dw["track"])).delete()
+        JobListingEmbedding.objects.for_user(user).filter(
+            job_listing=job, embedding_type=JobListingEmbedding.EmbeddingType.DISLIKED
+        ).filter(q_clear_on_sentiment_change(dw["track"])).delete()
     invalidate_preference_cache(user)
     invalidate_disliked_embeddings_cache(user)
+    _store_feedback_embedding_async(
+        user=user,
+        job=job,
+        embedding_type=JobListingEmbedding.EmbeddingType.LIKED,
+        track=dw["track"],
+        search_profile=dw["search_profile"],
+        embed_fn=embedding_module.embed_job_text,
+    )
+    return {"success": True}
+
+
+@router.post("/{job_listing_id}/unlike")
+def jobs_unlike(request, job_listing_id: int, track: Optional[str] = None, profile: Optional[str] = None):
+    """Clear like feedback for this job on the active search profile."""
+    user = api_user(request)
+    slug = normalize_track_slug(
+        _resolve_track_from_request(user, request, track=track, profile=profile),
+        user,
+    )
+    JobListingAction.objects.for_user(user).filter(
+        job_listing_id=job_listing_id, action=JobListingAction.ActionType.LIKED
+    ).filter(q_clear_on_sentiment_change(slug)).delete()
+    JobListingEmbedding.objects.for_user(user).filter(
+        job_listing_id=job_listing_id, embedding_type=JobListingEmbedding.EmbeddingType.LIKED
+    ).filter(q_clear_on_sentiment_change(slug)).delete()
+    invalidate_preference_cache(user)
     return {"success": True}
 
 
 @router.post("/{job_listing_id}/save")
-def jobs_save(request, job_listing_id: int, track: Optional[str] = None):
-    """Save job to favourites (saved list). Track-aware so saved jobs can be scoped to a track."""
+def jobs_save(request, job_listing_id: int, track: Optional[str] = None, profile: Optional[str] = None):
+    """
+    Save job to favourites and ensure it appears on My jobs.
+
+    New saves land in Review (vetting). If an active pipeline row already exists
+    (e.g. from a scheduled Huey search), its stage is left unchanged.
+    """
     user = api_user(request)
     job = get_object_or_404(JobListing, id=job_listing_id)
-    session_track = (
-        getattr(getattr(request, "session", None), "get", lambda *_: None)("job_search_track")
-        if hasattr(getattr(request, "session", None), "get")
-        else None
-    )
-    raw_track = _resolve_track(user, track, session_track)
+    raw_track = _resolve_track_from_request(user, request, track=track, profile=profile)
+    dw = dual_write_track_fields(user=user, slug=raw_track)
     JobListingAction.objects.get_or_create(
         owner=user,
         job_listing=job,
         action=JobListingAction.ActionType.SAVED,
-        track=raw_track,
+        track=dw["track"],
+        defaults={"search_profile": dw["search_profile"]},
     )
+    entry, landed_in_review = ensure_pipeline_entry_on_manual_save(
+        user,
+        job_listing_id=job.id,
+        slug=dw["track"],
+    )
+    if landed_in_review:
+        _enqueue_vetting_match_for_entry(request, user, entry)
     return {"success": True}
 
 
 @router.post("/{job_listing_id}/unsave")
-def jobs_unsave(request, job_listing_id: int, track: Optional[str] = None):
-    """Remove job from saved list for this track (session or param), including legacy global saved rows."""
+def jobs_unsave(request, job_listing_id: int, track: Optional[str] = None, profile: Optional[str] = None):
+    """Remove job from saved list and soft-delete its pipeline entry for this profile."""
     user = api_user(request)
-    session_track = (
-        getattr(getattr(request, "session", None), "get", lambda *_: None)("job_search_track")
-        if hasattr(getattr(request, "session", None), "get")
-        else None
+    slug = normalize_track_slug(
+        _resolve_track_from_request(user, request, track=track, profile=profile),
+        user,
     )
-    slug = normalize_track_slug(_resolve_track(user, track, session_track), user)
     JobListingAction.objects.for_user(user).filter(
         job_listing_id=job_listing_id, action=JobListingAction.ActionType.SAVED
     ).filter(q_saved_rows_for_track(slug)).delete()
+    remove_pipeline_entry_on_unsave(user, job_listing_id=job_listing_id, slug=slug)
     return {"success": True}
 
 
+def _enqueue_vetting_match_for_entry(request, user, entry: PipelineEntry) -> None:
+    """Best-effort enqueue of vetting interview scoring for a newly Review-stage entry."""
+    try:
+        from .llm_session import get_active_llm_provider
+        from .prompt_store import get_effective_prompts
+        from .tasks import evaluate_vetting_matching_task
+
+        pe = get_effective_prompts(request)
+        matching_prompt = pe.get("matching")
+        llm_provider = get_active_llm_provider(user, request)
+        session = getattr(request, "session", None)
+        llm_model = None
+        if session is not None:
+            llm_model = (
+                session.get("job_search_llm_model")
+                or session.get("optimizer_llm_model")
+                or None
+            )
+        evaluate_vetting_matching_task(
+            user.id,
+            [entry.id],
+            llm_provider=llm_provider,
+            llm_model=llm_model,
+            matching_prompt=matching_prompt,
+        )
+    except Exception:
+        logger.exception(
+            "[jobs_save] failed to enqueue vetting match for entry_id=%s",
+            getattr(entry, "id", None),
+        )
+
+
 @router.post("/{job_listing_id}/dislike")
-def jobs_dislike(request, job_listing_id: int, track: Optional[str] = None):
-    """Mark job as disliked; it will be excluded from future search results. Optional track (ic/mgmt) overrides session."""
+def jobs_dislike(request, job_listing_id: int, track: Optional[str] = None, profile: Optional[str] = None):
+    """Mark job as disliked: exclude from search and feed FIT / preference ranking."""
     user = api_user(request)
     job = get_object_or_404(JobListing, id=job_listing_id)
-    session_track = (
-        getattr(getattr(request, "session", None), "get", lambda *_: None)("job_search_track")
-        if hasattr(getattr(request, "session", None), "get")
-        else None
-    )
-    raw_track = _resolve_track(user, track, session_track)
-    JobListingAction.objects.get_or_create(
-        owner=user,
-        job_listing=job,
-        action=JobListingAction.ActionType.DISLIKED,
-        track=raw_track,
-    )
-    JobListingAction.objects.for_user(user).filter(
-        job_listing=job, action__in=[JobListingAction.ActionType.LIKED, JobListingAction.ActionType.SAVED]
-    ).filter(q_clear_on_sentiment_change(raw_track)).delete()
-    JobListingEmbedding.objects.for_user(user).filter(job_listing=job).filter(q_clear_on_sentiment_change(raw_track)).delete()
-    vec = embedding_module.embed_full(job.title or "", job.description or "")
-    if vec is not None:
-        JobListingEmbedding.objects.update_or_create(
+    raw_track = _resolve_track_from_request(user, request, track=track, profile=profile)
+    dw = dual_write_track_fields(user=user, slug=raw_track)
+    with transaction.atomic():
+        JobListingAction.objects.get_or_create(
             owner=user,
             job_listing=job,
-            embedding_type=JobListingEmbedding.EmbeddingType.DISLIKED,
-            track=raw_track,
-            defaults={"embedding": vec, "track": raw_track},
+            action=JobListingAction.ActionType.DISLIKED,
+            track=dw["track"],
+            defaults={"search_profile": dw["search_profile"]},
         )
+        JobListingAction.objects.for_user(user).filter(
+            job_listing=job,
+            action__in=[
+                JobListingAction.ActionType.LIKED,
+                JobListingAction.ActionType.SAVED,
+                JobListingAction.ActionType.HIDDEN,
+            ],
+        ).filter(q_clear_on_sentiment_change(dw["track"])).delete()
+        JobListingEmbedding.objects.for_user(user).filter(job_listing=job).filter(
+            q_clear_on_sentiment_change(dw["track"])
+        ).delete()
+    invalidate_preference_cache(user)
+    invalidate_disliked_embeddings_cache(user)
+    session = getattr(request, "session", None)
+    if session is not None and session.get("job_search_cache"):
+        session.pop("job_search_cache", None)
+        session.modified = True
+    _store_feedback_embedding_async(
+        user=user,
+        job=job,
+        embedding_type=JobListingEmbedding.EmbeddingType.DISLIKED,
+        track=dw["track"],
+        search_profile=dw["search_profile"],
+        embed_fn=embedding_module.embed_full,
+    )
+    return {"success": True}
+
+
+@router.post("/{job_listing_id}/hide")
+def jobs_hide(request, job_listing_id: int, track: Optional[str] = None, profile: Optional[str] = None):
+    """
+    Hide job from future search results without affecting FIT / preference ranking.
+
+    Unlike dislike, no preference embedding is stored.
+    """
+    user = api_user(request)
+    job = get_object_or_404(JobListing, id=job_listing_id)
+    raw_track = _resolve_track_from_request(user, request, track=track, profile=profile)
+    dw = dual_write_track_fields(user=user, slug=raw_track)
+    with transaction.atomic():
+        JobListingAction.objects.get_or_create(
+            owner=user,
+            job_listing=job,
+            action=JobListingAction.ActionType.HIDDEN,
+            track=dw["track"],
+            defaults={"search_profile": dw["search_profile"]},
+        )
+        # Hide is neutral for FIT: do not clear likes or create dislike embeddings.
+    session = getattr(request, "session", None)
+    if session is not None and session.get("job_search_cache"):
+        session.pop("job_search_cache", None)
+        session.modified = True
+    return {"success": True}
+
+
+@router.post("/{job_listing_id}/unhide")
+def jobs_unhide(request, job_listing_id: int, track: Optional[str] = None, profile: Optional[str] = None):
+    """Clear hide (and dislike) so the job can appear in search again without liking it."""
+    user = api_user(request)
+    slug = normalize_track_slug(
+        _resolve_track_from_request(user, request, track=track, profile=profile),
+        user,
+    )
+    JobListingAction.objects.for_user(user).filter(
+        job_listing_id=job_listing_id,
+        action__in=[
+            JobListingAction.ActionType.HIDDEN,
+            JobListingAction.ActionType.DISLIKED,
+        ],
+    ).filter(q_clear_on_sentiment_change(slug)).delete()
+    JobListingEmbedding.objects.for_user(user).filter(
+        job_listing_id=job_listing_id,
+        embedding_type=JobListingEmbedding.EmbeddingType.DISLIKED,
+    ).filter(q_clear_on_sentiment_change(slug)).delete()
     invalidate_preference_cache(user)
     invalidate_disliked_embeddings_cache(user)
     return {"success": True}

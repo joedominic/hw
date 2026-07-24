@@ -179,6 +179,13 @@ def _build_browser_use_llm(user) -> Any:
     raise ValueError(f"Provider {provider!r} is not supported by the generic apply agent.")
 
 
+def _policy_wrap_browser_llm(llm: Any, user, provider: str, model: str) -> Any:
+    """Attach shared LLM policy (kill switch, tokens, concurrency, timeout, usage)."""
+    from ..llm_policy import wrap_browser_use_llm
+
+    return wrap_browser_use_llm(llm, user=user, provider=provider, model=model)
+
+
 def run_generic_fill(ctx: ApplyContext) -> FillResult:
     """Fill an unknown-ATS form via browser-use, stopping before submit."""
     if not is_available():
@@ -209,6 +216,30 @@ def run_generic_fill(ctx: ApplyContext) -> FillResult:
     except ValueError as e:
         return FillResult(ok=False, payload=payload, error_code="no_adapter", message=str(e))
     except Exception as e:  # noqa: BLE001 - any agent failure is non-fatal
+        from ..llm_policy import (
+            LLMConcurrencyLimitExceeded,
+            LLMInvokeTimeout,
+            LLMRequestsDisabled,
+            LLMTokenBudgetExceeded,
+        )
+        from ..rate_limits import LLMUserRateLimitExceeded
+
+        if isinstance(
+            e,
+            (
+                LLMRequestsDisabled,
+                LLMTokenBudgetExceeded,
+                LLMConcurrencyLimitExceeded,
+                LLMInvokeTimeout,
+                LLMUserRateLimitExceeded,
+            ),
+        ):
+            return FillResult(
+                ok=False,
+                payload=payload,
+                error_code="fill_failed",
+                message=str(e),
+            )
         logger.warning("[apply_agent.generic] browser-use run failed: %s", e)
         return FillResult(
             ok=False,
@@ -320,7 +351,21 @@ def _drive_browser_use(ctx: ApplyContext) -> bool:
     """Run a bounded browser-use agent. Returns True if it completed without error."""
     from browser_use import Agent
 
-    llm = _build_browser_use_llm(ctx.user)
+    from ..llm_policy import assert_llm_kill_switch
+    from ..rate_limits import check_user_llm_rate_limit, record_llm_request
+
+    assert_llm_kill_switch(ctx.user)
+    check_user_llm_rate_limit(ctx.user)
+    # One request quota unit per generic-fill run; per-turn token/concurrency via wrapper.
+    record_llm_request(ctx.user)
+
+    cand = resolve_apply_agent_llm_candidate(ctx.user)
+    llm = _policy_wrap_browser_llm(
+        _build_browser_use_llm(ctx.user),
+        ctx.user,
+        cand["provider"],
+        cand["model"],
+    )
     task = _build_task_instructions(ctx)
     on_step = _make_browser_step_callback(ctx)
     from browser_use import BrowserProfile
@@ -328,7 +373,7 @@ def _drive_browser_use(ctx: ApplyContext) -> bool:
     from .browser import apply_browser_headless
 
     browser_profile = BrowserProfile(
-        headless=apply_browser_headless(),
+        headless=apply_browser_headless(user=ctx.user),
         enable_default_extensions=False,
     )
 

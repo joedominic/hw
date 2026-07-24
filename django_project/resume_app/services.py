@@ -73,7 +73,7 @@ def save_optimized_draft_content(resume_id: int, content: str, *, user):
     return optimized
 
 
-def run_ollama_guard_on_payloads(payloads: list, track_slug: str) -> list:
+def run_ollama_guard_on_payloads(payloads: list, track_slug: str, *, user) -> list:
     """
     Run local Ollama check on job payloads to verify seniority and fit.
     Updates payloads in-place with 'ollama_guard_status' and 'ollama_guard_reason'.
@@ -84,7 +84,7 @@ def run_ollama_guard_on_payloads(payloads: list, track_slug: str) -> list:
     from .models import LLMProviderConfig, Track
 
     provider = "Ollama Local"
-    config = LLMProviderConfig.objects.filter(provider=provider).first()
+    config = LLMProviderConfig.objects.for_user(user).filter(provider=provider).first()
     if not config or not config.is_active:
         return payloads
 
@@ -94,7 +94,7 @@ def run_ollama_guard_on_payloads(payloads: list, track_slug: str) -> list:
         logger.warning("[ollama_guard] Could not initialize Ollama: %s", e)
         return payloads
 
-    track_obj = Track.objects.filter(slug=track_slug).first()
+    track_obj = Track.objects.for_user(user).filter(slug=track_slug).first()
     target_level = track_obj.label if track_obj else "Professional"
 
     prompt_template = (
@@ -112,6 +112,14 @@ def run_ollama_guard_on_payloads(payloads: list, track_slug: str) -> list:
 
             prompt = prompt_template.format(
                 target_level=target_level, title=p.title, snippet=p.snippet
+            )
+            from .llm_gateway import log_llm_invoke
+
+            log_llm_invoke(
+                provider,
+                getattr(llm, "_resume_model", None) or config.default_model or "nemotron",
+                query="ollama_guard",
+                via="direct",
             )
             response = llm.invoke([HumanMessage(content=prompt)])
             content = response.content if hasattr(response, "content") else str(response)

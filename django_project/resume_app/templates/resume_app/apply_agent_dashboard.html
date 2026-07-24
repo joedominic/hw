@@ -69,7 +69,7 @@
                 {% endfor %}
             </div>
             <button type="submit"
-                    class="rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">
+                    class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover">
                 Start apply agent (selected)
             </button>
         </form>
@@ -92,7 +92,7 @@
                     <span class="block font-medium text-concierge-slate">{{ a.pipeline_entry.job_listing.title }}</span>
                     <span class="block text-xs text-slate-500">{{ a.pipeline_entry.job_listing.company_name }}{% if a.ats_type %} · {{ a.ats_type }}{% endif %}</span>
                 </span>
-                <span class="rounded-full px-2 py-0.5 text-xs font-medium {% if a.status == 'awaiting_approval' %}bg-violet-100 text-violet-900{% else %}bg-sky-100 text-sky-900{% endif %}">
+                <span class="rounded-full px-2 py-0.5 text-xs font-medium {% if a.status == 'awaiting_approval' %}bg-brand-soft text-brand-ink{% else %}bg-sky-100 text-sky-900{% endif %}">
                     {{ a.get_status_display }}
                 </span>
             </a>

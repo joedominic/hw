@@ -1,0 +1,211 @@
+{# Right sidebar — My Filters, Growth Pulse, Pro Tip. #}
+<div class="space-y-4 lg:sticky lg:top-20">
+    {# My Filters #}
+    <div class="rounded-2xl border border-slate-200/90 bg-white shadow-card">
+        <div class="border-b border-slate-100 px-4 py-3">
+            <h2 class="text-sm font-bold text-concierge-slate">My Filters</h2>
+            <p class="mt-0.5 text-xs text-slate-500">Saved searches and phrases to avoid.</p>
+        </div>
+        <div class="space-y-4 p-4">
+            <div>
+                <p class="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Saved Searches</p>
+                {% if saved_searches %}
+                <div class="flex flex-wrap gap-2">
+                    {% for entry in saved_search_entries %}
+                    <a href="{% url 'jobs_search' %}?preset={{ entry.search.id }}"
+                       class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors {% if selected_preset_id == entry.search.id %}bg-brand text-white shadow-sm{% else %}bg-brand-mist text-brand-ink hover:bg-brand-soft{% endif %}"
+                       title="{% if entry.schedule %}{{ entry.schedule.label }}{% else %}Load this saved search{% endif %}"
+                       aria-current="{% if selected_preset_id == entry.search.id %}true{% else %}false{% endif %}">
+                        {{ entry.search.name }}
+                        {% if selected_preset_id == entry.search.id and preset_is_dirty %}
+                        <span class="inline-flex rounded-full bg-amber-300/90 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-950">Edited</span>
+                        {% elif entry.schedule %}
+                        <span class="inline-flex h-4 w-4 items-center justify-center rounded-full {% if selected_preset_id == entry.search.id %}bg-brand/40{% else %}bg-brand/20{% endif %}" aria-hidden="true">
+                            <svg class="h-2.5 w-2.5 {% if selected_preset_id == entry.search.id %}text-white{% else %}text-brand{% endif %}" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"/></svg>
+                        </span>
+                        {% endif %}
+                    </a>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-xs text-slate-500">No saved searches yet.</p>
+                {% endif %}
+            </div>
+
+            {% if selected_preset_id %}
+            <div class="flex flex-wrap gap-2">
+                <form method="post" class="inline" onsubmit="return confirm('Delete this saved search?');">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="delete_saved_search">
+                    <input type="hidden" name="preset_id" value="{{ selected_preset_id }}">
+                    <button type="submit" class="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50">Delete</button>
+                </form>
+            </div>
+            <div class="rounded-xl border border-slate-100 bg-slate-50/80 p-3">
+                <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Automatic runs</p>
+                {% if selected_preset_schedule.is_active and selected_preset_schedule.label %}
+                <p class="mt-1 text-xs text-slate-600">{{ selected_preset_schedule.label }}</p>
+                {% else %}
+                <p class="mt-1 text-xs text-slate-500">Run this search on a schedule and add matches to your pipeline.</p>
+                {% endif %}
+                {% if selected_preset_schedule.is_custom %}
+                <p class="mt-2 text-xs text-amber-700">This search uses a custom cron schedule.</p>
+                <a href="{% url 'job_task_edit' selected_preset_schedule.task_id %}"
+                   class="mt-2 inline-flex text-xs font-medium text-brand hover:underline">Edit in automation</a>
+                {% else %}
+                <form method="post" class="mt-3 space-y-3" id="saved-search-schedule-form">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="schedule_saved_search">
+                    <input type="hidden" name="preset_id" value="{{ selected_preset_id }}">
+                    <div class="grid grid-cols-2 gap-2">
+                        <div>
+                            <label class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500" for="schedule-interval">Frequency</label>
+                            <select id="schedule-interval" name="schedule_interval"
+                                    class="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm">
+                                <option value="off" {% if selected_preset_schedule.interval == "off" %}selected{% endif %}>Off</option>
+                                <option value="daily" {% if selected_preset_schedule.interval == "daily" %}selected{% endif %}>Daily</option>
+                                <option value="weekdays" {% if selected_preset_schedule.interval == "weekdays" %}selected{% endif %}>Weekdays</option>
+                                <option value="weekly" {% if selected_preset_schedule.interval == "weekly" %}selected{% endif %}>Weekly (Mon)</option>
+                            </select>
+                        </div>
+                        <div id="schedule-time-wrap">
+                            <label class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500" for="schedule-time">Time</label>
+                            <input type="time" id="schedule-time" name="schedule_time"
+                                   value="{{ selected_preset_schedule.time }}"
+                                   class="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm">
+                        </div>
+                    </div>
+                    <button type="submit" class="w-full rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white hover:bg-brand-hover">
+                        Save schedule
+                    </button>
+                </form>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            <form id="save-search-form" method="post" class="space-y-2 border-t border-slate-100 pt-3">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="save_saved_search">
+                <input type="hidden" name="preset_id" id="save-preset-id" value="{{ selected_preset_id|default:'' }}">
+                <input type="hidden" name="q" id="save-field-q">
+                <input type="hidden" name="location" id="save-field-location">
+                <input type="hidden" name="track" id="save-field-track">
+                <input type="hidden" name="resume_id" id="save-field-resume">
+                <input type="hidden" name="min_score" id="save-field-min-score">
+                <input type="hidden" name="results_wanted" id="save-field-results-wanted">
+                <input type="hidden" name="llm_model" id="save-field-llm-model">
+                <div id="save-field-sites"></div>
+                {% if selected_preset_id %}
+                <p class="text-xs text-slate-600">
+                    {% if preset_is_dirty %}
+                    Criteria differ from <span class="font-semibold text-concierge-slate">{{ selected_preset.name }}</span>.
+                    {% else %}
+                    Editing <span class="font-semibold text-concierge-slate">{{ selected_preset.name }}</span>.
+                    {% endif %}
+                </p>
+                <label class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500" for="saved-search-name-input">Name</label>
+                <input type="text" id="saved-search-name-input" name="saved_search_name"
+                       value="{{ selected_preset.name }}"
+                       placeholder="{{ selected_preset.name }}"
+                       class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                <div class="flex flex-col gap-2 sm:flex-row">
+                    <button type="submit" id="save-update-btn" class="flex-1 rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover">
+                        {% if preset_is_dirty %}Save changes{% else %}Update{% endif %}
+                    </button>
+                    <button type="submit" name="save_as_new" value="1" id="save-as-new-btn"
+                            class="flex-1 rounded-lg border border-brand/30 bg-white px-4 py-2 text-sm font-semibold text-brand hover:bg-brand-mist">
+                        Save as new
+                    </button>
+                </div>
+                {% else %}
+                <label class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500" for="saved-search-name-input">
+                    Save current search
+                </label>
+                <input type="text" id="saved-search-name-input" name="saved_search_name"
+                       value=""
+                       placeholder="e.g. Remote Python roles"
+                       class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                       required>
+                <button type="submit" class="w-full rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover">
+                    Save search
+                </button>
+                {% endif %}
+            </form>
+
+            <div class="border-t border-slate-100 pt-3">
+                <p class="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Phrases to Avoid</p>
+                <p class="mb-2 text-xs text-slate-500">Jobs with these phrases are hidden.</p>
+                <form id="disqualifier-add-form" class="mb-3 flex gap-2">
+                    <input type="text" name="phrase" id="disqualifier-phrase-input" placeholder="e.g. Entry Level" maxlength="500" autocomplete="off"
+                           class="min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm">
+                    <button type="submit" class="shrink-0 rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white hover:bg-brand-hover">Add</button>
+                </form>
+                <div id="disqualifiers-list" class="flex flex-wrap gap-2">
+                    {% for d in current_disqualifiers %}
+                    <span class="disqualifier-badge inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 ring-1 ring-slate-200" data-id="{{ d.id }}">
+                        <span class="disqualifier-phrase">{{ d.phrase|truncatechars:40 }}</span>
+                        <button type="button" class="disqualifier-remove rounded px-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700" aria-label="Remove">&times;</button>
+                    </span>
+                    {% empty %}
+                    <span class="text-sm text-slate-500" id="disqualifiers-empty">None yet.</span>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# Growth Pulse #}
+    {% if find_jobs_pulse %}
+    <div class="overflow-hidden rounded-2xl bg-brand p-5 text-white shadow-card">
+        <p class="text-[10px] font-bold uppercase tracking-widest text-teal-200/90">Growth Pulse</p>
+        <div class="mt-4">
+            <div class="flex items-center justify-between text-sm">
+                <span class="font-medium text-teal-50">Profile Strength</span>
+                <span class="font-bold tabular-nums">{{ find_jobs_pulse.profile_strength }}%</span>
+            </div>
+            <div class="mt-2 h-2 overflow-hidden rounded-full bg-brand-ink/40">
+                <div class="h-full rounded-full bg-teal-300 transition-all" style="width: {{ find_jobs_pulse.profile_strength }}%"></div>
+            </div>
+        </div>
+        <div class="mt-4 grid grid-cols-2 gap-3">
+            <div class="rounded-xl bg-brand-ink/30 px-3 py-3">
+                <p class="text-2xl font-bold tabular-nums">{{ find_jobs_pulse.new_matches }}</p>
+                <p class="mt-0.5 text-[11px] font-medium text-teal-100/90">In pipeline</p>
+            </div>
+            <div class="rounded-xl bg-brand-ink/30 px-3 py-3">
+                <p class="text-2xl font-bold tabular-nums">{{ find_jobs_pulse.interviewing }}</p>
+                <p class="mt-0.5 text-[11px] font-medium text-teal-100/90">Interviewing</p>
+            </div>
+        </div>
+        <a href="{% url 'pipeline' %}" class="mt-4 inline-flex text-xs font-semibold text-teal-100 hover:text-white hover:underline">
+            Open My jobs →
+        </a>
+    </div>
+    {% endif %}
+
+    {# Resume ↔ profile #}
+    <div class="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-card">
+        <div class="p-5">
+            <p class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Resumes</p>
+            <p class="mt-2 text-sm font-semibold leading-snug text-concierge-slate">
+                Assign a PDF to each saved-search profile so applications use the right resume.
+            </p>
+            <a href="{% url 'track_list' %}" class="mt-3 inline-flex text-xs font-semibold text-brand hover:underline">
+                Open Search profiles →
+            </a>
+        </div>
+    </div>
+
+    {# Pro tip #}
+    <div class="overflow-hidden rounded-2xl border border-slate-200/90 bg-gradient-to-br from-brand-mist via-white to-slate-50 shadow-card">
+        <div class="p-5">
+            <p class="text-[10px] font-bold uppercase tracking-widest text-brand">Pro tip</p>
+            <p class="mt-2 text-sm font-semibold leading-snug text-concierge-slate">
+                Personalize cover letters automatically with AI after you tailor a resume.
+            </p>
+            <a href="{% url 'resume_optimizer' %}" class="mt-3 inline-flex text-xs font-semibold text-brand hover:underline">
+                Open Tailor resume →
+            </a>
+        </div>
+    </div>
+</div>

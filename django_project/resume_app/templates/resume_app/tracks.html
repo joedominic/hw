@@ -1,6 +1,6 @@
 {% extends "resume_app/base.html" %}
 
-{% block title %}Track management — ResumeElite{% endblock %}
+{% block title %}Search profiles — ResumeElite{% endblock %}
 
 {% block extra_head %}
 <style>
@@ -14,19 +14,27 @@
 
 {% block content %}
 <div class="mx-auto max-w-7xl">
+    {% if is_power_user %}
     {% include "resume_app/_jobs_workspace_tabs.html" %}
+    {% endif %}
 
     <div class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-            <p class="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Workspace / Track management</p>
-            <h1 class="mt-1 text-2xl font-bold tracking-tight text-concierge-slate">Track management</h1>
+            <p class="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                {% if is_power_user %}Workspace / Search profiles{% else %}Jobs / Search profiles{% endif %}
+            </p>
+            <h1 class="mt-1 text-2xl font-bold tracking-tight text-concierge-slate">Search profiles</h1>
             <p class="mt-2 max-w-2xl text-sm text-slate-600">
-                Orchestrate your job search strategy. Manage preference profiles (tracks) and associate them with PDF versions of your professional experience.
+                {% if is_power_user %}
+                Manage preference profiles for pipeline scoring and resume association. Each profile can have its own PDF versions and search context.
+                {% else %}
+                Upload a resume PDF and assign it to a search profile (for example FinCrimes or PE). The apply agent and match scoring use that profile’s resume.
+                {% endif %}
             </p>
         </div>
         <button type="button" id="new-track-open-btn"
-                class="shrink-0 rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">
-            + New Track
+                class="shrink-0 rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover">
+            + New profile
         </button>
     </div>
 
@@ -34,7 +42,7 @@
 
     <div class="mb-8 grid gap-4 sm:grid-cols-3">
         <div class="rounded-concierge border border-slate-200 bg-white p-5 shadow-sm">
-            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total tracks</p>
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Total profiles</p>
             <p class="mt-2 text-3xl font-bold tabular-nums text-concierge-slate">{{ stats.track_count }}</p>
         </div>
         <div class="rounded-concierge border border-slate-200 bg-white p-5 shadow-sm">
@@ -47,13 +55,13 @@
                 {% endif %}
             </p>
         </div>
-        <div class="rounded-concierge border border-violet-200 bg-violet-700 p-5 text-white shadow-sm">
-            <p class="text-xs font-semibold uppercase tracking-wide text-violet-200">Default profile</p>
+        <div class="rounded-concierge border border-brand/20 bg-brand p-5 text-white shadow-sm">
+            <p class="text-xs font-semibold uppercase tracking-wide text-brand-soft">Default profile</p>
             {% if stats.default_track %}
                 <p class="mt-2 text-lg font-bold leading-snug">{{ stats.default_track.label }}</p>
-                <p class="mt-1 font-mono text-xs text-violet-200">slug: {{ stats.default_track.slug }}</p>
+                <p class="mt-1 font-mono text-xs text-brand-soft">slug: {{ stats.default_track.slug }}</p>
             {% else %}
-                <p class="mt-2 text-sm text-violet-100">No track configured</p>
+                <p class="mt-2 text-sm text-brand-mist">No profile configured</p>
             {% endif %}
         </div>
     </div>
@@ -61,7 +69,7 @@
     <div class="grid gap-6 lg:grid-cols-5 lg:items-start">
         <section class="lg:col-span-3" aria-labelledby="tracks-heading">
             <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-                <h2 id="tracks-heading" class="text-sm font-semibold text-concierge-slate">Existing tracks</h2>
+                <h2 id="tracks-heading" class="text-sm font-semibold text-concierge-slate">Existing profiles</h2>
                 <label class="flex items-center gap-2 text-xs text-slate-600">
                     <span class="font-medium text-slate-500">Sorted by</span>
                     <select id="track-sort-select" class="rounded-concierge border border-slate-200 bg-white px-2 py-1 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
@@ -72,7 +80,7 @@
             </div>
 
             {% if not tracks %}
-                <p class="rounded-concierge border border-dashed border-slate-200 bg-white p-6 text-sm text-slate-500">No tracks yet. Create one with <strong>+ New Track</strong>.</p>
+                <p class="rounded-concierge border border-dashed border-slate-200 bg-white p-6 text-sm text-slate-500">No profiles yet. Create one with <strong>+ New profile</strong>.</p>
             {% else %}
                 <ul class="divide-y divide-slate-100 rounded-concierge border border-slate-200 bg-white shadow-sm">
                     {% for t in tracks %}
@@ -81,7 +89,7 @@
                                 <div class="flex min-w-0 flex-1 items-center gap-2">
                                     <h3 class="truncate text-sm font-semibold text-concierge-slate">{{ t.label }}</h3>
                                     {% if t.is_default %}
-                                        <span class="shrink-0 rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-violet-800">Default</span>
+                                        <span class="shrink-0 rounded bg-brand-soft px-1.5 py-0.5 text-[10px] font-bold uppercase text-brand-ink">Default</span>
                                     {% endif %}
                                     <span class="hidden font-mono text-[11px] text-slate-400 sm:inline">· {{ t.slug }}</span>
                                 </div>
@@ -97,7 +105,7 @@
                                 </div>
                                 <div class="flex shrink-0 items-center gap-2">
                                     <button type="button"
-                                            class="edit-track-btn text-[11px] font-medium text-violet-700 hover:text-violet-900"
+                                            class="edit-track-btn text-[11px] font-medium text-brand hover:text-brand-ink"
                                             data-slug="{{ t.slug }}"
                                             data-label="{{ t.label|escape }}"
                                             data-is-default="{% if t.is_default %}1{% else %}0{% endif %}">
@@ -136,7 +144,7 @@
                             </svg>
                             <p class="mt-3 text-sm font-medium text-concierge-slate">Drop your resume here</p>
                             <p class="mt-1 text-xs text-slate-500">PDF formats only, up to 10MB</p>
-                            <p id="resume-file-name" class="mt-2 hidden text-xs font-medium text-violet-800"></p>
+                            <p id="resume-file-name" class="mt-2 hidden text-xs font-medium text-brand-ink"></p>
                             <input type="file" id="resume-file-input" name="resume_file" accept="application/pdf" class="sr-only" required>
                             <button type="button" id="resume-browse-btn"
                                     class="mt-4 rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50">
@@ -144,7 +152,7 @@
                             </button>
                         </div>
                         <div class="mt-4">
-                            <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="upload-track-select">Default track</label>
+                            <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="upload-track-select">Default profile</label>
                             <select id="upload-track-select" name="track_slug" class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
                                 <option value="" {% if default_track_slug == "" %}selected{% endif %}>Unassigned</option>
                                 {% for t in tracks %}
@@ -152,7 +160,7 @@
                                 {% endfor %}
                             </select>
                         </div>
-                        <button type="submit" class="mt-4 w-full rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">Upload</button>
+                        <button type="submit" class="mt-4 w-full rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover">Upload</button>
                     </form>
                 </div>
             </div>
@@ -175,7 +183,7 @@
                     <input type="hidden" name="delete_resume_id" value="">
                     <div class="flex min-h-0 flex-1 flex-col p-4">
                         {% if not resume_rows %}
-                            <p class="text-sm text-slate-500">No resumes yet. Upload a PDF above to assign tracks.</p>
+                            <p class="text-sm text-slate-500">No resumes yet. Upload a PDF above to assign profiles.</p>
                         {% else %}
                             <ul class="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
                                 {% for row in resume_rows %}
@@ -192,7 +200,7 @@
                                                 </p>
                                                 <p class="text-xs text-slate-500">{{ row.file_size_display }}</p>
                                                 <div class="mt-2 flex flex-wrap items-center gap-2">
-                                                    <select class="min-w-[8rem] flex-1 rounded-concierge border border-slate-200 bg-white px-2 py-1.5 text-sm" name="resume_track_{{ r.id }}" aria-label="Track for {{ r.original_filename|default:'resume' }}">
+                                                    <select class="min-w-[8rem] flex-1 rounded-concierge border border-slate-200 bg-white px-2 py-1.5 text-sm" name="resume_track_{{ r.id }}" aria-label="Profile for {{ r.original_filename|default:'resume' }}">
                                                         <option value="" {% if not r.track %}selected{% endif %}>Unassigned</option>
                                                         {% for t in tracks %}
                                                             <option value="{{ t.slug }}" {% if r.track == t.slug %}selected{% endif %}>{{ t.label }}</option>
@@ -213,9 +221,9 @@
                                     {% endwith %}
                                 {% endfor %}
                             </ul>
-                            <button type="submit" class="mt-4 w-full shrink-0 rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">Save assignments</button>
+                            <button type="submit" class="mt-4 w-full shrink-0 rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover">Save assignments</button>
                             <p class="mt-3 text-center">
-                                <a href="#managed-resumes" class="text-xs font-medium text-violet-700 hover:text-violet-900">Manage assignments</a>
+                                <a href="#managed-resumes" class="text-xs font-medium text-brand hover:text-brand-ink">Manage assignments</a>
                             </p>
                         {% endif %}
                     </div>
@@ -228,7 +236,7 @@
 <dialog id="new-track-dialog" class="concierge-dialog track-form-dialog p-0">
     <form method="post" class="w-full rounded-concierge border border-slate-200 bg-white shadow-xl">
         <div class="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-            <h2 class="text-sm font-semibold text-concierge-slate">Create track</h2>
+            <h2 class="text-sm font-semibold text-concierge-slate">Create search profile</h2>
             <button type="button" id="new-track-close-btn" class="rounded-concierge p-1 text-slate-500 hover:bg-slate-100" aria-label="Close">&times;</button>
         </div>
         <div class="space-y-3 p-4">
@@ -252,12 +260,12 @@
             </div>
             <label class="flex items-center gap-2 text-sm text-slate-700">
                 <input class="h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" type="checkbox" value="1" id="track-is-default" name="is_default">
-                Default track
+                Default profile
             </label>
         </div>
         <div class="flex justify-end gap-2 border-t border-slate-100 px-4 py-3">
             <button type="button" id="new-track-cancel-btn" class="rounded-concierge px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">Cancel</button>
-            <button type="submit" class="rounded-concierge bg-violet-700 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-800">Create track</button>
+            <button type="submit" class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover">Create profile</button>
         </div>
     </form>
 </dialog>
@@ -265,7 +273,7 @@
 <dialog id="edit-track-dialog" class="concierge-dialog track-form-dialog p-0">
     <form method="post" class="w-full rounded-concierge border border-slate-200 bg-white shadow-xl">
         <div class="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-            <h2 class="text-sm font-semibold text-concierge-slate">Edit track</h2>
+            <h2 class="text-sm font-semibold text-concierge-slate">Edit search profile</h2>
             <button type="button" id="edit-track-close-btn" class="rounded-concierge p-1 text-slate-500 hover:bg-slate-100" aria-label="Close">&times;</button>
         </div>
         <div class="space-y-3 p-4">
@@ -290,12 +298,12 @@
             </div>
             <label class="flex items-center gap-2 text-sm text-slate-700">
                 <input class="h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" type="checkbox" value="1" id="edit-track-is-default" name="is_default">
-                Default track
+                Default profile
             </label>
         </div>
         <div class="flex justify-end gap-2 border-t border-slate-100 px-4 py-3">
             <button type="button" id="edit-track-cancel-btn" class="rounded-concierge px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">Cancel</button>
-            <button type="submit" class="rounded-concierge bg-violet-700 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-800">Save changes</button>
+            <button type="submit" class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover">Save changes</button>
         </div>
     </form>
 </dialog>
@@ -387,14 +395,14 @@
     if (dropZone && fileInput) {
         dropZone.addEventListener("dragover", function (e) {
             e.preventDefault();
-            dropZone.classList.add("border-violet-300", "bg-violet-50/30");
+            dropZone.classList.add("border-brand/40", "bg-brand-mist/30");
         });
         dropZone.addEventListener("dragleave", function () {
-            dropZone.classList.remove("border-violet-300", "bg-violet-50/30");
+            dropZone.classList.remove("border-brand/40", "bg-brand-mist/30");
         });
         dropZone.addEventListener("drop", function (e) {
             e.preventDefault();
-            dropZone.classList.remove("border-violet-300", "bg-violet-50/30");
+            dropZone.classList.remove("border-brand/40", "bg-brand-mist/30");
             var files = e.dataTransfer && e.dataTransfer.files;
             if (!files || !files.length) return;
             try {

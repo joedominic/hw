@@ -32,10 +32,10 @@ Supplemental accomplishments:
 Retrieved resume bullets (hybrid-ranked for relevance to the role slice; may be "(none)"):
 {retrieval_context}
 
-Role-focused job description excerpt (full posting is used by ATS/Recruiter judge steps):
+Role-focused job description excerpt (used by ATS/Recruiter judge steps when full posting is omitted):
 {job_description}
 
-Full job description (reference if the excerpt is ambiguous):
+Full job description (only when materially longer than the excerpt above):
 {full_job_description}
 
 Previous Feedback:

@@ -1,10 +1,16 @@
 """Staff-only support views."""
 import logging
 
+from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required, permission_required
 from django.db.models import Q
-from django.shortcuts import render
+from django.shortcuts import get_object_or_404, redirect, render
+from django.views.decorators.http import require_http_methods
+
+from .account import is_email_verified
+from .entitlements import assign_plan, ensure_default_plans, get_or_create_subscription, subscription_summary
+from .models import LLMAppUsageTotals, Plan
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -13,13 +19,78 @@ User = get_user_model()
 @login_required
 @permission_required("resume_app.can_impersonate_users", raise_exception=True)
 def staff_users_view(request):
+    ensure_default_plans()
     query = (request.GET.get("q") or "").strip()
-    users = User.objects.filter(is_active=True).order_by("-date_joined")
+    show_inactive = request.GET.get("inactive") == "1"
+    users = User.objects.all().order_by("-date_joined")
+    if not show_inactive:
+        users = users.filter(is_active=True)
     if query:
         users = users.filter(Q(username__icontains=query) | Q(email__icontains=query))
-    users = users[:100]
+    users = list(users[:100])
+
+    rows = []
+    for u in users:
+        sub = get_or_create_subscription(u)
+        summary = subscription_summary(u)
+        tokens = LLMAppUsageTotals.get_for_user(u)
+        rows.append(
+            {
+                "user": u,
+                "plan_slug": summary.get("plan_slug"),
+                "plan_name": summary.get("plan_name"),
+                "sub_status": sub.status,
+                "email_verified": is_email_verified(u),
+                "usage": summary.get("usage") or {},
+                "storage": summary.get("storage") or {},
+                "tokens": {
+                    "input": int(tokens.total_input_tokens or 0),
+                    "output": int(tokens.total_output_tokens or 0),
+                    "requests": int(tokens.total_requests or 0),
+                    "estimated_invokes": int(tokens.total_estimated_invokes or 0),
+                },
+            }
+        )
+
     return render(
         request,
         "resume_app/staff/users.html",
-        {"users": users, "query": query},
+        {
+            "rows": rows,
+            "query": query,
+            "show_inactive": show_inactive,
+            "plans": list(Plan.objects.filter(is_active=True).order_by("sort_order")),
+        },
     )
+
+
+@login_required
+@permission_required("resume_app.can_impersonate_users", raise_exception=True)
+@require_http_methods(["POST"])
+def staff_user_action_view(request, user_id: int):
+    target = get_object_or_404(User, pk=user_id)
+    action = (request.POST.get("action") or "").strip()
+
+    # Plan assignment is allowed for staff (dev/support); suspend/activate stay non-staff only.
+    if action in ("suspend", "activate") and (target.is_superuser or target.is_staff):
+        messages.error(request, "Cannot suspend or activate staff accounts here.")
+        return redirect("staff_users")
+
+    if action == "suspend":
+        target.is_active = False
+        target.save(update_fields=["is_active"])
+        messages.success(request, f"Suspended {target.username}.")
+    elif action == "activate":
+        target.is_active = True
+        target.save(update_fields=["is_active"])
+        messages.success(request, f"Activated {target.username}.")
+    elif action == "assign_plan":
+        slug = (request.POST.get("plan_slug") or "").strip()
+        try:
+            assign_plan(target, slug)
+            messages.success(request, f"Assigned plan {slug} to {target.username}.")
+        except Exception as exc:
+            messages.error(request, str(exc))
+    else:
+        messages.error(request, "Unknown action.")
+    return redirect("staff_users")

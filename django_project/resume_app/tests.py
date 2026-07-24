@@ -35,10 +35,9 @@ from .adzuna_client import _adzuna_result_to_dict, fetch_adzuna_jobs
 from .dice_client import _parse_jobs_from_html
 from .utils import format_job_source_label
 from .views import MAX_TRACK_RESUME_UPLOAD_BYTES, _count_unique_library_resumes
+from .test_utils import TenantTestCase, create_user, login_client, TEST_PASSWORD
 import json
 import os
-
-from .test_utils import TenantTestCase, create_user, login_client, TEST_PASSWORD
 
 
 class ModelTestCase(TestCase):
@@ -111,6 +110,12 @@ class NormalizeSiteNamesTestCase(TestCase):
         self.assertEqual(
             normalize_site_names(["dice", "adzuna", "indeed"]),
             ["dice", "adzuna", "indeed"],
+        )
+
+    def test_preserves_levels(self):
+        self.assertEqual(
+            normalize_site_names(["levels", "indeed"]),
+            ["levels", "indeed"],
         )
 
 
@@ -196,31 +201,354 @@ class DiceClientTestCase(TestCase):
     def test_parse_jobs_from_html_empty(self):
         self.assertEqual(_parse_jobs_from_html("<html></html>", set()), [])
 
+    def test_parse_jobs_from_html_card_link_titles(self):
+        html = """
+        <a aria-label="View Details for Director, Financial Crimes Advisory Data &amp; Analytics (0e5569e4d3144a2d89c7e498a2484ce7)"
+           data-testid="job-search-job-card-link"
+           href="/job-detail/0e5569e4-d314-4a2d-89c7-e498a2484ce7"></a>
+        <a href="/company-profile/x?companyname=AML%20RightSource"></a>
+        <a aria-label="View Details for Financial Crimes - Senior Data Scientist (9ce3c73e9abe181fb4190fa4ad7411c5)"
+           data-testid="job-search-job-card-link"
+           href="/job-detail/e072a75c-ac31-4f49-be39-ad7c040a3673"></a>
+        <img alt="KeyCorp" />
+        """
+        rows = _parse_jobs_from_html(html, set())
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(
+            rows[0]["title"],
+            "Director, Financial Crimes Advisory Data & Analytics",
+        )
+        self.assertNotEqual(rows[0]["title"], "Untitled")
+        self.assertEqual(rows[1]["title"], "Financial Crimes - Senior Data Scientist")
+
+    def test_normalize_dice_api_query_strips_quotes(self):
+        from resume_app.dice_client import _normalize_dice_api_query
+
+        self.assertEqual(
+            _normalize_dice_api_query('"financial crimes" technology'),
+            "financial crimes technology",
+        )
+
+    def test_parse_jobposting_from_html(self):
+        from resume_app.dice_client import _parse_jobposting_from_html
+
+        html = """
+        <html><head>
+        <script type="application/ld+json">
+        {
+          "@type": "JobPosting",
+          "title": "Senior Director, Software Engineering",
+          "description": "<b>What you'll do...</b><br /><br /><b>Duties:</b> Analyze the requirements and build systems.",
+          "hiringOrganization": {"@type": "Organization", "name": "Walmart Inc."},
+          "jobLocation": {
+            "@type": "Place",
+            "address": {
+              "@type": "PostalAddress",
+              "addressLocality": "Dallas",
+              "addressRegion": "TX",
+              "addressCountry": "US"
+            }
+          },
+          "datePosted": "2026-07-05T00:00:00Z"
+        }
+        </script>
+        </head><body></body></html>
+        """
+        parsed = _parse_jobposting_from_html(html)
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed["title"], "Senior Director, Software Engineering")
+        self.assertEqual(parsed["company_name"], "Walmart Inc.")
+        self.assertIn("Dallas", parsed["location"])
+        self.assertIn("Analyze the requirements", parsed["description"])
+        self.assertNotIn("<b>", parsed["description"])
+
+    def test_extract_dice_guid(self):
+        from resume_app.dice_client import extract_dice_guid
+
+        self.assertEqual(
+            extract_dice_guid("https://www.dice.com/job-detail/aeba63c5-d102-4999-b7f4-5e5040e8da20"),
+            "aeba63c5-d102-4999-b7f4-5e5040e8da20",
+        )
+        self.assertEqual(
+            extract_dice_guid("dice:aeba63c5-d102-4999-b7f4-5e5040e8da20"),
+            "aeba63c5-d102-4999-b7f4-5e5040e8da20",
+        )
+
     def test_format_job_source_labels(self):
         self.assertEqual(format_job_source_label("adzuna"), "Adzuna")
         self.assertEqual(format_job_source_label("dice"), "Dice")
         self.assertEqual(format_job_source_label("jobspy_indeed"), "Indeed")
 
+    def test_api_item_to_dict_normalizes_fields(self):
+        from resume_app.dice_client import _api_item_to_dict
+
+        row = _api_item_to_dict(
+            {
+                "id": "abc123",
+                "title": "Python Engineer",
+                "companyName": "Acme",
+                "jobLocation": {"displayName": "Austin, Texas, USA"},
+                "detailsPageUrl": "https://www.dice.com/job-detail/guid-1",
+                "postedDate": "2026-07-01T12:00:00Z",
+                "summary": "Build APIs in Python.",
+            }
+        )
+        self.assertIsNotNone(row)
+        assert row is not None
+        self.assertEqual(row["source"], "dice")
+        self.assertEqual(row["external_id"], "dice:abc123")
+        self.assertEqual(row["title"], "Python Engineer")
+        self.assertEqual(row["company_name"], "Acme")
+        self.assertEqual(row["location"], "Austin, Texas, USA")
+        self.assertEqual(row["description"], "Build APIs in Python.")
+        self.assertEqual(row["job_url"], "https://www.dice.com/job-detail/guid-1")
+        self.assertIn("date_posted", row)
+
+    @patch("resume_app.dice_client.requests.Session")
+    def test_fetch_dice_jobs_uses_api(self, mock_session_cls):
+        from resume_app.dice_client import fetch_dice_jobs
+
+        session = mock_session_cls.return_value.__enter__.return_value
+        response = session.get.return_value
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "data": [
+                {
+                    "id": "job-1",
+                    "title": "Backend Engineer",
+                    "companyName": "DiceCo",
+                    "jobLocation": {"city": "Remote", "state": ""},
+                    "detailsPageUrl": "https://www.dice.com/job-detail/guid-2",
+                    "summary": "Remote Python role",
+                    "postedDate": "2026-07-08T00:00:00Z",
+                }
+            ],
+            "meta": {"currentPage": 1, "pageSize": 20, "totalResults": 1},
+        }
+        rows = fetch_dice_jobs("python", results_wanted=5, hours_old=168)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["external_id"], "dice:job-1")
+        self.assertEqual(rows[0]["description"], "Remote Python role")
+        session.get.assert_called()
+        called_url = session.get.call_args[0][0]
+        self.assertIn("job-search-api.svc.dhigroupinc.com", called_url)
+
+    @patch("resume_app.dice_client._fetch_dice_jobs_api", side_effect=RuntimeError("api down"))
+    @patch("resume_app.dice_client._fetch_dice_jobs_html")
+    def test_fetch_dice_jobs_falls_back_to_html(self, mock_html, mock_api):
+        from resume_app.dice_client import fetch_dice_jobs
+
+        mock_html.return_value = [
+            {
+                "title": "Fallback Job",
+                "company_name": "Co",
+                "location": "NY",
+                "description": "",
+                "job_url": "https://www.dice.com/job-detail/x",
+                "source": "dice",
+                "external_id": "dice:x",
+            }
+        ]
+        rows = fetch_dice_jobs("python", results_wanted=3)
+        self.assertEqual(len(rows), 1)
+        mock_api.assert_called_once()
+        mock_html.assert_called_once()
+
+
+class LevelsClientTestCase(TestCase):
+    def test_slugify_search_term(self):
+        from resume_app.levels_client import _slugify
+
+        self.assertEqual(
+            _slugify("Software Engineering Manager"),
+            "software-engineering-manager",
+        )
+
+    def test_levels_location_slug_us_aliases(self):
+        from resume_app.levels_client import _levels_location_slug
+
+        self.assertEqual(_levels_location_slug("US"), "united-states")
+        self.assertEqual(_levels_location_slug("USA"), "united-states")
+        self.assertEqual(_levels_location_slug("United States"), "united-states")
+        self.assertEqual(_levels_location_slug(""), "united-states")
+        self.assertEqual(_levels_location_slug("San Francisco"), "san-francisco-bay-area")
+
+    def test_locations_match_country_slug(self):
+        from resume_app.levels_client import _locations_match_country_slug
+
+        self.assertTrue(
+            _locations_match_country_slug(
+                ["San Francisco, California, United States"],
+                "united-states",
+            )
+        )
+        self.assertTrue(
+            _locations_match_country_slug(["Chicago, Illinois"], "united-states")
+        )
+        self.assertFalse(
+            _locations_match_country_slug(["Bangalore, IND"], "united-states")
+        )
+        self.assertFalse(
+            _locations_match_country_slug(["Dublin, Ireland"], "united-states")
+        )
+
+    def test_resolve_levels_search_params_staff_engineer(self):
+        from resume_app.levels_client import _resolve_levels_search_params
+
+        params = _resolve_levels_search_params("Staff Software Development Engineer")
+        self.assertEqual(params["job_family_slug"], "software-engineer")
+        self.assertIsNone(params["job_title_slug"])
+        self.assertTrue(params["filter_title_client_side"])
+
+    def test_title_matches_search(self):
+        from resume_app.levels_client import _title_matches_search
+
+        self.assertTrue(
+            _title_matches_search(
+                "Staff Software Development Engineer",
+                "Staff Software Engineer",
+            )
+        )
+        self.assertFalse(
+            _title_matches_search("Product Manager", "Staff Software Engineer")
+        )
+
+    def test_extract_levels_job_id(self):
+        from resume_app.levels_client import extract_levels_job_id
+
+        self.assertEqual(
+            extract_levels_job_id("levels:103969804544549574"),
+            "103969804544549574",
+        )
+        self.assertEqual(
+            extract_levels_job_id(
+                "https://www.levels.fyi/jobs?jobId=103969804544549574"
+            ),
+            "103969804544549574",
+        )
+
+    def test_flatten_search_results(self):
+        from resume_app.levels_client import _flatten_search_results
+
+        rows = _flatten_search_results(
+            {
+                "results": [
+                    {
+                        "companyName": "Acme",
+                        "jobs": [
+                            {
+                                "id": "99",
+                                "title": "Engineering Manager",
+                                "locations": ["Boston, MA"],
+                                "applicationUrl": "https://example.com/apply",
+                                "postingDate": "2026-01-15T12:00:00Z",
+                                "minBaseSalary": 200000,
+                                "maxBaseSalary": 250000,
+                                "baseSalaryCurrency": "USD",
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source"], "levels")
+        self.assertEqual(rows[0]["external_id"], "levels:99")
+        self.assertEqual(rows[0]["company_name"], "Acme")
+        self.assertEqual(rows[0]["job_url"], "https://example.com/apply")
+        self.assertIn("Salary:", rows[0]["description"])
+
+    def test_decrypt_payload_roundtrip(self):
+        import base64
+        import hashlib
+        import zlib
+
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        from resume_app.levels_client import _decrypt_payload
+
+        original = {"results": [], "total": 0, "totalMatchingJobs": 0}
+        compressed = zlib.compress(json.dumps(original).encode("utf-8"))
+        pad_len = 16 - (len(compressed) % 16)
+        padded = compressed + bytes([pad_len]) * pad_len
+        key = base64.b64encode(hashlib.md5(b"levelstothemoon!!").digest())[:16]
+        cipher = Cipher(algorithms.AES(key), modes.ECB())
+        encryptor = cipher.encryptor()
+        encrypted = encryptor.update(padded) + encryptor.finalize()
+        payload_b64 = base64.b64encode(encrypted).decode("ascii")
+        decoded = _decrypt_payload(payload_b64)
+        self.assertEqual(decoded, original)
+
+    def test_format_job_source_label_levels(self):
+        self.assertEqual(format_job_source_label("levels"), "Levels.fyi")
+
+    @patch("resume_app.levels_client._levels_request")
+    def test_fetch_levels_jobs_paginates(self, mock_request):
+        from resume_app.levels_client import fetch_levels_jobs
+
+        mock_request.side_effect = [
+            {
+                "results": [
+                    {
+                        "companyName": "Co",
+                        "jobs": [
+                            {
+                                "id": "1",
+                                "title": "Staff Software Engineer",
+                                "locations": ["Boston, Massachusetts, United States"],
+                            }
+                        ],
+                    }
+                ],
+                "total": 10,
+            },
+            {
+                "results": [
+                    {
+                        "companyName": "Co2",
+                        "jobs": [
+                            {
+                                "id": "2",
+                                "title": "Senior Software Engineer",
+                                "locations": ["San Francisco, California, United States"],
+                            }
+                        ],
+                    }
+                ],
+                "total": 10,
+            },
+        ]
+        rows = fetch_levels_jobs(
+            "Staff Software Engineer",
+            location="United States",
+            results_wanted=2,
+        )
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(mock_request.call_count, 2)
+
 
 class FetchJobsOrchestratorTestCase(TestCase):
     @patch("resume_app.job_sources._fetch_jobs_jobspy")
+    @patch("resume_app.levels_client.fetch_levels_jobs")
     @patch("resume_app.dice_client.fetch_dice_jobs")
     @patch("resume_app.adzuna_client.fetch_adzuna_jobs")
-    def test_fetch_jobs_merges_providers(self, mock_adzuna, mock_dice, mock_jobspy):
+    def test_fetch_jobs_merges_providers(self, mock_adzuna, mock_dice, mock_levels, mock_jobspy):
         mock_jobspy.return_value = [
             {"source": "jobspy_indeed", "external_id": "j1", "title": "A"}
         ]
         mock_dice.return_value = [{"source": "dice", "external_id": "d1", "title": "B"}]
         mock_adzuna.return_value = [{"source": "adzuna", "external_id": "a1", "title": "C"}]
+        mock_levels.return_value = [{"source": "levels", "external_id": "l1", "title": "D"}]
         rows = fetch_jobs(
             "engineer",
-            site_name=["indeed", "dice", "adzuna"],
-            results_wanted=30,
+            site_name=["indeed", "dice", "adzuna", "levels"],
+            results_wanted=40,
         )
-        self.assertEqual(len(rows), 3)
+        self.assertEqual(len(rows), 4)
         mock_jobspy.assert_called_once()
         mock_dice.assert_called_once()
         mock_adzuna.assert_called_once()
+        mock_levels.assert_called_once()
         self.assertEqual(mock_jobspy.call_args[0][3], 10)
 
 
@@ -548,6 +876,356 @@ class WriterNodePromptTestCase(TestCase):
         self.assertGreater(p.index("TAILORED_V1"), p.index("RAW_PDF_TEXT"))
         self.assertIn("DOC:\nTAILORED_V1", p)
 
+    def test_writer_node_omits_duplicate_source_on_first_pass(self):
+        from resume_app.agents import writer_node
+        from resume_app.optimizer_budget import omitted_duplicate_field_note
+
+        captured = {}
+
+        def fake_llm_invoke(llm, messages, **kwargs):
+            captured["prompt"] = "\n".join(getattr(m, "content", str(m)) for m in messages)
+            r = MagicMock()
+            r.content = "OUT"
+            r.usage_metadata = None
+            return r
+
+        template = "SRC:\n{source_resume_text}\nDOC:\n{resume_text}\n"
+        state = {
+            "resume_text": "SAME BODY",
+            "source_resume_text": "SAME BODY",
+            "job_description": "JD",
+            "writer_job_description": "JD",
+            "optimized_resume": "",
+            "feedback": [],
+            "iteration_count": 0,
+            "llm": MagicMock(),
+            "writer_prompt_template": template,
+            "writer_prompt_system": "",
+            "writer_prompt_user": "",
+            "writer_prompt_legacy": "",
+            "debug": False,
+        }
+
+        with patch("resume_app.agents._llm_invoke_with_retry", side_effect=fake_llm_invoke):
+            writer_node(state)
+
+        note = omitted_duplicate_field_note()
+        self.assertIn(note, captured.get("prompt", ""))
+        self.assertNotIn("SRC:\nSAME BODY", captured.get("prompt", ""))
+
+
+class OptimizerAgentThoughtDebugTestCase(TestCase):
+    def test_format_agent_log_thought_three_sections(self):
+        from .agents import format_agent_log_thought
+
+        text = format_agent_log_thought(
+            {
+                "debug_messages": [
+                    {"role": "system", "content": "SYS"},
+                    {"role": "user", "content": "USR"},
+                ],
+                "input_tokens": 11,
+                "output_tokens": 22,
+                "raw_llm_response": "RAW",
+            }
+        )
+        self.assertIn("--- System Prompt ---", text)
+        self.assertIn("SYS", text)
+        self.assertIn("--- User Prompt ---", text)
+        self.assertIn("USR", text)
+        self.assertIn("--- Raw Output ---", text)
+        self.assertIn("RAW", text)
+        self.assertIn("input=11", text)
+
+    def test_can_view_optimizer_llm_debug_while_hijacking(self):
+        """Staff secret-sauce debug uses the original hijacker, not the impersonated user."""
+        from django.test import RequestFactory
+
+        from .agents import can_view_optimizer_llm_debug
+        from .tenancy import get_real_user
+
+        admin = create_user("hijack_admin")
+        admin.is_staff = True
+        admin.save(update_fields=["is_staff"])
+        target = create_user("hijack_target")
+        self.assertFalse(target.is_staff)
+
+        rf = RequestFactory()
+        req = rf.get("/")
+        req.user = target
+        req.session = {"hijack_history": [str(admin.pk)]}
+
+        self.assertEqual(get_real_user(req).pk, admin.pk)
+        self.assertTrue(can_view_optimizer_llm_debug(req))
+
+        req_plain = rf.get("/")
+        req_plain.user = target
+        req_plain.session = {}
+        self.assertFalse(can_view_optimizer_llm_debug(req_plain))
+
+    def test_redact_strips_prompt_keys(self):
+        from .agents import redact_agent_log_thought
+
+        redacted = redact_agent_log_thought(
+            {
+                "debug_messages": [{"role": "system", "content": "secret"}],
+                "raw_llm_response": "secret",
+                "ats_score": 90,
+                "input_tokens": 5,
+            },
+            include_prompt_debug=False,
+        )
+        self.assertNotIn("debug_messages", redacted)
+        self.assertNotIn("raw_llm_response", redacted)
+        self.assertEqual(redacted.get("ats_score"), 90)
+        self.assertEqual(redacted.get("input_tokens"), 5)
+
+    def test_get_status_data_hides_logs_for_non_staff(self):
+        from django.test import RequestFactory
+
+        from .api import get_status_data
+        from .models import AgentLog
+
+        user = create_user("thoughts_user")
+        resume = UserResume.objects.create(owner=user, file="t.pdf")
+        jd = JobDescription.objects.create(content="JD")
+        optimized = OptimizedResume.objects.create(
+            owner=user, original_resume=resume, job_description=jd, status="completed"
+        )
+        AgentLog.objects.create(
+            optimized_resume=optimized,
+            step_name="recruiter_judge",
+            thought={
+                "debug_messages": [{"role": "system", "content": "secret sauce"}],
+                "input_tokens": 9,
+                "output_tokens": 3,
+                "raw_llm_response": "table",
+            },
+        )
+        rf = RequestFactory()
+        req = rf.get("/")
+        req.user = user
+        data = get_status_data(optimized.id, user, request=req)
+        self.assertFalse(data["show_agent_thoughts"])
+        self.assertEqual(data["logs"], [])
+
+        user.is_staff = True
+        user.save(update_fields=["is_staff"])
+        req.user = user
+        data_staff = get_status_data(optimized.id, user, request=req)
+        self.assertTrue(data_staff["show_agent_thoughts"])
+        self.assertEqual(len(data_staff["logs"]), 1)
+        self.assertIn("secret sauce", data_staff["logs"][0]["thought_text"])
+        self.assertEqual(data_staff["logs"][0]["step_in"], 9)
+
+    def test_side_channel_pop_into_create_agent_log(self):
+        from .agents import clear_node_llm_debug, push_node_llm_debug
+        from .models import AgentLog
+        from .tasks import _create_agent_log
+
+        user = create_user("sidechan_user")
+        resume = UserResume.objects.create(owner=user, file="t.pdf")
+        jd = JobDescription.objects.create(content="JD")
+        optimized = OptimizedResume.objects.create(
+            owner=user, original_resume=resume, job_description=jd
+        )
+        clear_node_llm_debug(str(optimized.id))
+        push_node_llm_debug(
+            str(optimized.id),
+            {
+                "debug_messages": [{"role": "user", "content": "from-side-channel"}],
+                "input_tokens": 42,
+                "output_tokens": 7,
+                "raw_llm_response": "out",
+            },
+        )
+        _create_agent_log(optimized, ["writer"], "step_0", {"step_0": {"ats_score": 1}})
+        log = AgentLog.objects.get(optimized_resume=optimized)
+        self.assertEqual(log.step_name, "writer")
+        self.assertEqual(log.thought.get("input_tokens"), 42)
+        self.assertEqual(log.thought["debug_messages"][0]["content"], "from-side-channel")
+
+
+class OptimizerBudgetTestCase(TestCase):
+    def test_should_include_source_resume_when_different(self):
+        from resume_app.optimizer_budget import should_include_source_resume
+
+        self.assertTrue(should_include_source_resume("alpha", "beta"))
+
+    def test_should_not_include_source_resume_when_same(self):
+        from resume_app.optimizer_budget import should_include_source_resume
+
+        self.assertFalse(should_include_source_resume("same text", "same   text"))
+
+    def test_should_not_include_full_jd_when_role_slice_covers_posting(self):
+        from resume_app.optimizer_budget import should_include_full_job_description
+
+        full = "Role requirements " * 20
+        role = full.strip()
+        self.assertFalse(should_include_full_job_description(role, full))
+
+    def test_should_include_full_jd_when_materially_longer(self):
+        from resume_app.optimizer_budget import should_include_full_job_description
+
+        role = "Short role slice"
+        full = role + " " + ("extra posting detail " * 50)
+        self.assertTrue(should_include_full_job_description(role, full))
+
+    @override_settings(
+        OPTIMIZER_JUDGE_RESUME_MAX_CHARS=100,
+        OPTIMIZER_JUDGE_JD_MAX_CHARS=50,
+    )
+    def test_truncate_judge_inputs(self):
+        from resume_app.optimizer_budget import (
+            truncate_judge_job_description,
+            truncate_judge_resume,
+        )
+
+        self.assertEqual(len(truncate_judge_resume("x" * 200)), 100)
+        self.assertEqual(len(truncate_judge_job_description("y" * 200)), 50)
+
+    @patch("resume_app.embeddings.extract_role_description", return_value="ROLE SLICE")
+    def test_build_context_state_uses_role_focused_jd(self, _mock_extract):
+        from resume_app.optimizer_budget import build_optimizer_context_state_raw
+
+        ctx = build_optimizer_context_state_raw("resume", "full jd text", job_title="Engineer")
+        self.assertEqual(ctx["writer_job_description"], "ROLE SLICE")
+        self.assertEqual(ctx["judge_job_description"], "ROLE SLICE")
+        self.assertEqual(ctx["job_description"], "full jd text")
+
+
+class JudgeNodeRoutingTestCase(TestCase):
+    def test_judge_node_prefers_remote_by_default(self):
+        from resume_app.agents import ats_judge_node
+        from resume_app.parsers import AtsJudgeResult
+
+        captured = {}
+
+        def fake_unstructured(*args, **kwargs):
+            captured["prefer_local"] = kwargs.get("prefer_local")
+            data = AtsJudgeResult(ats_match_score=80, strategic_feedback="ok")
+            return data, {"ats_match_score": 80}, MagicMock(content='{"ats_match_score":80}'), {"path": "unstructured"}
+
+        state = {
+            "llm": MagicMock(),
+            "optimized_resume": "draft",
+            "resume_text": "draft",
+            "judge_job_description": "jd",
+            "job_description": "jd",
+            "ats_judge_prompt_template": "RES:{optimized_resume}\nJD:{job_description}",
+            "ats_judge_prompt_system": "",
+            "ats_judge_prompt_user": "",
+            "ats_judge_prompt_legacy": "",
+            "debug": False,
+        }
+
+        with patch("resume_app.agents._unstructured_judge_invoke", side_effect=fake_unstructured):
+            out = ats_judge_node(state)
+
+        self.assertFalse(captured.get("prefer_local"))
+        self.assertEqual(out.get("ats_score"), 80)
+
+    @override_settings(OPTIMIZER_JUDGES_PREFER_LOCAL=True)
+    def test_judge_node_can_opt_into_local_preference(self):
+        from resume_app.agents import ats_judge_node
+        from resume_app.parsers import AtsJudgeResult
+
+        captured = {}
+
+        def fake_unstructured(*args, **kwargs):
+            captured["prefer_local"] = kwargs.get("prefer_local")
+            data = AtsJudgeResult(ats_match_score=80, strategic_feedback="ok")
+            return data, {"ats_match_score": 80}, MagicMock(content='{"ats_match_score":80}'), {"path": "unstructured"}
+
+        state = {
+            "llm": MagicMock(),
+            "optimized_resume": "draft",
+            "resume_text": "draft",
+            "judge_job_description": "jd",
+            "job_description": "jd",
+            "ats_judge_prompt_template": "RES:{optimized_resume}\nJD:{job_description}",
+            "ats_judge_prompt_system": "",
+            "ats_judge_prompt_user": "",
+            "ats_judge_prompt_legacy": "",
+            "debug": False,
+        }
+
+        with patch("resume_app.agents._unstructured_judge_invoke", side_effect=fake_unstructured):
+            out = ats_judge_node(state)
+
+        self.assertTrue(captured.get("prefer_local"))
+        self.assertEqual(out.get("ats_score"), 80)
+
+    @override_settings(
+        OPTIMIZER_JUDGES_PREFER_LOCAL=True,
+        OPTIMIZER_JUDGE_RESUME_MAX_CHARS=10,
+        OPTIMIZER_JUDGE_JD_MAX_CHARS=5,
+    )
+    def test_judge_node_caps_resume_and_jd_in_prompt(self):
+        from resume_app.agents import recruiter_judge_node
+        from resume_app.parsers import ScoreFeedback
+
+        captured = {}
+
+        def fake_unstructured(llm, messages, **kwargs):
+            captured["prompt"] = "\n".join(getattr(m, "content", str(m)) for m in messages)
+            data = ScoreFeedback(score=70, feedback="fine")
+            return data, {"score": 70}, MagicMock(content='{"score":70}'), {"path": "unstructured"}
+
+        state = {
+            "llm": MagicMock(),
+            "optimized_resume": "012345678901234567890",
+            "resume_text": "012345678901234567890",
+            "judge_job_description": "abcdefghijklmnop",
+            "job_description": "abcdefghijklmnop",
+            "recruiter_judge_prompt_template": "RES:{optimized_resume}\nJD:{job_description}",
+            "recruiter_judge_prompt_system": "",
+            "recruiter_judge_prompt_user": "",
+            "recruiter_judge_prompt_legacy": "",
+            "debug": False,
+        }
+
+        with patch("resume_app.agents._unstructured_judge_invoke", side_effect=fake_unstructured):
+            recruiter_judge_node(state)
+
+        prompt = captured.get("prompt", "")
+        self.assertIn("0123456789", prompt)
+        self.assertNotIn("012345678901234567890", prompt)
+        self.assertIn("abcde", prompt)
+        self.assertNotIn("abcdefghijklmnop", prompt)
+
+    def test_writer_node_keeps_strong_model_routing(self):
+        from resume_app.agents import writer_node
+
+        captured = {}
+
+        def fake_llm_invoke(llm, messages, **kwargs):
+            captured["prefer_local"] = kwargs.get("prefer_local")
+            r = MagicMock()
+            r.content = "OUT"
+            r.usage_metadata = None
+            return r
+
+        state = {
+            "resume_text": "BODY",
+            "source_resume_text": "BODY",
+            "job_description": "JD",
+            "optimized_resume": "",
+            "feedback": [],
+            "iteration_count": 0,
+            "llm": MagicMock(),
+            "writer_prompt_template": "X",
+            "writer_prompt_system": "",
+            "writer_prompt_user": "",
+            "writer_prompt_legacy": "",
+            "debug": False,
+        }
+
+        with patch("resume_app.agents._llm_invoke_with_retry", side_effect=fake_llm_invoke):
+            writer_node(state)
+
+        self.assertFalse(captured.get("prefer_local"))
+
 
 class ResumeKeywordMinerTestCase(TestCase):
     def test_mine_keywords_empty_jobs(self):
@@ -722,6 +1400,20 @@ class PipelineResumeSummaryAPITestCase(TenantTestCase):
 
 
 class PipelineStageViewTestCase(TenantTestCase):
+    def setUp(self):
+        super().setUp()
+        from .experience import set_experience_mode
+        from .models import UserExperienceSettings
+
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_staff"])
+        set_experience_mode(self.user, UserExperienceSettings.ExperienceMode.POWER)
+        Track.objects.get_or_create(
+            owner=self.user,
+            slug="ic",
+            defaults={"label": "IC", "is_default": False},
+        )
+
     def _create_job_and_entry(self, track="ic"):
         job = JobListing.objects.create(
             source="test",
@@ -790,6 +1482,97 @@ class PipelineStageViewTestCase(TenantTestCase):
         self.assertContains(response, "/resume/optimizer/")
         self.assertContains(response, f"job_id={job.id}")
         self.assertContains(response, "Open optimizer")
+
+
+class FindJobsSavePipelineTestCase(TenantTestCase):
+    """Find-jobs Save creates Review pipeline entries; Unsave removes them."""
+
+    username = "findjobs_save"
+
+    def _create_job(self, external_id: str = "save-1") -> JobListing:
+        return JobListing.objects.create(
+            source="test",
+            external_id=external_id,
+            title="Engineer",
+            company_name="ACME",
+        )
+
+    @patch("resume_app.jobs_api._enqueue_vetting_match_for_entry")
+    def test_save_creates_review_pipeline_entry(self, _mock_enqueue):
+        job = self._create_job()
+        track = Track.get_default_slug(self.user)
+        response = self.client.post(f"/api/resume/jobs/{job.id}/save?track={track}")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json().get("success"))
+        pe = PipelineEntry.objects.get(owner=self.user, job_listing=job, track=track)
+        self.assertEqual(pe.stage, PipelineEntry.Stage.VETTING)
+        self.assertIsNone(pe.removed_at)
+        _mock_enqueue.assert_called_once()
+
+    @patch("resume_app.jobs_api._enqueue_vetting_match_for_entry")
+    def test_save_leaves_existing_pipeline_stage(self, _mock_enqueue):
+        job = self._create_job("save-existing")
+        track = Track.get_default_slug(self.user)
+        PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=job,
+            track=track,
+            stage=PipelineEntry.Stage.PIPELINE,
+        )
+        response = self.client.post(f"/api/resume/jobs/{job.id}/save?track={track}")
+        self.assertEqual(response.status_code, 200)
+        pe = PipelineEntry.objects.get(owner=self.user, job_listing=job, track=track)
+        self.assertEqual(pe.stage, PipelineEntry.Stage.PIPELINE)
+        _mock_enqueue.assert_not_called()
+
+    @patch("resume_app.jobs_api._enqueue_vetting_match_for_entry")
+    def test_save_restores_soft_deleted_to_review(self, mock_enqueue):
+        job = self._create_job("save-restored")
+        track = Track.get_default_slug(self.user)
+        pe = PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=job,
+            track=track,
+            stage=PipelineEntry.Stage.PIPELINE,
+        )
+        pe.mark_deleted(save=True)
+        response = self.client.post(f"/api/resume/jobs/{job.id}/save?track={track}")
+        self.assertEqual(response.status_code, 200)
+        pe.refresh_from_db()
+        self.assertIsNone(pe.removed_at)
+        self.assertEqual(pe.stage, PipelineEntry.Stage.VETTING)
+        mock_enqueue.assert_called_once()
+
+    @patch("resume_app.jobs_api._enqueue_vetting_match_for_entry")
+    def test_unsave_soft_deletes_pipeline_entry(self, _mock_enqueue):
+        job = self._create_job("unsave-1")
+        track = Track.get_default_slug(self.user)
+        self.client.post(f"/api/resume/jobs/{job.id}/save?track={track}")
+        pe = PipelineEntry.objects.get(owner=self.user, job_listing=job, track=track)
+        self.assertEqual(pe.stage, PipelineEntry.Stage.VETTING)
+
+        response = self.client.post(f"/api/resume/jobs/{job.id}/unsave?track={track}")
+        self.assertEqual(response.status_code, 200)
+        pe.refresh_from_db()
+        self.assertIsNotNone(pe.removed_at)
+        self.assertEqual(pe.stage, PipelineEntry.Stage.DELETED)
+
+    @patch("resume_app.jobs_api._enqueue_vetting_match_for_entry")
+    def test_saved_job_appears_on_review_board(self, _mock_enqueue):
+        from resume_app.saved_searches import create_or_update_saved_search
+
+        create_or_update_saved_search(self.user, name="FinCrimes", search_term="AML")
+        job = self._create_job("save-board")
+        # Saved searches create a profile slug from the name
+        from resume_app.models import SearchProfile
+
+        sp = SearchProfile.objects.for_user(self.user).filter(name="FinCrimes").first()
+        track = sp.slug if sp else Track.get_default_slug(self.user)
+        self.client.post(f"/api/resume/jobs/{job.id}/save?track={track}")
+        response = self.client.get(f"/jobs/vetting/?track={track}")
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Engineer")
+        self.assertContains(response, "ACME")
 
 
 class PipelineResumeEnqueueTestCase(TestCase):
@@ -1044,6 +1827,48 @@ class JobDedupeTestCase(TestCase):
         )
         self.assertEqual(job_listing_fingerprint(a), job_listing_fingerprint(b))
 
+    def test_search_dedupe_by_title_company_keeps_first(self):
+        from .job_dedupe import dedupe_payloads_by_title_company
+        from .schemas import JobPayload
+
+        payloads = [
+            JobPayload(
+                id=1,
+                title="Staff Software Engineer (Backend) - Everand Core",
+                company_name="Scribd, Inc.",
+                location="Portland, OR, US",
+                snippet="a",
+                url="https://example.com/1",
+                source="indeed",
+                focus_percent=72,
+            ),
+            JobPayload(
+                id=2,
+                title="Staff Software Engineer (Backend) - Everand Core",
+                company_name="Scribd, Inc.",
+                location="Jacksonville, FL, US",
+                snippet="a",
+                url="https://example.com/2",
+                source="indeed",
+                focus_percent=72,
+            ),
+            JobPayload(
+                id=3,
+                title="Other Role",
+                company_name="Scribd, Inc.",
+                location="Remote",
+                snippet="b",
+                url="https://example.com/3",
+                source="indeed",
+                focus_percent=60,
+            ),
+        ]
+        out = dedupe_payloads_by_title_company(payloads)
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[0].id, 1)
+        self.assertEqual(out[0].location, "Portland, OR, US")
+        self.assertEqual(out[1].id, 3)
+
     def test_dedupe_keeps_higher_focus_after_penalty(self):
         from .job_dedupe import dedupe_pipeline_entries
 
@@ -1114,24 +1939,97 @@ class JobDedupeTestCase(TestCase):
         self.assertEqual(r1["entries_removed"], 1)
 
 
+class JdCleanseNodeTestCase(TestCase):
+    @patch("resume_app.agents._llm_invoke_with_retry")
+    def test_jd_cleanse_overwrites_downstream_jd_fields(self, mock_invoke):
+        from types import SimpleNamespace
+
+        from resume_app.agents import jd_cleanse_node, create_workflow_from_steps, VALID_STEP_IDS
+
+        self.assertIn("jd_cleanse", VALID_STEP_IDS)
+        app = create_workflow_from_steps(["jd_cleanse", "writer", "ats_judge"])
+        self.assertIsNotNone(app)
+
+        mock_invoke.return_value = SimpleNamespace(
+            content="Core requirements: Python, Django, AWS. Lead platform delivery."
+        )
+        user = create_user("jdcleanse")
+        noisy = (
+            "About us: We love culture.\nBenefits: unlimited PTO.\n"
+            "Responsibilities: Build APIs in Python and Django on AWS.\n"
+            "EEO: Equal opportunity employer."
+        )
+        out = jd_cleanse_node(
+            {
+                "job_description": noisy,
+                "job_title": "Staff Engineer",
+                "llm": None,
+                "user_id": user.id,
+                "job_cache_key": "test-jd",
+            }
+        )
+        cleansed = out["job_description"]
+        self.assertEqual(out["writer_job_description"], cleansed)
+        self.assertEqual(out["judge_job_description"], cleansed)
+        self.assertLess(len(cleansed), len(noisy))
+        self.assertIn("Python", cleansed)
+        self.assertTrue(out.get("jd_cleansed"))
+        mock_invoke.assert_called_once()
+
+    @patch("resume_app.agents._llm_invoke_with_retry", side_effect=RuntimeError("down"))
+    def test_jd_cleanse_falls_back_to_heuristic(self, _mock_invoke):
+        from resume_app.agents import jd_cleanse_node
+
+        user = create_user("jdcleanseh")
+        noisy = (
+            "About the company\nWe are great.\n\n"
+            "Responsibilities:\n- Build scalable systems\n- Lead engineers\n"
+        )
+        out = jd_cleanse_node(
+            {
+                "job_description": noisy,
+                "job_title": "Principal Engineer",
+                "llm": None,
+                "user_id": user.id,
+            }
+        )
+        self.assertTrue(out["job_description"])
+        self.assertEqual(out["writer_job_description"], out["job_description"])
+        self.assertFalse(out.get("jd_cleansed"))
+        self.assertEqual((out.get("parse_info") or {}).get("path"), "heuristic_fallback")
+
+
 class PromptStoreResolveTestCase(TestCase):
     def test_resolve_matching_uses_code_defaults_when_profile_empty(self):
         from resume_app.prompt_store import resolve_prompt_parts
-        from resume_app.models import UserPromptProfile
+        from resume_app.models import SystemPromptProfile
 
-        user = create_user("promptmatch")
-        prof = UserPromptProfile.get_for_user(user)
+        prof = SystemPromptProfile.get_solo()
         s, u, leg = resolve_prompt_parts(prof, "matching")
         self.assertIsNone(leg)
         self.assertIn("JSON", s)
         self.assertIn("{resume_text}", u)
 
+    def test_resolve_writer_heals_default_legacy_to_system_user_split(self):
+        from resume_app.prompt_store import resolve_prompt_parts
+        from resume_app.models import SystemPromptProfile
+        from resume_app.prompts import DEFAULT_WRITER_PROMPT, DEFAULT_WRITER_SYSTEM, DEFAULT_WRITER_USER
+
+        prof = SystemPromptProfile.get_solo()
+        prof.writer = DEFAULT_WRITER_PROMPT
+        prof.writer_system = ""
+        prof.writer_user = ""
+        prof.save()
+        s, u, leg = resolve_prompt_parts(prof, "writer")
+        self.assertIsNone(leg)
+        self.assertEqual(s, DEFAULT_WRITER_SYSTEM)
+        self.assertEqual(u, DEFAULT_WRITER_USER)
+
     def test_resolve_jd_cleanse_uses_code_defaults_when_profile_empty(self):
         from resume_app.prompt_store import resolve_prompt_parts
-        from resume_app.models import UserPromptProfile
+        from resume_app.models import SystemPromptProfile
 
-        user = create_user("promptjd")
-        prof = UserPromptProfile.get_for_user(user)
+        prof = SystemPromptProfile.get_solo()
         s, u, leg = resolve_prompt_parts(prof, "jd_cleanse")
         self.assertIsNone(leg)
         self.assertIn("core job signal", s.lower())
@@ -1143,8 +2041,9 @@ class LlmRateLimitTestCase(TestCase):
     def test_acquire_when_disabled_returns_noop(self):
         from resume_app.llm_rate_limit import acquire_llm_slot
 
+        user = create_user("rluser")
         with patch("resume_app.llm_rate_limit._get_limits", return_value=None):
-            rec, rel = acquire_llm_slot("Groq", "llama", 42)
+            rec, rel = acquire_llm_slot("Groq", "llama", 42, user=user)
         rec(10)
         rel()
 
@@ -1208,14 +2107,14 @@ class AtsJudgeProfilePromptTestCase(TestCase):
         self.user = create_user("atsjudge")
         AtsJudgeProfile.objects.all().delete()
         self.strict = AtsJudgeProfile.objects.create(
-            owner=self.user,
+            owner=None,
             name="Strict",
             slug="strict",
             ats_judge_system="STRICT_SYS",
             ats_judge_user="STRICT_USR {optimized_resume}",
         )
         self.default = AtsJudgeProfile.objects.create(
-            owner=self.user,
+            owner=None,
             name="Default",
             slug="default-alt",
             is_default=True,
@@ -1248,7 +2147,7 @@ class AtsJudgeProfilePromptTestCase(TestCase):
         from resume_app.prompt_store import resolve_effective_ats_judge_profile_id
 
         wf = OptimizerWorkflow.objects.create(
-            owner=self.user,
+            owner=None,
             name="WF",
             steps=["writer", "ats_judge", "recruiter_judge"],
             ats_judge_profile=self.strict,
@@ -1516,9 +2415,9 @@ class TrackListLibraryResumeTestCase(TenantTestCase):
         default = Track.objects.for_user(self.user).filter(is_default=True).first()
         response = self.client.get("/jobs/tracks/")
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Track management")
+        self.assertContains(response, "Search profiles")
         self.assertContains(response, "Unique resumes")
-        self.assertContains(response, "Total tracks")
+        self.assertContains(response, "Total profiles")
         self.assertContains(response, "Default profile")
         self.assertContains(response, str(track_count))
         self.assertContains(response, str(unique_resumes))
@@ -1664,3 +2563,53 @@ class GeneratedResumeCleanupTestCase(TestCase):
         self.assertFalse(UserResume.objects.filter(pk=old.pk).exists())
         self.assertTrue(UserResume.objects.filter(pk=keep.pk).exists())
         self.assertTrue(UserResume.objects.filter(pk=library.pk).exists())
+
+
+class SystemOptimizerWorkflowTestCase(TestCase):
+    """Admin-managed workflows (owner=null) are visible to all subscribers."""
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        from resume_app.models import OptimizerWorkflow
+
+        User = get_user_model()
+        self.admin = User.objects.create_user(username="wf_admin", password="pass")
+        self.admin.is_staff = True
+        self.admin.save(update_fields=["is_staff"])
+        self.subscriber = User.objects.create_user(username="wf_sub", password="pass")
+        self.system_wf = OptimizerWorkflow.objects.create(
+            owner=None,
+            name="JD-Rec-ATS-Writer-ATS",
+            steps=["jd_cleanse", "recruiter_judge", "ats_judge", "writer", "ats_judge"],
+        )
+        self.personal_wf = OptimizerWorkflow.objects.create(
+            owner=self.subscriber,
+            name="Private legacy",
+            steps=["writer"],
+        )
+
+    def test_list_shows_system_not_personal(self):
+        from resume_app.prompt_store import list_optimizer_workflows
+
+        names = {w.name for w in list_optimizer_workflows(self.subscriber)}
+        self.assertIn("JD-Rec-ATS-Writer-ATS", names)
+        self.assertNotIn("Private legacy", names)
+
+    def test_subscriber_can_resolve_system_workflow(self):
+        from resume_app.prompt_store import get_optimizer_workflow_by_id
+
+        wf = get_optimizer_workflow_by_id(self.system_wf.pk, self.subscriber)
+        self.assertIsNotNone(wf)
+        self.assertEqual(wf.name, "JD-Rec-ATS-Writer-ATS")
+        self.assertIsNone(get_optimizer_workflow_by_id(self.personal_wf.pk, self.subscriber))
+
+    def test_subscriber_forbidden_from_workflow_manage_ui(self):
+        self.client.force_login(self.subscriber)
+        resp = self.client.get("/workspace/workflows/")
+        self.assertEqual(resp.status_code, 403)
+
+    def test_staff_sees_workflow_list(self):
+        self.client.force_login(self.admin)
+        resp = self.client.get("/workspace/workflows/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "JD-Rec-ATS-Writer-ATS")

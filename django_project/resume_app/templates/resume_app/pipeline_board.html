@@ -3,6 +3,10 @@
 {% block title %}{{ board_page_title }} — ResumeElite{% endblock %}
 
 {% block extra_head %}
+{% if not my_jobs_profile_gate %}
+<style>
+    .line-clamp-3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+</style>
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js" crossorigin="anonymous"></script>
 <style>
@@ -64,13 +68,22 @@
 .pipeline-summary-markdown h2 { font-size: 1.05rem; font-weight: 600; margin: 1rem 0 0.5rem; color: #0f172a; }
 </style>
 {% endif %}
+{% endif %}
 {% endblock %}
 
 {% block content %}
 <div class="mx-auto max-w-6xl">
+    {% if my_jobs_profile_gate %}
+        <div class="mb-6">
+            <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">{{ board_page_title }}</h1>
+        </div>
+        {% include "resume_app/_concierge_messages.html" %}
+        {% include "resume_app/_my_jobs_profile_gate.html" %}
+    {% else %}
+    {% include "resume_app/_onboarding_banner.html" %}
     <div class="mb-6">
-        <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">{{ board_page_title }}</h1>
-        <p class="mt-1 text-sm text-slate-600">{{ board_page_subtitle }}</p>
+        <h1 class="text-2xl font-bold tracking-tight text-concierge-slate sm:text-3xl">{{ board_page_title }}</h1>
+        <p class="mt-1.5 text-sm text-slate-500 sm:text-base">{{ board_page_subtitle }}</p>
         {% if show_board_metrics %}
         <p class="mt-2 text-xs text-slate-500">
             Flow: <span class="font-medium text-concierge-slate">Pipeline</span> → Vetting → Applying → Done
@@ -90,7 +103,7 @@
     <div class="mb-4 flex flex-col gap-3 rounded-concierge border border-slate-200 bg-white p-3 shadow-sm">
         <div class="flex flex-wrap items-center gap-2">
             <button type="button" id="pipeline-resume-summary-btn"
-                    class="inline-flex items-center gap-2 rounded-concierge bg-concierge-slate px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    class="inline-flex items-center gap-2 rounded-concierge bg-brand px-3 py-2 text-sm font-semibold text-white hover:bg-brand-hover disabled:cursor-not-allowed disabled:opacity-50"
                     {% if pipeline_resume_summary_eligible_count == 0 or not pipeline_resume_llm_configured %}disabled{% endif %}
                     title="Extract resume keywords from job descriptions (LLM)">
                 <span id="pipeline-resume-summary-btn-label">Resume summary</span>
@@ -181,17 +194,51 @@
     </dialog>
     {% endif %}
 
-    <form method="get" class="mb-6 space-y-4">
+    <form method="get" class="mb-5 {% if not is_power_user %}rounded-2xl border border-slate-200/90 bg-white p-3 shadow-sm sm:p-4{% else %}space-y-4{% endif %}">
         <input type="hidden" name="track" value="{{ pipeline_track }}">
+        {% if not is_power_user %}
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+            <div class="relative min-w-0 flex-1">
+                <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M11 18a7 7 0 100-14 7 7 0 000 14z"/></svg>
+                </span>
+                <input type="search" name="q"
+                       class="h-11 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 text-sm text-concierge-slate placeholder:text-slate-400 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
+                       placeholder="Search your saved jobs…"
+                       value="{{ pipeline_search_query|default:'' }}"
+                       aria-label="Search jobs">
+            </div>
+            {% if pipeline_source_options %}
+            <label class="relative shrink-0 sm:w-44">
+                <span class="sr-only">Filter by source</span>
+                <select name="source"
+                        class="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white px-3 pr-8 text-sm text-slate-700 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
+                    <option value="">Filter: All roles</option>
+                    {% for src_val, src_label in pipeline_source_options %}
+                    <option value="{{ src_val }}" {% if pipeline_source_selected == src_val %}selected{% endif %}>{{ src_label }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            {% endif %}
+            <button type="submit" class="inline-flex h-11 items-center justify-center rounded-xl bg-brand px-5 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
+                Search
+            </button>
+            {% if pipeline_has_active_filters %}
+            <a href="{{ board_clear_url }}" class="inline-flex h-11 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm font-medium text-slate-600 hover:bg-slate-100">Clear</a>
+            {% endif %}
+        </div>
+        {% else %}
         <div class="flex flex-col gap-2 sm:flex-row">
             <input type="search" name="q" class="min-w-0 flex-1 rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate" placeholder="Search title, company, description…" value="{{ pipeline_search_query|default:'' }}" aria-label="Search dashboard">
             <div class="flex flex-wrap gap-2">
                 <button type="submit" class="rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50">Apply filters</button>
                 {% if pipeline_has_active_filters %}
-                    <a href="{{ board_clear_url }}" class="inline-flex items-center rounded-concierge border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100">Clear all</a>
+                    <a href="{{ board_clear_url }}" class="inline-flex items-center rounded-concierge border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100">Clear</a>
                 {% endif %}
             </div>
         </div>
+        {% endif %}
+        {% if show_advanced_board_filters %}
         <div class="flex flex-col gap-3 rounded-concierge border border-slate-100 bg-slate-50/80 p-3 sm:flex-row sm:flex-wrap sm:items-end">
             <div class="flex min-w-[10rem] flex-col gap-1">
                 <label for="pipeline-filter-source" class="text-xs font-medium text-slate-500">Source (JobSpy)</label>
@@ -214,12 +261,12 @@
                 Pref is the preference margin % (liked vs disliked embeddings). Jobs without a score yet are hidden when a min/max is set.
             </p>
         </div>
+        {% endif %}
     </form>
 
-    <div class="rounded-concierge border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
+    <div class="{% if is_power_user %}rounded-concierge border border-slate-200 bg-white p-4 shadow-sm sm:p-6{% endif %}">
         {% include "resume_app/_pipeline_jobs.html" with stage_label=board_stage empty_message=board_empty_message empty_help_list=board_empty_help_list empty_clear_url=board_clear_url %}
     </div>
-</div>
 {% if show_pipeline_resume_summary %}
 <script>
 (function() {
@@ -514,4 +561,6 @@
 })();
 </script>
 {% endif %}
+    {% endif %}
+</div>
 {% endblock %}

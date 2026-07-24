@@ -4,50 +4,107 @@
 <div class="space-y-6">
     <div>
         <h1 class="text-2xl font-bold text-concierge-slate">Support — Users</h1>
-        <p class="mt-1 text-sm text-slate-600">Search accounts and login as a user to assist with support.</p>
+        <p class="mt-1 text-sm text-slate-600">Search accounts, review plan/usage, suspend, or impersonate.</p>
     </div>
-    <form method="get" class="flex flex-wrap gap-2">
+    {% include "resume_app/_concierge_messages.html" %}
+    <form method="get" class="flex flex-wrap gap-2 items-center">
         <input type="search" name="q" value="{{ query }}" placeholder="Email or username"
                class="min-w-[200px] flex-1 rounded-concierge border border-slate-300 px-3 py-2 text-sm">
-        <button type="submit" class="rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white">Search</button>
+        <label class="flex items-center gap-1 text-sm text-slate-600">
+            <input type="checkbox" name="inactive" value="1" {% if show_inactive %}checked{% endif %}>
+            Include suspended
+        </label>
+        <button type="submit" class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white">Search</button>
     </form>
     <div class="overflow-x-auto rounded-concierge border border-slate-200 bg-white">
         <table class="min-w-full text-left text-sm">
             <thead class="border-b border-slate-200 bg-slate-50 text-xs uppercase text-slate-500">
                 <tr>
-                    <th class="px-4 py-3">Username</th>
-                    <th class="px-4 py-3">Email</th>
-                    <th class="px-4 py-3">Last login</th>
-                    <th class="px-4 py-3">Joined</th>
-                    <th class="px-4 py-3"></th>
+                    <th class="px-4 py-3">User</th>
+                    <th class="px-4 py-3">Plan</th>
+                    <th class="px-4 py-3">Usage today</th>
+                    <th class="px-4 py-3">Storage</th>
+                    <th class="px-4 py-3">LLM tokens (lifetime)</th>
+                    <th class="px-4 py-3">Verified</th>
+                    <th class="px-4 py-3">Status</th>
+                    <th class="px-4 py-3">Actions</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-slate-100">
-                {% for u in users %}
-                <tr>
-                    <td class="px-4 py-3 font-medium">{{ u.username }}</td>
-                    <td class="px-4 py-3">{{ u.email|default:"—" }}</td>
-                    <td class="px-4 py-3">{{ u.last_login|date:"Y-m-d H:i"|default:"—" }}</td>
-                    <td class="px-4 py-3">{{ u.date_joined|date:"Y-m-d" }}</td>
+                {% for row in rows %}
+                {% with u=row.user %}
+                <tr class="{% if not u.is_active %}bg-slate-50 opacity-75{% endif %}">
                     <td class="px-4 py-3">
+                        <div class="font-medium">{{ u.username }}</div>
+                        <div class="text-xs text-slate-500">{{ u.email|default:"—" }}</div>
+                        <div class="text-xs text-slate-400">Joined {{ u.date_joined|date:"Y-m-d" }}</div>
+                    </td>
+                    <td class="px-4 py-3">
+                        <div>{{ row.plan_name|default:"—" }}</div>
+                        <div class="text-xs text-slate-500">{{ row.sub_status }}</div>
+                    </td>
+                    <td class="px-4 py-3 text-xs tabular-nums text-slate-600">
+                        LLM {{ row.usage.llm_requests.used }}/{% if row.usage.llm_requests.limit %}{{ row.usage.llm_requests.limit }}{% else %}∞{% endif %}<br>
+                        Search {{ row.usage.job_searches.used }}/{% if row.usage.job_searches.limit %}{{ row.usage.job_searches.limit }}{% else %}∞{% endif %}<br>
+                        Apply {{ row.usage.apply_runs.used }}/{% if row.usage.apply_runs.limit %}{{ row.usage.apply_runs.limit }}{% else %}∞{% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-xs tabular-nums text-slate-600">
+                        {{ row.storage.used_mb }} MB
+                        {% if row.storage.limit_mb %}
+                        / {{ row.storage.limit_mb }} MB
+                        {% else %}
+                        / ∞
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-xs tabular-nums text-slate-600">
+                        In {{ row.tokens.input|default:0 }}<br>
+                        Out {{ row.tokens.output|default:0 }}<br>
+                        Req {{ row.tokens.requests|default:0 }}
+                    </td>
+                    <td class="px-4 py-3">
+                        {% if row.email_verified %}
+                        <span class="text-emerald-700">Yes</span>
+                        {% else %}
+                        <span class="text-amber-700">No</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3">
+                        {% if u.is_active %}<span class="text-emerald-700">Active</span>{% else %}<span class="text-red-700">Suspended</span>{% endif %}
+                    </td>
+                    <td class="px-4 py-3 space-y-2">
                         {% if u.is_staff or u.is_superuser %}
                         <span class="text-xs text-slate-400">Staff</span>
                         {% else %}
-                        <form method="post" action="{% url 'hijack:acquire' %}" class="inline">
+                        <form method="post" action="{% url 'staff_user_action' u.pk %}" class="flex flex-wrap gap-1 items-center">
+                            {% csrf_token %}
+                            <select name="plan_slug" class="rounded border border-slate-300 text-xs px-1 py-1">
+                                {% for p in plans %}
+                                <option value="{{ p.slug }}" {% if p.slug == row.plan_slug %}selected{% endif %}>{{ p.name }}</option>
+                                {% endfor %}
+                            </select>
+                            <button type="submit" name="action" value="assign_plan" class="rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-50">Set plan</button>
+                            {% if u.is_active %}
+                            <button type="submit" name="action" value="suspend" class="rounded border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50">Suspend</button>
+                            {% else %}
+                            <button type="submit" name="action" value="activate" class="rounded border border-emerald-200 px-2 py-1 text-xs text-emerald-700 hover:bg-emerald-50">Activate</button>
+                            {% endif %}
+                        </form>
+                        {% if u.is_active %}
+                        <form method="post" action="{% url 'hijack:acquire' %}" class="mt-1">
                             {% csrf_token %}
                             <input type="hidden" name="user_pk" value="{{ u.pk }}">
-                            <input type="hidden" name="next" value="{% url 'home' %}">
+                            <input type="hidden" name="next" value="{% url 'resume_optimizer' %}">
                             <input type="text" name="reason" placeholder="Reason (required)" required
-                                   class="mr-2 max-w-[140px] rounded border border-slate-300 px-2 py-1 text-xs">
-                            <button type="submit" class="rounded-concierge bg-amber-600 px-3 py-1 text-xs font-semibold text-white hover:bg-amber-700">
-                                Login as
-                            </button>
+                                   class="w-40 rounded border border-slate-300 px-2 py-1 text-xs">
+                            <button type="submit" class="rounded bg-brand px-2 py-1 text-xs font-semibold text-white">Impersonate</button>
                         </form>
+                        {% endif %}
                         {% endif %}
                     </td>
                 </tr>
+                {% endwith %}
                 {% empty %}
-                <tr><td colspan="5" class="px-4 py-8 text-center text-slate-500">No users found.</td></tr>
+                <tr><td colspan="8" class="px-4 py-6 text-center text-slate-500">No users found.</td></tr>
                 {% endfor %}
             </tbody>
         </table>

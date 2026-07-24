@@ -40,6 +40,40 @@ def job_listing_fingerprint(job) -> str:
     return h
 
 
+def title_company_key(title: str | None, company: str | None) -> tuple[str, str]:
+    """Normalized (title, company) key for Find-jobs result de-dupe."""
+    return (_normalize_ws(title or ""), _normalize_ws(company or ""))
+
+
+def dedupe_payloads_by_title_company(payloads: list) -> list:
+    """
+    Collapse multi-location / cross-board duplicates in search results.
+
+    Keeps the first payload for each normalized title+company pair (call after
+    ranking so the best-fit copy wins). Rows with both title and company empty
+    are kept as-is.
+    """
+    if not payloads:
+        return payloads
+    seen: set[tuple[str, str]] = set()
+    out: list = []
+    for payload in payloads:
+        title = getattr(payload, "title", None)
+        company = getattr(payload, "company_name", None)
+        if isinstance(payload, dict):
+            title = payload.get("title")
+            company = payload.get("company_name")
+        key = title_company_key(title, company)
+        if not key[0] and not key[1]:
+            out.append(payload)
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(payload)
+    return out
+
+
 def stage_filter_q(stage: str, *, include_done: bool) -> models.Q:
     """
     Build a Q object for PipelineEntry.stage.

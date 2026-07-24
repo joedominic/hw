@@ -1,7 +1,7 @@
 {% if not pipeline_jobs %}
     <div class="text-sm text-slate-600">
         {% if pipeline_search_query %}
-            <p class="mb-0">No jobs match "{{ pipeline_search_query }}". <a href="{{ empty_clear_url }}" class="font-medium text-concierge-slate underline">Clear all filters</a> to see up to {% firstof pipeline_count_before_text_search pipeline_total_count %} job(s) matching your source/pref filters.</p>
+            <p class="mb-0">No jobs match "{{ pipeline_search_query }}". <a href="{{ empty_clear_url }}" class="font-medium text-concierge-slate underline">Clear search</a>{% if is_power_user %} to see up to {% firstof pipeline_count_before_text_search pipeline_total_count %} job(s) matching your source/pref filters{% endif %}.</p>
         {% else %}
             <p class="mb-1">{{ empty_message }}</p>
             {% if empty_help_list %}
@@ -11,23 +11,31 @@
                     {% endfor %}
                 </ul>
             {% endif %}
+            {% if not is_power_user and board_stage == "pipeline" %}
+                <p class="mt-3 mb-0">
+                    <a href="{% url 'jobs_search' %}" class="inline-flex items-center rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover">Find jobs</a>
+                </p>
+            {% endif %}
         {% endif %}
     </div>
 {% else %}
+    {% if is_power_user %}
     <p class="mb-3 text-xs text-slate-500">
         {% if pipeline_search_query %}
             Showing {{ pipeline_jobs|length }} of {% firstof pipeline_count_before_text_search pipeline_total_count %} job(s) matching "{{ pipeline_search_query }}" (after source/pref filters).
         {% elif pipeline_has_active_filters %}
-            Showing {{ pipeline_jobs|length }} of {{ pipeline_total_count }} job(s) in {{ stage_label }} with current filters.
+            Showing {{ pipeline_jobs|length }} of {{ pipeline_total_count }} job(s) in {{ board_stage_display }} with current filters.
         {% else %}
-            {{ pipeline_jobs|length }} job(s) in {{ stage_label }}.
+            {{ pipeline_jobs|length }} job{% if pipeline_jobs|length != 1 %}s{% endif %} in {{ board_stage_display }}.
         {% endif %}
     </p>
+    {% endif %}
 
     <form id="pipeline-bulk-form" method="post" class="mb-4">
         {% csrf_token %}
         <input type="hidden" name="track" value="{{ pipeline_track }}">
         <input type="hidden" name="next" value="{{ request.get_full_path }}">
+        {% if is_power_user %}
         <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
             <label class="inline-flex cursor-pointer items-center gap-2 text-sm text-slate-700">
                 <input class="h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" type="checkbox" id="select-all-jobs">
@@ -44,7 +52,7 @@
                     Delete selected
                 </button>
                 {% if stage_label == "applying" %}
-                <button type="button" id="pipeline-bulk-open-optimizer" class="rounded-concierge border border-violet-200 bg-white px-3 py-1.5 text-xs font-semibold text-violet-900 hover:bg-violet-50">
+                <button type="button" id="pipeline-bulk-open-optimizer" class="rounded-concierge border border-brand/20 bg-white px-3 py-1.5 text-xs font-semibold text-brand-ink hover:bg-brand-mist">
                     Open optimizer (selected)
                 </button>
                 <button type="submit" name="action" value="start_apply_agent" class="rounded-concierge border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-900 hover:bg-emerald-50">
@@ -53,9 +61,41 @@
                 {% endif %}
             </div>
         </div>
+        {% else %}
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
+            <div class="flex flex-wrap items-center gap-3">
+                <label class="inline-flex cursor-pointer items-center gap-2 text-sm text-slate-700">
+                    <input class="h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand" type="checkbox" id="select-all-jobs">
+                    <span>Select all</span>
+                </label>
+                <span class="text-sm text-slate-500">
+                    {% if pipeline_search_query %}
+                        {{ pipeline_jobs|length }} match{% if pipeline_jobs|length != 1 %}es{% endif %} in {{ board_stage_display }}
+                    {% else %}
+                        {{ pipeline_jobs|length }} job{% if pipeline_jobs|length != 1 %}s{% endif %} in {{ board_stage_display }}
+                    {% endif %}
+                </span>
+            </div>
+            <div class="flex flex-wrap items-center gap-3">
+                {% if stage_label == "applying" %}
+                <button type="button" id="pipeline-bulk-open-optimizer" class="text-sm font-semibold text-brand hover:underline">
+                    Tailor selected
+                </button>
+                {% endif %}
+                <button type="submit" name="action" value="bulk_delete"
+                        class="inline-flex items-center gap-1.5 text-sm font-semibold text-red-600 hover:text-red-700">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                    </svg>
+                    Remove selected
+                </button>
+            </div>
+        </div>
+        {% endif %}
     </form>
 
     {% for j in pipeline_jobs %}
+        {% if is_power_user %}
         <div class="mb-3 rounded-concierge border border-slate-200 bg-white p-3 shadow-sm">
             <div class="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
                 <div class="flex min-w-0 flex-1 items-start gap-2">
@@ -66,7 +106,9 @@
                         <div class="mt-1 flex flex-wrap items-center gap-1">
                             {% if j.focus_percent is not None %}
                                 <span class="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-900">Fit {{ j.focus_percent }}{% if j.focus_percent_after_penalty is not None %}→{{ j.focus_percent_after_penalty }}{% endif %}%</span>
+                                {% if request.user.is_staff %}
                                 <a href="{% url 'focus_breakdown' j.id %}?track={{ pipeline_track }}" class="rounded-concierge border border-sky-200 px-2 py-0.5 text-xs font-medium text-sky-800 hover:bg-sky-50">Why?</a>
+                                {% endif %}
                             {% endif %}
                             {% if stage_label == "vetting" and j.interview_probability is not None %}
                                 <span class="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900" title="{{ j.interview_reasoning|default:''|truncatechars:180 }}">
@@ -79,7 +121,7 @@
                                 <span class="rounded-full px-2 py-0.5 text-xs font-medium {% if j.preference_margin_percent < -3 %}bg-red-100 text-red-900{% elif j.preference_margin_percent > 3 %}bg-emerald-100 text-emerald-900{% else %}bg-slate-100 text-slate-700{% endif %}">Pref {{ j.preference_margin_percent }}%</span>
                             {% endif %}
                             {% if j.source_display or j.source %}
-                                <span class="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-900" title="{{ j.source }}">{{ j.source_display|default:j.source }}</span>
+                                <span class="rounded-full border border-brand/20 bg-brand-mist px-2 py-0.5 text-xs font-medium text-brand-ink" title="{{ j.source }}">{{ j.source_display|default:j.source }}</span>
                             {% endif %}
                         </div>
                         <p class="mt-1 text-xs text-slate-500">{{ j.company_name }} · {{ j.location|default:"—" }}</p>
@@ -114,13 +156,13 @@
                         {% endif %}
                         {% if stage_label == "applying" or stage_label == "done" %}
                             {% if j.optimized_resume_id %}
-                                <a href="{% url 'resume_optimizer' %}?opt_id={{ j.optimized_resume_id }}" class="inline-flex items-center rounded-concierge border border-violet-200 bg-violet-50 px-2 py-1 text-xs font-medium text-violet-900 hover:bg-violet-100" title="Open scores, judge feedback, and tailored draft">Results</a>
+                                <a href="{% url 'resume_optimizer' %}?opt_id={{ j.optimized_resume_id }}" class="inline-flex items-center rounded-concierge border border-brand/20 bg-brand-mist px-2 py-1 text-xs font-medium text-brand-ink hover:bg-brand-soft" title="Open scores, judge feedback, and tailored draft">Results</a>
                             {% endif %}
                             {% if stage_label == "applying" %}
-                            <a href="{% url 'resume_optimizer' %}?job_id={{ j.id }}{% if j.optimizer_user_resume_id %}&amp;resume_id={{ j.optimizer_user_resume_id }}{% endif %}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center rounded-concierge border border-violet-200 bg-white px-2 py-1 text-xs font-medium text-violet-900 hover:bg-violet-50" title="Open resume optimizer with this job and your track resume prefilled">Open optimizer</a>
+                            <a href="{% url 'resume_optimizer' %}?job_id={{ j.id }}{% if j.optimizer_user_resume_id %}&amp;resume_id={{ j.optimizer_user_resume_id }}{% endif %}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center rounded-concierge border border-brand/20 bg-white px-2 py-1 text-xs font-medium text-brand-ink hover:bg-brand-mist" title="Open resume optimizer with this job and your track resume prefilled">Open optimizer</a>
                             {% endif %}
                             {% if stage_label == "done" and j.pipeline_entry_id %}
-                            <button type="button" class="pipeline-interview-prep-btn inline-flex items-center rounded-concierge border border-indigo-200 bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-900 hover:bg-indigo-100" data-entry-id="{{ j.pipeline_entry_id }}" data-job-title="{{ j.title|escape }}" title="Generate expected interview questions (uses resume you applied with + job description)">
+                            <button type="button" class="pipeline-interview-prep-btn inline-flex items-center rounded-concierge border border-brand/30 bg-brand-mist px-2 py-1 text-xs font-medium text-brand-ink hover:bg-brand-soft" data-entry-id="{{ j.pipeline_entry_id }}" data-job-title="{{ j.title|escape }}" title="Generate expected interview questions (uses resume you applied with + job description)">
                                 Interview prep{% if j.has_interview_prep %} <span class="text-emerald-700">✓</span>{% endif %}
                             </button>
                             {% endif %}
@@ -132,8 +174,24 @@
                 </div>
             </div>
         </div>
+        {% else %}
+            {% include "resume_app/_pipeline_job_card_normal.html" %}
+        {% endif %}
     {% endfor %}
 
+    <dialog id="pipelineJobDescDialog" class="concierge-dialog w-[min(100vw-2rem,48rem)] max-h-[90vh] overflow-hidden p-0" aria-labelledby="pipelineJobDescTitle">
+        <div class="flex max-h-[90vh] flex-col rounded-concierge border border-slate-200 bg-white shadow-2xl">
+            <header class="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
+                <h2 id="pipelineJobDescTitle" class="m-0 text-base font-semibold text-concierge-slate">Job description</h2>
+                <button type="button" id="pipelineJobDescClose" class="rounded-concierge px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100">Close</button>
+            </header>
+            <div id="pipelineJobDescBody" class="min-h-0 flex-1 overflow-y-auto bg-white px-4 py-3 text-sm text-slate-700">
+                <p class="text-slate-500">Loading…</p>
+            </div>
+        </div>
+    </dialog>
+
+    {% if is_power_user %}
     <dialog id="pipelineJobLocalDescDialog" class="concierge-dialog w-[min(100vw-2rem,52rem)] max-h-[90vh] overflow-hidden p-0" aria-labelledby="pipelineJobLocalDescTitle">
         <div class="flex max-h-[90vh] flex-col rounded-concierge border border-slate-200 bg-white shadow-2xl">
             <header class="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200 px-4 py-3">
@@ -153,6 +211,7 @@
             </div>
         </div>
     </dialog>
+    {% endif %}
 
     <dialog id="pipelineInterviewPrepDialog" class="concierge-dialog w-[min(100vw-2rem,52rem)] max-h-[90vh] overflow-hidden p-0" aria-labelledby="pipelineInterviewPrepTitle">
         <div class="flex max-h-[90vh] flex-col rounded-concierge border border-slate-200 bg-white shadow-2xl">
@@ -163,7 +222,7 @@
             <div class="min-h-0 flex-1 overflow-y-auto bg-white px-4 py-3">
                 <p id="interview-prep-heading" class="mb-2 text-sm font-semibold text-concierge-slate"></p>
                 <div class="mb-3 flex flex-wrap items-center gap-2">
-                    <button type="button" id="interview-prep-generate-btn" class="inline-flex items-center gap-1.5 rounded-concierge bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700">
+                    <button type="button" id="interview-prep-generate-btn" class="inline-flex items-center gap-1.5 rounded-concierge bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-hover">
                         <span id="interview-prep-btn-text">Generate interview questions</span>
                         <span id="interview-prep-spinner" class="hidden h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-white/40 border-t-white" role="status" aria-hidden="true"></span>
                     </button>
@@ -200,6 +259,55 @@
                 }
             });
         })();
+        (function() {
+            var dlg = document.getElementById('pipelineJobDescDialog');
+            var closeBtn = document.getElementById('pipelineJobDescClose');
+            var bodyEl = document.getElementById('pipelineJobDescBody');
+            if (!dlg || !closeBtn || !bodyEl) return;
+            function escapeHtml(s) {
+                return String(s == null ? '' : s)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;');
+            }
+            function closeDlg() { if (dlg.open) dlg.close(); }
+            closeBtn.addEventListener('click', closeDlg);
+            document.querySelectorAll('.pipeline-job-toggle-desc').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    var id = btn.getAttribute('data-job-id');
+                    if (!id) return;
+                    bodyEl.innerHTML = '<p class="text-slate-500">Loading…</p>';
+                    try { dlg.showModal(); } catch (e) {}
+                    fetch('/api/resume/jobs/' + id, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+                        .then(function(r) {
+                            if (!r.ok) return r.json().then(function(j) { throw new Error(j.detail || j.message || ('HTTP ' + r.status)); });
+                            return r.json();
+                        })
+                        .then(function(data) {
+                            var title = escapeHtml(data.title || 'Job');
+                            var company = escapeHtml(data.company_name || '');
+                            var desc = (data.description || '').trim();
+                            var html = '<p class="mb-3 text-sm font-semibold text-concierge-slate">' + title
+                                + (company ? ' <span class="font-normal text-slate-500">@ ' + company + '</span>' : '')
+                                + '</p>';
+                            if (!desc) {
+                                html += '<p class="text-sm text-slate-500">No description available.</p>';
+                            } else {
+                                html += '<div class="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">' + escapeHtml(desc) + '</div>';
+                            }
+                            if (data.url) {
+                                html += '<p class="mt-4"><a href="' + escapeHtml(data.url) + '" target="_blank" rel="noopener" class="text-sm font-semibold text-brand hover:underline">View original posting</a></p>';
+                            }
+                            bodyEl.innerHTML = html;
+                        })
+                        .catch(function(err) {
+                            bodyEl.innerHTML = '<p class="text-sm text-red-600">' + escapeHtml(err.message || 'Failed to load description') + '</p>';
+                        });
+                });
+            });
+        })();
+        {% if is_power_user %}
         (function() {
             var dlg = document.getElementById('pipelineJobLocalDescDialog');
             var closeBtn = document.getElementById('pipelineJobLocalDescClose');
@@ -249,6 +357,7 @@
                 });
             });
         })();
+        {% endif %}
         (function() {
             var dlg = document.getElementById('pipelineInterviewPrepDialog');
             var closeBtn = document.getElementById('pipelineInterviewPrepClose');

@@ -1,0 +1,139 @@
+{# Main results column — CareerFlow-inspired. #}
+{% url 'jobs_search' as jobs_search_url %}
+<div class="space-y-4">
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+            <h1 class="text-xl font-bold tracking-tight text-concierge-slate sm:text-2xl">
+                {% if show_favourites %}Saved jobs
+                {% elif show_excluded %}Hidden jobs
+                {% elif search_results and search_results.total %}Recommended for you
+                {% elif query %}No matches yet
+                {% else %}Find your next role{% endif %}
+            </h1>
+            {% if not show_favourites and not show_excluded and search_results and search_results.total %}
+            <p class="mt-1 text-sm text-slate-500">Showing {{ search_results.total }} match{{ search_results.total|pluralize:"es" }}</p>
+            {% elif show_favourites and saved_results %}
+            <p class="mt-1 text-sm text-slate-500">{{ saved_results.total|default:0 }} saved</p>
+            {% endif %}
+        </div>
+        {% if not show_favourites and not show_excluded and query and search_results %}
+        <div class="flex flex-wrap items-center gap-2 text-sm">
+            <a href="{{ jobs_search_url }}?view=results&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if selected_preset_id %}&preset={{ selected_preset_id }}{% endif %}&sort=focus{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}"
+               class="rounded-lg px-2.5 py-1 font-medium {% if sort_param == 'focus' %}bg-brand-mist text-brand-ink{% else %}text-slate-600 hover:bg-slate-50{% endif %}">Best match</a>
+            <a href="{{ jobs_search_url }}?view=results&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if selected_preset_id %}&preset={{ selected_preset_id }}{% endif %}&refresh=1{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}"
+               class="rounded-lg px-2.5 py-1 font-medium text-slate-600 hover:bg-slate-50">Refresh</a>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="flex flex-wrap items-center gap-1 rounded-2xl border border-slate-200/90 bg-white p-1 shadow-card">
+        <a class="inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-semibold {% if not show_favourites and not show_excluded %}bg-brand-mist text-brand-ink{% else %}text-slate-500 hover:bg-slate-50 hover:text-slate-700{% endif %}"
+           href="{{ jobs_search_url }}?view=results&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if selected_preset_id %}&preset={{ selected_preset_id }}{% endif %}{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}">
+            All results
+            {% if search_results and search_results.total and not show_favourites and not show_excluded %}
+            <span class="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-brand">{{ search_results.total }}</span>
+            {% endif %}
+        </a>
+        <a class="inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-semibold {% if show_favourites %}bg-brand-mist text-brand-ink{% else %}text-slate-500 hover:bg-slate-50 hover:text-slate-700{% endif %}"
+           href="{{ jobs_search_url }}?view=favourites&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if selected_preset_id %}&preset={{ selected_preset_id }}{% endif %}{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}">
+            Favourites
+            {% if saved_results and saved_results.total %}
+            <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{{ saved_results.total }}</span>
+            {% endif %}
+        </a>
+        <a class="inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-semibold {% if show_excluded %}bg-brand-mist text-brand-ink{% else %}text-slate-500 hover:bg-slate-50 hover:text-slate-700{% endif %}"
+           href="{{ jobs_search_url }}?view=excluded&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if selected_preset_id %}&preset={{ selected_preset_id }}{% endif %}{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}">
+            {% if is_power_user %}Excluded{% else %}Hidden{% endif %}
+            {% if excluded_results and excluded_results.total %}
+            <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{{ excluded_results.total }}</span>
+            {% endif %}
+        </a>
+    </div>
+
+    {% if not show_favourites and not show_excluded and query and search_results and search_results.jobs %}
+    <div class="rounded-2xl border border-brand/10 bg-concierge-dark px-4 py-4 shadow-card sm:px-5">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div class="text-white">
+                <p class="text-[10px] font-bold uppercase tracking-widest text-teal-300/90">AI insights</p>
+                <p class="mt-1 text-sm text-slate-300">Select jobs below, then generate themes across roles you are comparing.</p>
+            </div>
+            <button type="button" id="insights-btn"
+                    class="inline-flex shrink-0 items-center gap-2 rounded-xl bg-white px-4 py-2 text-xs font-bold uppercase tracking-wide text-brand-ink hover:bg-brand-mist">
+                <span id="insights-btn-text">Generate</span>
+                <span id="insights-spinner" class="hidden h-3.5 w-3.5 animate-spin rounded-full border-2 border-brand/30 border-t-brand" aria-hidden="true"></span>
+            </button>
+        </div>
+        <p id="insights-status" class="mt-2 text-xs text-slate-400" role="status" aria-live="polite"></p>
+    </div>
+    {% endif %}
+
+    <div class="space-y-3">
+        {% if show_favourites %}
+            {% if not saved_results or not saved_results.jobs %}
+            <div class="rounded-2xl border border-dashed border-slate-200 bg-white px-6 py-12 text-center shadow-card">
+                <p class="text-sm text-slate-600">No saved jobs yet. Use <strong>Save Job</strong> on a result.</p>
+            </div>
+            {% else %}
+            {% for j in saved_results.jobs %}
+            <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-card">
+                <h3 class="font-bold text-concierge-slate">{{ j.title }}</h3>
+                <p class="mt-1 text-sm text-slate-500">{{ j.company_name }} · {{ j.location|default:"—" }}</p>
+                {% if j.snippet %}<p class="mt-2 line-clamp-2 text-sm text-slate-600">{{ j.snippet }}</p>{% endif %}
+                <div class="mt-3 flex flex-wrap gap-2">
+                    {% if j.url %}<a href="{{ j.url }}" target="_blank" class="rounded-xl border border-slate-200 px-3.5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">View</a>{% endif %}
+                    <form method="post" class="inline">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="unsave">
+                        <input type="hidden" name="job_id" value="{{ j.id }}">
+                        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                        <button type="submit" class="rounded-xl border border-red-200 px-3.5 py-2 text-sm font-medium text-red-700 hover:bg-red-50">Remove</button>
+                    </form>
+                </div>
+            </div>
+            {% endfor %}
+            {% endif %}
+        {% elif show_excluded %}
+            {% if not excluded_results or not excluded_results.jobs %}
+            <div class="rounded-2xl border border-dashed border-slate-200 bg-white px-6 py-12 text-center shadow-card">
+                <p class="text-sm text-slate-600">No hidden jobs. Hide a job from results to see it here.</p>
+            </div>
+            {% else %}
+            {% for j in excluded_results.jobs %}
+            <div class="rounded-2xl border border-slate-200 bg-white p-5 opacity-90 shadow-card">
+                <h3 class="font-bold text-concierge-slate">{{ j.title }}</h3>
+                <p class="mt-1 text-sm text-slate-500">{{ j.company_name }} · {{ j.location|default:"—" }}</p>
+                <div class="mt-3 flex flex-wrap gap-2">
+                    {% if j.url %}<a href="{{ j.url }}" target="_blank" class="rounded-xl border border-slate-200 px-3.5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">View</a>{% endif %}
+                    <form method="post" class="inline">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="unhide">
+                        <input type="hidden" name="job_id" value="{{ j.id }}">
+                        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                        <button type="submit" class="rounded-xl border border-brand/20 px-3.5 py-2 text-sm font-medium text-brand hover:bg-brand-mist">Restore</button>
+                    </form>
+                </div>
+            </div>
+            {% endfor %}
+            {% endif %}
+        {% else %}
+            {% if not search_results or not search_results.jobs %}
+            <div class="rounded-2xl border border-dashed border-slate-200 bg-white px-6 py-14 text-center shadow-card">
+                <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-brand-mist text-brand">
+                    <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M21 21l-4.35-4.35M11 18a7 7 0 100-14 7 7 0 000 14z"/></svg>
+                </div>
+                <p class="text-sm font-medium text-concierge-slate">
+                    {% if query %}No jobs found for this search{% else %}Start your search{% endif %}
+                </p>
+                <p class="mx-auto mt-1 max-w-sm text-sm text-slate-500">
+                    {% if query %}Try different keywords or open Advanced Filters to search more sites.
+                    {% else %}Enter a role and location above, then hit Search Jobs.{% endif %}
+                </p>
+            </div>
+            {% else %}
+            {% for j in search_results.jobs %}
+                {% include "resume_app/_find_jobs_result_card.html" with j=j %}
+            {% endfor %}
+            {% endif %}
+        {% endif %}
+    </div>
+</div>

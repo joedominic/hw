@@ -32,7 +32,7 @@
                     <option value="{{ p.id }}" {% if workflow and workflow.ats_judge_profile_id == p.id %}selected{% endif %}>{{ p.name }}</option>
                     {% endfor %}
                 </select>
-                <p class="mt-1 text-xs text-slate-500">Used when this workflow runs and no per-run ATS is selected. <a href="{% url 'prompt_library' %}" class="underline">Manage ATS profiles</a></p>
+                <p class="mt-1 text-xs text-slate-500">Used when this workflow runs and no per-run ATS is selected.{% if request.user.is_staff %} <a href="{% url 'prompt_library' %}" class="underline">Manage ATS profiles</a>{% endif %}</p>
             </div>
         </div>
 
@@ -43,6 +43,7 @@
                 <button type="button" class="rounded-concierge border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-concierge-slate hover:bg-slate-100" data-add-step="writer">+ Writer</button>
                 <button type="button" class="rounded-concierge border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-concierge-slate hover:bg-slate-100" data-add-step="ats_judge">+ ATS Judge</button>
                 <button type="button" class="rounded-concierge border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-concierge-slate hover:bg-slate-100" data-add-step="recruiter_judge">+ Recruiter Judge</button>
+                <button type="button" class="rounded-concierge border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-concierge-slate hover:bg-slate-100" data-add-step="jd_cleanse">+ JD Cleanse</button>
             </div>
             <ul id="workflow-steps-list" class="mt-4 divide-y divide-slate-100 rounded-concierge border border-slate-200 bg-slate-50/30"></ul>
             <input type="hidden" name="workflow_steps" id="workflow-steps-input" value="" data-initial="{{ workflow_steps_json|force_escape }}">
@@ -53,7 +54,7 @@
         <input type="hidden" name="score_threshold" value="85">
 
         <div class="flex flex-wrap gap-3">
-            <button type="submit" class="rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+            <button type="submit" class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
                 {% if workflow %}Save changes{% else %}Create workflow{% endif %}
             </button>
             <a href="{% url 'workflow_list' %}" class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50">Cancel</a>
@@ -63,7 +64,7 @@
 
 <script>
 (function () {
-    var stepLabels = { writer: "Writer", ats_judge: "ATS Judge", recruiter_judge: "Recruiter Judge" };
+    var stepLabels = { writer: "Writer", ats_judge: "ATS Judge", recruiter_judge: "Recruiter Judge", jd_cleanse: "JD Cleanse" };
     var steps = [];
     var listEl = document.getElementById("workflow-steps-list");
     var inputEl = document.getElementById("workflow-steps-input");

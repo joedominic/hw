@@ -23,8 +23,8 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 - `model`: provider model (optional)
 - `prompts`: optional prompt overrides (`writer`, `ats_judge`, `recruiter_judge`)
 - `ats_judge_profile_id`: optional explicit ATS profile pk (else workflow default or global default profile)
-- `debug`, `rate_limit_delay`, `max_iterations`, `score_threshold`
-- `workflow_steps`, `loop_to`
+- `debug`, `rate_limit_delay`, `max_iterations`, `score_threshold` (iteration/threshold params are retained for API compatibility; the default compiled graph is a single pass)
+- `workflow_steps`, `loop_to` (`loop_to` ignored; custom `workflow_steps` run listed steps once in order)
 
 **When it runs:**
 - Queued when the user clicks **Optimize** / **Re-optimize** on the **Applying** board.
@@ -33,10 +33,11 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 **What it does:**
 - Loads the `OptimizedResume` by `resume_id`.
 - Parses the resume PDF text via `parse_pdf(...)`.
-- Runs LLM calls through **`resume_app.llm_gateway.invoke_llm_messages`**: preference order, job pinning (`job_cache_key=str(optimized_resume.id)`), rate-limit cooldowns, and **`AppAutomationSettings.stop_llm_requests`** (kill switch).
+- Builds optimizer context via `optimizer_budget.build_optimizer_context_state()` (role-focused JD excerpt, truncated resume fields, char budgets).
+- Runs LLM calls through **`resume_app.llm_gateway.invoke_llm_messages`**: preference order, job pinning (`job_cache_key=str(optimized_resume.id)`), rate-limit cooldowns, and **`AppAutomationSettings.stop_llm_requests`** (kill switch). Writer and judges are remote-first by default (`prefer_local=False`); set `OPTIMIZER_JUDGES_PREFER_LOCAL=True` to prefer local Ollama for ATS/Recruiter only.
 - Builds a LangGraph workflow:
-  - default is `writer` → `ats_judge` → `recruiter_judge`
-  - or uses `workflow_steps` if provided (requires support in `agents.py`)
+  - default is `writer` → `ats_judge` → `recruiter_judge` (single pass, then END)
+  - or uses `workflow_steps` if provided (each listed step runs once in order)
 - Streams node updates and writes progress to the DB:
   - updates `optimized_resume.status` to `STATUS_RUNNING`
   - updates `optimized_resume.status_display` as scores/drafting progress arrives
@@ -44,6 +45,7 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 - On completion:
   - writes `optimized_resume.optimized_content`
   - writes `ats_score` and `recruiter_score`
+  - writes `optimizer_context_snapshot` from `optimizer_context_budget` (char counts for writer/judge JD and resume fields)
   - writes token usage:
     - `total_input_tokens`
     - `total_output_tokens`
@@ -59,7 +61,7 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 - On not found / error: `{"status": "error", ...}`
 
 **LLM cost drivers:**
-- This is the primary “full optimization” LLM workload. It can run multiple iterations depending on workflow graph settings.
+- Default run is **three LLM calls** (Writer + ATS + Recruiter), one pass. Hybrid routing sends judges to local Ollama when configured, leaving Writer on the paid/strong model. Token input is reduced by Writer prompt dedupe, role-focused JD slicing, and judge input caps (`OPTIMIZER_*` settings). See `resume_app/docs/OPTIMIZER_PAGE.md`.
 
 ---
 
@@ -382,24 +384,26 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 
 ---
 
-## 12. `run_apply_agent_step(attempt_id)`
+## 12. `run_apply_agent_step(user_id, attempt_id)`
 
 **Defined:** `resume_app/tasks.py` — `@db_task()`
 
 **When it runs:**
-- Enqueued by `apply_agent_heartbeat`, and as an immediate fast-path when an attempt is started, approved, or given an override URL (via the Apply Agent UI / `apply_api`).
+- Enqueued by `apply_agent_heartbeat`, as an immediate fast-path when an attempt is started / approved / given an override URL, when an optimizer run completes for a waiting attempt (`nudge_apply_attempts_for_pipeline_entry`), and by self-chaining after a successful state transition.
 
 **What it does:**
-- Acquires a per-attempt cache lock (so the same attempt is never processed twice concurrently), then calls `apply_agent.orchestrator.advance_attempt(attempt_id)` to perform exactly one state-machine step:
+- Acquires a per-attempt cache lock (so the same attempt is never processed twice concurrently), then calls `apply_agent.orchestrator.advance_attempt(attempt_id, user_id=…)` to perform exactly one state-machine step:
   - `queued → optimizing → waiting_optimizer` (waits for `OptimizedResume`)
-  - `→ resolve_and_detect` (mock URL map by default; live Playwright redirect following when `APPLY_USE_MOCK_RESOLVER=False`)
+  - `→ resolve_and_detect` (live Playwright for aggregators by default; mock URL map when `APPLY_USE_MOCK_RESOLVER=True`; known ATS hosts short-circuit)
   - `→ dry_run_fill` (headless fill via a deterministic ATS adapter, or the browser-use generic agent for unknown ATS; captures a semantic answer key)
   - `→ awaiting_approval` (semi-auto) or `→ submitting` (graduated full-auto)
   - `submitting` is **atomic**: re-validation fill on a fresh form + Submit + success assertion (DOM confirmation and submit XHR) in one transaction, then `succeeded` + `PipelineEntry.mark_done()`.
+- If status advanced into another active state, enqueues itself again so progress does not wait solely on the 60s heartbeat.
 - Browser work runs inside an isolated `browser.new_context()` with a 30s default page timeout and a small concurrency semaphore (`APPLY_BROWSER_CONCURRENCY`, default 2). A crash/timeout mid-submit is recorded as `submit_ambiguous` and never auto-retried (double-apply risk).
 
 **Configuration (`core/settings.py` / env):**
-- `APPLY_USE_MOCK_RESOLVER` (default `True`) — mock vs live URL resolution.
+- `HUEY_NAME` (default `jobapp-main`) — unique Redis queue name per checkout.
+- `APPLY_USE_MOCK_RESOLVER` (default `False`) — mock vs live URL resolution.
 - `APPLY_BROWSER_CONCURRENCY` (default `2`) — max concurrent browser steps.
 - `AppAutomationSettings.apply_*` — mode, allowed ATS, upload format, min optimizer score, full-auto graduation threshold.
 
@@ -419,14 +423,15 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 
 ### Redis-backed RPM / TPM limits
 
-- Implementation: `resume_app/llm_rate_limit.py`, enforced in `resume_app/agents._llm_invoke_with_retry` (all paths that use it, including Job Search Insights).
+- Implementation: `resume_app/llm_rate_limit.py`, enforced via `resume_app.llm_gateway.invoke_llm_messages` (optimizer, matching, insights, pipeline extract, etc.). Full gateway reference: [`LLM_GATEWAY.md`](LLM_GATEWAY.md).
 - **Configuration (env / `core/settings.py`):**
   - `LLM_RATE_LIMIT_ENABLED` (default: `True`)
-  - `LLM_RATE_LIMIT_FAIL_OPEN` (default: `True` — if Redis is down or the wait budget is exceeded, the call is still allowed; watch logs)
+  - `LLM_RATE_LIMIT_FAIL_OPEN` (default: follows `DEBUG` — fail-closed in production; when true, Redis down / wait exceeded still allows the call)
   - `LLM_RATE_LIMIT_MAX_WAIT_SECONDS` (default: `120`)
   - `LLM_RATE_LIMIT_REDIS_URL` (optional; defaults to Huey Redis host/port/db)
   - `LLM_RATE_LIMIT_REDIS_DB` (default: same as `HUEY_REDIS_DB`)
-  - Per-provider window limits: `LLM_RATE_LIMIT_BY_PROVIDER` — default includes **Groq** via `LLM_RATE_LIMIT_GROQ_RPM` (default `30`) and `LLM_RATE_LIMIT_GROQ_TPM` (default `6000`). Add other providers by extending the dict in settings.
+  - Per-provider window limits: `LLM_RATE_LIMIT_BY_PROVIDER` — default includes **Groq** (`LLM_RATE_LIMIT_GROQ_RPM` / `_TPM`) and **OpenAI** (`LLM_RATE_LIMIT_OPENAI_RPM` / `_TPM`). Add other providers by extending the dict in settings.
+  - Also: daily token budgets, per-user concurrency, and invoke timeouts — see `LLM_GATEWAY.md` and `operations.md`.
   - **Integrations UI:** On Settings → Integrations, each preference row can set optional **Rate limit RPM** and **Rate limit TPM** (set **both** or leave **both** blank). Limits apply to that provider + **Preferred model** when they match the live LLM call; if no row matches the model, a row with an **empty** Preferred model is used as a provider-wide fallback, then env defaults.
 - Token usage for limiting is estimated before the call (chars/4) and reconciled from provider usage metadata when available.
 

@@ -17,9 +17,10 @@ from .models import (
     ApplicationAttempt,
     OptimizedResume,
     PipelineEntry,
+    SystemPromptProfile,
     UserResume,
 )
-from .prompt_store import profile_for_llm, resolve_prompt_parts
+from .prompt_store import resolve_prompt_parts
 from .services import parse_pdf
 
 logger = logging.getLogger(__name__)
@@ -83,7 +84,8 @@ def _job_meta_from_optimized(optimized: OptimizedResume) -> tuple[str, str, str]
 
 def _latest_completed_optimization(entry: PipelineEntry) -> OptimizedResume | None:
     return (
-        OptimizedResume.objects.filter(
+        OptimizedResume.objects.for_user(entry.owner)
+        .filter(
             pipeline_entry=entry,
             status=OptimizedResume.STATUS_COMPLETED,
         )
@@ -94,12 +96,13 @@ def _latest_completed_optimization(entry: PipelineEntry) -> OptimizedResume | No
     )
 
 
-def _library_resume_text(track_slug: str) -> str:
+def _library_resume_text(track_slug: str, *, user) -> str:
     track_slug = (track_slug or "").strip().lower()
+    qs = UserResume.objects.for_user(user).filter(is_library=True)
     ur = (
-        UserResume.library().filter(track=track_slug).order_by("-uploaded_at").first()
+        qs.filter(track=track_slug).order_by("-uploaded_at").first()
         if track_slug
-        else UserResume.library().order_by("-uploaded_at").first()
+        else qs.order_by("-uploaded_at").first()
     )
     if ur is None or not ur.file:
         return ""
@@ -112,7 +115,7 @@ def _library_resume_text(track_slug: str) -> str:
 
 def resolve_interview_prep_inputs(entry: PipelineEntry) -> InterviewPrepInputs:
     """Resolve resume + JD for interview prep with fallbacks."""
-    entry = PipelineEntry.objects.select_related("job_listing").get(pk=entry.pk)
+    entry = PipelineEntry.objects.select_related("job_listing", "owner").get(pk=entry.pk)
     company, title, url = _job_meta_from_entry(entry)
     job = entry.job_listing
     jd = (job.description or "").strip()
@@ -137,7 +140,7 @@ def resolve_interview_prep_inputs(entry: PipelineEntry) -> InterviewPrepInputs:
             if not jd:
                 jd = (opt.job_description.content or "").strip()
     if not resume_text:
-        resume_text = _library_resume_text(entry.track)
+        resume_text = _library_resume_text(entry.track, user=entry.owner)
     if not jd:
         opt = _latest_completed_optimization(entry)
         if opt and opt.job_description_id:
@@ -254,7 +257,7 @@ def generate_cover_letter(
     if not (optimized.optimized_content or "").strip():
         raise JobPrepError("Optimized resume content is empty.")
 
-    profile = prompts_profile or profile_for_llm(None)
+    profile = prompts_profile or SystemPromptProfile.get_solo()
     sys_t, usr_t, leg = resolve_prompt_parts(profile, "cover_letter")
     company, title, _url = _job_meta_from_optimized(optimized)
     jd = (optimized.job_description.content or "").strip()
@@ -277,6 +280,7 @@ def generate_cover_letter(
     raw = _llm_invoke_with_retry(
         llm,
         messages,
+        user=optimized.owner,
         job_cache_key=cache_key,
         usage_query_kind=USAGE_QUERY_COVER_LETTER,
     )
@@ -314,7 +318,7 @@ def generate_interview_prep(
             "No resume text available. Optimize a resume or upload a library resume for this track."
         )
 
-    profile = prompts_profile or profile_for_llm(None)
+    profile = prompts_profile or SystemPromptProfile.get_solo()
     sys_t, usr_t, leg = resolve_prompt_parts(profile, "interview_prep")
     fmt = {
         "resume_text": inputs.resume_text,
@@ -336,6 +340,7 @@ def generate_interview_prep(
     raw = _llm_invoke_with_retry(
         llm,
         messages,
+        user=entry.owner,
         job_cache_key=cache_key,
         usage_query_kind=USAGE_QUERY_INTERVIEW_PREP,
     )

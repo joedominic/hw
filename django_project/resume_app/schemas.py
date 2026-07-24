@@ -40,6 +40,8 @@ class JobPayload(Schema):
     optimizer_user_resume_id: Optional[int] = None  # UserResume id for "Open optimizer" prefill (Applying board)
     pipeline_entry_id: Optional[int] = None  # PipelineEntry id for Done-board interview prep
     has_interview_prep: Optional[bool] = None
+    is_saved: Optional[bool] = False
+    is_liked: Optional[bool] = False
 
 
 class JobDetailPayload(Schema):
@@ -55,6 +57,21 @@ class JobDetailPayload(Schema):
     posted_at: Optional[datetime] = None
     fetched_at: Optional[datetime] = None
     raw_json: Optional[Any] = None
+
+
+class FetchJobDescriptionRequest(Schema):
+    url: str
+    job_listing_id: Optional[int] = None
+
+
+class FetchJobDescriptionResponse(Schema):
+    description: str
+    title: Optional[str] = None
+    company_name: Optional[str] = None
+    location: Optional[str] = None
+    source: Optional[str] = None
+    url: Optional[str] = None
+    job_listing_id: Optional[int] = None
 
 
 class JobSearchResponse(Schema):

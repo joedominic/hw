@@ -2,6 +2,7 @@
 import logging
 
 from django.dispatch import receiver
+from django.utils import timezone
 from hijack.signals import hijack_ended, hijack_started
 
 from .models import ImpersonationAuditLog
@@ -43,5 +44,5 @@ def on_hijack_ended(sender, request, hijacker, hijacked, **kwargs):
         hijacker=hijacker,
         target=hijacked,
         ended_at__isnull=True,
-    ).order_by("-started_at").update(ended_at=__import__("django.utils.timezone", fromlist=["timezone"]).timezone.now())
+    ).order_by("-started_at").update(ended_at=timezone.now())
     logger.info("impersonation_ended hijacker=%s target=%s", hijacker.pk, hijacked.pk)

@@ -1,17 +1,16 @@
 """
-Persisted optimizer / job-search prompt templates (UserPromptProfile).
+System-wide optimizer / job-search prompt templates (SystemPromptProfile).
 
-Server-rendered pages and Ninja endpoints should use get_effective_prompts(request)
-so DB-backed text wins over code defaults. Legacy session key optimizer_prompts is
-migrated once into the profile when the DB row is still empty.
+Staff edit prompts via the Prompt Library. All users resolve the same templates
+(empty DB fields fall back to code defaults in prompts.py). ATS judge prompts
+live in global AtsJudgeProfile rows (owner=null).
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-from .models import AtsJudgeProfile, OptimizerWorkflow, UserPromptProfile
-from .tenancy import api_user
+from .models import AtsJudgeProfile, OptimizerWorkflow, SystemPromptProfile
 from .prompts import (
     DEFAULT_ATS_JUDGE_PROMPT,
     DEFAULT_ATS_JUDGE_SYSTEM,
@@ -38,6 +37,8 @@ from .prompts import (
     DEFAULT_WRITER_SYSTEM,
     DEFAULT_WRITER_USER,
 )
+
+PromptProfileLike = Union[SystemPromptProfile, Any]
 
 DEFAULT_PROMPTS: Dict[str, str] = {
     "writer": DEFAULT_WRITER_PROMPT,
@@ -97,36 +98,14 @@ _PROMPT_SPEC = {
 }
 
 
-def _get_or_create_profile(user) -> UserPromptProfile:
-    return UserPromptProfile.get_for_user(user)
+def get_system_prompt_profile() -> SystemPromptProfile:
+    """Return the singleton system prompt row."""
+    return SystemPromptProfile.get_solo()
 
 
-def _profile_is_empty(profile: UserPromptProfile) -> bool:
-    split_fields = []
-    for _leg, sys_a, usr_a, _ds, _du in _PROMPT_SPEC.values():
-        split_fields.extend([sys_a, usr_a])
-    if any((getattr(profile, f) or "").strip() for f in _LEGACY_FIELDS):
-        return False
-    if any((getattr(profile, f) or "").strip() for f in split_fields):
-        return False
-    return True
-
-
-def _migrate_session_to_profile(request, profile: UserPromptProfile) -> bool:
-    sess = request.session.get("optimizer_prompts")
-    if not isinstance(sess, dict):
-        return False
-    changed = False
-    for f in _LEGACY_FIELDS:
-        val = sess.get(f)
-        if val and str(val).strip():
-            setattr(profile, f, str(val))
-            changed = True
-    if changed:
-        profile.save()
-        request.session.pop("optimizer_prompts", None)
-        request.session.modified = True
-    return changed
+def _global_ats_qs():
+    """ATS judge profiles shared by all users (admin-managed)."""
+    return AtsJudgeProfile.objects.filter(owner__isnull=True)
 
 
 def resolve_ats_judge_parts(profile: AtsJudgeProfile) -> Tuple[str, str, Optional[str]]:
@@ -144,10 +123,8 @@ def resolve_ats_judge_parts(profile: AtsJudgeProfile) -> Tuple[str, str, Optiona
 
 
 def get_default_ats_judge_profile(user=None) -> Optional[AtsJudgeProfile]:
-    """Per-user fallback ATS profile (is_default, slug default, or lowest pk)."""
-    qs = AtsJudgeProfile.objects.all()
-    if user is not None and getattr(user, "is_authenticated", False):
-        qs = qs.filter(owner=user)
+    """Global fallback ATS profile (is_default, slug default, or lowest pk)."""
+    qs = _global_ats_qs()
     return (
         qs.filter(is_default=True).first()
         or qs.filter(slug="default").first()
@@ -156,20 +133,16 @@ def get_default_ats_judge_profile(user=None) -> Optional[AtsJudgeProfile]:
 
 
 def list_ats_judge_profiles(user=None) -> List[AtsJudgeProfile]:
-    qs = AtsJudgeProfile.objects.all()
-    if user is not None and getattr(user, "is_authenticated", False):
-        qs = qs.filter(owner=user)
-    return list(qs.order_by("name"))
+    """List admin-managed global ATS judge profiles (user arg ignored)."""
+    return list(_global_ats_qs().order_by("name"))
 
 
 def get_ats_judge_profile_by_id(profile_id: Optional[int], user=None) -> Optional[AtsJudgeProfile]:
+    """Fetch a global ATS profile by id (user arg ignored)."""
     if not profile_id:
         return None
     try:
-        qs = AtsJudgeProfile.objects.all()
-        if user is not None and getattr(user, "is_authenticated", False):
-            qs = qs.filter(owner=user)
-        return qs.get(pk=int(profile_id))
+        return _global_ats_qs().get(pk=int(profile_id))
     except (AtsJudgeProfile.DoesNotExist, ValueError, TypeError):
         return None
 
@@ -255,7 +228,7 @@ def save_ats_judge_profile(
     return profile
 
 
-def _user_prompt_profile_has_ats(profile: UserPromptProfile) -> bool:
+def _system_prompt_profile_has_ats(profile: PromptProfileLike) -> bool:
     return any(
         (getattr(profile, f) or "").strip()
         for f in ("ats_judge", "ats_judge_system", "ats_judge_user")
@@ -263,7 +236,7 @@ def _user_prompt_profile_has_ats(profile: UserPromptProfile) -> bool:
 
 
 def resolve_prompt_parts(
-    profile: UserPromptProfile,
+    profile: PromptProfileLike,
     kind: str,
 ) -> Tuple[str, str, Optional[str]]:
     """
@@ -280,32 +253,28 @@ def resolve_prompt_parts(
     if sys_v or usr_v:
         return (sys_v or def_sys, usr_v or def_user, None)
     if leg:
+        # Auto-heal: optimizer UI used to persist the concatenated default as
+        # legacy and clear system/user — prefer real System+User messages again.
+        default_combined = (def_sys + "\n\n" + def_user).strip()
+        if leg == default_combined or leg == (DEFAULT_PROMPTS.get(kind) or "").strip():
+            return (def_sys, def_user, None)
         return ("", "", leg)
     return (def_sys, def_user, None)
 
 
-def get_effective_prompts(request: Optional[Any], user=None) -> Dict[str, str]:
+def get_effective_prompts(request: Optional[Any] = None, user=None) -> Dict[str, str]:
     """
-    Return merged prompts for forms and display: legacy combined strings plus
+    Return merged system prompts for forms and display: legacy combined strings plus
     system/user fields. Keys: writer, writer_system, writer_user, ...
 
     System/user textareas show the effective templates (including code defaults when
     the profile row is still empty), so the Prompt Library matches runtime behavior.
     """
-    if user is None and request is not None:
-        user = api_user(request)
-    if user is None:
-        from django.contrib.auth import get_user_model
-        user = get_user_model().objects.order_by("pk").first()
-    if user is None:
-        return dict(DEFAULT_PROMPTS)
-    profile = _get_or_create_profile(user)
-    if request is not None and hasattr(request, "session") and _profile_is_empty(profile):
-        _migrate_session_to_profile(request, profile)
-        profile.refresh_from_db()
+    del request, user  # API compat; prompts are system-wide
+    profile = get_system_prompt_profile()
 
     out: Dict[str, str] = {}
-    default_ats = get_default_ats_judge_profile(user)
+    default_ats = get_default_ats_judge_profile()
     for kind, (leg_a, sys_a, usr_a, def_sys, def_user) in _PROMPT_SPEC.items():
         if kind == "ats_judge" and default_ats is not None:
             out.update(get_ats_judge_profile_display(default_ats))
@@ -317,7 +286,6 @@ def get_effective_prompts(request: Optional[Any], user=None) -> Dict[str, str]:
         has_split = bool(raw_sys or raw_usr)
         eff_sys, eff_usr, eff_leg = resolve_prompt_parts(profile, kind)
 
-        # Form fields: show effective system/user (code defaults when DB is empty), not raw blanks.
         if eff_leg:
             out[f"{kind}_system"] = ""
             out[f"{kind}_user"] = ""
@@ -338,9 +306,9 @@ def get_effective_prompts(request: Optional[Any], user=None) -> Dict[str, str]:
 
 
 def save_prompts_to_profile(request: Optional[Any], prompts: Dict[str, str]) -> None:
-    """Persist prompt dict to the signed-in user's UserPromptProfile."""
-    user = api_user(request)
-    profile = _get_or_create_profile(user)
+    """Persist prompt dict to the system-wide SystemPromptProfile."""
+    del request  # API compat
+    profile = get_system_prompt_profile()
     for kind, (leg_a, sys_a, usr_a, _ds, _du) in _PROMPT_SPEC.items():
         if kind == "ats_judge":
             continue
@@ -351,29 +319,23 @@ def save_prompts_to_profile(request: Optional[Any], prompts: Dict[str, str]) -> 
         if usr_a in prompts:
             setattr(profile, usr_a, prompts.get(usr_a) or "")
     profile.save()
-    if request is not None and hasattr(request, "session"):
-        request.session.pop("optimizer_prompts", None)
-        request.session.modified = True
 
 
-def clear_all_prompts_in_profile(request: Optional[Any]) -> None:
+def clear_all_prompts_in_profile(request: Optional[Any] = None) -> None:
     """Clear every prompt field so code defaults (including system/user splits) apply."""
-    user = api_user(request)
-    profile = _get_or_create_profile(user)
+    del request  # API compat
+    profile = get_system_prompt_profile()
     for _kind, (leg_a, sys_a, usr_a, _ds, _du) in _PROMPT_SPEC.items():
         setattr(profile, leg_a, "")
         setattr(profile, sys_a, "")
         setattr(profile, usr_a, "")
     profile.save()
-    if request is not None and hasattr(request, "session"):
-        request.session.pop("optimizer_prompts", None)
-        request.session.modified = True
 
 
-def profile_for_llm(request: Optional[Any]) -> UserPromptProfile:
-    """Fresh profile row for resolve_prompt_parts (after optional session migrate)."""
-    get_effective_prompts(request)
-    return _get_or_create_profile(api_user(request))
+def profile_for_llm(request: Optional[Any] = None) -> SystemPromptProfile:
+    """System prompt row for resolve_prompt_parts."""
+    del request  # API compat
+    return get_system_prompt_profile()
 
 
 def _ats_judge_prompt_state(
@@ -383,6 +345,7 @@ def _ats_judge_prompt_state(
     ats_judge_profile_id: Optional[int] = None,
     workflow: Optional[OptimizerWorkflow] = None,
     workflow_ats_judge_profile_id: Optional[int] = None,
+    user=None,
 ) -> Dict[str, str]:
     from .prompts import DEFAULT_ATS_JUDGE_PROMPT as _DEF_ATS
 
@@ -401,13 +364,14 @@ def _ats_judge_prompt_state(
         ats_judge_profile_id=ats_judge_profile_id,
         workflow=workflow,
         workflow_ats_judge_profile_id=workflow_ats_judge_profile_id,
+        user=user,
     )
-    ats_prof = get_ats_judge_profile_by_id(effective_id)
+    ats_prof = get_ats_judge_profile_by_id(effective_id, user=user)
     if ats_prof is not None:
         s, u, leg = resolve_ats_judge_parts(ats_prof)
     else:
-        prof = profile_for_llm(request)
-        if _user_prompt_profile_has_ats(prof):
+        prof = get_system_prompt_profile()
+        if _system_prompt_profile_has_ats(prof):
             s, u, leg = resolve_prompt_parts(prof, "ats_judge")
         else:
             s, u, leg = DEFAULT_ATS_JUDGE_SYSTEM, DEFAULT_ATS_JUDGE_USER, None
@@ -427,6 +391,7 @@ def build_optimizer_graph_prompt_state(
     ats_judge_profile_id: Optional[int] = None,
     workflow: Optional[OptimizerWorkflow] = None,
     workflow_ats_judge_profile_id: Optional[int] = None,
+    user=None,
 ) -> Dict[str, str]:
     """
     LangGraph initial_state keys for writer / ATS / recruiter prompts.
@@ -438,7 +403,7 @@ def build_optimizer_graph_prompt_state(
         DEFAULT_WRITER_PROMPT as _DEF_W,
     )
 
-    prof = profile_for_llm(request)
+    prof = get_system_prompt_profile()
     out: Dict[str, str] = {}
     out.update(
         _ats_judge_prompt_state(
@@ -447,6 +412,7 @@ def build_optimizer_graph_prompt_state(
             ats_judge_profile_id=ats_judge_profile_id,
             workflow=workflow,
             workflow_ats_judge_profile_id=workflow_ats_judge_profile_id,
+            user=user,
         )
     )
     for kind, prefix in (
@@ -486,3 +452,23 @@ def build_jd_cleanse_llm_messages(
         user_template=u or None,
         format_kwargs={"title": title or "", "job_description": job_description or ""},
     )
+
+
+def _global_workflow_qs():
+    """Optimizer workflows shared by all users (admin-managed)."""
+    return OptimizerWorkflow.objects.filter(owner__isnull=True)
+
+
+def list_optimizer_workflows(user=None):
+    """List admin-managed global optimizer workflows (user arg ignored)."""
+    return list(_global_workflow_qs().select_related("ats_judge_profile").order_by("name"))
+
+
+def get_optimizer_workflow_by_id(workflow_id: Optional[int], user=None) -> Optional[OptimizerWorkflow]:
+    """Fetch a global optimizer workflow by id (user arg ignored)."""
+    if not workflow_id:
+        return None
+    try:
+        return _global_workflow_qs().select_related("ats_judge_profile").get(pk=int(workflow_id))
+    except (OptimizerWorkflow.DoesNotExist, ValueError, TypeError):
+        return None

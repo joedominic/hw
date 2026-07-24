@@ -13,7 +13,10 @@ from django.utils import timezone
 
 from ninja.errors import HttpError
 
+from .experience import has_my_jobs_search_profile, is_power_user
 from .job_search_core import pipeline_jobs_to_payloads
+from .saved_searches import backfill_saved_search_profile_tracks, pipeline_track_tabs_for_board
+from .search_profile_scope import resolve_active_profile_slug
 from .jobs_api import (
     jobs_dislike as api_jobs_dislike,
     jobs_like as api_jobs_like,
@@ -22,11 +25,23 @@ from .jobs_api import (
 from .llm_session import get_active_llm_provider
 from .models import OptimizedResume, PipelineEntry, Track
 from .tasks import _resolve_user_resume_for_track
-from .track_actions import saved_listing_id_set
 from .prompt_store import get_effective_prompts
 from .utils import format_job_source_label
 
 BOARD_STAGES = ("pipeline", "vetting", "applying", "done")
+
+STAGE_TAB_LABELS_POWER = {
+    "pipeline": "Pipeline",
+    "vetting": "Vetting",
+    "applying": "Applying",
+    "done": "Done",
+}
+STAGE_TAB_LABELS_NORMAL = {
+    "pipeline": "New",
+    "vetting": "Review",
+    "applying": "Applying",
+    "done": "Applied",
+}
 
 
 def _attach_optimizer_user_resume_id(user, pipeline_jobs, raw_track: str) -> None:
@@ -141,13 +156,20 @@ def _apply_save_action(entry: PipelineEntry | None, board_stage: str, request) -
     # done: favourites only; stage unchanged
 
 
-def _save_success_message(board_stage: str) -> str:
+def _save_success_message(board_stage: str, *, power_user: bool) -> str:
     if board_stage == "pipeline":
-        return "Job saved to favourites."
+        if power_user:
+            return "Job saved to favourites and moved to Vetting."
+        return "Job moved to Review."
     if board_stage == "vetting":
-        return "Job moved to Applying. Use Open optimizer on the Applying board when you are ready to tailor your resume."
+        if power_user:
+            return (
+                "Job moved to Applying. Use Open optimizer on the Applying board "
+                "when you are ready to tailor your resume."
+            )
+        return "Job moved to Applying."
     if board_stage == "applying":
-        return "Job moved to Done."
+        return "Marked as applied." if not power_user else "Job moved to Done."
     return "Job saved to favourites."
 
 
@@ -156,12 +178,48 @@ def pipeline_board_view(request, board_stage: str):
         raise ValueError("invalid board_stage")
 
     user = request.user
+    power_user = is_power_user(user)
+    backfill_saved_search_profile_tracks(user)
+
+    if not has_my_jobs_search_profile(user):
+        jobs_search_url = reverse("jobs_search")
+        if request.method == "POST":
+            messages.info(
+                request,
+                "Set up a search profile on Find jobs first—run a search and save it with a name.",
+            )
+            return redirect(reverse("pipeline"))
+        return render(
+            request,
+            "resume_app/pipeline_board.html",
+            {
+                "my_jobs_profile_gate": True,
+                "board_page_title": "My jobs",
+                "jobs_search_url": jobs_search_url,
+            },
+        )
+
     tracks_qs = Track.ensure_baseline(user)
+    pipeline_track_tabs = pipeline_track_tabs_for_board(user, power_user=power_user)
+    board_track_slugs = {t["slug"] for t in pipeline_track_tabs}
     available_slugs = set(tracks_qs.values_list("slug", flat=True))
-    raw_track = (request.GET.get("track") or request.session.get("job_search_track") or "").strip().lower()
-    if not raw_track or raw_track not in available_slugs:
-        raw_track = Track.get_default_slug(user)
+    raw_track = resolve_active_profile_slug(
+        user,
+        profile=request.GET.get("profile"),
+        track=request.GET.get("track"),
+        session_profile=request.session.get("job_search_profile_slug"),
+        session_track=request.session.get("job_search_track"),
+    )
+    if power_user:
+        if not raw_track or raw_track not in available_slugs:
+            raw_track = Track.get_default_slug(user)
+    else:
+        if not board_track_slugs:
+            raw_track = Track.get_default_slug(user)
+        elif not raw_track or raw_track not in board_track_slugs:
+            raw_track = pipeline_track_tabs[0]["slug"]
     request.session["job_search_track"] = raw_track
+    request.session["job_search_profile_slug"] = raw_track
     request.session.modified = True
 
     if request.method == "POST":
@@ -178,6 +236,15 @@ def pipeline_board_view(request, board_stage: str):
                 return redirect(next_url)
             if not selected_ids:
                 messages.info(request, "Select at least one job before starting the apply agent.")
+                return redirect(next_url)
+            from .models import ApplicantProfile
+
+            profile = ApplicantProfile.get_for_user(user)
+            if not (profile.full_name and profile.email):
+                messages.error(
+                    request,
+                    "Set your name and email on the Apply Agent profile page before starting.",
+                )
                 return redirect(next_url)
             entry_ids: list[int] = []
             for jid in selected_ids:
@@ -290,27 +357,22 @@ def pipeline_board_view(request, board_stage: str):
                         entry.mark_deleted(save=True)
                     messages.success(request, _single_dislike_msg(board_stage))
                 elif action == "save":
-                    api_jobs_save(request, job_listing_id=jid_int)
+                    api_jobs_save(request, job_listing_id=jid_int, track=track_from_form)
                     entry = PipelineEntry.objects.for_user(user).filter(
                         job_listing_id=jid_int,
                         track=track_from_form,
                         removed_at__isnull=True,
                     ).first()
                     _apply_save_action(entry, board_stage, request)
-                    messages.success(request, _save_success_message(board_stage))
+                    messages.success(request, _save_success_message(board_stage, power_user=power_user))
             except (HttpError, ValueError, TypeError) as e:
                 messages.error(request, str(e))
         return redirect(next_url)
 
-    saved_ids: set[int] = set()
-    if board_stage == "pipeline":
-        saved_ids = saved_listing_id_set(raw_track)
-
     entries_qs = PipelineEntry.objects.for_user(user).filter(track=raw_track, removed_at__isnull=True)
     if board_stage == "pipeline":
-        entries_qs = (
-            entries_qs.filter(models.Q(stage="") | models.Q(stage=PipelineEntry.Stage.PIPELINE))
-            .exclude(job_listing_id__in=saved_ids)
+        entries_qs = entries_qs.filter(
+            models.Q(stage="") | models.Q(stage=PipelineEntry.Stage.PIPELINE)
         )
     elif board_stage == "vetting":
         entries_qs = entries_qs.filter(stage=PipelineEntry.Stage.VETTING)
@@ -390,8 +452,9 @@ def pipeline_board_view(request, board_stage: str):
         search_q or source_filter or pref_min_raw != "" or pref_max_raw != ""
     )
 
-    if board_stage == "applying":
+    if board_stage in ("vetting", "applying"):
         _attach_optimizer_user_resume_id(user, pipeline_jobs, raw_track)
+    if board_stage == "applying":
         _attach_optimized_resume_ids_for_stage(
             user, pipeline_jobs, raw_track, PipelineEntry.Stage.APPLYING
         )
@@ -401,43 +464,91 @@ def pipeline_board_view(request, board_stage: str):
         )
 
     job_tasks_url = reverse("job_automation")
-    board_titles = {
-        "pipeline": "Dashboard",
-        "vetting": "Vetting",
-        "applying": "Applying",
-        "done": "Done",
-    }
-    board_subtitles = {
-        "pipeline": "Jobs from scheduled tasks. Focus % is computed when you open this page. Like, Dislike, Save, and Delete behave like Job Search.",
-        "vetting": "Interview % shows only when the model reply is parsed to a number. Use Match debug on a job to run one call and inspect the raw response. Automation retries missing scores on a cooldown so unparsed replies do not spam the LLM.",
-        "applying": "Active applications. Open optimizer opens the resume tool in a new tab with this job and your track resume prefilled—run when you are ready. Saving marks a job done after you submit.",
-        "done": "Completed applications.",
-    }
-    empty_messages = {
-        "pipeline": f"No jobs in the pipeline for {raw_track} track.",
-        "vetting": f"No jobs in Vetting for {raw_track} track.",
-        "applying": f"No jobs in Applying for {raw_track} track.",
-        "done": f"No jobs in Done for {raw_track} track.",
-    }
-    empty_help = {
-        "pipeline": [
-            f"Go to {job_tasks_url} to create an active scheduled search (or use Run now on an existing task). Jobs are added only when a task runs.",
-            "Tasks run automatically when next_run_at is due (scheduler runs every minute). Default cron is 9 AM daily—use Run now to test without waiting.",
-            "Try the other track (IC vs Management) if your task uses a different track.",
-            "Saved jobs are hidden from the pipeline; they appear under Job Search → Favourites.",
-        ],
-        "vetting": [],
-        "applying": [],
-        "done": [],
-    }
+    stage_tab_labels = STAGE_TAB_LABELS_POWER if power_user else STAGE_TAB_LABELS_NORMAL
+    if power_user:
+        board_titles = {
+            "pipeline": "Dashboard",
+            "vetting": "Vetting",
+            "applying": "Applying",
+            "done": "Done",
+        }
+        board_subtitles = {
+            "pipeline": (
+                "Jobs from scheduled tasks. Focus % is computed when you open this page. "
+                "Like, Dislike, Save, and Delete behave like Job Search."
+            ),
+            "vetting": (
+                "Interview % shows only when the model reply is parsed to a number. "
+                "Use Match debug on a job to run one call and inspect the raw response. "
+                "Automation retries missing scores on a cooldown so unparsed replies do not spam the LLM."
+            ),
+            "applying": (
+                "Active applications. Open optimizer opens the resume tool in a new tab with this job "
+                "and your track resume prefilled—run when you are ready. Saving marks a job done after you submit."
+            ),
+            "done": "Completed applications.",
+        }
+        empty_messages = {
+            "pipeline": f"No jobs in the pipeline for {raw_track} track.",
+            "vetting": f"No jobs in Vetting for {raw_track} track.",
+            "applying": f"No jobs in Applying for {raw_track} track.",
+            "done": f"No jobs in Done for {raw_track} track.",
+        }
+        empty_help = {
+            "pipeline": [
+                f"Go to {job_tasks_url} to create an active scheduled search (or use Run now on an existing task). Jobs are added only when a task runs.",
+                "Tasks run automatically when next_run_at is due (scheduler runs every minute). Default cron is 9 AM daily—use Run now to test without waiting.",
+                "Try the other track (IC vs Management) if your task uses a different track.",
+                "Saved jobs are hidden from the pipeline; they appear under Job Search → Favourites.",
+            ],
+            "vetting": [],
+            "applying": [],
+            "done": [],
+        }
+    else:
+        board_titles = {
+            "pipeline": "My jobs",
+            "vetting": "My jobs",
+            "applying": "My jobs",
+            "done": "My jobs",
+        }
+        board_subtitles = {
+            "pipeline": "Manage your career pipeline from discovery to offer.",
+            "vetting": "Manage your career pipeline from discovery to offer.",
+            "applying": "Manage your career pipeline from discovery to offer.",
+            "done": "Manage your career pipeline from discovery to offer.",
+        }
+        empty_messages = {
+            "pipeline": "No new jobs yet.",
+            "vetting": "No jobs in review.",
+            "applying": "No jobs you're applying to right now.",
+            "done": "No applied jobs yet.",
+        }
+        empty_help = {
+            "pipeline": [
+                "Scheduled searches add matching roles here automatically.",
+                "Shortlist a job to move it to Review when you're ready to evaluate it.",
+            ],
+            "vetting": [
+                "Save a job on Find jobs to add it here, or shortlist one from New.",
+                "When a job looks promising, choose Ready to apply to move it to Applying.",
+            ],
+            "applying": [
+                "Use Tailor resume to customize your PDF for each role before you submit.",
+            ],
+            "done": [],
+        }
 
     board_empty_message = empty_messages[board_stage]
     board_empty_help_list = empty_help[board_stage]
     if pipeline_stage_total > 0 and not pipeline_jobs and pipeline_has_active_filters:
-        board_empty_message = (
-            "No jobs match the current filters. Try clearing the text search, "
-            "setting Source to All sources, or widening the Pref score range."
-        )
+        if power_user:
+            board_empty_message = (
+                "No jobs match the current filters. Try clearing the text search, "
+                "setting Source to All sources, or widening the Pref score range."
+            )
+        else:
+            board_empty_message = "No jobs match your search."
         board_empty_help_list = []
 
     now = timezone.now()
@@ -456,7 +567,11 @@ def pipeline_board_view(request, board_stage: str):
     qd.pop("track", None)
     pipeline_board_extra_query = qd.urlencode()
 
-    show_pipeline_resume_summary = board_stage in ("vetting", "applying")
+    show_pipeline_resume_summary = power_user and board_stage in ("vetting", "applying")
+    show_advanced_board_filters = power_user
+    show_pipeline_track_tabs = (
+        len(pipeline_track_tabs) > 1 if not power_user else tracks_qs.count() > 1
+    )
     pipeline_resume_llm_providers: list[str] = []
     pipeline_resume_llm_provider: str | None = None
     pipeline_resume_llm_configured = False
@@ -466,12 +581,13 @@ def pipeline_board_view(request, board_stage: str):
         from .pipeline_llm_skill_extract import resolve_provider_api_key
 
         configured = list(
-            LLMProviderConfig.objects.exclude(encrypted_api_key="")
+            LLMProviderConfig.objects.for_user(user)
+            .exclude(encrypted_api_key="")
             .values_list("provider", flat=True)
             .distinct()
         )
         if not configured:
-            configured = [p for p in sorted(LLM_PROVIDERS) if resolve_provider_api_key(p)]
+            configured = [p for p in sorted(LLM_PROVIDERS) if resolve_provider_api_key(p, user=user)]
         pipeline_resume_llm_providers = sorted(set(configured))
         pipeline_resume_llm_configured = bool(pipeline_resume_llm_providers)
         chosen = (request.session.get("pipeline_resume_llm_provider") or "").strip()
@@ -491,15 +607,20 @@ def pipeline_board_view(request, board_stage: str):
         "pipeline_source_selected": source_filter,
         "pipeline_pref_min": pref_min_raw,
         "pipeline_pref_max": pref_max_raw,
-        "pipeline_tracks": list(tracks_qs),
+        "pipeline_tracks": pipeline_track_tabs,
+        "pipeline_track_tabs": pipeline_track_tabs,
         "stage_counts": stage_counts,
         "board_stage": board_stage,
+        "board_stage_display": stage_tab_labels[board_stage],
         "board_page_title": board_titles[board_stage],
         "board_page_subtitle": board_subtitles[board_stage],
         "board_empty_message": board_empty_message,
         "board_empty_help_list": board_empty_help_list,
         "board_clear_url": clear_url,
-        "show_board_metrics": board_stage == "pipeline",
+        "stage_tab_labels": stage_tab_labels,
+        "show_advanced_board_filters": show_advanced_board_filters,
+        "show_pipeline_track_tabs": show_pipeline_track_tabs,
+        "show_board_metrics": power_user and board_stage == "pipeline",
         "done_total": done_total,
         "done_this_week": done_this_week,
         "conversion_percent": conversion_percent,

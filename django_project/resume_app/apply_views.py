@@ -41,7 +41,7 @@ def _apply_agent_llm_form_context(settings_solo: AppAutomationSettings) -> dict:
         .distinct()
     )
     if not configured:
-        configured = [p for p in sorted(LLM_PROVIDERS) if resolve_provider_api_key(p)]
+        configured = [p for p in sorted(LLM_PROVIDERS) if resolve_provider_api_key(p, user=user)]
     providers = sorted(set(configured))
 
     models_by_provider: dict[str, list[str]] = {}
@@ -91,6 +91,13 @@ def apply_agent_dashboard_view(request):
     if request.method == "POST":
         action = request.POST.get("action")
         if action == "start":
+            profile = ApplicantProfile.get_for_user(request.user)
+            if not (profile.full_name and profile.email):
+                messages.error(
+                    request,
+                    "Set your name and email on the Apply Agent profile page before starting.",
+                )
+                return redirect(reverse("apply_agent"))
             entry_ids = [e for e in request.POST.getlist("entry_ids") if e]
             if not entry_ids:
                 messages.info(request, "Select at least one job to start the apply agent.")
@@ -293,11 +300,13 @@ def apply_agent_profile_view(request):
                 if llm_provider not in LLM_PROVIDERS:
                     messages.error(request, "Invalid Apply Agent LLM provider.")
                     return redirect(reverse("apply_agent_profile"))
-                has_key = LLMProviderConfig.objects.filter(
-                    provider=llm_provider,
-                    encrypted_api_key__isnull=False,
-                ).exclude(encrypted_api_key="").exists()
-                if not has_key and not resolve_provider_api_key(llm_provider):
+                has_key = (
+                    LLMProviderConfig.objects.for_user(request.user)
+                    .filter(provider=llm_provider, encrypted_api_key__isnull=False)
+                    .exclude(encrypted_api_key="")
+                    .exists()
+                )
+                if not has_key and not resolve_provider_api_key(llm_provider, user=request.user):
                     messages.error(
                         request,
                         f"Apply Agent LLM provider {llm_provider} has no API key configured.",
@@ -317,6 +326,6 @@ def apply_agent_profile_view(request):
         "allowed_ats_text": ", ".join(settings_solo.apply_allowed_ats or []),
         "supported_ats": supported_ats(),
         **_apply_agent_llm_form_context(settings_solo),
-        "browser_headless": apply_browser_headless(),
+        "browser_headless": apply_browser_headless(user=request.user),
     }
     return render(request, "resume_app/apply_agent_profile.html", context)

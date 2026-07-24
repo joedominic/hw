@@ -48,18 +48,21 @@ class Track(models.Model):
         """
         Ensure there is at least one track for this user.
 
-        If no Track rows exist yet for the user, seed the original two defaults (ic, mgmt).
+        If no Track rows exist yet for the user, seed a single default search profile.
         """
         qs = cls.objects.for_user(user)
         if not qs.exists():
-            baseline = [
-                ("ic", "IC (Principal / Staff)"),
-                ("mgmt", "Management (Manager / Director)"),
-            ]
-            for slug, label in baseline:
-                cls.objects.get_or_create(owner=user, slug=slug, defaults={"label": label})
-            if not qs.filter(is_default=True).exists():
-                qs.filter(slug="ic").update(is_default=True)
+            cls.objects.get_or_create(
+                owner=user,
+                slug="general",
+                defaults={"label": "General", "is_default": True},
+            )
+        elif not qs.filter(is_default=True).exists():
+            first = qs.order_by("id").first()
+            if first:
+                qs.update(is_default=False)
+                first.is_default = True
+                first.save(update_fields=["is_default"])
         return qs.all()
 
     @classmethod
@@ -74,8 +77,8 @@ class Track(models.Model):
             return first.slug
         obj, _created = cls.objects.get_or_create(
             owner=user,
-            slug="ic",
-            defaults={"label": "IC (Principal / Staff)", "is_default": True},
+            slug="general",
+            defaults={"label": "General", "is_default": True},
         )
         return obj.slug
 
@@ -237,7 +240,8 @@ class AgentLog(models.Model):
 
 class AtsJudgeProfile(models.Model):
     """
-    Named ATS judge prompt (system/user/legacy triple). Users pick one per optimizer run;
+    Named ATS judge prompt (system/user/legacy triple). Runtime uses global rows
+    (owner=null) managed by staff. Users may select one per optimizer run;
     OptimizerWorkflow may set a default profile for that workflow.
     """
 
@@ -247,7 +251,7 @@ class AtsJudgeProfile(models.Model):
         null=True,
         blank=True,
         related_name="ats_judge_profiles",
-        help_text="Null for global built-in seed profiles copied on signup.",
+        help_text="Null for system-wide admin-managed profiles. Legacy per-user rows are ignored at runtime.",
     )
     name = models.CharField(max_length=255)
     slug = models.SlugField(
@@ -292,15 +296,62 @@ class AtsJudgeProfile(models.Model):
                 candidate = f"{base}-{n}"
                 n += 1
             self.slug = candidate
-        if self.is_default and self.owner_id:
+        if self.is_default:
             AtsJudgeProfile.objects.filter(owner=self.owner).exclude(pk=self.pk).update(is_default=False)
         super().save(*args, **kwargs)
 
 
+class SystemPromptProfile(models.Model):
+    """
+    Singleton system-wide prompt overrides managed by staff/admins.
+    Empty string for a field means fall back to the code default in prompts.py.
+    All users share this one set of prompts.
+    """
+
+    writer = models.TextField(blank=True)
+    writer_system = models.TextField(blank=True)
+    writer_user = models.TextField(blank=True)
+    ats_judge = models.TextField(blank=True)
+    ats_judge_system = models.TextField(blank=True)
+    ats_judge_user = models.TextField(blank=True)
+    recruiter_judge = models.TextField(blank=True)
+    recruiter_judge_system = models.TextField(blank=True)
+    recruiter_judge_user = models.TextField(blank=True)
+    matching = models.TextField(blank=True)
+    matching_system = models.TextField(blank=True)
+    matching_user = models.TextField(blank=True)
+    insights = models.TextField(blank=True)
+    insights_system = models.TextField(blank=True)
+    insights_user = models.TextField(blank=True)
+    jd_cleanse = models.TextField(blank=True)
+    jd_cleanse_system = models.TextField(blank=True)
+    jd_cleanse_user = models.TextField(blank=True)
+    cover_letter = models.TextField(blank=True)
+    cover_letter_system = models.TextField(blank=True)
+    cover_letter_user = models.TextField(blank=True)
+    interview_prep = models.TextField(blank=True)
+    interview_prep_system = models.TextField(blank=True)
+    interview_prep_user = models.TextField(blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "System prompt profile"
+        verbose_name_plural = "System prompt profiles"
+
+    def __str__(self) -> str:
+        return "System prompt profile"
+
+    @classmethod
+    def get_solo(cls) -> "SystemPromptProfile":
+        """Return the singleton row (pk=1), creating it if needed."""
+        obj, _created = cls.objects.get_or_create(pk=1)
+        return obj
+
+
 class UserPromptProfile(models.Model):
     """
-    Per-user edited Writer / Judge / Matching / Insights / JD cleanse prompts.
-    Empty string for a field means fall back to the code default in prompts.py.
+    Legacy per-user prompt overrides. No longer used at runtime; retained for
+    historical data. Prefer SystemPromptProfile.
     """
 
     owner = models.OneToOneField(
@@ -450,17 +501,6 @@ class LLMAppUsageTotals(models.Model):
     def get_for_user(cls, user):
         obj, _created = cls.objects.get_or_create(owner=user)
         return obj
-
-    @classmethod
-    def get_solo(cls):
-        """Deprecated: use get_for_user(user). Kept for transitional call sites."""
-        from django.contrib.auth import get_user_model
-
-        User = get_user_model()
-        user = User.objects.order_by("pk").first()
-        if user is None:
-            raise User.DoesNotExist("No users exist; create one before using LLM totals.")
-        return cls.get_for_user(user)
 
 
 class LLMUsageByModel(models.Model):
@@ -644,6 +684,11 @@ class AppAutomationSettings(models.Model):
         default=False,
         help_text="When True, show a visible Chromium window during apply-agent browser steps (dev; requires Huey on this machine).",
     )
+    export_replacements = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Up to 5 {token, value} pairs applied when exporting optimized resumes to PDF/Word.",
+    )
 
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -673,16 +718,31 @@ class AppAutomationSettings(models.Model):
         )
         return obj
 
-    @classmethod
-    def get_solo(cls):
-        """Deprecated: use get_for_user(user)."""
-        from django.contrib.auth import get_user_model
+    @staticmethod
+    def normalize_export_replacements(raw) -> list:
+        """Return exactly 5 {token, value} dicts for Settings UI / export."""
+        out: list[dict] = []
+        if isinstance(raw, list):
+            for entry in raw[:5]:
+                if isinstance(entry, dict):
+                    out.append(
+                        {
+                            "token": (entry.get("token") or "").strip(),
+                            "value": "" if entry.get("value") is None else str(entry.get("value")),
+                        }
+                    )
+                else:
+                    out.append({"token": "", "value": ""})
+        while len(out) < 5:
+            out.append({"token": "", "value": ""})
+        return out[:5]
 
-        User = get_user_model()
-        user = User.objects.order_by("pk").first()
-        if user is None:
-            raise User.DoesNotExist("No users exist.")
-        return cls.get_for_user(user)
+    def set_export_replacements(self, raw) -> list:
+        """Persist normalized replacements and return the stored list."""
+        normalized = self.normalize_export_replacements(raw)
+        self.export_replacements = normalized
+        self.save(update_fields=["export_replacements", "updated_at"])
+        return normalized
 
 
 class JobListing(models.Model):
@@ -713,7 +773,7 @@ class JobListing(models.Model):
 
 
 class JobListingAction(models.Model):
-    """User actions on job listings: liked, disliked, saved."""
+    """User actions on job listings: liked, disliked, hidden, saved."""
 
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -723,15 +783,23 @@ class JobListingAction(models.Model):
     class ActionType(models.TextChoices):
         LIKED = "liked", "Liked"
         DISLIKED = "disliked", "Disliked"
+        HIDDEN = "hidden", "Hidden"
         SAVED = "saved", "Saved"
 
     job_listing = models.ForeignKey(JobListing, on_delete=models.CASCADE)
     action = models.CharField(max_length=16, choices=ActionType.choices)
+    search_profile = models.ForeignKey(
+        "SearchProfile",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="profile_listing_actions",
+    )
     track = models.CharField(
         max_length=32,
         blank=True,
         default="",
-        help_text="Preference track slug for likes/dislikes/saves (e.g. 'ic', 'mgmt'). Empty for legacy/global rows.",
+        help_text="Legacy track slug mirror; kept in sync with search_profile.slug.",
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -757,11 +825,18 @@ class JobListingEmbedding(models.Model):
         choices=EmbeddingType.choices,
         default=EmbeddingType.LIKED,
     )
+    search_profile = models.ForeignKey(
+        "SearchProfile",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="profile_embeddings",
+    )
     track = models.CharField(
         max_length=16,
         blank=True,
         default="",
-        help_text="Preference track: 'ic' or 'mgmt' for likes/dislikes; empty for legacy/global.",
+        help_text="Legacy track slug mirror; kept in sync with search_profile.slug.",
     )
     embedding = models.JSONField(help_text="List of floats, e.g. 384-dim from sentence-transformers")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -786,9 +861,16 @@ class JobListingTrackMetrics(models.Model):
         related_name="job_listing_track_metrics",
     )
     job_listing = models.ForeignKey(JobListing, on_delete=models.CASCADE)
+    search_profile = models.ForeignKey(
+        "SearchProfile",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="profile_metrics",
+    )
     track = models.CharField(
         max_length=32,
-        help_text="Track slug, e.g. 'ic', 'mgmt', or a custom track.",
+        help_text="Legacy track slug mirror; kept in sync with search_profile.slug.",
     )
     focus_percent = models.IntegerField(null=True, blank=True)
     focus_after_penalty = models.IntegerField(null=True, blank=True)
@@ -834,11 +916,19 @@ class UserDisqualifier(models.Model):
 
 
 class OptimizerWorkflow(models.Model):
-    """Saved custom workflow for Resume Optimization."""
+    """
+    Saved custom workflow for Resume Optimization.
+
+    Runtime uses global rows (owner=null) managed by staff. All subscribers
+    can select them in the Optimizer; legacy per-user rows are ignored.
+    """
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
+        null=True,
+        blank=True,
         related_name="optimizer_workflows",
+        help_text="Null for system-wide admin-managed workflows. Legacy per-user rows are ignored at runtime.",
     )
     name = models.CharField(max_length=255)
     steps = models.JSONField(
@@ -900,12 +990,132 @@ class JobMatchResult(models.Model):
         return f"Match {self.job_listing_id} x resume {self.resume_id} ({self.fit_score})"
 
 
+class SearchProfile(models.Model):
+    """
+    Atomic job-search context: query config, pipeline scope, and (future) schedule.
+    Replaces the split between SavedJobSearch + Track slug for normal workflows.
+    """
+
+    SCHEDULE_OFF = "off"
+    SCHEDULE_DAILY = "daily"
+    SCHEDULE_WEEKDAYS = "weekdays"
+    SCHEDULE_WEEKLY = "weekly"
+    SCHEDULE_CUSTOM = "custom"
+    SCHEDULE_INTERVAL_CHOICES = [
+        (SCHEDULE_OFF, "Off"),
+        (SCHEDULE_DAILY, "Daily"),
+        (SCHEDULE_WEEKDAYS, "Weekdays"),
+        (SCHEDULE_WEEKLY, "Weekly"),
+        (SCHEDULE_CUSTOM, "Custom"),
+    ]
+
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="search_profiles",
+    )
+    name = models.CharField(max_length=255)
+    slug = models.SlugField(
+        max_length=32,
+        help_text="URL-safe profile key (unique per owner).",
+    )
+    description = models.TextField(blank=True, default="")
+    search_term = models.CharField(max_length=512)
+    location = models.CharField(max_length=512, blank=True, default="")
+    profile_slug = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        help_text="Deprecated: legacy track slug mirror; kept in sync with slug during migration.",
+    )
+    resume = models.ForeignKey(
+        "UserResume",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="search_profiles",
+    )
+    min_score = models.PositiveSmallIntegerField(null=True, blank=True)
+    results_wanted = models.PositiveSmallIntegerField(default=50)
+    site_names = models.JSONField(default=list, blank=True)
+    llm_model = models.CharField(max_length=128, blank=True, default="")
+    schedule_interval = models.CharField(
+        max_length=16,
+        choices=SCHEDULE_INTERVAL_CHOICES,
+        default=SCHEDULE_OFF,
+    )
+    schedule_time = models.TimeField(null=True, blank=True)
+    schedule_cron = models.CharField(max_length=128, blank=True, default="")
+    schedule_is_active = models.BooleanField(default=False)
+    schedule_next_run_at = models.DateTimeField(null=True, blank=True)
+    is_default = models.BooleanField(
+        default=False,
+        help_text="At most one default profile per owner (legacy General bucket).",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = OwnedManager()
+
+    class Meta:
+        ordering = ["-updated_at", "name"]
+        unique_together = [("owner", "name"), ("owner", "slug")]
+        verbose_name = "Search profile"
+        verbose_name_plural = "Search profiles"
+
+    def __str__(self) -> str:
+        return self.name
+
+    def save(self, *args, **kwargs):
+        slug = (self.slug or self.profile_slug or "").strip().lower()
+        if slug:
+            self.slug = slug
+            self.profile_slug = slug
+        super().save(*args, **kwargs)
+
+    def to_query_params(self) -> dict[str, str]:
+        """Build GET query params for jobs_search from this profile."""
+        params: dict[str, str] = {}
+        if self.search_term:
+            params["q"] = self.search_term
+        if self.location:
+            params["location"] = self.location
+        if self.slug:
+            params["profile"] = self.slug
+            params["track"] = self.slug
+        if self.resume_id:
+            params["resume_id"] = str(self.resume_id)
+        if self.min_score is not None:
+            params["min_score"] = str(self.min_score)
+        if self.results_wanted:
+            params["results_wanted"] = str(self.results_wanted)
+        if self.llm_model:
+            params["llm_model"] = self.llm_model
+        for site in self.site_names or []:
+            params.setdefault("site_name", [])
+            if isinstance(params["site_name"], list):
+                params["site_name"].append(site)
+        return params
+
+
+# Backward-compatible alias during consolidation.
+SavedJobSearch = SearchProfile
+
+
 class JobSearchTask(models.Model):
     """Scheduled job search: runs on cron, accumulates results into pipeline by track."""
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="job_search_tasks",
+    )
+    saved_search = models.OneToOneField(
+        "SearchProfile",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="scheduled_task",
+        help_text="When set, this task runs the linked search profile configuration.",
     )
     name = models.CharField(max_length=255, blank=True, help_text="Optional label for this task")
     search_term = models.CharField(max_length=512)
@@ -966,9 +1176,17 @@ class PipelineEntry(models.Model):
         DELETED = "deleted", "Deleted"
 
     job_listing = models.ForeignKey(JobListing, on_delete=models.CASCADE)
+    search_profile = models.ForeignKey(
+        "SearchProfile",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="pipeline_entries",
+        help_text="Search profile scope (Phase 1 dual-write with track slug).",
+    )
     track = models.CharField(
         max_length=32,
-        help_text="Track slug for this pipeline row.",
+        help_text="Track slug for this pipeline row (legacy; mirrors search_profile.slug).",
     )
     stage = models.CharField(
         max_length=16,
@@ -1122,17 +1340,6 @@ class ApplicantProfile(models.Model):
     def get_for_user(cls, user):
         obj, _created = cls.objects.get_or_create(owner=user)
         return obj
-
-    @classmethod
-    def get_solo(cls):
-        """Deprecated: use get_for_user(user)."""
-        from django.contrib.auth import get_user_model
-
-        User = get_user_model()
-        user = User.objects.order_by("pk").first()
-        if user is None:
-            raise User.DoesNotExist("No users exist.")
-        return cls.get_for_user(user)
 
 
 class SiteCredential(models.Model):
@@ -1387,6 +1594,57 @@ class AtsAutoSubmitStats(models.Model):
         return f"{self.ats_type}: streak={self.clean_submit_streak} full_auto={self.full_auto_enabled}"
 
 
+class UserExperienceSettings(models.Model):
+    """
+    Per-user UI experience mode and onboarding progress.
+
+    Normal mode: simplified nav and guided onboarding.
+    Power mode: full builder surfaces (prompts, workflows, optimizer setup step).
+    """
+
+    class ExperienceMode(models.TextChoices):
+        NORMAL = "normal", "Normal"
+        POWER = "power", "Power"
+
+    owner = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="experience_settings",
+    )
+    experience_mode = models.CharField(
+        max_length=16,
+        choices=ExperienceMode.choices,
+        default=ExperienceMode.NORMAL,
+    )
+    onboarding_completed_at = models.DateTimeField(null=True, blank=True)
+    onboarding_dismissed_at = models.DateTimeField(null=True, blank=True)
+    step_llm_connected = models.BooleanField(default=False)
+    step_resume_uploaded = models.BooleanField(default=False)
+    step_first_search = models.BooleanField(default=False)
+    email_verified_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the account email was verified. Null means unverified.",
+    )
+    pending_email = models.EmailField(
+        blank=True,
+        default="",
+        help_text="Email awaiting verification after an address change.",
+    )
+
+    class Meta:
+        verbose_name = "User experience settings"
+        verbose_name_plural = "User experience settings"
+
+    def __str__(self):
+        return f"{self.owner_id} ({self.experience_mode})"
+
+    @classmethod
+    def get_for_user(cls, user):
+        obj, _created = cls.objects.get_or_create(owner=user)
+        return obj
+
+
 class ImpersonationAuditLog(models.Model):
     """Audit trail for support staff login-as-user sessions."""
 
@@ -1413,3 +1671,149 @@ class ImpersonationAuditLog(models.Model):
 
     def __str__(self):
         return f"{self.hijacker_id} → {self.target_id} @ {self.started_at}"
+
+
+class Plan(models.Model):
+    """Commercial plan with daily quotas and feature flags. 0 = unlimited."""
+
+    slug = models.SlugField(max_length=64, unique=True)
+    name = models.CharField(max_length=128)
+    description = models.TextField(blank=True, default="")
+    llm_requests_per_day = models.PositiveIntegerField(
+        default=50,
+        help_text="Daily LLM invoke cap. 0 = unlimited.",
+    )
+    job_searches_per_day = models.PositiveIntegerField(
+        default=20,
+        help_text="Daily job-search runs. 0 = unlimited.",
+    )
+    apply_runs_per_day = models.PositiveIntegerField(
+        default=5,
+        help_text="Daily apply-agent attempt starts. 0 = unlimited.",
+    )
+    storage_mb = models.PositiveIntegerField(
+        default=250,
+        help_text="Soft storage budget in MB. 0 = unlimited (enforcement optional).",
+    )
+    api_access = models.BooleanField(default=False)
+    stripe_price_id = models.CharField(max_length=128, blank=True, default="")
+    is_active = models.BooleanField(default=True)
+    is_default = models.BooleanField(default=False)
+    sort_order = models.PositiveSmallIntegerField(default=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["sort_order", "name"]
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if self.is_default:
+            Plan.objects.exclude(pk=self.pk).filter(is_default=True).update(is_default=False)
+
+
+class Subscription(models.Model):
+    """Per-user subscription binding to a Plan (Stripe-backed when configured)."""
+
+    class Status(models.TextChoices):
+        TRIALING = "trialing", "Trialing"
+        ACTIVE = "active", "Active"
+        PAST_DUE = "past_due", "Past due"
+        CANCELED = "canceled", "Canceled"
+        UNPAID = "unpaid", "Unpaid"
+
+    owner = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="subscription",
+    )
+    plan = models.ForeignKey(
+        Plan,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="subscriptions",
+    )
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
+    stripe_customer_id = models.CharField(max_length=128, blank=True, default="")
+    stripe_subscription_id = models.CharField(max_length=128, blank=True, default="")
+    trial_ends_at = models.DateTimeField(null=True, blank=True)
+    current_period_end = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Subscription"
+        verbose_name_plural = "Subscriptions"
+
+    def __str__(self):
+        plan = self.plan.slug if self.plan_id else "?"
+        return f"{self.owner_id}:{plan}:{self.status}"
+
+
+class UsageCounter(models.Model):
+    """Durable per-day usage ledger for quota enforcement."""
+
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="usage_counters",
+    )
+    metric = models.CharField(max_length=64, db_index=True)
+    period_date = models.DateField(db_index=True)
+    count = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = OwnedManager()
+
+    class Meta:
+        unique_together = [("owner", "metric", "period_date")]
+        indexes = [
+            models.Index(fields=["owner", "period_date"]),
+        ]
+
+    def __str__(self):
+        return f"{self.owner_id} {self.metric}@{self.period_date}={self.count}"
+
+
+class CustomerApiKey(models.Model):
+    """Hashed customer API key for programmatic access."""
+
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="api_keys",
+    )
+    name = models.CharField(max_length=128, blank=True, default="")
+    prefix = models.CharField(max_length=16, db_index=True)
+    key_hash = models.CharField(max_length=64, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    objects = OwnedManager()
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.prefix}… ({self.owner_id})"
+
+    @property
+    def is_active(self) -> bool:
+        return self.revoked_at is None
+
+
+class StripeWebhookEvent(models.Model):
+    """Idempotency log for Stripe webhooks."""
+
+    event_id = models.CharField(max_length=128, unique=True)
+    event_type = models.CharField(max_length=128, blank=True, default="")
+    processed_at = models.DateTimeField(auto_now_add=True)
+    payload = models.JSONField(null=True, blank=True)
+
+    def __str__(self):
+        return self.event_id

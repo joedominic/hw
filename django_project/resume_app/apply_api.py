@@ -72,9 +72,13 @@ def _get_user_attempt(user, attempt_id: int) -> ApplicationAttempt:
 def start(request, payload: StartApplyIn):
     """Create attempts for the given Applying-stage entries and kick off processing."""
     from .apply_agent import orchestrator
+    from .models import ApplicantProfile
     from .tasks import run_apply_agent_step
 
     user = api_user(request)
+    profile = ApplicantProfile.get_for_user(user)
+    if not (profile.full_name and profile.email):
+        raise HttpError(400, "Applicant profile incomplete: set name and email first.")
     if not payload.pipeline_entry_ids:
         raise HttpError(400, "No pipeline entries provided.")
     mode = payload.automation_mode

@@ -299,6 +299,7 @@ class OrchestratorTests(TenantTestCase):
         self.entry.refresh_from_db()
         self.assertEqual(self.entry.stage, PipelineEntry.Stage.APPLYING)
 
+    @override_settings(APPLY_USE_MOCK_RESOLVER=True)
     def test_unresolved_url_fails(self):
         self.job.url = "https://www.indeed.com/viewjob?jk=unmapped"
         self.job.save()
@@ -418,12 +419,19 @@ class MemoryLeakFixTests(TenantTestCase):
 
     @override_settings(APPLY_USE_MOCK_RESOLVER=False, APPLY_BROWSER_STEP_TIMEOUT_SECONDS=30)
     def test_resolve_live_acquires_browser_slot(self):
+        # Aggregator URL is unknown ATS → live path needs a browser slot.
+        self.job.url = "https://www.indeed.com/viewjob?jk=abc123"
+        self.job.save(update_fields=["url"])
         attempt = ApplicationAttempt.objects.create(
             pipeline_entry=self.entry,
             status=ApplicationAttempt.Status.RESOLVE_AND_DETECT,
             resume_file_path="/tmp/x.pdf",
         )
-        ok_result = resolver.ResolveResult(ok=True, apply_url=self.job.url, ats_type="greenhouse")
+        ok_result = resolver.ResolveResult(
+            ok=True,
+            apply_url="https://boards.greenhouse.io/acme/jobs/1",
+            ats_type="greenhouse",
+        )
         with patch.object(orchestrator, "_acquire_browser_slot", return_value=True) as acquire, \
              patch.object(orchestrator, "_release_browser_slot") as release, \
              patch.object(orchestrator, "_run_browser_step", side_effect=_sync_browser_step), \
@@ -529,14 +537,13 @@ class ApplyBrowserHeadlessTests(TenantTestCase):
         settings = AppAutomationSettings.get_for_user(self.user)
         settings.apply_browser_show_window = False
         settings.save(update_fields=["apply_browser_show_window"])
-        with patch.object(AppAutomationSettings, "get_solo", return_value=settings):
-            self.assertTrue(apply_browser_headless())
+        self.assertTrue(apply_browser_headless(user=self.user))
 
     @override_settings(APPLY_BROWSER_HEADLESS=False)
     def test_env_headless_false_shows_window(self):
         from .apply_agent.browser import apply_browser_headless
 
-        self.assertFalse(apply_browser_headless())
+        self.assertFalse(apply_browser_headless(user=self.user))
 
     @override_settings(APPLY_BROWSER_HEADLESS=True)
     def test_profile_show_window_overrides_headless(self):
@@ -545,5 +552,79 @@ class ApplyBrowserHeadlessTests(TenantTestCase):
         settings = AppAutomationSettings.get_for_user(self.user)
         settings.apply_browser_show_window = True
         settings.save(update_fields=["apply_browser_show_window"])
-        with patch.object(AppAutomationSettings, "get_solo", return_value=settings):
-            self.assertFalse(apply_browser_headless())
+        self.assertFalse(apply_browser_headless(user=self.user))
+
+    @override_settings(APPLY_BROWSER_HEADLESS=True)
+    def test_without_user_ignores_other_tenant_show_window(self):
+        from .apply_agent.browser import apply_browser_headless
+
+        # First user in DB may have show_window; without user= we must not read get_solo.
+        other = create_user("other_headless")
+        solo = AppAutomationSettings.get_for_user(other)
+        solo.apply_browser_show_window = True
+        solo.save(update_fields=["apply_browser_show_window"])
+        self.assertTrue(apply_browser_headless())
+
+
+class AllowedAtsAndGenericFallbackTests(TenantTestCase):
+    def setUp(self):
+        super().setUp()
+        self.job = JobListing.objects.create(
+            source="test",
+            external_id="ats-gate",
+            title="Engineer",
+            company_name="Acme",
+            url="https://boards.greenhouse.io/acme/jobs/99",
+        )
+        self.entry = PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=self.job,
+            track="ic",
+            stage=PipelineEntry.Stage.APPLYING,
+        )
+        self._completed = OptimizedResume.objects.create(
+            owner=self.user,
+            original_resume=UserResume.objects.create(owner=self.user, file="r.pdf", is_library=True),
+            job_description=JobDescription.objects.create(content="JD"),
+            status=OptimizedResume.STATUS_COMPLETED,
+            optimized_content="Resume body",
+            pipeline_entry=self.entry,
+            ats_score=90,
+            recruiter_score=88,
+        )
+
+    def test_disallowed_ats_fails(self):
+        solo = AppAutomationSettings.get_for_user(self.user)
+        solo.apply_allowed_ats = ["lever"]
+        solo.save(update_fields=["apply_allowed_ats"])
+        attempt = ApplicationAttempt.objects.create(
+            pipeline_entry=self.entry,
+            optimized_resume=self._completed,
+            status=ApplicationAttempt.Status.RESOLVE_AND_DETECT,
+            resume_file_path="/tmp/x.pdf",
+        )
+        with patch.object(orchestrator, "_run_browser_step", side_effect=_sync_browser_step):
+            orchestrator.advance_attempt(attempt.id)
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.status, ApplicationAttempt.Status.FAILED)
+        self.assertEqual(attempt.error_code, ApplicationAttempt.ERROR_NO_ADAPTER)
+        self.assertIn("allowed list", attempt.error_message)
+
+    @override_settings(APPLY_USE_MOCK_RESOLVER=True)
+    def test_generic_fallback_disabled_fails_unknown(self):
+        self.job.url = "https://careers.acme.com/jobs/1"
+        self.job.save(update_fields=["url"])
+        solo = AppAutomationSettings.get_for_user(self.user)
+        solo.apply_generic_fallback_enabled = False
+        solo.save(update_fields=["apply_generic_fallback_enabled"])
+        attempt = ApplicationAttempt.objects.create(
+            pipeline_entry=self.entry,
+            optimized_resume=self._completed,
+            status=ApplicationAttempt.Status.RESOLVE_AND_DETECT,
+            resume_file_path="/tmp/x.pdf",
+        )
+        with patch.object(orchestrator, "_run_browser_step", side_effect=_sync_browser_step):
+            orchestrator.advance_attempt(attempt.id)
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.status, ApplicationAttempt.Status.FAILED)
+        self.assertEqual(attempt.error_code, ApplicationAttempt.ERROR_NO_ADAPTER)

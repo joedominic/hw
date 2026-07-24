@@ -21,7 +21,6 @@ from .models import (
     JobListingTrackMetrics,
     JobDescription,
     OptimizerWorkflow,
-    UserPromptProfile,
 )
 from datetime import timedelta
 from .job_sources import normalize_site_names
@@ -116,7 +115,7 @@ def validate_cron(cron_string: str) -> None:
 
 
 def _build_llm_override(llm_provider: str, llm_model: str | None, user):
-    api_key = resolve_provider_api_key(llm_provider)
+    api_key = resolve_provider_api_key(llm_provider, user=user)
     if not api_key:
         raise ValueError(f"No API key configured for {llm_provider}.")
 
@@ -182,6 +181,8 @@ CLEANUP_STATUS_CACHE_TTL_SECONDS = 60 * 60 * 24 * 7  # 7 days
 
 def _create_agent_log(optimized_resume, steps, prev_node, accumulated):
     """Create one AgentLog for the completed node; resolve step_display from steps if step_*."""
+    from .agents import pop_node_llm_debug
+
     step_display = prev_node
     if steps and prev_node and prev_node.startswith("step_"):
         try:
@@ -190,10 +191,19 @@ def _create_agent_log(optimized_resume, steps, prev_node, accumulated):
                 step_display = steps[idx]
         except (ValueError, IndexError):
             pass
+    thought = dict(accumulated.get(prev_node) or {})
+    # LangGraph stream updates often omit ephemeral debug keys; side-channel is authoritative.
+    debug = pop_node_llm_debug(str(optimized_resume.id))
+    if debug:
+        for key, val in debug.items():
+            if key == "feedback" and thought.get("feedback"):
+                continue
+            if val is not None:
+                thought[key] = val
     AgentLog.objects.create(
         optimized_resume=optimized_resume,
         step_name=step_display,
-        thought=accumulated.get(prev_node) or {},
+        thought=thought,
     )
 
 
@@ -230,6 +240,13 @@ def optimize_resume_task(
         return {"status": "error", "message": "OptimizedResume not found"}
 
     try:
+        from .agents import clear_node_llm_debug
+        from .llm_gateway import NO_CLOUD_LLM_MESSAGE, cloud_llm_available
+
+        if not cloud_llm_available(user):
+            raise RuntimeError(NO_CLOUD_LLM_MESSAGE)
+
+        clear_node_llm_debug(str(resume_id))
         job_desc = optimized_resume.job_description.content
 
         # Parse PDF
@@ -264,6 +281,7 @@ def optimize_resume_task(
             prompts or None,
             ats_judge_profile_id=explicit_ats,
             workflow=workflow,
+            user=user,
         )
         initial_state = {
             **ctx_state,
@@ -326,7 +344,21 @@ def optimize_resume_task(
                 prev_node = node_name
 
                 update_fields: list[str] = []
-                if "optimized_resume" in state_update:
+                if state_update.get("jd_cleansed") is not None or (
+                    "writer_job_description" in state_update
+                    and "optimized_resume" not in state_update
+                    and "ats_score" not in state_update
+                    and "recruiter_score" not in state_update
+                ):
+                    parse_info = state_update.get("parse_info") or {}
+                    in_c = parse_info.get("input_chars")
+                    out_c = parse_info.get("output_chars")
+                    if in_c is not None and out_c is not None:
+                        optimized_resume.status_display = f"Cleansing JD ({in_c}→{out_c} chars)"
+                    else:
+                        optimized_resume.status_display = "Cleansing job description"
+                    update_fields.append("status_display")
+                elif "optimized_resume" in state_update:
                     optimized_resume.status_display = "Drafting"
                     update_fields.append("status_display")
                     oc = last_state.get("optimized_resume")
@@ -355,6 +387,7 @@ def optimize_resume_task(
 
         optimized_resume.refresh_from_db()
         if optimized_resume.status == OptimizedResume.STATUS_FAILED and (optimized_resume.error_message or "").strip() == CANCELLED_MESSAGE:
+            clear_node_llm_debug(str(resume_id))
             return {"status": "cancelled", "resume_id": resume_id}
 
         # Final update
@@ -370,9 +403,23 @@ def optimize_resume_task(
             optimized_resume.optimizer_context_snapshot = snap
         optimized_resume.save()
 
+        # Resume apply-agent attempts that were waiting on this optimization.
+        if optimized_resume.pipeline_entry_id:
+            try:
+                nudge_apply_attempts_for_pipeline_entry(user.id, optimized_resume.pipeline_entry_id)
+            except Exception:
+                logger.exception(
+                    "[optimize_resume_task] failed to nudge apply agent for entry=%s",
+                    optimized_resume.pipeline_entry_id,
+                )
+
+        clear_node_llm_debug(str(resume_id))
         return {"status": "success", "resume_id": resume_id}
 
     except Exception as e:
+        from .agents import clear_node_llm_debug
+
+        clear_node_llm_debug(str(resume_id))
         if is_auth_error(e):
             LLMProviderConfig.objects.for_user(user).filter(provider=provider).update(encrypted_api_key="", last_validated_at=None)
         optimized_resume.refresh_from_db()
@@ -500,7 +547,7 @@ def _enqueue_single_pipeline_resume_optimization(
     if not user_resume or not user_resume.file:
         return {
             "status": "error",
-            "message": "No resume PDF for this track (upload in Optimizer)",
+            "message": "No resume PDF for this search profile (upload and assign one under Search profiles)",
             "entry_id": pipeline_entry_id,
         }
 
@@ -648,15 +695,17 @@ def _run_job_search_task_impl(user_id, task_id):
         return {"status": "error", "message": str(e)}
 
     jobs_added_to_pipeline = 0
+    from .search_profile_scope import upsert_pipeline_entry
+
     for payload in jobs_out:
         job_id = payload.id
         pe = PipelineEntry.objects.for_user(user).filter(job_listing_id=job_id, track=task.track).first()
         if pe is None:
-            PipelineEntry.objects.create(
-                owner=user,
+            upsert_pipeline_entry(
+                user,
                 job_listing_id=job_id,
-                track=task.track,
-                stage=PipelineEntry.Stage.PIPELINE,
+                slug=task.track,
+                defaults={"stage": PipelineEntry.Stage.PIPELINE},
             )
             jobs_added_to_pipeline += 1
         elif pe.removed_at is not None:
@@ -788,7 +837,7 @@ def evaluate_vetting_matching_task(
         updated = 0
         skipped = 0
         errors = []
-        ms, mu, ml = resolve_prompt_parts(UserPromptProfile.get_for_user(user), "matching")
+        ms, mu, ml = resolve_prompt_parts(profile_for_llm(None), "matching")
         for entry in entries:
             track = entry.track
             resolved = resume_snippet_map.get(track)
@@ -937,7 +986,7 @@ def try_vetting_match_debug(
 
     llm = None
     if llm_provider:
-        api_key = resolve_provider_api_key(llm_provider)
+        api_key = resolve_provider_api_key(llm_provider, user=user)
         if not api_key:
             return {
                 "ok": False,
@@ -1562,6 +1611,7 @@ def pipeline_resume_llm_extract_task(run_dir_str: str):
     from pathlib import Path
 
     from django.conf import settings
+    from django.contrib.auth import get_user_model
 
     from .pipeline_llm_skill_extract import (
         effective_pipeline_batch_size,
@@ -1579,8 +1629,19 @@ def pipeline_resume_llm_extract_task(run_dir_str: str):
         logger.exception("[pipeline_resume_llm_extract_task] invalid run dir %s", run_dir_str)
         return {"status": "error", "message": str(e)}
 
+    owner_id = meta.get("owner_id")
+    if not owner_id:
+        write_run_error(run_dir, "Run metadata missing owner_id.")
+        return {"status": "error", "message": "missing_owner"}
+    User = get_user_model()
+    try:
+        user = User.objects.get(pk=int(owner_id))
+    except (TypeError, ValueError, User.DoesNotExist):
+        write_run_error(run_dir, f"Owner {owner_id!r} not found.")
+        return {"status": "error", "message": "owner_not_found"}
+
     provider = (meta.get("provider") or "OpenAI").strip()
-    api_key = resolve_provider_api_key(provider)
+    api_key = resolve_provider_api_key(provider, user=user)
     if not api_key:
         write_run_error(
             run_dir,
@@ -1597,6 +1658,7 @@ def pipeline_resume_llm_extract_task(run_dir_str: str):
     try:
         run_pipeline_llm_extraction(
             run_dir,
+            user=user,
             provider=provider,
             api_key=api_key,
             jobs=jobs,
@@ -1630,16 +1692,58 @@ def run_apply_agent_step(user_id: int, attempt_id: int):
     Browser work happens inside the orchestrator with a hard per-step deadline
     and a small concurrency semaphore. A per-attempt lock prevents concurrent
     processing of the same attempt.
+
+    After a successful non-terminal step, immediately enqueue the next step so
+    progress does not depend solely on the 60s heartbeat (which is gated by
+    ``apply_agent_enabled``).
     """
     lock_key = f"{APPLY_AGENT_STEP_LOCK_PREFIX}{attempt_id}"
     if not cache.add(lock_key, 1, APPLY_AGENT_STEP_LOCK_TIMEOUT):
         return {"status": "skipped", "message": "Attempt already processing", "attempt_id": attempt_id}
+    should_chain = False
     try:
         from .apply_agent import orchestrator
+        from .models import ApplicationAttempt
 
-        return orchestrator.advance_attempt(int(attempt_id), user_id=int(user_id))
+        before = (
+            ApplicationAttempt.objects.filter(id=int(attempt_id), pipeline_entry__owner_id=int(user_id))
+            .values_list("status", flat=True)
+            .first()
+        )
+        result = orchestrator.advance_attempt(int(attempt_id), user_id=int(user_id))
+        after = (result or {}).get("state") or ""
+        # Only chain when the state machine actually progressed. Waiting on the
+        # optimizer or a browser slot leaves status unchanged and must not loop.
+        if (
+            (result or {}).get("status") == "ok"
+            and after in ApplicationAttempt.ACTIVE_STATUSES
+            and after != before
+        ):
+            should_chain = True
+        return result
     finally:
         cache.delete(lock_key)
+        if should_chain:
+            run_apply_agent_step(int(user_id), int(attempt_id))
+
+
+def nudge_apply_attempts_for_pipeline_entry(user_id: int, pipeline_entry_id: int) -> int:
+    """Enqueue apply-agent steps for attempts waiting on this pipeline entry's optimizer."""
+    from .models import ApplicationAttempt
+
+    waiting = list(
+        ApplicationAttempt.objects.filter(
+            pipeline_entry_id=int(pipeline_entry_id),
+            pipeline_entry__owner_id=int(user_id),
+            status__in=(
+                ApplicationAttempt.Status.OPTIMIZING,
+                ApplicationAttempt.Status.WAITING_OPTIMIZER,
+            ),
+        ).values_list("id", flat=True)
+    )
+    for attempt_id in waiting:
+        run_apply_agent_step(int(user_id), int(attempt_id))
+    return len(waiting)
 
 
 @db_periodic_task(crontab(minute="*"))
@@ -1663,7 +1767,7 @@ def apply_agent_heartbeat():
         ).values_list("id", flat=True)
         for attempt_id in list(active):
             run_apply_agent_step(user.id, attempt_id)
-        enqueued += 1
+            enqueued += 1
     if enqueued:
         logger.info("[apply_agent_heartbeat] enqueued %s step(s)", enqueued)
     return {"status": "ok", "enqueued": enqueued}

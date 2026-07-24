@@ -12,6 +12,8 @@ def format_job_source_label(source: str | None) -> str:
         return "Adzuna"
     if s == "dice":
         return "Dice"
+    if s == "levels":
+        return "Levels.fyi"
     if s.startswith("jobspy_"):
         s = s[7:]
     return s.replace("_", " ").title()

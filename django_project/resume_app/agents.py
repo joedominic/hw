@@ -2,7 +2,9 @@ from typing import TypedDict, List, Annotated, Optional, Any
 import operator
 import logging
 import re
+import threading
 
+from django.conf import settings
 from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage
 from langgraph.graph import StateGraph, END
 
@@ -38,11 +40,100 @@ from .prompts import (
     DEFAULT_MATCHING_SYSTEM,
     DEFAULT_MATCHING_USER,
 )
+from .optimizer_budget import (
+    omitted_duplicate_field_note,
+    should_include_full_job_description,
+    should_include_source_resume,
+    truncate_judge_job_description,
+    truncate_judge_resume,
+)
 
 logger = logging.getLogger(__name__)
 
+# LangGraph stream updates often omit non-channel / ephemeral keys. Persist per-node
+# LLM debug payloads here (FIFO per run key) so AgentLog always gets prompts + tokens.
+_NODE_LLM_DEBUG_LOCK = threading.Lock()
+_NODE_LLM_DEBUG_QUEUES: dict[str, list[dict]] = {}
+
+
+def push_node_llm_debug(run_key: str | None, payload: dict) -> None:
+    """Append debug payload for the next AgentLog of this optimization run."""
+    key = (run_key or "").strip()
+    if not key or not payload:
+        return
+    with _NODE_LLM_DEBUG_LOCK:
+        _NODE_LLM_DEBUG_QUEUES.setdefault(key, []).append(dict(payload))
+
+
+def pop_node_llm_debug(run_key: str | None) -> dict:
+    """Pop the next queued debug payload (ordered by node completion)."""
+    key = (run_key or "").strip()
+    if not key:
+        return {}
+    with _NODE_LLM_DEBUG_LOCK:
+        q = _NODE_LLM_DEBUG_QUEUES.get(key) or []
+        if not q:
+            return {}
+        item = q.pop(0)
+        if not q:
+            _NODE_LLM_DEBUG_QUEUES.pop(key, None)
+        return item
+
+
+def clear_node_llm_debug(run_key: str | None) -> None:
+    key = (run_key or "").strip()
+    if not key:
+        return
+    with _NODE_LLM_DEBUG_LOCK:
+        _NODE_LLM_DEBUG_QUEUES.pop(key, None)
+
+
+def _debug_payload_from_node_out(
+    *,
+    step: str,
+    messages_debug: list[dict],
+    debug_prompt: str,
+    format_summary: dict,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    tokens_estimated: bool = False,
+    raw_llm_response: str | None = None,
+    raw_llm_response_retry: str | None = None,
+    parse_info: dict | None = None,
+    feedback=None,
+    optimized_resume: str | None = None,
+) -> dict:
+    """Fields stored on AgentLog.thought for admin debug UI."""
+    payload: dict[str, Any] = {
+        "step": step,
+        "debug_messages": messages_debug,
+        "debug_prompt": debug_prompt,
+        "debug_format_summary": format_summary,
+    }
+    if input_tokens is not None:
+        payload["input_tokens"] = int(input_tokens)
+    if output_tokens is not None:
+        payload["output_tokens"] = int(output_tokens)
+    if tokens_estimated:
+        payload["tokens_estimated"] = True
+    if raw_llm_response:
+        payload["raw_llm_response"] = raw_llm_response
+    if raw_llm_response_retry:
+        payload["raw_llm_response_retry"] = raw_llm_response_retry
+    if parse_info is not None:
+        payload["parse_info"] = parse_info
+    if feedback is not None:
+        payload["feedback"] = feedback
+    if optimized_resume:
+        payload["optimized_resume"] = optimized_resume
+    return payload
+
 # Chars-per-token heuristic when provider does not report usage (e.g. some Ollama setups)
 _CHARS_PER_TOKEN_ESTIMATE = 4
+
+
+def _judges_prefer_local() -> bool:
+    return bool(getattr(settings, "OPTIMIZER_JUDGES_PREFER_LOCAL", False))
 
 
 def _normalize_token_usage(response, llm_output=None, prompt_text=None, response_content=None):
@@ -139,6 +230,7 @@ def _llm_invoke_with_retry(
     usage_query_kind: str | None = None,
     prefer_local: bool = True,
     only_local: bool = False,
+    allow_local: bool = True,
 ):
     from .llm_gateway import call_invoke_llm_messages
 
@@ -158,6 +250,7 @@ def _llm_invoke_with_retry(
         usage_query_kind=usage_query_kind,
         prefer_local=prefer_local,
         only_local=only_local,
+        allow_local=allow_local,
     )
 
 
@@ -442,6 +535,8 @@ class AgentState(_AgentStateBase, total=False):
     job_cache_key: str  # Stable id for LLM gateway pinning (e.g. optimized resume id)
     source_resume_text: str  # PDF extraction; immutable fact anchor for Writer across steps
     writer_job_description: str  # Role-focused JD excerpt for Writer (optional; else full JD)
+    judge_job_description: str  # JD excerpt for ATS/Recruiter judges
+    job_title: str  # Optional title for JD cleanse prompt
     optimization_notes: str
     pipeline_skills_json: str
     job_highlights: str
@@ -457,6 +552,20 @@ class AgentState(_AgentStateBase, total=False):
     recruiter_judge_prompt_system: str
     recruiter_judge_prompt_user: str
     recruiter_judge_prompt_legacy: str
+    # Per-node debug / metering (must be in schema or LangGraph drops them from stream updates)
+    debug: bool
+    input_tokens: int
+    output_tokens: int
+    tokens_estimated: bool
+    debug_prompt: str
+    debug_messages: list
+    debug_format_summary: dict
+    raw_llm_response: str
+    raw_llm_response_retry: str
+    raw_llm_result_type: str
+    raw_llm_result_type_retry: str
+    parse_info: dict
+    jd_cleansed: bool  # True when jd_cleanse_node successfully shrank the JD
 
 # --- Agent Nodes ---
 
@@ -471,7 +580,35 @@ _STATE_KEYS = frozenset({
     "debug", "max_iterations", "score_threshold", "job_cache_key",
     "writer_job_description", "optimization_notes", "pipeline_skills_json", "job_highlights",
     "retrieval_context", "optimizer_context_budget", "user_id",
+    "judge_job_description", "job_title", "jd_cleansed",
+    "input_tokens", "output_tokens", "tokens_estimated",
+    "debug_prompt", "debug_messages", "debug_format_summary",
+    "raw_llm_response", "raw_llm_response_retry", "raw_llm_result_type", "raw_llm_result_type_retry",
+    "parse_info", "last_ats_json", "last_recruiter_json",
 })
+
+
+def _messages_to_debug_payload(messages) -> tuple[str, list[dict]]:
+    """Build (debug_prompt text, debug_messages list) for AgentLog / UI."""
+    dm: list[dict] = []
+    parts: list[str] = []
+    for m in messages or []:
+        role = "user"
+        if isinstance(m, SystemMessage):
+            role = "system"
+        content = getattr(m, "content", "") or ""
+        dm.append({"role": role, "content": content})
+        parts.append(f"{m.__class__.__name__}:\n{content}")
+    return "\n\n---\n\n".join(parts), dm
+
+
+def _format_field_summary(fmt: dict) -> dict:
+    """Compact map of template format kwargs: char length + whether empty (for debug UI)."""
+    out: dict = {}
+    for key, val in (fmt or {}).items():
+        s = "" if val is None else str(val)
+        out[key] = {"chars": len(s), "empty": not s.strip(), "preview": (s[:240] + ("…" if len(s) > 240 else ""))}
+    return out
 
 
 def _state_get(state: dict, key: str, default=None):
@@ -482,6 +619,14 @@ def _state_get(state: dict, key: str, default=None):
         return state.get(key, default) if isinstance(state, dict) else getattr(state, key, default)
     except KeyError:
         return default
+
+
+def _judge_job_description_from_state(state: dict) -> str:
+    return (
+        (_state_get(state, "judge_job_description") or "").strip()
+        or (_state_get(state, "writer_job_description") or "").strip()
+        or (_state_get(state, "job_description") or "").strip()
+    )
 
 
 def writer_node(state: AgentState):
@@ -503,13 +648,23 @@ def writer_node(state: AgentState):
     jd_writer = (_state_get(state, "writer_job_description") or "").strip()
     if not jd_writer:
         jd_writer = jd_full
+    source_for_prompt = (
+        src
+        if should_include_source_resume(src, resume_body_this_step)
+        else omitted_duplicate_field_note()
+    )
+    full_jd_for_prompt = (
+        jd_full
+        if should_include_full_job_description(jd_writer, jd_full)
+        else omitted_duplicate_field_note()
+    )
     fmt = dict(
         resume_text=resume_body_this_step,
         job_description=jd_writer,
-        full_job_description=jd_full,
+        full_job_description=full_jd_for_prompt,
         feedback=", ".join(_state_get(state, "feedback") or []),
         optimized_resume=prior,
-        source_resume_text=src,
+        source_resume_text=source_for_prompt,
         optimization_notes=_state_get(state, "optimization_notes") or "(none)",
         pipeline_skills_json=_state_get(state, "pipeline_skills_json") or "(none)",
         job_highlights=_state_get(state, "job_highlights") or "(none)",
@@ -527,25 +682,19 @@ def writer_node(state: AgentState):
         user_template=usr_t or None,
         format_kwargs=fmt,
     )
-    dbg_prompt = "\n\n---\n\n".join(
-        f"{m.__class__.__name__}:\n{getattr(m, 'content', '')}" for m in messages
-    )
+    dbg_prompt, dm = _messages_to_debug_payload(messages)
     logger.warning(
         "[writer] prompts sent to LLM (%s message(s), total_chars=%s):\n%s",
         len(messages),
         len(dbg_prompt),
         dbg_prompt[:8000] + ("..." if len(dbg_prompt) > 8000 else ""),
     )
-    if _state_get(state, "debug"):
-        dm = []
-        for m in messages:
-            role = "user"
-            if isinstance(m, SystemMessage):
-                role = "system"
-            dm.append({"role": role, "content": getattr(m, "content", "")})
-        out = {"debug_prompt": dbg_prompt, "debug_messages": dm}
-    else:
-        out = {}
+    # Always persist prompt + format summary on AgentLog (schema fields survive LangGraph stream).
+    out = {
+        "debug_prompt": dbg_prompt,
+        "debug_messages": dm,
+        "debug_format_summary": _format_field_summary(fmt),
+    }
     from .llm_gateway import USAGE_QUERY_OPTIMIZER_WRITER
 
     response = _llm_invoke_with_retry(
@@ -555,6 +704,7 @@ def writer_node(state: AgentState):
         job_cache_key=_state_get(state, "job_cache_key"),
         usage_query_kind=USAGE_QUERY_OPTIMIZER_WRITER,
         prefer_local=False,
+        allow_local=False,
     )
     out.update({
         "optimized_resume": response.content,
@@ -566,6 +716,20 @@ def writer_node(state: AgentState):
     out["output_tokens"] = usage["output_tokens"]
     if usage.get("tokens_estimated"):
         out["tokens_estimated"] = True
+    push_node_llm_debug(
+        _state_get(state, "job_cache_key"),
+        _debug_payload_from_node_out(
+            step="writer",
+            messages_debug=dm,
+            debug_prompt=dbg_prompt,
+            format_summary=out["debug_format_summary"],
+            input_tokens=out.get("input_tokens"),
+            output_tokens=out.get("output_tokens"),
+            tokens_estimated=bool(out.get("tokens_estimated")),
+            raw_llm_response=_serialize_llm_result_for_log(response),
+            optimized_resume=str(response.content or "")[:4000],
+        ),
+    )
     return out
 
 
@@ -580,6 +744,8 @@ def _unstructured_judge_invoke(
     job_cache_key: str | None,
     usage_query_kind: str,
     config: dict | None = None,
+    prefer_local: bool = False,
+    allow_local: bool = False,
 ) -> tuple[ScoreFeedback | AtsJudgeResult, Optional[dict], Any, dict]:
     """
     Raw LLM invoke + text/JSON parse (no with_structured_output).
@@ -593,7 +759,8 @@ def _unstructured_judge_invoke(
         structured_schema=None,
         job_cache_key=job_cache_key,
         usage_query_kind=usage_query_kind,
-        prefer_local=False,
+        prefer_local=prefer_local,
+        allow_local=allow_local,
     )
     text = _llm_message_content_to_text(getattr(raw, "content", None) if raw is not None else None)
     if not text.strip() and raw is not None:
@@ -638,12 +805,17 @@ def _judge_node(
     structured_schema: type = ScoreFeedback,
     parse_fallback=_parse_score_fallback,
     use_structured_output: bool = True,
+    prefer_local: bool | None = None,
 ):
     llm = _state_get(state, "llm")
     draft = (_state_get(state, "optimized_resume") or "").strip() or (_state_get(state, "resume_text") or "").strip()
+    draft = truncate_judge_resume(draft)
+    judge_jd = truncate_judge_job_description(_judge_job_description_from_state(state))
+    if prefer_local is None:
+        prefer_local = _judges_prefer_local()
     fmt = dict(
         optimized_resume=draft,
-        job_description=_state_get(state, "job_description") or "",
+        job_description=judge_jd,
     )
     legacy = (_state_get(state, legacy_state_key) or "").strip()
     sys_t = (_state_get(state, system_state_key) or "").strip()
@@ -657,27 +829,20 @@ def _judge_node(
         user_template=usr_t or None,
         format_kwargs=fmt,
     )
-    dbg_prompt = "\n\n---\n\n".join(
-        f"{m.__class__.__name__}:\n{getattr(m, 'content', '')}" for m in messages
-    )
+    dbg_prompt, dm = _messages_to_debug_payload(messages)
     logger.warning(
-        "[%s] prompts sent to LLM (%s message(s), chars=%s):\n%s",
+        "[%s] prompts sent to LLM (%s message(s), chars=%s, prefer_local=%s):\n%s",
         label,
         len(messages),
         len(dbg_prompt),
+        prefer_local,
         dbg_prompt[:8000] + ("..." if len(dbg_prompt) > 8000 else ""),
     )
-    if _state_get(state, "debug"):
-        dm = []
-        for m in messages:
-            role = "user"
-            if isinstance(m, SystemMessage):
-                role = "system"
-            dm.append({"role": role, "content": getattr(m, "content", "")})
-        out = {"debug_prompt": dbg_prompt, "debug_messages": dm}
-    else:
-        # Always log judge prompts in agent thoughts (resume body is needed to debug parse failures).
-        out = {"debug_prompt": dbg_prompt}
+    out = {
+        "debug_prompt": dbg_prompt,
+        "debug_messages": dm,
+        "debug_format_summary": _format_field_summary(fmt),
+    }
     from .llm_gateway import (
         USAGE_QUERY_OPTIMIZER_ATS_JUDGE,
         USAGE_QUERY_OPTIMIZER_RECRUITER_JUDGE,
@@ -707,6 +872,8 @@ def _judge_node(
             job_cache_key=_state_get(state, "job_cache_key"),
             usage_query_kind=_usage_qk,
             config=invoke_config,
+            prefer_local=prefer_local,
+            allow_local=False,
         )
         out["raw_llm_response"] = _serialize_llm_result_for_log(raw)
         out["raw_llm_result_type"] = type(raw).__name__ if raw is not None else "NoneType"
@@ -720,7 +887,8 @@ def _judge_node(
                 structured_schema=structured_schema,
                 job_cache_key=_state_get(state, "job_cache_key"),
                 usage_query_kind=_usage_qk,
-                prefer_local=False,
+                prefer_local=prefer_local,
+                allow_local=False,
             )
             out["raw_llm_response"] = _serialize_llm_result_for_log(structured_result)
             out["raw_llm_result_type"] = (
@@ -745,6 +913,8 @@ def _judge_node(
                     job_cache_key=_state_get(state, "job_cache_key"),
                     usage_query_kind=_usage_qk,
                     config=invoke_config,
+                    prefer_local=prefer_local,
+                    allow_local=False,
                 )
                 out["raw_llm_response_retry"] = _serialize_llm_result_for_log(raw)
             else:
@@ -767,6 +937,8 @@ def _judge_node(
                         job_cache_key=_state_get(state, "job_cache_key"),
                         usage_query_kind=_usage_qk,
                         config=invoke_config,
+                        prefer_local=prefer_local,
+                        allow_local=False,
                     )
                     out["raw_llm_response_retry"] = _serialize_llm_result_for_log(raw)
                     if _is_default_judge_fallback(data):
@@ -786,6 +958,8 @@ def _judge_node(
                 job_cache_key=_state_get(state, "job_cache_key"),
                 usage_query_kind=_usage_qk,
                 config=invoke_config,
+                prefer_local=prefer_local,
+                allow_local=False,
             )
             out["raw_llm_response"] = _serialize_llm_result_for_log(raw)
             out["raw_llm_result_type"] = type(raw).__name__ if raw is not None else "NoneType"
@@ -818,31 +992,82 @@ def _judge_node(
         out["output_tokens"] = usage["output_tokens"]
         if usage.get("tokens_estimated"):
             out["tokens_estimated"] = True
+    push_node_llm_debug(
+        _state_get(state, "job_cache_key"),
+        _debug_payload_from_node_out(
+            step=label,
+            messages_debug=dm,
+            debug_prompt=dbg_prompt,
+            format_summary=out.get("debug_format_summary") or {},
+            input_tokens=out.get("input_tokens"),
+            output_tokens=out.get("output_tokens"),
+            tokens_estimated=bool(out.get("tokens_estimated")),
+            raw_llm_response=out.get("raw_llm_response"),
+            raw_llm_response_retry=out.get("raw_llm_response_retry"),
+            parse_info=out.get("parse_info"),
+            feedback=out.get("feedback"),
+        ),
+    )
     return out
 
 
-_AGENT_LOG_SKIP_KEYS = frozenset({
-    "feedback",
-    "reasoning",
-    "message",
-    "optimized_resume",
-    "input_tokens",
-    "output_tokens",
-    "ats_score",
-    "recruiter_score",
+_PROMPT_DEBUG_KEYS = frozenset({
     "debug_prompt",
     "debug_messages",
+    "debug_format_summary",
     "raw_llm_response",
     "raw_llm_response_retry",
     "raw_llm_result_type",
     "raw_llm_result_type_retry",
     "parse_info",
-    "tokens_estimated",
 })
 
 
-def format_agent_log_thought(thought) -> str:
-    """Human-readable agent log body for optimizer UI (server + client mirror)."""
+def can_view_optimizer_llm_debug(request) -> bool:
+    """
+    Full LLM prompt debug (system/user/raw) is staff-only — product secret sauce.
+
+    True when the *real* signed-in user is staff/superuser, including while
+    django-hijack impersonating another account.
+    """
+    from .tenancy import get_real_user
+
+    real = get_real_user(request) if request is not None else None
+    if real is None:
+        return False
+    return bool(getattr(real, "is_staff", False) or getattr(real, "is_superuser", False))
+
+
+def redact_agent_log_thought(thought: dict | None, *, include_prompt_debug: bool) -> dict:
+    """Return a copy of thought safe for the current viewer."""
+    if not isinstance(thought, dict):
+        return {}
+    if include_prompt_debug:
+        return dict(thought)
+    public = {k: v for k, v in thought.items() if k not in _PROMPT_DEBUG_KEYS}
+    public.pop("optimized_resume", None)
+    public.pop("resume_text", None)
+    return public
+
+
+def _split_system_user_from_messages(messages) -> tuple[str, str]:
+    system_parts: list[str] = []
+    user_parts: list[str] = []
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        if (m.get("role") or "").lower() == "system":
+            system_parts.append(content)
+        else:
+            user_parts.append(content)
+    return "\n\n".join(system_parts), "\n\n".join(user_parts)
+
+
+def format_agent_log_thought(thought, *, include_prompt_debug: bool = True) -> str:
+    """Human-readable agent log: System Prompt / User Prompt / Raw Output (+ tokens)."""
     if thought is None:
         return ""
     if isinstance(thought, str):
@@ -850,51 +1075,67 @@ def format_agent_log_thought(thought) -> str:
     if not isinstance(thought, dict):
         return str(thought)
 
+    thought = redact_agent_log_thought(thought, include_prompt_debug=include_prompt_debug)
+    import json as _json
+
     parts: list[str] = []
-    prompt = (thought.get("debug_prompt") or "").strip()
-    if prompt:
-        parts.append("--- Prompt sent to LLM ---\n" + prompt)
 
-    raw = (thought.get("raw_llm_response") or "").strip()
-    if raw:
-        parts.append("--- Raw LLM response ---\n" + raw)
+    if include_prompt_debug:
+        system_text, user_text = _split_system_user_from_messages(thought.get("debug_messages"))
+        if not system_text and not user_text:
+            flat = (thought.get("debug_prompt") or "").strip()
+            if flat:
+                user_text = flat
+        parts.append("--- System Prompt ---\n" + (system_text or "(none — combined/legacy user message only)"))
+        parts.append("--- User Prompt ---\n" + (user_text or "(empty)"))
 
-    raw_retry = (thought.get("raw_llm_response_retry") or "").strip()
-    if raw_retry:
-        parts.append("--- Raw LLM response (unstructured retry) ---\n" + raw_retry)
+    in_tok = thought.get("input_tokens")
+    out_tok = thought.get("output_tokens")
+    if in_tok is not None or out_tok is not None:
+        est = " (estimated)" if thought.get("tokens_estimated") else ""
+        parts.append(
+            f"--- Tokens ---\n"
+            f"input={in_tok if in_tok is not None else '—'}  "
+            f"output={out_tok if out_tok is not None else '—'}{est}"
+        )
 
-    parse_info = thought.get("parse_info")
-    if parse_info:
-        try:
-            import json as _json
+    if include_prompt_debug:
+        raw = (thought.get("raw_llm_response") or "").strip()
+        raw_retry = (thought.get("raw_llm_response_retry") or "").strip()
+        if raw or raw_retry:
+            body = raw or "(empty)"
+            if raw_retry:
+                body = body + "\n\n--- Raw Output (retry) ---\n" + raw_retry
+            parts.append("--- Raw Output ---\n" + body)
+        else:
+            resume_out = thought.get("optimized_resume")
+            if isinstance(resume_out, str) and resume_out.strip():
+                s = resume_out.strip()
+                parts.append("--- Raw Output ---\n" + s[:8000] + ("…" if len(s) > 8000 else ""))
+            else:
+                fb = thought.get("feedback")
+                if fb:
+                    parts.append("--- Raw Output ---\n" + (fb if isinstance(fb, str) else str(fb)))
 
-            parts.append(
-                "--- Parse info ---\n"
-                + _json.dumps(parse_info, indent=2, ensure_ascii=False, default=str)
-            )
-        except Exception:
-            parts.append("--- Parse info ---\n" + str(parse_info))
-
-    for key in ("feedback", "reasoning", "message"):
-        val = thought.get(key)
-        if val:
-            parts.append(str(val))
-
-    resume_out = thought.get("optimized_resume")
-    if isinstance(resume_out, str) and resume_out.strip():
-        s = resume_out.strip()
-        parts.append(s[:2000] + ("…" if len(s) > 2000 else ""))
-
-    rest = {k: v for k, v in thought.items() if k not in _AGENT_LOG_SKIP_KEYS}
-    if rest:
-        import json as _json
-
-        parts.append(_json.dumps(rest, indent=2, ensure_ascii=False, default=str))
+        parse_info = thought.get("parse_info")
+        if parse_info:
+            try:
+                parts.append(
+                    "--- Parse info ---\n"
+                    + _json.dumps(parse_info, indent=2, ensure_ascii=False, default=str)
+                )
+            except Exception:
+                parts.append("--- Parse info ---\n" + str(parse_info))
+    else:
+        for key in ("ats_score", "recruiter_score"):
+            if key in thought and thought[key] is not None:
+                parts.append(f"{key}: {thought[key]}")
+        fb = thought.get("feedback")
+        if fb:
+            parts.append(str(fb) if not isinstance(fb, str) else fb)
 
     if parts:
         return "\n\n".join(parts)
-    import json as _json
-
     return _json.dumps(thought, indent=2, ensure_ascii=False, default=str)
 
 
@@ -932,18 +1173,132 @@ def recruiter_judge_node(state: AgentState):
         score_key="recruiter_score",
         feedback_prefix="Recruiter: ",
         last_json_state_key="last_recruiter_json",
+        use_structured_output=False,
     )
+
+
+def jd_cleanse_node(state: AgentState):
+    """
+    Shrink a noisy job posting to core requirements via the JD Cleanse Prompt Library templates.
+
+    Overwrites ``job_description``, ``writer_job_description``, and ``judge_job_description`` so
+    every later workflow step consumes the cleansed text.
+    """
+    from .jd_cleanser import JDCleanserService
+    from .llm_gateway import USAGE_QUERY_JD_CLEANSE
+    from .prompt_store import build_jd_cleanse_llm_messages
+
+    full_jd = (_state_get(state, "job_description") or "").strip()
+    title = (_state_get(state, "job_title") or "").strip()
+    if not full_jd:
+        return {
+            "job_description": "",
+            "writer_job_description": "",
+            "judge_job_description": "",
+            "jd_cleansed": False,
+            "debug_prompt": "",
+            "debug_messages": [],
+            "debug_format_summary": _format_field_summary(
+                {"title": title, "job_description": ""}
+            ),
+        }
+
+    jd_for_prompt = full_jd[:8000]
+    fmt = {"title": title, "job_description": jd_for_prompt}
+    messages = build_jd_cleanse_llm_messages(
+        None,
+        title=title,
+        job_description=jd_for_prompt,
+    )
+    dbg_prompt, dm = _messages_to_debug_payload(messages)
+    logger.warning(
+        "[jd_cleanse] prompts sent to LLM (%s message(s), chars=%s):\n%s",
+        len(messages),
+        len(dbg_prompt),
+        dbg_prompt[:8000] + ("..." if len(dbg_prompt) > 8000 else ""),
+    )
+    out: dict = {
+        "debug_prompt": dbg_prompt,
+        "debug_messages": dm,
+        "debug_format_summary": _format_field_summary(fmt),
+    }
+
+    llm = _state_get(state, "llm")
+    owner_user = _state_user(state)
+    cleansed = ""
+    raw = None
+    try:
+        raw = _llm_invoke_with_retry(
+            llm,
+            messages,
+            user=owner_user,
+            job_cache_key=_state_get(state, "job_cache_key"),
+            usage_query_kind=USAGE_QUERY_JD_CLEANSE,
+            # Optimizer JD cleanse follows remote-first policy (same as Writer/judges).
+            prefer_local=False,
+            only_local=False,
+            allow_local=False,
+        )
+        cleansed = (_llm_message_content_to_text(getattr(raw, "content", None) if raw is not None else None) or "").strip()
+        if not cleansed and raw is not None:
+            cleansed = (_llm_message_content_to_text(raw) or "").strip()
+    except Exception as e:
+        logger.warning("[jd_cleanse] LLM cleanse failed, using heuristic: %s", e)
+
+    used_heuristic = False
+    if len(cleansed) < 50:
+        cleansed = JDCleanserService.cleanse_heuristically(full_jd, title=title, max_chars=5000)
+        used_heuristic = True
+
+    cleansed = (cleansed or "").strip()
+    out.update(
+        {
+            "job_description": cleansed,
+            "writer_job_description": cleansed,
+            "judge_job_description": cleansed,
+            "jd_cleansed": bool(cleansed) and not used_heuristic,
+            "raw_llm_response": _serialize_llm_result_for_log(raw) if raw is not None else "",
+            "parse_info": {
+                "path": "heuristic_fallback" if used_heuristic else "llm",
+                "input_chars": len(full_jd),
+                "output_chars": len(cleansed),
+            },
+        }
+    )
+    if raw is not None:
+        usage = _normalize_token_usage(raw, None, dbg_prompt)
+        out["input_tokens"] = usage["input_tokens"]
+        out["output_tokens"] = usage["output_tokens"]
+        if usage.get("tokens_estimated"):
+            out["tokens_estimated"] = True
+
+    push_node_llm_debug(
+        _state_get(state, "job_cache_key"),
+        _debug_payload_from_node_out(
+            step="jd_cleanse",
+            messages_debug=dm,
+            debug_prompt=dbg_prompt,
+            format_summary=out["debug_format_summary"],
+            input_tokens=out.get("input_tokens"),
+            output_tokens=out.get("output_tokens"),
+            tokens_estimated=bool(out.get("tokens_estimated")),
+            raw_llm_response=out.get("raw_llm_response"),
+            optimized_resume=cleansed[:4000],
+        ),
+    )
+    return out
+
 
 # --- Graph Logic ---
 
-VALID_STEP_IDS = frozenset({"writer", "ats_judge", "recruiter_judge"})
+VALID_STEP_IDS = frozenset({"writer", "ats_judge", "recruiter_judge", "jd_cleanse"})
 
 
 def create_workflow_from_steps(steps: list, max_iterations: int = 3, loop_to: Optional[str] = None):
     """
     Build a compiled StateGraph from an ordered list of step ids. No recursion:
     the flow runs once from first step to last, then END.
-    steps: e.g. ["recruiter_judge", "writer", "ats_judge", "writer", "recruiter_judge"]
+    steps: e.g. ["jd_cleanse", "writer", "ats_judge", "recruiter_judge"]
     Each position in the list gets its own graph node so repeated step types run in sequence
     without overwriting edges (one node per invocation, not per step type).
     loop_to: ignored (kept for API compatibility).
@@ -957,6 +1312,7 @@ def create_workflow_from_steps(steps: list, max_iterations: int = 3, loop_to: Op
         "writer": writer_node,
         "ats_judge": ats_judge_node,
         "recruiter_judge": recruiter_judge_node,
+        "jd_cleanse": jd_cleanse_node,
     }
     workflow = StateGraph(AgentState)
     for i, step_id in enumerate(steps):

@@ -26,28 +26,38 @@
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js" crossorigin="anonymous"></script>
 {% endblock %}
 
-{% block title %}Setup &amp; configuration — ResumeElite{% endblock %}
+{% block title %}{% if is_power_user %}Setup &amp; configuration{% else %}Tailor your resume{% endif %} — ResumeElite{% endblock %}
 
 {% block content %}
 <div class="mx-auto max-w-6xl">
-    <div class="mb-8">
-        <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Setup &amp; configuration</h1>
-        <p class="mt-1 max-w-2xl text-sm text-slate-600">
+    <div class="mb-8 brand-animate">
+        <h1 class="text-3xl font-extrabold tracking-tight text-concierge-slate">{% if is_power_user %}Setup &amp; configuration{% else %}Tailor your resume{% endif %}</h1>
+        <p class="mt-2 max-w-2xl text-sm leading-relaxed text-slate-600">
+            {% if is_power_user %}
             Tune your LLM engine, persona prompts, and workflow—then move through input and optimization in a focused, step-by-step flow.
+            {% else %}
+            Upload your resume, paste a job description, and let the AI optimizer tailor your experience.
+            {% endif %}
         </p>
-        <div class="mt-6 flex flex-wrap items-center gap-4" id="wizard-stepper" role="navigation" aria-label="Progress">
-            <button type="button" data-goto-step="1" class="wizard-step-dot flex items-center gap-2 rounded-concierge border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-concierge-slate shadow-sm">
-                <span class="flex h-7 w-7 items-center justify-center rounded-full bg-concierge-slate text-xs text-white">1</span>
+        <div class="mt-6 flex flex-wrap items-center gap-2" id="wizard-stepper" role="navigation" aria-label="Progress">
+            {% if is_power_user %}
+            <button type="button" data-goto-step="1" class="wizard-step-dot inline-flex items-center gap-2.5 rounded-xl px-4 py-2.5 text-sm font-semibold text-concierge-slate transition">
+                <span class="flex h-7 w-7 items-center justify-center rounded-full bg-brand text-xs font-bold text-white">1</span>
                 Setup
             </button>
-            <span class="hidden text-slate-300 sm:inline">→</span>
-            <button type="button" data-goto-step="2" class="wizard-step-dot flex items-center gap-2 rounded-concierge border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-500 shadow-sm">
-                <span class="flex h-7 w-7 items-center justify-center rounded-full bg-slate-200 text-xs text-slate-600">2</span>
+            <span class="hidden text-slate-300 sm:inline" aria-hidden="true">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            </span>
+            {% endif %}
+            <button type="button" data-goto-step="2" class="wizard-step-dot inline-flex items-center gap-2.5 rounded-xl px-4 py-2.5 text-sm font-semibold {% if is_power_user %}text-slate-500{% else %}text-brand-ink{% endif %} transition">
+                <span class="flex h-7 w-7 items-center justify-center rounded-full {% if is_power_user %}bg-slate-200 text-slate-600{% else %}bg-brand text-white{% endif %} text-xs font-bold">{% if is_power_user %}2{% else %}1{% endif %}</span>
                 Input &amp; upload
             </button>
-            <span class="hidden text-slate-300 sm:inline">→</span>
-            <button type="button" data-goto-step="3" class="wizard-step-dot flex items-center gap-2 rounded-concierge border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-500 shadow-sm">
-                <span class="flex h-7 w-7 items-center justify-center rounded-full bg-slate-200 text-xs text-slate-600">3</span>
+            <span class="hidden text-slate-300 sm:inline" aria-hidden="true">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            </span>
+            <button type="button" data-goto-step="3" class="wizard-step-dot inline-flex items-center gap-2.5 rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-500 transition">
+                <span class="flex h-7 w-7 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-600">{% if is_power_user %}3{% else %}2{% endif %}</span>
                 Optimization
             </button>
         </div>
@@ -56,7 +66,7 @@
     {% if messages %}
         <div class="mb-6 space-y-2">
             {% for message in messages %}
-                <div class="rounded-concierge border px-4 py-3 text-sm {% if message.tags == 'error' %}border-red-200 bg-red-50 text-red-900{% elif message.tags == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-900{% else %}border-slate-200 bg-white text-slate-800{% endif %}" role="alert">
+                <div class="rounded-concierge border px-4 py-3 text-sm {% if message.tags == 'error' %}border-red-200 bg-red-50 text-red-900{% elif message.tags == 'success' %}border-brand/20 bg-brand-mist text-brand-ink{% else %}border-slate-200 bg-white text-slate-800{% endif %}" role="alert">
                     {{ message }}
                 </div>
             {% endfor %}
@@ -67,9 +77,7 @@
         {% csrf_token %}
         <input type="hidden" name="llm_provider" value="{{ selected_provider|default_if_none:'' }}">
         <input type="hidden" name="action" value="run_optimizer">
-        {% if prefill_resume_id %}
-        <input type="hidden" name="use_resume_id" value="{{ prefill_resume_id }}">
-        {% endif %}
+        <input type="hidden" name="use_resume_id" id="use-resume-id-input" value="{{ prefill_resume_id|default:'' }}">
         <input type="hidden" name="workflow_steps" id="workflow-steps-input" value="">
         <input type="hidden" name="optimizer_workflow_id" id="optimizer-workflow-id-input" value="">
         <input type="hidden" name="ats_judge_profile_id" id="ats-judge-profile-id-input" value="{{ selected_ats_profile_id|default:'' }}">
@@ -80,11 +88,11 @@
         {# ——— Step 1 ——— #}
         <div id="wizard-panel-1" class="wizard-panel space-y-8" data-step="1">
             <div class="grid gap-6 lg:grid-cols-2">
-                <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+                <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-card">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h2 class="text-lg font-semibold text-concierge-slate">LLM provider</h2>
                         {% if llm_key_stored %}
-                            <span class="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-800">Active</span>
+                            <span class="rounded-full bg-brand-soft px-2 py-0.5 text-xs font-semibold text-brand-ink">Active</span>
                         {% else %}
                             <span class="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-800">Setup required</span>
                         {% endif %}
@@ -92,7 +100,7 @@
                     <p class="mt-1 text-sm text-slate-600">
                         <span class="font-medium text-concierge-slate">{{ selected_provider|default:"Not configured" }}</span>
                         {% if llm_key_stored %}
-                            <span class="text-emerald-600"> · Connected</span>
+                            <span class="text-brand"> · Connected</span>
                         {% endif %}
                     </p>
                     {% if llm_key_stored %}
@@ -108,7 +116,7 @@
                     <div class="mt-5 space-y-4">
                         <div>
                             <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="llm-model-select">Model version</label>
-                            <select id="llm-model-select" name="llm_model" class="w-full rounded-concierge border border-slate-200 bg-white px-3 py-2 text-sm text-concierge-slate focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate {% if not llm_models %}opacity-60{% endif %}" {% if not llm_models %}disabled{% endif %}>
+                            <select id="llm-model-select" name="llm_model" class="w-full rounded-concierge border border-slate-200 bg-white px-3 py-2 text-sm text-concierge-slate focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20 {% if not llm_models %}opacity-60{% endif %}" {% if not llm_models %}disabled{% endif %}>
                                 {% if not llm_models %}
                                     <option>(Connect an API key to load models)</option>
                                 {% else %}
@@ -124,12 +132,12 @@
                                 <span id="llm-temperature-label" class="font-mono text-concierge-slate">{{ optimizer_temperature }}</span>
                             </div>
                             <input type="range" id="llm-temperature" name="llm_temperature" min="0" max="2" step="0.1" value="{{ optimizer_temperature }}"
-                                   class="h-2 w-full cursor-pointer appearance-none rounded-full bg-slate-200 accent-concierge-slate">
+                                   class="h-2 w-full cursor-pointer appearance-none rounded-full bg-slate-200 accent-brand">
                             <p class="mt-1 text-xs text-slate-400">Stored for future API use; provider defaults apply today.</p>
                         </div>
                     </div>
                     <div class="mt-6 flex flex-wrap gap-3">
-                        <button type="button" id="save-engine-btn" class="rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+                        <button type="button" id="save-engine-btn" class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
                             Save engine settings
                         </button>
                         <a href="{% url 'llm_test' %}" class="inline-flex items-center justify-center rounded-concierge border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-concierge-slate hover:bg-slate-100">
@@ -138,7 +146,7 @@
                     </div>
                 </div>
 
-                <div class="rounded-concierge bg-concierge-slate p-6 text-white shadow-sm">
+                <div class="rounded-2xl bg-concierge-dark p-6 text-white shadow-sm">
                     <h2 class="text-lg font-semibold">Workflow health</h2>
                     <p class="mt-1 text-xs text-slate-400">Snapshot from your last run when available.</p>
                     <dl class="mt-6 space-y-4">
@@ -174,56 +182,47 @@
             <div>
                 <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
                     <h2 class="text-lg font-semibold text-concierge-slate">Persona prompt matrix</h2>
-                    <a href="{% url 'prompt_library' %}" class="text-sm font-medium text-concierge-slate underline">Full prompt library</a>
+                    {% if request.user.is_staff %}
+                    <a href="{% url 'prompt_library' %}" class="text-sm font-medium text-concierge-slate underline">Edit system prompts</a>
+                    {% endif %}
                 </div>
+                <p class="mb-4 text-xs text-slate-500">Prompts are system-wide and managed by admins. Everyone uses the same templates.</p>
                 <div class="grid gap-4 md:grid-cols-3">
-                    <div class="rounded-concierge border border-slate-200 bg-white p-4 shadow-sm">
+                    <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-card">
                         <div class="flex h-10 w-10 items-center justify-center rounded-concierge bg-slate-100 text-lg">✍</div>
                         <h3 class="mt-3 font-semibold text-concierge-slate">The Writer</h3>
                         <p class="mt-1 text-xs text-slate-500">Tailors your resume to the job description.</p>
                         <p class="mt-3 line-clamp-3 rounded-concierge bg-slate-50 p-2 font-mono text-xs leading-relaxed text-slate-600">{{ prompts.writer|truncatechars:160 }}</p>
-                        <details class="mt-3 group">
-                            <summary class="cursor-pointer text-sm font-medium text-concierge-slate hover:underline">Edit instruction set</summary>
-                            <label class="mt-2 block text-xs text-slate-500" for="prompt-writer-input">Writer prompt</label>
-                            <textarea id="prompt-writer-input" name="prompt_writer" rows="10"
-                                      class="mt-1 w-full rounded-concierge border border-slate-200 p-2 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
-                                      placeholder="Writer prompt template">{{ prompts.writer }}</textarea>
-                            <p class="mt-1 text-xs text-slate-400">Placeholders: <code class="rounded bg-slate-100 px-1">{source_resume_text}</code>, <code class="rounded bg-slate-100 px-1">{resume_text}</code>, <code class="rounded bg-slate-100 px-1">{optimized_resume}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code> (role slice for Writer), <code class="rounded bg-slate-100 px-1">{full_job_description}</code>, <code class="rounded bg-slate-100 px-1">{retrieval_context}</code>, <code class="rounded bg-slate-100 px-1">{optimization_notes}</code>, <code class="rounded bg-slate-100 px-1">{pipeline_skills_json}</code>, <code class="rounded bg-slate-100 px-1">{job_highlights}</code>, <code class="rounded bg-slate-100 px-1">{feedback}</code></p>
-                        </details>
                     </div>
-                    <div class="rounded-concierge border border-slate-200 bg-white p-4 shadow-sm">
+                    <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-card">
                         <div class="flex h-10 w-10 items-center justify-center rounded-concierge bg-slate-100 text-lg">⚖</div>
                         <h3 class="mt-3 font-semibold text-concierge-slate">ATS judge</h3>
                         <p class="mt-1 text-xs text-slate-500">Scores keyword and structure fit. Choose the <strong>ATS profile</strong> on the Input step (Workflow section) before you run.</p>
                         <p id="ats-profile-summary-setup" class="mt-3 rounded-concierge bg-slate-50 p-2 text-xs text-slate-600"></p>
+                        {% if request.user.is_staff %}
                         <p class="mt-2 text-xs text-slate-400"><a href="{% url 'prompt_library' %}" class="font-medium text-concierge-slate underline">Edit ATS profiles</a> in the Prompt Library.</p>
+                        {% endif %}
                     </div>
-                    <div class="rounded-concierge border border-slate-200 bg-white p-4 shadow-sm">
+                    <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-card">
                         <div class="flex h-10 w-10 items-center justify-center rounded-concierge bg-slate-100 text-lg">👤</div>
                         <h3 class="mt-3 font-semibold text-concierge-slate">The recruiter</h3>
                         <p class="mt-1 text-xs text-slate-500">Human-style review and narrative feedback.</p>
                         <p class="mt-3 line-clamp-3 rounded-concierge bg-slate-50 p-2 font-mono text-xs leading-relaxed text-slate-600">{{ prompts.recruiter_judge|truncatechars:160 }}</p>
-                        <details class="mt-3 group">
-                            <summary class="cursor-pointer text-sm font-medium text-concierge-slate hover:underline">Edit instruction set</summary>
-                            <label class="mt-2 block text-xs text-slate-500" for="prompt-recruiter-input">Recruiter judge prompt</label>
-                            <textarea id="prompt-recruiter-input" name="prompt_recruiter_judge" rows="10"
-                                      class="mt-1 w-full rounded-concierge border border-slate-200 p-2 font-mono text-xs focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
-                                      placeholder="Recruiter judge prompt template">{{ prompts.recruiter_judge }}</textarea>
-                            <p class="mt-1 text-xs text-slate-400">Placeholders: <code class="rounded bg-slate-100 px-1">{optimized_resume}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code></p>
-                        </details>
                     </div>
                 </div>
             </div>
 
             <div class="grid gap-6 lg:grid-cols-2 lg:items-end">
-                <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+                <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-card">
                     <h2 class="text-lg font-semibold text-concierge-slate">Execution pipeline</h2>
                     <p class="mt-1 text-xs text-slate-500">Operational toggles for this workspace.</p>
                     <ul class="mt-4 space-y-3 text-sm">
+                        {% if show_agent_thoughts %}
                         <li class="flex items-start gap-3">
-                            <input class="mt-1 h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" type="checkbox" id="debug-check" name="debug" {% if request.POST.debug %}checked{% endif %}>
-                            <label for="debug-check" class="text-slate-700">Debug mode — log full prompts to agent thoughts</label>
+                            <input class="mt-1 h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand" type="checkbox" id="debug-check" name="debug" {% if request.POST.debug %}checked{% endif %}>
+                            <label for="debug-check" class="text-slate-700">Debug mode — staff-only agent thoughts (system / user / raw)</label>
                         </li>
+                        {% endif %}
                         <li class="flex items-start gap-3 opacity-50">
                             <input type="checkbox" checked disabled class="mt-1 h-4 w-4 rounded border-slate-300" aria-disabled="true">
                             <span class="text-slate-600">Auto-summarize long bullets <span class="text-xs text-slate-400">(roadmap)</span></span>
@@ -240,7 +239,7 @@
                 </div>
                 <div class="flex flex-wrap items-center justify-end gap-4">
                     <a href="{% url 'resume_optimizer' %}" class="text-sm font-medium text-slate-500 hover:text-concierge-slate">Discard changes</a>
-                    <button type="button" class="goto-step-2 inline-flex items-center gap-2 rounded-concierge bg-concierge-slate px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+                    <button type="button" class="goto-step-2 inline-flex items-center gap-2 rounded-concierge bg-brand px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
                         Continue to input
                         <span aria-hidden="true">→</span>
                     </button>
@@ -249,129 +248,191 @@
         </div>
 
         {# ——— Step 2 ——— #}
-        <div id="wizard-panel-2" class="wizard-panel hidden space-y-6" data-step="2">
-            <div class="mb-2 flex flex-wrap items-center justify-between gap-3">
-                <h2 class="text-lg font-semibold text-concierge-slate">Input &amp; upload</h2>
-                <p class="text-xs text-slate-500">Select template → provide documents → run AI optimization</p>
-            </div>
-            <div class="grid gap-6 lg:grid-cols-2">
-                <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
-                    <h3 class="font-semibold text-concierge-slate">Upload resume</h3>
-                    <p class="mt-1 text-xs text-slate-500">PDF required for extraction.</p>
+        <div id="wizard-panel-2" class="wizard-panel hidden space-y-5 brand-animate brand-animate-delay-1" data-step="2">
+            <div class="grid gap-5 lg:grid-cols-2">
+                {# Upload resume #}
+                <div class="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-card">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <h3 class="text-base font-bold text-concierge-slate">Upload resume</h3>
+                        <span class="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">PDF preferred</span>
+                    </div>
                     {% if prefill_resume_id %}
-                        <p class="mt-2 rounded-concierge bg-emerald-50 px-3 py-2 text-xs text-emerald-900">Using resume: {{ prefill_resume_name|default:"Resume" }} (ID {{ prefill_resume_id }}). Choose a file below to override.</p>
+                        <p id="selected-resume-banner" class="mt-3 rounded-xl bg-brand-mist px-3 py-2 text-xs text-brand-ink">Using <strong>{{ prefill_resume_name|default:"Resume" }}</strong>. Choose a file or another document below to override.</p>
+                    {% else %}
+                        <p id="selected-resume-banner" class="mt-3 hidden rounded-xl bg-brand-mist px-3 py-2 text-xs text-brand-ink"></p>
                     {% endif %}
-                    <label class="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-concierge border-2 border-dashed border-slate-200 bg-slate-50 px-6 py-12 text-center hover:border-slate-300">
-                        <span class="text-sm font-medium text-concierge-slate">Drop PDF here or browse</span>
-                        <span class="mt-1 text-xs text-slate-500">application/pdf</span>
+                    <label class="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50/80 px-6 py-10 text-center transition hover:border-brand/40 hover:bg-brand-mist/50">
+                        <span class="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-soft text-brand" aria-hidden="true">
+                            <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+                        </span>
+                        <span class="mt-3 text-sm font-semibold text-concierge-slate">Drop PDF here or browse</span>
+                        <span class="mt-1 text-xs text-slate-500">PDF required for extraction</span>
                         <input type="file" id="resume-file-input" name="resume_file" accept="application/pdf" class="sr-only">
                     </label>
-                    <p id="resume-file-name" class="mt-2 text-center text-xs text-slate-500"></p>
-                    <div class="mt-6 border-t border-slate-100 pt-4">
-                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Recent documents</p>
-                        <p class="mt-2 text-xs text-slate-500">Uploaded files appear after you run an optimization. Use Match to attach a saved resume.</p>
+                    <p id="resume-file-name" class="mt-2 text-center text-xs font-medium text-brand"></p>
+                    <div class="mt-5 border-t border-slate-100 pt-4">
+                        <p class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Recent documents</p>
+                        {% if recent_resumes %}
+                        <ul class="mt-3 space-y-1.5" id="recent-resumes-list">
+                            {% for r in recent_resumes %}
+                            <li>
+                                <button type="button"
+                                        class="recent-resume-btn group flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition hover:bg-brand-mist {% if prefill_resume_id == r.id %}bg-brand-mist ring-1 ring-brand/20{% endif %}"
+                                        data-resume-id="{{ r.id }}"
+                                        data-resume-name="{{ r.original_filename|default:r.file.name|default:'Resume' }}">
+                                    <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-rose-50 text-rose-500" aria-hidden="true">
+                                        <svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm-1 1.5L18.5 9H13V3.5zM8 13h8v1.5H8V13zm0 3h8v1.5H8V16zm0-6h5v1.5H8V10z"/></svg>
+                                    </span>
+                                    <span class="min-w-0 flex-1">
+                                        <span class="block truncate text-sm font-semibold text-concierge-slate group-hover:text-brand-ink">{{ r.original_filename|default:r.file.name|default:"Resume" }}</span>
+                                        <span class="block text-[11px] text-slate-400">Last used {{ r.uploaded_at|timesince }} ago</span>
+                                    </span>
+                                </button>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                        {% else %}
+                        <p class="mt-2 text-xs text-slate-500">No library resumes yet. Upload a PDF above or add one under Search profiles.</p>
+                        {% endif %}
                     </div>
                 </div>
-                <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+
+                {# Job description #}
+                <div class="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-card">
                     <div class="flex flex-wrap items-start justify-between gap-2">
-                        <h3 class="font-semibold text-concierge-slate">Job description</h3>
-                        <button type="button" class="text-xs font-medium text-slate-400" disabled title="Coming soon">Auto-fill from URL</button>
+                        <h3 class="text-base font-bold text-concierge-slate">Job description</h3>
+                        <button type="button" id="job-desc-autofill-btn" class="inline-flex items-center gap-1 text-xs font-semibold text-brand hover:text-brand-hover">
+                            Auto-fill from URL
+                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
+                        </button>
                     </div>
-                    <textarea id="job-description-input" name="job_description" rows="14"
-                              class="mt-3 w-full rounded-concierge border border-slate-200 p-3 text-sm text-concierge-slate focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
-                              placeholder="Paste the target job description here">{{ job_description_value }}</textarea>
+                    <p id="job-desc-autofill-status" class="mt-1 hidden text-xs text-slate-500"></p>
+                    <textarea id="job-description-input" name="job_description" rows="16"
+                              class="mt-4 w-full resize-y rounded-2xl border-0 bg-slate-50 p-4 text-sm leading-relaxed text-concierge-slate placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand/20"
+                              placeholder="Paste the full job description here… (Includes title, requirements, and about the company)">{{ job_description_value }}</textarea>
                 </div>
             </div>
 
-            <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
-                <h3 class="font-semibold text-concierge-slate">Supporting context <span class="text-xs font-normal text-slate-500">(optional)</span></h3>
-                <p class="mt-1 text-xs text-slate-500">Passed to the Writer only; lengths are capped server-side. Full job text is still used for ATS/Recruiter judges.</p>
-                <p class="mt-1 text-xs text-slate-500">Saved automatically when you leave this step or run the optimizer. Leave blank to use defaults from <a href="{% url 'settings' %}?tab=app" class="font-medium text-concierge-slate underline">Settings</a>.</p>
-                <div class="mt-4 grid gap-4 lg:grid-cols-3">
-                    <div>
-                        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="optimization-notes-input">Notes</label>
-                        <textarea id="optimization-notes-input" name="optimization_notes" rows="5"
-                                  class="w-full rounded-concierge border border-slate-200 p-2 text-sm text-concierge-slate focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
-                                  placeholder="e.g. Emphasize leadership, omit Company X">{{ optimization_notes_value|default:'' }}</textarea>
-                    </div>
-                    <div>
-                        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="pipeline-skills-input">Pipeline / skills JSON</label>
-                        <textarea id="pipeline-skills-input" name="pipeline_skills_json" rows="5"
-                                  class="w-full rounded-concierge border border-slate-200 p-2 text-sm text-concierge-slate focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
-                                  placeholder='e.g. {"hard_skills":["python","aws"]}'>{{ pipeline_skills_json_value|default:'' }}</textarea>
-                    </div>
-                    <div>
-                        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="job-highlights-input">Supplemental accomplishments</label>
-                        <textarea id="job-highlights-input" name="job_highlights" rows="5"
-                                  class="w-full rounded-concierge border border-slate-200 p-2 text-sm text-concierge-slate focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
-                                  placeholder="List accomplishments you want the optimizer to weave into the resume">{{ job_highlights_value|default:'' }}</textarea>
+            {# Supporting context — collapsible #}
+            <details class="group rounded-2xl border border-slate-200/80 bg-white shadow-card open:shadow-card" id="supporting-context-details">
+                <summary class="flex cursor-pointer list-none items-center gap-3 px-5 py-4 [&::-webkit-details-marker]:hidden">
+                    <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600" aria-hidden="true">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+                    </span>
+                    <span class="min-w-0 flex-1">
+                        <span class="block text-sm font-bold text-concierge-slate">Supporting context <span class="font-medium text-slate-400">(Optional)</span></span>
+                        <span class="block text-xs text-slate-500">Provide extra signals like specific accomplishments or skill weights.</span>
+                    </span>
+                    <svg class="h-5 w-5 shrink-0 text-slate-400 transition group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                </summary>
+                <div class="border-t border-slate-100 px-5 pb-5 pt-4">
+                    <p class="text-xs text-slate-500">Passed to the Writer only; lengths are capped server-side. Saved when you leave this step or run. Leave blank to use defaults from <a href="{% url 'settings' %}?tab=app" class="font-semibold text-brand hover:underline">Settings</a>.</p>
+                    <div class="mt-4 grid gap-4 lg:grid-cols-3">
+                        <div>
+                            <label class="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-slate-400" for="optimization-notes-input">Notes</label>
+                            <textarea id="optimization-notes-input" name="optimization_notes" rows="5"
+                                      class="w-full rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-sm text-concierge-slate focus:border-brand focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand/20"
+                                      placeholder="e.g. Emphasize leadership, omit Company X">{{ optimization_notes_value|default:'' }}</textarea>
+                        </div>
+                        <div>
+                            <label class="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-slate-400" for="pipeline-skills-input">Pipeline / skills JSON</label>
+                            <textarea id="pipeline-skills-input" name="pipeline_skills_json" rows="5"
+                                      class="w-full rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-sm text-concierge-slate focus:border-brand focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand/20"
+                                      placeholder='e.g. {"hard_skills":["python","aws"]}'>{{ pipeline_skills_json_value|default:'' }}</textarea>
+                        </div>
+                        <div>
+                            <label class="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-slate-400" for="job-highlights-input">Supplemental accomplishments</label>
+                            <textarea id="job-highlights-input" name="job_highlights" rows="5"
+                                      class="w-full rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-sm text-concierge-slate focus:border-brand focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand/20"
+                                      placeholder="List accomplishments you want the optimizer to weave in">{{ job_highlights_value|default:'' }}</textarea>
+                        </div>
                     </div>
                 </div>
-            </div>
+            </details>
 
-            <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
-                <label class="mb-1 block text-sm font-medium text-concierge-slate" for="workflow-preset">Workflow</label>
-                <select id="workflow-preset" class="w-full max-w-xl rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate" aria-describedby="workflow-help">
-                    <optgroup label="Built-in">
-                        <option value="default">Writer → ATS → Recruiter</option>
-                        <option value="recruiter_first">Recruiter → Writer → ATS → Recruiter</option>
-                    </optgroup>
-                    {% if saved_workflows %}
-                    <optgroup label="Saved workflows">
-                        {% for w in saved_workflows %}
-                        <option value="wf_{{ w.id }}" data-steps="{{ w.steps_json|force_escape }}" data-workflow-id="{{ w.id }}" data-ats-id="{{ w.ats_judge_profile_id|default:'' }}">{{ w.name }}</option>
-                        {% endfor %}
-                    </optgroup>
-                    {% endif %}
-                </select>
-                <p id="workflow-help" class="mt-2 text-xs text-slate-500">Runs once in order shown. <a href="{% url 'workflow_list' %}" class="font-medium text-concierge-slate underline">Manage workflows</a></p>
-
-                <div class="mt-6 border-t border-slate-100 pt-6">
-                    <label class="mb-1 block text-sm font-medium text-concierge-slate" for="ats-profile-select">ATS profile</label>
-                    <p class="mb-2 text-xs text-slate-500">Which ATS scoring prompt to use when the workflow includes the ATS Judge step.</p>
-                    {% if ats_profiles %}
-                    <select id="ats-profile-select" class="w-full max-w-xl rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
-                        {% for p in ats_profiles %}
-                        <option value="{{ p.id }}" data-preview="{{ p.preview_text|force_escape }}"
-                                {% if selected_ats_profile_id == p.id %}selected{% endif %}>{{ p.name }}{% if p.is_default %} (default){% endif %}</option>
-                        {% endfor %}
-                    </select>
-                    <p id="ats-profile-preview" class="mt-3 line-clamp-4 rounded-concierge bg-slate-50 p-2 font-mono text-xs leading-relaxed text-slate-600"></p>
-                    {% else %}
-                    <p class="text-sm text-amber-800">No ATS profiles found. Run <code class="rounded bg-amber-50 px-1">python manage.py migrate resume_app</code> or create one in the <a href="{% url 'prompt_library' %}" class="underline font-medium">Prompt Library</a>.</p>
-                    {% endif %}
-                    <p class="mt-2 text-xs text-slate-500"><a href="{% url 'prompt_library' %}" class="font-medium text-concierge-slate underline">Manage ATS profiles</a></p>
-                </div>
-
-                <div class="mt-6 grid gap-4 sm:grid-cols-2">
+            {# Configuration #}
+            <div class="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-card">
+                <div class="grid gap-6 lg:grid-cols-2">
                     <div>
-                        <label class="mb-1 block text-xs font-medium text-slate-600" for="rate-limit-input">Rate limit delay (seconds)</label>
-                        <input type="number" min="0" step="1" id="rate-limit-input" name="rate_limit_delay"
-                               class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm"
-                               value="{{ request.POST.rate_limit_delay|default:'' }}">
+                        <div class="mb-1.5 flex items-center justify-between gap-2">
+                            <label class="text-sm font-bold text-concierge-slate" for="workflow-preset">Workflow</label>
+                            {% if request.user.is_staff %}
+                            <a href="{% url 'workflow_list' %}" class="text-xs font-semibold text-brand hover:underline">Manage workflows</a>
+                            {% endif %}
+                        </div>
+                        <select id="workflow-preset" class="w-full rounded-xl border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm font-medium text-concierge-slate focus:border-brand focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand/20" aria-describedby="workflow-help">
+                            <optgroup label="Built-in">
+                                <option value="default">Writer → ATS → Recruiter (Default)</option>
+                                <option value="recruiter_first">Recruiter → Writer → ATS → Recruiter</option>
+                            </optgroup>
+                            {% if saved_workflows %}
+                            <optgroup label="Saved workflows">
+                                {% for w in saved_workflows %}
+                                <option value="wf_{{ w.id }}" data-steps="{{ w.steps_json|force_escape }}" data-workflow-id="{{ w.id }}" data-ats-id="{{ w.ats_judge_profile_id|default:'' }}">{{ w.name }}</option>
+                                {% endfor %}
+                            </optgroup>
+                            {% endif %}
+                        </select>
+                        <p id="workflow-help" class="mt-1.5 text-xs text-slate-500">Runs once in the order shown.</p>
                     </div>
-                    <div id="run-mode-toggle-wrap">
-                        <span class="mb-1 block text-xs font-medium text-slate-600">Run mode</span>
-                        <div class="flex flex-wrap gap-2">
-                            <label class="inline-flex cursor-pointer items-center gap-2 rounded-concierge border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50">
-                                <input type="radio" class="text-concierge-slate focus:ring-concierge-slate" name="run_mode" id="run-mode-full" value="full" checked>
-                                Full run
-                            </label>
-                            <label class="inline-flex cursor-pointer items-center gap-2 rounded-concierge border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50">
-                                <input type="radio" class="text-concierge-slate focus:ring-concierge-slate" name="run_mode" id="run-mode-step" value="step">
-                                Step by step
-                            </label>
+                    <div>
+                        <div class="mb-1.5 flex items-center justify-between gap-2">
+                            <label class="text-sm font-bold text-concierge-slate" for="ats-profile-select">ATS profile</label>
+                            {% if request.user.is_staff %}
+                            <a href="{% url 'prompt_library' %}" class="text-xs font-semibold text-brand hover:underline">Manage ATS profiles</a>
+                            {% endif %}
+                        </div>
+                        {% if ats_profiles %}
+                        <select id="ats-profile-select" class="w-full rounded-xl border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 text-sm font-medium text-concierge-slate focus:border-brand focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand/20">
+                            {% for p in ats_profiles %}
+                            <option value="{{ p.id }}" data-preview="{{ p.preview_text|force_escape }}"
+                                    {% if selected_ats_profile_id == p.id %}selected{% endif %}>{{ p.name }}{% if p.is_default %} (default){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                        <p id="ats-profile-preview" class="sr-only"></p>
+                        {% else %}
+                        <p class="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-900">No ATS profiles found.{% if request.user.is_staff %} Create one in the <a href="{% url 'prompt_library' %}" class="font-semibold underline">Prompt Library</a>.{% endif %}</p>
+                        {% endif %}
+                        <div class="mt-3 flex gap-2.5 rounded-xl bg-brand-mist px-3.5 py-3 text-xs leading-relaxed text-brand-ink">
+                            <svg class="mt-0.5 h-4 w-4 shrink-0 text-brand" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>
+                            <span>Uses a high-precision matching algorithm to score keyword density and structural fit against the job description.</span>
                         </div>
                     </div>
                 </div>
 
-                <div class="mt-6 flex flex-wrap items-center gap-4" id="full-run-actions">
-                    <button type="submit" class="rounded-concierge bg-concierge-slate px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 disabled:opacity-50"
+                <div class="mt-6 flex flex-wrap items-end gap-5 border-t border-slate-100 pt-6">
+                    <div id="run-mode-toggle-wrap" class="min-w-[14rem] flex-1">
+                        <span class="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-slate-400">Run mode</span>
+                        <div class="inline-flex rounded-xl bg-slate-100 p-1" role="group" aria-label="Run mode">
+                            <label class="run-mode-label cursor-pointer">
+                                <input type="radio" class="peer sr-only" name="run_mode" id="run-mode-full" value="full" checked>
+                                <span class="block rounded-lg px-4 py-2 text-sm font-semibold text-slate-500 transition peer-checked:bg-white peer-checked:text-brand-ink peer-checked:shadow-sm">Full run</span>
+                            </label>
+                            <label class="run-mode-label cursor-pointer">
+                                <input type="radio" class="peer sr-only" name="run_mode" id="run-mode-step" value="step">
+                                <span class="block rounded-lg px-4 py-2 text-sm font-semibold text-slate-500 transition peer-checked:bg-white peer-checked:text-brand-ink peer-checked:shadow-sm">Step-by-step</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="w-28">
+                        <label class="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-slate-400" for="rate-limit-input">Delay (sec)</label>
+                        <input type="number" min="0" step="1" id="rate-limit-input" name="rate_limit_delay"
+                               class="w-full rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 text-sm font-medium focus:border-brand focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand/20"
+                               value="{{ request.POST.rate_limit_delay|default:'' }}"
+                               placeholder="0">
+                    </div>
+                </div>
+
+                <div class="mt-6 flex flex-wrap items-center justify-between gap-4" id="full-run-actions">
+                    <div class="flex flex-wrap items-center gap-4">
+                        <button type="button" data-goto-step="1" class="text-sm font-semibold text-slate-500 hover:text-concierge-slate">← Back to setup</button>
+                        <button type="button" data-goto-step="3" class="text-sm font-medium text-slate-400 hover:text-concierge-slate hover:underline">Skip to results</button>
+                    </div>
+                    <button type="submit" class="inline-flex items-center gap-2 rounded-xl bg-brand px-6 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-brand-hover disabled:opacity-50"
                             {% if not llm_key_stored %}disabled{% endif %}>
-                        Run optimizer
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"/></svg>
+                        <span id="run-optimizer-btn-label">Run optimizer</span>
                     </button>
-                    <button type="button" data-goto-step="1" class="text-sm font-medium text-slate-500 hover:text-concierge-slate">← Back to setup</button>
-                    <button type="button" data-goto-step="3" class="text-sm font-medium text-concierge-slate underline">Skip to results</button>
                     {% if not llm_key_stored %}
                         <p class="w-full text-xs text-red-600">Configure an active provider in Settings before running.</p>
                     {% endif %}
@@ -386,38 +447,38 @@
                 <button type="button" data-goto-step="2" class="text-sm font-medium text-slate-500 hover:text-concierge-slate">← Back to input</button>
             </div>
 
-            <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm" id="run-single-step-card" style="display: none;">
-                <h3 class="font-semibold text-concierge-slate">Step by step</h3>
+            <div class="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-card" id="run-single-step-card" style="display: none;">
+                <h3 class="text-base font-bold text-concierge-slate">Step by step</h3>
                 <p class="mt-1 text-xs text-slate-500">Run one agent at a time; the draft field updates after Writer. A second Writer pass uses that draft when you keep it filled.</p>
                 <div class="mt-4 text-xs text-slate-600" id="step-progress-visual" aria-live="polite"></div>
                 <div class="mt-4">
-                    <label class="mb-1 block text-sm font-medium" for="step-select">Step</label>
-                    <select id="step-select" class="w-full max-w-md rounded-concierge border border-slate-200 px-3 py-2 text-sm"></select>
+                    <label class="mb-1.5 block text-sm font-semibold text-concierge-slate" for="step-select">Step</label>
+                    <select id="step-select" class="w-full max-w-md rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-sm"></select>
                 </div>
                 <div class="mt-4" id="step-draft-wrap">
-                    <label class="mb-1 block text-sm font-medium" for="step-draft-input">Current resume draft</label>
+                    <label class="mb-1.5 block text-sm font-semibold text-concierge-slate" for="step-draft-input">Current resume draft</label>
                     <p id="step-draft-hint" class="mb-1 text-xs text-slate-500"></p>
-                    <textarea id="step-draft-input" class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs" rows="6" placeholder="First Writer pass: can be empty. After Writer or judges: draft appears here for revision or scoring."></textarea>
+                    <textarea id="step-draft-input" class="w-full rounded-xl border border-slate-200 bg-slate-50/80 p-3 font-mono text-xs focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand/20" rows="6" placeholder="First Writer pass: can be empty. After Writer or judges: draft appears here for revision or scoring."></textarea>
                 </div>
-                <button type="button" class="mt-4 rounded-concierge border border-concierge-slate bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50 disabled:opacity-50" id="run-step-btn" {% if not llm_key_stored %}disabled{% endif %}>Run step</button>
+                <button type="button" class="mt-4 rounded-xl border border-brand/20 bg-brand-mist px-4 py-2 text-sm font-bold text-brand-ink hover:bg-brand-soft disabled:opacity-50" id="run-step-btn" {% if not llm_key_stored %}disabled{% endif %}>Run step</button>
                 <div id="run-step-output" class="mt-4 hidden border-t border-slate-100 pt-4">
                     <h4 class="text-sm font-semibold">Output</h4>
-                    <details class="mt-2 rounded-concierge border border-slate-200 bg-slate-50">
+                    <details class="mt-2 rounded-xl border border-slate-200 bg-slate-50">
                         <summary class="cursor-pointer px-3 py-2 text-xs font-medium">Prompt sent to LLM</summary>
                         <pre id="run-step-input" class="max-h-80 overflow-auto whitespace-pre-wrap border-t border-slate-200 p-3 text-xs"></pre>
                     </details>
-                    <pre id="run-step-result" class="mt-2 max-h-96 overflow-auto whitespace-pre-wrap rounded-concierge bg-slate-50 p-3 text-xs"></pre>
+                    <pre id="run-step-result" class="mt-2 max-h-96 overflow-auto whitespace-pre-wrap rounded-xl bg-slate-50 p-3 text-xs"></pre>
                     <p class="mt-2 text-xs text-slate-500" id="run-step-tokens" title=""></p>
                 </div>
-                <div id="run-step-error" class="mt-4 hidden rounded-concierge border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900" role="alert"></div>
+                <div id="run-step-error" class="mt-4 hidden rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-900" role="alert"></div>
                 <div id="run-step-spinner" class="mt-4 hidden items-center gap-2 text-sm text-slate-600">
-                    <span class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-concierge-slate"></span>
+                    <span class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-brand"></span>
                     <span id="run-step-spinner-text">Running…</span>
                 </div>
             </div>
 
-            <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm" id="optimizer-status-card">
-                <h3 class="font-semibold text-concierge-slate">Run status</h3>
+            <div class="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-card" id="optimizer-status-card">
+                <h3 class="text-base font-bold text-concierge-slate">Run status</h3>
                 <div class="mt-4" id="optimizer-status-container"
                      {% if optimized_resume_id %}data-resume-id="{{ optimized_resume_id }}" data-status-url="{% url 'resume_status' resume_id=optimized_resume_id %}" data-save-draft-url="{% url 'resume_save_draft' resume_id=optimized_resume_id %}"{% endif %}>
                     <div id="optimizer-status-body">
@@ -436,34 +497,12 @@
         </div>
     </form>
 
-    <div class="mt-8 rounded-concierge border border-slate-200 bg-white p-4 shadow-sm">
-        <p class="text-xs text-slate-500">Save persona prompts without running a job (same as before).</p>
-        <form method="post" id="save-prompts-form" class="mt-3 flex flex-wrap items-center gap-3">
-            {% csrf_token %}
-            <input type="hidden" name="action" value="save_prompts">
-            <input type="hidden" name="prompt_writer" id="save-prompts-writer" value="">
-            <input type="hidden" name="prompt_recruiter_judge" id="save-prompts-recruiter" value="">
-            <button type="submit" class="rounded-concierge border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-medium text-concierge-slate hover:bg-slate-100">Save prompts only</button>
-        </form>
-        <form method="post" class="mt-2">
-            {% csrf_token %}
-            <input type="hidden" name="action" value="reset_prompts">
-            <button type="submit" class="text-xs text-slate-500 underline hover:text-concierge-slate">Reset prompts to server defaults</button>
-        </form>
-    </div>
 </div>
 {% endblock %}
 
 {% block extra_js %}
 {{ block.super }}
 <script>
-document.getElementById("save-prompts-form")?.addEventListener("submit", function () {
-    var w = document.getElementById("prompt-writer-input");
-    var r = document.getElementById("prompt-recruiter-input");
-    document.getElementById("save-prompts-writer").value = w ? w.value : "";
-    document.getElementById("save-prompts-recruiter").value = r ? r.value : "";
-});
-
 (function () {
     var atsSel = document.getElementById("ats-profile-select");
     var atsPreview = document.getElementById("ats-profile-preview");
@@ -522,10 +561,12 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
             var t = parseInt(btn.getAttribute("data-goto-step"), 10);
             var num = btn.querySelector("span.flex.h-7");
             var active = t === n;
-            btn.classList.toggle("text-concierge-slate", active);
+            btn.classList.toggle("bg-brand-soft", active);
+            btn.classList.toggle("text-brand-ink", active);
             btn.classList.toggle("text-slate-500", !active);
+            btn.classList.toggle("font-semibold", true);
             if (num) {
-                num.classList.toggle("bg-concierge-slate", active);
+                num.classList.toggle("bg-brand", active);
                 num.classList.toggle("text-white", active);
                 num.classList.toggle("bg-slate-200", !active);
                 num.classList.toggle("text-slate-600", !active);
@@ -573,10 +614,53 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
 
     var fileIn = document.getElementById("resume-file-input");
     var fileLbl = document.getElementById("resume-file-name");
+    var useResumeInput = document.getElementById("use-resume-id-input");
+    var selectedBanner = document.getElementById("selected-resume-banner");
+
+    function setSelectedResume(id, name) {
+        if (useResumeInput) useResumeInput.value = id ? String(id) : "";
+        document.querySelectorAll(".recent-resume-btn").forEach(function (btn) {
+            var on = id && btn.getAttribute("data-resume-id") === String(id);
+            btn.classList.toggle("bg-brand-mist", !!on);
+            btn.classList.toggle("ring-1", !!on);
+            btn.classList.toggle("ring-brand/20", !!on);
+        });
+        if (selectedBanner) {
+            if (id && name) {
+                selectedBanner.innerHTML = "Using <strong></strong>. Choose a file or another document below to override.";
+                selectedBanner.querySelector("strong").textContent = name;
+                selectedBanner.classList.remove("hidden");
+            } else if (!id) {
+                selectedBanner.classList.add("hidden");
+                selectedBanner.textContent = "";
+            }
+        }
+    }
+
+    document.querySelectorAll(".recent-resume-btn").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+            var id = btn.getAttribute("data-resume-id");
+            var name = btn.getAttribute("data-resume-name") || "Resume";
+            if (fileIn) fileIn.value = "";
+            if (fileLbl) fileLbl.textContent = "";
+            setSelectedResume(id, name);
+        });
+    });
+
     if (fileIn && fileLbl) {
         fileIn.addEventListener("change", function () {
             fileLbl.textContent = (fileIn.files && fileIn.files[0]) ? fileIn.files[0].name : "";
+            if (fileIn.files && fileIn.files[0]) setSelectedResume("", "");
         });
+    }
+
+    var supportDetails = document.getElementById("supporting-context-details");
+    if (supportDetails) {
+        var notes = document.getElementById("optimization-notes-input");
+        var skills = document.getElementById("pipeline-skills-input");
+        var highlights = document.getElementById("job-highlights-input");
+        var hasCtx = (notes && notes.value.trim()) || (skills && skills.value.trim()) || (highlights && highlights.value.trim());
+        if (hasCtx) supportDetails.open = true;
     }
 })();
 </script>
@@ -597,11 +681,18 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
     const runModeFull = document.getElementById("run-mode-full");
     const runModeStep = document.getElementById("run-mode-step");
 
-    const stepLabels = { writer: "Writer", ats_judge: "ATS Judge", recruiter_judge: "Recruiter Judge" };
+    const stepLabels = { writer: "Writer", ats_judge: "ATS Judge", recruiter_judge: "Recruiter Judge", jd_cleanse: "JD Cleanse" };
+    const stepInputHints = {
+        writer: "resume (+ optional draft) → optimized draft",
+        ats_judge: "draft → score + feedback",
+        recruiter_judge: "draft → score + feedback",
+        jd_cleanse: "job description → cleansed JD for later steps",
+    };
     const stepOptionHints = {
         writer: "resume → tailored draft",
         ats_judge: "draft → score + feedback",
         recruiter_judge: "draft → score + feedback",
+        jd_cleanse: "JD → cleansed core requirements",
     };
     var lastAtsFeedback = "";
     var lastAtsScore = null;
@@ -722,6 +813,8 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
             if (writerDraft) {
                 fd.append("optimized_resume", writerDraft);
             }
+        } else if (step === "jd_cleanse") {
+            // Job description alone is enough; no resume/draft required.
         } else {
             var judgeDraft = (stepDraftInput && stepDraftInput.value || "").trim();
             if (judgeDraft) {
@@ -784,6 +877,18 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
             if (data.step === "writer" && data.output && data.output.optimized_resume) {
                 stepDraftInput.value = data.output.optimized_resume;
                 lines.push(data.output.optimized_resume);
+            } else if (data.step === "jd_cleanse" && data.output) {
+                var cleansed = (data.output.job_description || data.output.writer_job_description || "").trim();
+                if (cleansed) {
+                    var jdInput = document.getElementById("job-description-input");
+                    if (jdInput) jdInput.value = cleansed;
+                    lines.push("Cleansed job description (" + cleansed.length + " chars):\n\n" + cleansed);
+                } else {
+                    lines.push("(JD cleanse returned empty text)");
+                }
+                if (data.output.parse_info) {
+                    lines.push("\n--- Parse info ---\n" + JSON.stringify(data.output.parse_info, null, 2));
+                }
             } else if (data.step === "ats_judge" && data.output) {
                 lines.push("ATS score: " + (data.output.ats_score ?? "—"));
                 if (data.output.feedback) lines.push("Feedback: " + data.output.feedback);
@@ -804,8 +909,31 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
             runStepResult.textContent = lines.length ? lines.join("\n\n") : (data.output ? JSON.stringify(data.output) : "");
 
             if (runStepInput) {
-                var promptText = (data.output && data.output.debug_prompt) ? data.output.debug_prompt : "";
-                runStepInput.textContent = promptText;
+                var inputParts = [];
+                var fmtSum = data.output && data.output.debug_format_summary;
+                if (fmtSum && typeof fmtSum === "object") {
+                    inputParts.push("--- Template fields passed into prompt ---");
+                    Object.keys(fmtSum).forEach(function (key) {
+                        var meta = fmtSum[key] || {};
+                        var flag = meta.empty ? "empty" : ((meta.chars != null ? meta.chars : 0) + " chars");
+                        var prev = (meta.preview || "").replace(/\n/g, " ");
+                        inputParts.push(key + ": " + flag + (prev && !meta.empty ? " | " + prev : ""));
+                    });
+                    inputParts.push("");
+                }
+                var msgs = data.output && data.output.debug_messages;
+                if (Array.isArray(msgs) && msgs.length) {
+                    inputParts.push("--- Messages sent to LLM ---");
+                    msgs.forEach(function (m, idx) {
+                        var role = ((m && m.role) || "message").toUpperCase();
+                        var content = (m && m.content) || "";
+                        inputParts.push("[" + (idx + 1) + "] " + role + " (" + content.length + " chars)\n" + content);
+                    });
+                } else {
+                    var promptText = (data.output && data.output.debug_prompt) ? data.output.debug_prompt : "";
+                    if (promptText) inputParts.push("--- Prompt sent to LLM ---\n" + promptText);
+                }
+                runStepInput.textContent = inputParts.join("\n\n");
                 var det = runStepInput.closest("details");
                 if (det) det.open = false;
             }
@@ -901,13 +1029,13 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
             html += '<h4 class="text-lg font-semibold text-concierge-slate">New resume draft</h4>';
             html += '<p class="mt-1 text-xs text-slate-500">Edit the text below, then <strong>Save draft</strong> before exporting PDF or Word.</p>';
             html += '<textarea id="optimizer-draft-editor" rows="22" data-resume-id="' + esc(resumeId) + '"';
-            html += ' class="mt-3 w-full max-h-[32rem] min-h-[12rem] resize-y rounded-concierge border border-slate-200 bg-white p-4 font-mono text-sm leading-relaxed text-slate-800 focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"></textarea>';
+            html += ' class="mt-3 w-full max-h-[32rem] min-h-[12rem] resize-y rounded-concierge border border-slate-200 bg-white p-4 font-mono text-sm leading-relaxed text-slate-800 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"></textarea>';
             html += '<div class="mt-3 flex flex-wrap items-center gap-3">';
-            html += '<button type="button" id="save-draft-btn" data-resume-id="' + esc(resumeId) + '" class="rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">Save draft</button>';
+            html += '<button type="button" id="save-draft-btn" data-resume-id="' + esc(resumeId) + '" class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">Save draft</button>';
             html += '<span id="save-draft-status" class="text-xs text-slate-500" aria-live="polite"></span></div>';
             html += '<p class="mt-3 text-sm text-slate-500">Replacement tokens from Settings apply on export.</p>';
             html += '<div class="mt-4 flex flex-wrap gap-3">';
-            html += '<a class="inline-flex items-center rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800" href="/api/resume/export/' + esc(resumeId) + '/pdf">Export PDF</a>';
+            html += '<a class="inline-flex items-center rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover" href="/api/resume/export/' + esc(resumeId) + '/pdf">Export PDF</a>';
             html += '<a class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50" href="/api/resume/export/' + esc(resumeId) + '/docx">Export Word</a>';
             html += '<a class="inline-flex items-center text-sm font-medium text-slate-500 hover:text-concierge-slate" href="{% url 'resume_optimizer' %}">Run again</a></div>';
         } else {
@@ -927,13 +1055,13 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
         html += '<h4 class="text-lg font-semibold text-concierge-slate">Cover letter</h4>';
         html += '<p class="mt-1 text-xs text-slate-500">Generate a job-specific cover letter for apply forms. Until generated, the apply agent uses your global template.</p>';
         html += '<div class="mt-3 flex flex-wrap items-center gap-2">';
-        html += '<button type="button" id="generate-cover-letter-btn" data-resume-id="' + esc(resumeId) + '" class="inline-flex items-center gap-1.5 rounded-concierge bg-violet-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-violet-700">';
+        html += '<button type="button" id="generate-cover-letter-btn" data-resume-id="' + esc(resumeId) + '" class="inline-flex items-center gap-1.5 rounded-concierge bg-brand px-3 py-1.5 text-sm font-semibold text-white hover:bg-brand-hover">';
         html += '<span id="cover-letter-btn-text">' + esc(btnLabel) + '</span>';
         html += '<span id="cover-letter-spinner" class="hidden h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-white/40 border-t-white"></span></button>';
         html += '<span id="cover-letter-gen-status" class="text-xs text-slate-500" role="status" aria-live="polite"></span></div>';
-        html += '<textarea id="optimizer-cover-letter-editor" rows="12" data-resume-id="' + esc(resumeId) + '" class="mt-3 w-full max-h-[24rem] min-h-[8rem] resize-y rounded-concierge border border-slate-200 bg-white p-4 font-mono text-sm leading-relaxed text-slate-800 focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"></textarea>';
+        html += '<textarea id="optimizer-cover-letter-editor" rows="12" data-resume-id="' + esc(resumeId) + '" class="mt-3 w-full max-h-[24rem] min-h-[8rem] resize-y rounded-concierge border border-slate-200 bg-white p-4 font-mono text-sm leading-relaxed text-slate-800 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"></textarea>';
         html += '<div class="mt-3 flex flex-wrap items-center gap-3">';
-        html += '<button type="button" id="save-cover-letter-btn" data-resume-id="' + esc(resumeId) + '" class="rounded-concierge border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-semibold text-violet-900 hover:bg-violet-100">Save cover letter</button>';
+        html += '<button type="button" id="save-cover-letter-btn" data-resume-id="' + esc(resumeId) + '" class="rounded-concierge border border-brand/20 bg-brand-mist px-4 py-2 text-sm font-semibold text-brand-ink hover:bg-brand-soft">Save cover letter</button>';
         html += '<span id="save-cover-letter-status" class="text-xs text-slate-500" aria-live="polite"></span></div>';
         if (data.interview_prep_markdown) {
             html += '<p class="mt-4 text-xs text-slate-500">Interview prep was generated on the <a href="/jobs/done/" class="font-medium underline">Done</a> board for this job.</p>';
@@ -1001,38 +1129,59 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
             html += '<p class="mt-4 text-sm text-slate-500"><button type="button" class="rounded-concierge bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700" id="stop-optimization-btn" data-resume-id="' + esc(resumeId) + '">Stop optimization</button></p>';
         }
 
-        if (data.logs && data.logs.length) {
-            html += '<div class="mt-8 border-t border-slate-100 pt-6"><h4 class="text-sm font-semibold text-concierge-slate">Agent thoughts</h4><div class="mt-3 space-y-2">';
+        if (data.show_agent_thoughts && data.logs && data.logs.length) {
+            html += '<div class="mt-8 border-t border-slate-100 pt-6"><h4 class="text-sm font-semibold text-concierge-slate">Agent thoughts <span class="font-normal text-slate-400">(staff only)</span></h4><div class="mt-3 space-y-2">';
             function thoughtToText(thought) {
                 if (thought == null) return "";
                 if (typeof thought === "string") return thought;
                 if (typeof thought !== "object") return String(thought);
                 var parts = [];
-                if (thought.debug_prompt) parts.push("--- Prompt sent to LLM ---\n" + String(thought.debug_prompt));
-                if (thought.raw_llm_response) parts.push("--- Raw LLM response ---\n" + String(thought.raw_llm_response));
-                if (thought.raw_llm_response_retry) parts.push("--- Raw LLM response (unstructured retry) ---\n" + String(thought.raw_llm_response_retry));
-                if (thought.parse_info) parts.push("--- Parse info ---\n" + JSON.stringify(thought.parse_info, null, 2));
-                if (thought.feedback) parts.push(String(thought.feedback));
-                if (thought.reasoning) parts.push(String(thought.reasoning));
-                if (thought.message) parts.push(String(thought.message));
-                if (thought.optimized_resume && typeof thought.optimized_resume === "string") {
-                    var s = thought.optimized_resume;
-                    parts.push(s.slice(0, 2000) + (s.length > 2000 ? "…" : ""));
+                var msgs = thought.debug_messages;
+                var systemParts = [], userParts = [];
+                if (Array.isArray(msgs)) {
+                    msgs.forEach(function (m) {
+                        var content = ((m && m.content) || "").trim();
+                        if (!content) return;
+                        if (((m && m.role) || "").toLowerCase() === "system") systemParts.push(content);
+                        else userParts.push(content);
+                    });
                 }
-                var rest = {};
-                var skip = ["feedback", "reasoning", "message", "optimized_resume", "input_tokens", "output_tokens", "ats_score", "recruiter_score", "debug_prompt", "debug_messages", "raw_llm_response", "raw_llm_response_retry", "raw_llm_result_type", "raw_llm_result_type_retry", "parse_info", "tokens_estimated"];
-                for (var k in thought) if (thought.hasOwnProperty(k) && skip.indexOf(k) < 0) rest[k] = thought[k];
-                if (Object.keys(rest).length) parts.push(JSON.stringify(rest, null, 2));
+                var systemText = systemParts.join("\n\n");
+                var userText = userParts.join("\n\n");
+                if (!systemText && !userText && thought.debug_prompt) userText = String(thought.debug_prompt);
+                parts.push("--- System Prompt ---\n" + (systemText || "(none — combined/legacy user message only)"));
+                parts.push("--- User Prompt ---\n" + (userText || "(empty)"));
+                if (thought.input_tokens != null || thought.output_tokens != null) {
+                    parts.push(
+                        "--- Tokens ---\ninput=" + (thought.input_tokens != null ? thought.input_tokens : "—") +
+                        "  output=" + (thought.output_tokens != null ? thought.output_tokens : "—") +
+                        (thought.tokens_estimated ? " (estimated)" : "")
+                    );
+                }
+                if (thought.raw_llm_response || thought.raw_llm_response_retry) {
+                    var rawBody = thought.raw_llm_response ? String(thought.raw_llm_response) : "(empty)";
+                    if (thought.raw_llm_response_retry) {
+                        rawBody += "\n\n--- Raw Output (retry) ---\n" + String(thought.raw_llm_response_retry);
+                    }
+                    parts.push("--- Raw Output ---\n" + rawBody);
+                } else if (thought.optimized_resume && typeof thought.optimized_resume === "string") {
+                    var s = thought.optimized_resume;
+                    parts.push("--- Raw Output ---\n" + s.slice(0, 8000) + (s.length > 8000 ? "…" : ""));
+                } else if (thought.feedback) {
+                    parts.push("--- Raw Output ---\n" + String(thought.feedback));
+                }
+                if (thought.parse_info) parts.push("--- Parse info ---\n" + JSON.stringify(thought.parse_info, null, 2));
                 return parts.join("\n\n") || JSON.stringify(thought, null, 2);
             }
             data.logs.forEach(function (log, i) {
-                var id = "log-js-" + i;
                 var stepLabel = (log.step_name || log.step || "Step") + "";
-                var t = log.thought;
-                var stepIn = (t && (t.input_tokens != null || t.input != null)) ? (t.input_tokens != null ? t.input_tokens : t.input) : 0;
-                var stepOut = (t && (t.output_tokens != null || t.output != null)) ? (t.output_tokens != null ? t.output_tokens : t.output) : 0;
-                stepLabel += " — " + stepIn + " in · " + stepOut + " out";
-                var bodyText = thoughtToText(log.thought);
+                var t = log.thought || {};
+                var stepIn = (log.step_in != null) ? log.step_in : ((t.input_tokens != null) ? t.input_tokens : ((t.input != null) ? t.input : null));
+                var stepOut = (log.step_out != null) ? log.step_out : ((t.output_tokens != null) ? t.output_tokens : ((t.output != null) ? t.output : null));
+                if (stepIn != null || stepOut != null) {
+                    stepLabel += " — " + (stepIn != null ? stepIn : "—") + " in · " + (stepOut != null ? stepOut : "—") + " out";
+                }
+                var bodyText = log.thought_text || thoughtToText(log.thought);
                 html += "<details class=\"rounded-concierge border border-slate-200 bg-white\"><summary class=\"cursor-pointer px-3 py-2 text-sm font-medium\">" + esc(stepLabel) + "</summary>";
                 html += "<pre class=\"max-h-[32rem] overflow-auto whitespace-pre-wrap border-t border-slate-100 p-3 text-xs\">" + esc(bodyText) + "</pre></details>";
             });
@@ -1086,6 +1235,70 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
         var input = document.querySelector('#optimizer-form input[name="csrfmiddlewaretoken"]') || document.querySelector('input[name="csrfmiddlewaretoken"]');
         return input ? input.value : '';
     }
+
+    (function () {
+        var autofillBtn = document.getElementById("job-desc-autofill-btn");
+        var autofillStatus = document.getElementById("job-desc-autofill-status");
+        var jobDescInput = document.getElementById("job-description-input");
+        if (!autofillBtn || !jobDescInput) return;
+
+        function setAutofillStatus(msg, isError) {
+            if (!autofillStatus) return;
+            if (!msg) {
+                autofillStatus.classList.add("hidden");
+                autofillStatus.textContent = "";
+                return;
+            }
+            autofillStatus.textContent = msg;
+            autofillStatus.className = "mt-1 text-xs " + (isError ? "text-rose-600" : "text-slate-500");
+            autofillStatus.classList.remove("hidden");
+        }
+
+        autofillBtn.addEventListener("click", function () {
+            var url = window.prompt("Paste a Dice job URL (https://www.dice.com/job-detail/...)");
+            if (!url) return;
+            url = String(url).trim();
+            if (!url) return;
+            var params = new URLSearchParams(window.location.search || "");
+            var jobListingId = params.get("job_id");
+            autofillBtn.disabled = true;
+            setAutofillStatus("Fetching full job description…", false);
+            var body = { url: url };
+            if (jobListingId) body.job_listing_id = parseInt(jobListingId, 10);
+            fetch("/api/resume/jobs/fetch-description", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "X-CSRFToken": getCsrfOptimizer(),
+                    "X-Requested-With": "XMLHttpRequest"
+                },
+                body: JSON.stringify(body)
+            })
+                .then(function (r) {
+                    return r.json().then(function (data) {
+                        return { ok: r.ok, status: r.status, data: data };
+                    });
+                })
+                .then(function (res) {
+                    if (!res.ok) {
+                        var msg = (res.data && (res.data.detail || res.data.message)) || ("Request failed (" + res.status + ")");
+                        throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+                    }
+                    var desc = (res.data && res.data.description) || "";
+                    if (!desc.trim()) throw new Error("No description returned");
+                    jobDescInput.value = desc;
+                    setAutofillStatus("Loaded " + desc.length.toLocaleString() + " characters from Dice.", false);
+                })
+                .catch(function (err) {
+                    setAutofillStatus(err.message || "Auto-fill failed", true);
+                })
+                .finally(function () {
+                    autofillBtn.disabled = false;
+                });
+        });
+    })();
+
     statusBody.addEventListener("input", function (e) {
         if (e.target && e.target.id === "optimizer-draft-editor") {
             window.__optimizerDraftDirty = true;
@@ -1157,7 +1370,7 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
                 saveClBtn.disabled = false;
                 if (res.ok && res.data && res.data.ok) {
                     window.__optimizerCoverLetterDirty = false;
-                    if (saveClSt) { saveClSt.textContent = "Saved"; saveClSt.className = "text-xs text-emerald-700"; }
+                    if (saveClSt) { saveClSt.textContent = "Saved"; saveClSt.className = "text-xs text-brand"; }
                 } else {
                     var err2 = (res.data && res.data.detail) ? res.data.detail : "Save failed";
                     if (saveClSt) { saveClSt.textContent = err2; saveClSt.className = "text-xs text-red-700"; }
@@ -1191,7 +1404,7 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
                 saveBtn.disabled = false;
                 if (res.ok && res.data && res.data.ok) {
                     window.__optimizerDraftDirty = false;
-                    if (statusEl) { statusEl.textContent = "Saved"; statusEl.className = "text-xs text-emerald-700"; }
+                    if (statusEl) { statusEl.textContent = "Saved"; statusEl.className = "text-xs text-brand"; }
                 } else {
                     var err = (res.data && res.data.error) ? res.data.error : "Save failed";
                     if (statusEl) { statusEl.textContent = err; statusEl.className = "text-xs text-red-700"; }
@@ -1284,12 +1497,15 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
             fd.set("action", "run_optimizer");
             fd.append("file", fileInput.files[0]);
             var submitBtn = optimizerForm.querySelector("button[type=submit]");
-            if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Starting…"; }
+            var submitLbl = document.getElementById("run-optimizer-btn-label");
+            if (submitBtn) { submitBtn.disabled = true; }
+            if (submitLbl) submitLbl.textContent = "Starting…";
             if (typeof window.__optimizerWizardGoTo === "function") window.__optimizerWizardGoTo(3);
             fetch("/api/resume/optimize", { method: "POST", body: fd })
                 .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, status: r.status, data: d }; }).catch(function () { return { ok: r.ok, status: r.status, data: null }; }); })
                 .then(function (result) {
-                    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = "Run optimizer"; }
+                    if (submitBtn) submitBtn.disabled = false;
+                    if (submitLbl) submitLbl.textContent = "Run optimizer";
                     if (!result.ok) {
                         var msg = "Optimization failed to start.";
                         if (result.data) {
@@ -1317,7 +1533,8 @@ document.getElementById("save-prompts-form")?.addEventListener("submit", functio
                         });
                 })
                 .catch(function (err) {
-                    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = "Run optimizer"; }
+                    if (submitBtn) submitBtn.disabled = false;
+                    if (submitLbl) submitLbl.textContent = "Run optimizer";
                     alert(typeof err === "object" && err && (err.message || err.msg) ? (err.message || err.msg) : String(err));
                 });
         });

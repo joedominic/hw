@@ -40,7 +40,7 @@ class JDCleanserService:
         Use LLM to extract core job information, preferring local models.
         """
         try:
-            from .llm_gateway import invoke_llm_messages
+            from .llm_gateway import USAGE_QUERY_JD_CLEANSE, invoke_llm_messages
             from langchain_core.messages import HumanMessage
 
             prompt = (
@@ -56,6 +56,7 @@ class JDCleanserService:
                 user=user,
                 prefer_local=True,
                 only_local=True,
+                usage_query_kind=USAGE_QUERY_JD_CLEANSE,
             )
             content = response.content if hasattr(response, 'content') else str(response)
 

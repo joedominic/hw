@@ -1,0 +1,124 @@
+{# Hero search bar — CareerFlow-inspired. #}
+<div class="find-jobs-hero mb-6">
+    {% if selected_preset %}
+    <div class="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-brand/20 bg-brand-mist px-4 py-2.5">
+        <div class="min-w-0">
+            <p class="text-[10px] font-semibold uppercase tracking-wide text-brand">Working in saved search</p>
+            <p class="truncate text-sm font-semibold text-brand-ink">
+                {{ selected_preset.name }}
+                {% if preset_is_dirty %}
+                <span class="ml-1.5 inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">Unsaved changes</span>
+                {% endif %}
+            </p>
+        </div>
+        <a href="{% url 'jobs_search' %}?q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}"
+           class="shrink-0 text-xs font-medium text-brand hover:underline">
+            Exit saved search
+        </a>
+    </div>
+    {% endif %}
+
+    <form id="job-search-form" method="get" class="rounded-2xl border border-slate-200/90 bg-white p-4 shadow-card sm:p-5">
+        {% if selected_preset_id %}<input type="hidden" name="preset" value="{{ selected_preset_id }}">{% endif %}
+        {% if not is_power_user and job_search_llm_provider and job_search_llm_model %}
+        <input type="hidden" name="llm_model" value="{{ job_search_llm_model }}">
+        {% endif %}
+        <input type="hidden" name="track" id="track-select" value="{{ job_search_track }}">
+
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-stretch">
+            <div class="relative min-w-0 flex-1">
+                <span class="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M11 18a7 7 0 100-14 7 7 0 000 14z"/></svg>
+                </span>
+                <input type="text" id="search-term-input" name="q" value="{{ query }}"
+                       placeholder="Job title, keywords, or company"
+                       class="h-12 w-full rounded-xl border border-slate-200 bg-white pl-11 pr-3 text-sm text-concierge-slate placeholder:text-slate-400 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
+            </div>
+            <div class="relative min-w-0 flex-1 lg:max-w-xs">
+                <span class="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                </span>
+                <input type="text" id="location-input" name="location" value="{{ location }}"
+                       placeholder="City, state, or remote"
+                       class="h-12 w-full rounded-xl border border-slate-200 bg-white pl-11 pr-3 text-sm text-concierge-slate placeholder:text-slate-400 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
+            </div>
+            <button type="submit" id="job-search-submit-btn"
+                    class="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-brand px-6 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-hover disabled:cursor-wait disabled:opacity-80">
+                <span id="job-search-submit-label">Search Jobs</span>
+                <span id="job-search-submit-spinner" class="hidden h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden="true"></span>
+            </button>
+        </div>
+
+        <div class="mt-3 flex flex-wrap items-center gap-3">
+            <button type="button" id="job-search-filter-btn"
+                    class="inline-flex items-center gap-1.5 text-sm font-medium text-brand hover:text-brand-hover"
+                    aria-controls="job-search-options" aria-expanded="{% if job_search_options_open %}true{% else %}false{% endif %}">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h18M7 8h10M10 12h4M12 16h0"/></svg>
+                Advanced Filters
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            </button>
+            {% if min_score or selected_resume_id or results_wanted != 50 %}
+            <span class="text-xs text-slate-500">Filters active</span>
+            {% endif %}
+        </div>
+
+        <details id="job-search-options" class="mt-3 rounded-xl border border-slate-200 bg-slate-50/80" {% if job_search_options_open %}open{% endif %}>
+            <summary class="sr-only">Filter options</summary>
+            <div class="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-12 lg:items-end">
+                <div class="sm:col-span-1 lg:col-span-3">
+                    <label class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500" for="resume-select">Resume for match</label>
+                    <select id="resume-select" name="resume_id" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                        <option value="" data-track="">Latest</option>
+                        {% for r in resumes %}
+                            <option value="{{ r.id }}" {% if r.id == selected_resume_id %}selected{% endif %} data-track="{{ r.track|default:'' }}">{{ r.label }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="sm:col-span-1 lg:col-span-2">
+                    <label class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500" for="min-score-input">Min score</label>
+                    <input type="number" min="0" max="100" id="min-score-input" name="min_score" value="{{ min_score }}" placeholder="Any"
+                           class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                </div>
+                <div class="sm:col-span-1 lg:col-span-2">
+                    <label class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500" for="results-wanted-input">Jobs to fetch</label>
+                    <input type="number" min="10" max="200" id="results-wanted-input" name="results_wanted" value="{{ results_wanted }}"
+                           class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                </div>
+                <div class="sm:col-span-2 lg:col-span-12">
+                    <div class="mb-1 flex flex-wrap items-center justify-between gap-2">
+                        <span class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Job sites</span>
+                        <span class="flex gap-2 text-xs">
+                            <button type="button" id="job-sites-select-all" class="font-medium text-brand hover:underline">All</button>
+                            <button type="button" id="job-sites-select-none" class="font-medium text-brand hover:underline">None</button>
+                        </span>
+                    </div>
+                    <div id="job-sites-checkboxes" class="flex flex-wrap gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm">
+                        <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="indeed" class="job-site-cb h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand" {% if "indeed" in selected_site_names %}checked{% endif %}> Indeed</label>
+                        <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="linkedin" class="job-site-cb h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand" {% if "linkedin" in selected_site_names %}checked{% endif %}> LinkedIn</label>
+                        <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="dice" class="job-site-cb h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand" {% if "dice" in selected_site_names %}checked{% endif %}> Dice</label>
+                        <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="adzuna" class="job-site-cb h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand" {% if "adzuna" in selected_site_names %}checked{% endif %}> Adzuna</label>
+                        <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="levels" class="job-site-cb h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand" {% if "levels" in selected_site_names %}checked{% endif %}> Levels.fyi</label>
+                    </div>
+                </div>
+                {% if is_power_user %}
+                {% if job_search_llm_provider %}
+                <div class="sm:col-span-1 lg:col-span-3">
+                    <label class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500" for="llm-model-select">Model ({{ job_search_llm_provider }})</label>
+                    <select id="llm-model-select" name="llm_model" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
+                        {% for m in job_search_llm_models %}
+                            <option value="{{ m }}" {% if m == job_search_llm_model %}selected{% endif %}>{{ m }}</option>
+                        {% empty %}
+                            <option value="">—</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% else %}
+                <div class="sm:col-span-1 lg:col-span-3 text-sm text-slate-500">
+                    <a href="{% url 'settings' %}" class="font-medium text-brand hover:underline">Configure LLM in Settings</a>
+                </div>
+                {% endif %}
+                {% endif %}
+            </div>
+        </details>
+    </form>
+</div>

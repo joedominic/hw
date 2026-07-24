@@ -343,6 +343,7 @@ def maybe_run_pipeline_consolidation(
     api_key: str,
     model: str,
     http_max_attempts: int,
+    user=None,
 ) -> None:
     """Single LLM pass after all batches: semantic de-dupe. Best-effort; leaves NDJSON aggregate if it fails."""
     from django.conf import settings
@@ -369,6 +370,7 @@ def maybe_run_pipeline_consolidation(
             user_content=user_content,
             system_prompt=CONSOLIDATION_SYSTEM_PROMPT,
             max_attempts=max(1, int(http_max_attempts)),
+            user=user,
         )
         merged = _skills_from_llm_text(content)
         _write_consolidated_skills(run_dir, merged)
@@ -562,10 +564,19 @@ def _bind_json_mode(llm: Any, provider: str) -> Tuple[Any, bool]:
     """Return (runnable, True) when native JSON mode is enabled."""
     try:
         # Groq: langchain_groq forwards bind(model_kwargs=...) in a way the client rejects.
+        bound = None
         if provider in ("OpenAI", "OpenRouter"):
-            return llm.bind(model_kwargs={"response_format": {"type": "json_object"}}), True
-        if provider == "Google AI Studio":
-            return llm.bind(model_kwargs={"response_mime_type": "application/json"}), True
+            bound = llm.bind(model_kwargs={"response_format": {"type": "json_object"}})
+        elif provider == "Google AI Studio":
+            bound = llm.bind(model_kwargs={"response_mime_type": "application/json"})
+        if bound is not None:
+            for attr in ("_resume_provider", "_resume_model"):
+                if hasattr(llm, attr):
+                    try:
+                        setattr(bound, attr, getattr(llm, attr))
+                    except Exception:
+                        pass
+            return bound, True
     except Exception as e:
         logger.debug("pipeline JSON bind not used for %s: %s", provider, e)
     return llm, False
@@ -578,16 +589,21 @@ def llm_invoke_pipeline_batch(
     model: str,
     user_content: str,
     system_prompt: str = SYSTEM_PROMPT,
+    user=None,
 ) -> Tuple[str, int, int]:
     """
     Single stateless chat turn: system prompt + this batch’s user text only.
     No prior JD batches or assistant messages are sent (including for Ollama Local),
     so context length and KV cache are per-call, not cumulative across the pipeline run.
+
+    Routes through ``llm_gateway.invoke_llm_messages`` so quotas, token budgets,
+    concurrency, and usage tracking apply.
     """
     from langchain_core.messages import HumanMessage, SystemMessage
 
     from .agents import _normalize_token_usage
     from .llm_factory import get_llm
+    from .llm_gateway import USAGE_QUERY_PIPELINE_SKILL_EXTRACT, invoke_llm_messages
 
     llm = get_llm(provider, api_key, model)
     llm, native_json = _bind_json_mode(llm, provider)
@@ -596,7 +612,12 @@ def llm_invoke_pipeline_batch(
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_text),
     ]
-    response = llm.invoke(messages)
+    response = invoke_llm_messages(
+        messages,
+        user=user,
+        llm_override=llm,
+        usage_query_kind=USAGE_QUERY_PIPELINE_SKILL_EXTRACT,
+    )
     raw = getattr(response, "content", None) or ""
     if isinstance(raw, list):
         raw = "".join(
@@ -622,6 +643,7 @@ def llm_call_with_retries(
     max_attempts: int = 3,
     base_delay: float = 1.0,
     max_delay: float = 120.0,
+    user=None,
 ) -> Tuple[str, int, int]:
     """Retry only on 429 or 5xx. ``max_attempts`` is total tries (default 3 = initial + 2 retries)."""
     max_attempts = max(1, int(max_attempts))
@@ -634,9 +656,29 @@ def llm_call_with_retries(
                 model=model,
                 user_content=user_content,
                 system_prompt=system_prompt,
+                user=user,
             )
         except Exception as e:
             last_err = e
+            from .llm_policy import (
+                LLMConcurrencyLimitExceeded,
+                LLMInvokeTimeout,
+                LLMRequestsDisabled,
+                LLMTokenBudgetExceeded,
+            )
+            from .rate_limits import LLMUserRateLimitExceeded
+
+            if isinstance(
+                e,
+                (
+                    LLMRequestsDisabled,
+                    LLMTokenBudgetExceeded,
+                    LLMConcurrencyLimitExceeded,
+                    LLMInvokeTimeout,
+                    LLMUserRateLimitExceeded,
+                ),
+            ):
+                raise
             msg = str(e).lower()
             status = getattr(e, "status_code", None)
             if status is None:
@@ -644,7 +686,7 @@ def llm_call_with_retries(
             retryable = (
                 status == 429
                 or "429" in msg
-                or "rate" in msg
+                or ("rate" in msg and "limit" in msg)
                 or (status is not None and 500 <= int(status) < 600)
             )
             if not retryable:
@@ -671,6 +713,7 @@ def llm_call_with_retries(
 def run_pipeline_llm_extraction(
     run_dir: Path,
     *,
+    user,
     provider: str,
     api_key: str,
     jobs: Sequence[Tuple[str, str]],
@@ -723,10 +766,10 @@ def run_pipeline_llm_extraction(
         return
 
     def kill_switch() -> bool:
-        if AppAutomationSettings is None:
+        if AppAutomationSettings is None or user is None:
             return False
         try:
-            return bool(AppAutomationSettings.get_solo().stop_llm_requests)
+            return bool(AppAutomationSettings.get_for_user(user).stop_llm_requests)
         except Exception:
             return False
 
@@ -808,6 +851,7 @@ def run_pipeline_llm_extraction(
                 model=model,
                 user_content=user_text,
                 max_attempts=http_max_attempts,
+                user=user,
             )
             last_request_end = time.time()
             actual_prompt = prompt_tokens or est
@@ -840,6 +884,7 @@ def run_pipeline_llm_extraction(
                         model=model,
                         user_content=user_text + _STRICT_JSON_RETRY_TAIL,
                         max_attempts=http_max_attempts,
+                        user=user,
                     )
                     last_request_end = time.time()
                     bucket.record_usage(prompt_tokens2 or est)
@@ -891,6 +936,29 @@ def run_pipeline_llm_extraction(
                 save_stopped("LLM requests disabled in settings")
                 return
             raise
+        except Exception as e:
+            from .llm_policy import (
+                LLMConcurrencyLimitExceeded,
+                LLMInvokeTimeout,
+                LLMRequestsDisabled,
+                LLMTokenBudgetExceeded,
+            )
+            from .rate_limits import LLMUserRateLimitExceeded
+
+            if isinstance(
+                e,
+                (
+                    LLMRequestsDisabled,
+                    LLMTokenBudgetExceeded,
+                    LLMConcurrencyLimitExceeded,
+                    LLMInvokeTimeout,
+                    LLMUserRateLimitExceeded,
+                ),
+            ):
+                logger.info("Pipeline LLM stopped by policy: %s", e)
+                save_stopped(str(e))
+                return
+            raise
 
     from django.conf import settings as dj_settings
 
@@ -914,6 +982,7 @@ def run_pipeline_llm_extraction(
             api_key=api_key,
             model=model,
             http_max_attempts=http_max_attempts,
+            user=user,
         )
     prog_fin = load_progress(run_dir)
     prog_fin.update(
@@ -944,6 +1013,7 @@ def _finalize_meta(run_dir: Path, completed: bool = True) -> None:
 def write_initial_run_files(
     run_dir: Path,
     *,
+    owner_id: int,
     track: str,
     provider: str,
     model: str,
@@ -953,6 +1023,7 @@ def write_initial_run_files(
 ) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     meta = {
+        "owner_id": int(owner_id),
         "track": track,
         "provider": provider,
         "model": model,
@@ -1007,14 +1078,22 @@ def fetch_jobs_ordered(entry_ids: Sequence[int]) -> List[Tuple[str, str]]:
     return out
 
 
-def resolve_provider_api_key(provider: str) -> Optional[str]:
-    """Decrypt stored key for provider, else same env fallbacks as ``llm_factory.get_llm``."""
+def resolve_provider_api_key(provider: str, *, user) -> Optional[str]:
+    """Decrypt the owning user's stored key for provider, else platform env fallbacks."""
     from django.conf import settings
 
     from .crypto import decrypt_api_key
     from .models import LLMProviderConfig
 
-    cfg = LLMProviderConfig.objects.filter(provider=provider).exclude(encrypted_api_key="").first()
+    if user is None:
+        raise TypeError("resolve_provider_api_key requires user=")
+
+    cfg = (
+        LLMProviderConfig.objects.for_user(user)
+        .filter(provider=provider)
+        .exclude(encrypted_api_key="")
+        .first()
+    )
     if cfg and cfg.encrypted_api_key:
         try:
             return decrypt_api_key(cfg.encrypted_api_key)
@@ -1045,6 +1124,6 @@ def resolve_provider_api_key(provider: str) -> Optional[str]:
     return None
 
 
-def resolve_openai_api_key() -> Optional[str]:
+def resolve_openai_api_key(*, user) -> Optional[str]:
     """Backward-compatible alias for OpenAI-only callers."""
-    return resolve_provider_api_key("OpenAI")
+    return resolve_provider_api_key("OpenAI", user=user)

@@ -34,7 +34,7 @@
     {% endif %}
 
     <div class="mb-6 flex flex-wrap items-center gap-3">
-        <span class="rounded-full px-3 py-1 text-sm font-medium {% if attempt.status == 'succeeded' %}bg-emerald-100 text-emerald-900{% elif attempt.status == 'failed' %}bg-red-100 text-red-900{% elif attempt.status == 'awaiting_approval' %}bg-violet-100 text-violet-900{% else %}bg-sky-100 text-sky-900{% endif %}">
+        <span class="rounded-full px-3 py-1 text-sm font-medium {% if attempt.status == 'succeeded' %}bg-emerald-100 text-emerald-900{% elif attempt.status == 'failed' %}bg-red-100 text-red-900{% elif attempt.status == 'awaiting_approval' %}bg-brand-soft text-brand-ink{% else %}bg-sky-100 text-sky-900{% endif %}">
             {{ attempt.get_status_display }}
         </span>
         {% if attempt.confidence is not None %}

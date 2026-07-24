@@ -9,7 +9,7 @@
         <div>
             <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Searches</h1>
             <p class="mt-1 text-sm text-slate-600">
-                Tracks separate profiles; scheduled tasks fetch jobs into the track’s pipeline.
+                Profiles separate pipeline buckets; scheduled tasks fetch jobs into the selected profile’s pipeline.
             </p>
         </div>
         <div class="flex shrink-0 flex-col items-end gap-1 text-right">
@@ -28,7 +28,7 @@
                 <div class="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-concierge-slate">Tracks</div>
                 <div class="flex flex-1 flex-col p-4">
                     {% if not tracks %}
-                        <p class="text-sm text-slate-500">No tracks yet.</p>
+                        <p class="text-sm text-slate-500">No search profiles yet.</p>
                     {% else %}
                         <div class="space-y-1">
                             {% for t in tracks %}
@@ -57,7 +57,7 @@
                             <span class="ml-1 text-xs text-slate-500">· {{ selected_track.label }}</span>
                         {% endif %}
                     </div>
-                    <a href="{% url 'job_task_create' %}" class="rounded-concierge bg-concierge-slate px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800">New task</a>
+                    <a href="{% url 'job_task_create' %}" class="rounded-concierge bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-hover">New task</a>
                 </div>
                 <div class="p-4">
                     {% if not tasks %}

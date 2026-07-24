@@ -22,6 +22,7 @@ from .models import (
     PipelineEntry,
     UserResume,
 )
+from .test_utils import create_user
 
 
 class InterviewPrepMarkdownTests(TestCase):
@@ -48,25 +49,31 @@ class InterviewPrepMarkdownTests(TestCase):
 
 class ResolveInterviewPrepInputsTests(TestCase):
     def setUp(self):
+        self.user = create_user("jobprep")
         self.job = JobListing.objects.create(
+            source="test",
+            external_id="jobprep-1",
             title="Engineer",
             company_name="Acme",
             description="Need Python and Django.",
             url="https://example.com/job/1",
         )
         self.entry = PipelineEntry.objects.create(
+            owner=self.user,
             job_listing=self.job,
             track="ic",
             stage=PipelineEntry.Stage.DONE,
         )
         self.jd = JobDescription.objects.create(content="Need Python.")
         self.resume = UserResume.objects.create(
+            owner=self.user,
             file="resumes/test.pdf",
             original_filename="test.pdf",
             track="ic",
             is_library=True,
         )
         self.opt = OptimizedResume.objects.create(
+            owner=self.user,
             original_resume=self.resume,
             job_description=self.jd,
             optimized_content="Tailored resume for Acme.",
@@ -98,9 +105,13 @@ class ResolveInterviewPrepInputsTests(TestCase):
 
 class GenerateCoverLetterTests(TestCase):
     def setUp(self):
+        self.user = create_user("coverletter")
         self.jd = JobDescription.objects.create(content="Build APIs.")
-        self.resume = UserResume.objects.create(file="r.pdf", original_filename="r.pdf")
+        self.resume = UserResume.objects.create(
+            owner=self.user, file="r.pdf", original_filename="r.pdf"
+        )
         self.opt = OptimizedResume.objects.create(
+            owner=self.user,
             original_resume=self.resume,
             job_description=self.jd,
             optimized_content="Senior engineer with Python.",
@@ -125,12 +136,16 @@ class GenerateCoverLetterTests(TestCase):
 
 class GenerateInterviewPrepTests(TestCase):
     def setUp(self):
+        self.user = create_user("interviewprep")
         self.job = JobListing.objects.create(
+            source="test",
+            external_id="interviewprep-1",
             title="Engineer",
             company_name="Acme",
             description="Python role at Acme.",
         )
         self.entry = PipelineEntry.objects.create(
+            owner=self.user,
             job_listing=self.job,
             track="ic",
             stage=PipelineEntry.Stage.APPLYING,
@@ -151,8 +166,11 @@ class GenerateInterviewPrepTests(TestCase):
         self.entry.stage = PipelineEntry.Stage.DONE
         self.entry.save(update_fields=["stage"])
         jd = JobDescription.objects.create(content="Python role.")
-        resume = UserResume.objects.create(file="r.pdf", original_filename="r.pdf", track="ic", is_library=True)
+        resume = UserResume.objects.create(
+            owner=self.user, file="r.pdf", original_filename="r.pdf", track="ic", is_library=True
+        )
         OptimizedResume.objects.create(
+            owner=self.user,
             original_resume=resume,
             job_description=jd,
             optimized_content="Python engineer.",

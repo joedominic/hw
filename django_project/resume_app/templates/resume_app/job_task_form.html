@@ -19,23 +19,23 @@
         <div class="grid gap-4 sm:grid-cols-2">
             <div>
                 <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="name">Name (optional)</label>
-                <input type="text" id="name" name="name" value="{% if task %}{{ task.name }}{% endif %}" placeholder="e.g. Principal IC Dallas"
+                <input type="text" id="name" name="name" value="{% if task %}{{ task.name }}{% else %}{{ form_name|default:'' }}{% endif %}" placeholder="e.g. Principal IC Dallas"
                        class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
             </div>
             <div>
                 <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="search_term">Search term <span class="text-red-600">*</span></label>
-                <input type="text" id="search_term" name="search_term" value="{% if task %}{{ task.search_term }}{% endif %}" required placeholder="e.g. Principal Engineer"
+                <input type="text" id="search_term" name="search_term" value="{% if task %}{{ task.search_term }}{% else %}{{ form_search_term|default:'' }}{% endif %}" required placeholder="e.g. Principal Engineer"
                        class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
             </div>
         </div>
         <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div class="sm:col-span-1 lg:col-span-2">
                 <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="location">Location (optional)</label>
-                <input type="text" id="location" name="location" value="{% if task %}{{ task.location }}{% endif %}" placeholder="e.g. Dallas, TX"
+                <input type="text" id="location" name="location" value="{% if task %}{{ task.location }}{% else %}{{ form_location|default:'' }}{% endif %}" placeholder="e.g. Dallas, TX"
                        class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
             </div>
             <div>
-                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="track">Track</label>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="track">Search profile</label>
                 <select id="track" name="track" class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
                     {% for t in job_tracks %}
                         <option value="{{ t.slug }}" {% if form_track == t.slug %}selected{% endif %}>{{ t.label }}</option>
@@ -68,10 +68,11 @@
                 <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="linkedin" class="h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" {% if "linkedin" in form_site_name %}checked{% endif %}> LinkedIn</label>
                 <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="dice" class="h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" {% if "dice" in form_site_name %}checked{% endif %}> Dice</label>
                 <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="adzuna" class="h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" {% if "adzuna" in form_site_name %}checked{% endif %}> Adzuna</label>
+                <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="levels" class="h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" {% if "levels" in form_site_name %}checked{% endif %}> Levels.fyi</label>
             </div>
         </div>
         <div class="flex flex-wrap gap-3 pt-2">
-            <button type="submit" class="rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800">
+            <button type="submit" class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
                 {% if task %}Update{% else %}Create{% endif %}
             </button>
             <a href="{% url 'job_automation' %}{% if form_track %}?track={{ form_track }}{% endif %}" class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">Cancel</a>

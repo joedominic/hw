@@ -88,6 +88,11 @@ def resolve_and_detect(url: str, *, use_mock: bool | None = None) -> ResolveResu
     if not url:
         return ResolveResult(ok=False, error_code="unresolved_url", message="Job has no URL")
 
+    # Known ATS hosts are already apply URLs — no redirect following needed.
+    ats = ats_detect.detect_ats_from_url(url)
+    if ats != ats_detect.ATS_UNKNOWN:
+        return ResolveResult(ok=True, apply_url=url, ats_type=ats)
+
     if use_mock is None:
         use_mock = use_mock_resolver()
 
@@ -102,15 +107,11 @@ def _resolve_mock(url: str) -> ResolveResult:
         final_url, ats = mapping[url]
         return ResolveResult(ok=True, apply_url=final_url, ats_type=ats or ats_detect.ATS_UNKNOWN)
 
-    ats = ats_detect.detect_ats_from_url(url)
-    if ats != ats_detect.ATS_UNKNOWN:
-        return ResolveResult(ok=True, apply_url=url, ats_type=ats)
-
     if _is_aggregator(url):
         return ResolveResult(
             ok=False,
             error_code="unresolved_url",
-            message="Aggregator URL has no mock mapping; supply an override apply URL.",
+            message="Aggregator URL has no mock mapping; supply an override apply URL or set APPLY_USE_MOCK_RESOLVER=0 for live resolution.",
         )
 
     # Direct company page with an unknown ATS — generic fallback can try it.

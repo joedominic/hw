@@ -6,6 +6,7 @@ from .models import (
     ApplicationAttempt,
     ApplicationAttemptStep,
     AtsAutoSubmitStats,
+    CustomerApiKey,
     LLMAppUsageTotals,
     LLMUsageByModel,
     LLMUsageByQuery,
@@ -14,11 +15,88 @@ from .models import (
     JobListing,
     JobMatchResult,
     JobListingEmbedding,
+    Plan,
     SiteCredential,
+    Subscription,
+    StripeWebhookEvent,
+    UsageCounter,
     UserDisqualifier,
+    SavedJobSearch,
+    UserExperienceSettings,
     OptimizerWorkflow,
+    SystemPromptProfile,
     UserPromptProfile,
 )
+
+
+@admin.register(Plan)
+class PlanAdmin(admin.ModelAdmin):
+    list_display = (
+        "slug",
+        "name",
+        "llm_requests_per_day",
+        "job_searches_per_day",
+        "apply_runs_per_day",
+        "api_access",
+        "is_default",
+        "is_active",
+        "stripe_price_id",
+    )
+    list_filter = ("is_active", "api_access", "is_default")
+    prepopulated_fields = {"slug": ("name",)}
+
+
+@admin.register(Subscription)
+class SubscriptionAdmin(admin.ModelAdmin):
+    list_display = ("owner", "plan", "status", "stripe_customer_id", "updated_at")
+    list_filter = ("status", "plan")
+    raw_id_fields = ("owner", "plan")
+    search_fields = ("owner__username", "owner__email", "stripe_customer_id")
+
+
+@admin.register(UsageCounter)
+class UsageCounterAdmin(admin.ModelAdmin):
+    list_display = ("owner", "metric", "period_date", "count", "updated_at")
+    list_filter = ("metric",)
+    raw_id_fields = ("owner",)
+
+
+@admin.register(CustomerApiKey)
+class CustomerApiKeyAdmin(admin.ModelAdmin):
+    list_display = ("owner", "prefix", "name", "created_at", "last_used_at", "revoked_at")
+    raw_id_fields = ("owner",)
+    search_fields = ("owner__username", "prefix", "name")
+
+
+@admin.register(StripeWebhookEvent)
+class StripeWebhookEventAdmin(admin.ModelAdmin):
+    list_display = ("event_id", "event_type", "processed_at")
+    search_fields = ("event_id", "event_type")
+
+
+@admin.register(SavedJobSearch)
+class SavedJobSearchAdmin(admin.ModelAdmin):
+    list_display = ("name", "slug", "owner", "search_term", "location", "updated_at")
+    list_filter = ("slug",)
+    search_fields = ("name", "search_term", "slug", "owner__username")
+    raw_id_fields = ("owner", "resume")
+
+
+@admin.register(UserExperienceSettings)
+class UserExperienceSettingsAdmin(admin.ModelAdmin):
+    list_display = (
+        "owner",
+        "experience_mode",
+        "email_verified_at",
+        "pending_email",
+        "onboarding_completed_at",
+        "onboarding_dismissed_at",
+        "step_llm_connected",
+        "step_resume_uploaded",
+        "step_first_search",
+    )
+    list_filter = ("experience_mode",)
+    search_fields = ("owner__username", "owner__email", "pending_email")
 
 
 @admin.register(AppAutomationSettings)
@@ -140,8 +218,15 @@ class AtsJudgeProfileAdmin(admin.ModelAdmin):
 
 @admin.register(OptimizerWorkflow)
 class OptimizerWorkflowAdmin(admin.ModelAdmin):
-    list_display = ("name", "ats_judge_profile", "max_iterations", "score_threshold", "updated_at")
+    list_display = ("name", "owner", "ats_judge_profile", "max_iterations", "score_threshold", "updated_at")
     list_filter = ("max_iterations",)
+    raw_id_fields = ("owner",)
+
+
+@admin.register(SystemPromptProfile)
+class SystemPromptProfileAdmin(admin.ModelAdmin):
+    list_display = ("id", "updated_at")
+    readonly_fields = ("updated_at",)
 
 
 @admin.register(UserPromptProfile)

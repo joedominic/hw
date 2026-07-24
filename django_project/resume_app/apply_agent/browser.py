@@ -23,17 +23,23 @@ logger = logging.getLogger("huey")
 DEFAULT_PAGE_TIMEOUT_MS = 30_000
 
 
-def apply_browser_headless() -> bool:
-    """Return True unless env or profile settings request a visible browser window."""
-    from django.conf import settings as django_settings
+def apply_browser_headless(*, user=None) -> bool:
+    """Return True unless env or the owning user's profile requests a visible window.
 
-    from ..models import AppAutomationSettings
+    ``user`` must be the attempt owner when checking per-user ``apply_browser_show_window``.
+    Without a user, only the process-wide ``APPLY_BROWSER_HEADLESS`` env is consulted
+    (``get_solo`` is intentionally not used — it returns the wrong tenant).
+    """
+    from django.conf import settings as django_settings
 
     if not getattr(django_settings, "APPLY_BROWSER_HEADLESS", True):
         return False
-    solo = AppAutomationSettings.get_solo()
-    if getattr(solo, "apply_browser_show_window", False):
-        return False
+    if user is not None:
+        from ..models import AppAutomationSettings
+
+        solo = AppAutomationSettings.get_for_user(user)
+        if getattr(solo, "apply_browser_show_window", False):
+            return False
     return True
 
 

@@ -9,8 +9,8 @@ from typing import List, Optional, Tuple, Dict
 from django.conf import settings
 
 from .models import JobListing, JobListingAction, JobListingTrackMetrics, PipelineEntry
-from .track_actions import disliked_listing_id_set, normalize_track_slug
-from .job_sources import fetch_jobs, normalize_site_names, upsert_job_listing_from_fetch
+from .track_actions import excluded_listing_id_set, liked_listing_id_set, normalize_track_slug, saved_listing_id_set
+from .job_sources import fetch_jobs, normalize_site_names, upsert_job_listing_from_fetch, _parse_date_posted
 from .schemas import JobPayload
 from .preference import (
     get_preference_vectors,
@@ -41,6 +41,18 @@ def _safe_display_str(val: Optional[str]) -> str:
     return s or ""
 
 
+def annotate_saved_flags(user, track: Optional[str], jobs: List[JobPayload]) -> List[JobPayload]:
+    """Set ``is_saved`` / ``is_liked`` on each payload from track-scoped feedback actions."""
+    if not jobs:
+        return jobs
+    saved_ids = saved_listing_id_set(user, track)
+    liked_ids = liked_listing_id_set(user, track)
+    for payload in jobs:
+        payload.is_saved = payload.id in saved_ids
+        payload.is_liked = payload.id in liked_ids
+    return jobs
+
+
 def _job_to_payload(job: JobListing, *, snippet: Optional[str] = None) -> JobPayload:
     if snippet is None:
         snippet = (job.description or "")[:300].replace("\n", " ")
@@ -58,6 +70,32 @@ def _job_to_payload(job: JobListing, *, snippet: Optional[str] = None) -> JobPay
         posted_at=job.posted_at,
         fetched_at=job.fetched_at,
     )
+
+
+def rehydrate_job_payloads(jobs: list) -> List[JobPayload]:
+    """
+    Restore JobPayload objects from session-cached dicts.
+
+    ``model_dump(mode="json")`` serializes datetimes to ISO strings; Django's
+    ``timesince`` filter requires real datetime instances.
+    """
+    if not jobs:
+        return []
+    out: List[JobPayload] = []
+    for job in jobs:
+        if isinstance(job, JobPayload):
+            out.append(job)
+            continue
+        if not isinstance(job, dict):
+            continue
+        data = dict(job)
+        data["posted_at"] = _parse_date_posted(data.get("posted_at"))
+        data["fetched_at"] = _parse_date_posted(data.get("fetched_at"))
+        try:
+            out.append(JobPayload(**data))
+        except Exception:
+            logger.warning("Skipping invalid cached job payload id=%s", data.get("id"), exc_info=True)
+    return out
 
 
 def _tokenize_for_bm25(text: str) -> List[str]:
@@ -85,10 +123,17 @@ def run_job_search_core(
     if not search_term or not search_term.strip():
         raise ValueError("search_term is required")
 
+    from .entitlements import METRIC_JOB_SEARCHES, QuotaExceeded, consume_quota
+
+    try:
+        consume_quota(user, METRIC_JOB_SEARCHES, 1)
+    except QuotaExceeded as exc:
+        raise ValueError(str(exc)) from exc
+
     results_wanted = results_wanted or getattr(settings, "JOB_SEARCH_DEFAULT_RESULTS", 50)
     site_name = normalize_site_names(site_name)
     norm_track = normalize_track_slug(track, user)
-    disliked_listing_ids = disliked_listing_id_set(user, track)
+    disliked_listing_ids = excluded_listing_id_set(user, track)
     from .models import UserDisqualifier
 
     disqualifier_pattern = build_disqualifier_pattern(
@@ -137,6 +182,7 @@ def run_job_search_core(
     logger.info("[job_search_core] After filter: %d jobs", jobs_after_filter)
 
     jobs_out = rank_and_filter_jobs(jobs_with_meta, norm_track, user=user)
+    annotate_saved_flags(user, norm_track, jobs_out)
     return (jobs_fetched, jobs_after_filter, jobs_out, refs_for_cache)
 
 
@@ -396,10 +442,20 @@ def rank_and_filter_jobs(
         try:
             from .services import run_ollama_guard_on_payloads
 
-            jobs_out = run_ollama_guard_on_payloads(jobs_out[:10], track) + jobs_out[10:]
+            jobs_out = run_ollama_guard_on_payloads(jobs_out[:10], track, user=user) + jobs_out[10:]
         except Exception as e:
             logger.warning("Ollama Guard failed, skipping: %s", e)
 
+    from .job_dedupe import dedupe_payloads_by_title_company
+
+    before = len(jobs_out)
+    jobs_out = dedupe_payloads_by_title_company(jobs_out)
+    if len(jobs_out) < before:
+        logger.info(
+            "[job_search] title/company dedupe: %d → %d jobs",
+            before,
+            len(jobs_out),
+        )
     return jobs_out
 
 
@@ -505,4 +561,5 @@ def pipeline_jobs_to_payloads(
         )
 
     jobs_with_meta.sort(key=_sort_key, reverse=True)
-    return [p for _j, p in jobs_with_meta]
+    payloads = [p for _j, p in jobs_with_meta]
+    return annotate_saved_flags(user, track_slug, payloads)

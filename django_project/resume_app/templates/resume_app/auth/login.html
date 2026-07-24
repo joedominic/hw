@@ -1,10 +1,17 @@
-{% extends "resume_app/base.html" %}
+{% extends "resume_app/auth/base_public.html" %}
 {% block title %}Sign in — ResumeElite{% endblock %}
+{% block header_nav %}
+{% if signup_enabled %}
+<a href="{% url 'signup' %}" class="rounded-concierge bg-brand px-3.5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-hover">
+    Get started
+</a>
+{% endif %}
+{% endblock %}
 {% block content %}
 <div class="mx-auto max-w-md">
-    <h1 class="text-2xl font-bold text-concierge-slate">Sign in</h1>
+    <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Sign in</h1>
     <p class="mt-1 text-sm text-slate-600">Access your job search workspace.</p>
-    <form method="post" class="mt-6 space-y-4 rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+    <form method="post" class="mt-6 space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-card">
         {% csrf_token %}
         {% if form.non_field_errors %}
         <div class="rounded-concierge border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
@@ -12,23 +19,26 @@
         </div>
         {% endif %}
         <div>
-            <label for="{{ form.username.id_for_label }}" class="mb-1 block text-sm font-medium">Username</label>
+            <label for="{{ form.username.id_for_label }}" class="mb-1 block text-sm font-medium text-concierge-slate">Username</label>
             {{ form.username }}
             {% if form.username.errors %}<p class="mt-1 text-sm text-red-600">{{ form.username.errors.0 }}</p>{% endif %}
         </div>
         <div>
-            <label for="{{ form.password.id_for_label }}" class="mb-1 block text-sm font-medium">Password</label>
+            <label for="{{ form.password.id_for_label }}" class="mb-1 block text-sm font-medium text-concierge-slate">Password</label>
             {{ form.password }}
             {% if form.password.errors %}<p class="mt-1 text-sm text-red-600">{{ form.password.errors.0 }}</p>{% endif %}
+            <p class="mt-2 text-right text-sm">
+                <a href="{% url 'password_reset' %}" class="font-medium text-brand hover:text-brand-hover">Forgot password?</a>
+            </p>
         </div>
-        <button type="submit" class="w-full rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">
+        <button type="submit" class="w-full rounded-concierge bg-brand px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-hover">
             Sign in
         </button>
     </form>
     {% if signup_enabled %}
     <p class="mt-4 text-center text-sm text-slate-600">
         No account?
-        <a href="{% url 'signup' %}" class="font-medium text-concierge-slate underline">Create one</a>
+        <a href="{% url 'signup' %}" class="font-semibold text-brand hover:text-brand-hover">Create one</a>
     </p>
     {% endif %}
 </div>

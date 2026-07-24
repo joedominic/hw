@@ -8,7 +8,11 @@
     <div class="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
             <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Monitor</h1>
-            <p class="mt-1 text-sm text-slate-600">Queue depth and periodic task controls.</p>
+            <p class="mt-1 text-sm text-slate-600">Queue depth, periodic tasks, and worker maintenance.</p>
+        </div>
+        <div class="inline-flex items-center gap-2 rounded-full border border-brand/20 bg-brand-mist px-3 py-1 text-xs font-semibold text-brand-ink">
+            <span class="h-1.5 w-1.5 rounded-full bg-brand" aria-hidden="true"></span>
+            Huey worker
         </div>
     </div>
 
@@ -19,16 +23,16 @@
     {% endif %}
 
     <div class="mb-6 space-y-3">
-        <div class="rounded-concierge border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
+        <div class="rounded-concierge border border-brand/20 bg-brand-mist px-4 py-3 text-sm text-brand-ink">
             <strong>Worker:</strong> <code class="rounded bg-white/80 px-1">python manage.py run_huey</code> from <code class="rounded bg-white/80 px-1">django_project/</code>
         </div>
-        <div class="rounded-concierge border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+        <div class="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-card text-sm text-slate-600">
             <strong>Queue depth:</strong> Pending, scheduled, and results store sizes (when Redis is used).
         </div>
     </div>
 
     <div class="mb-6 grid gap-6 lg:grid-cols-3">
-        <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm lg:col-span-1">
+        <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-card lg:col-span-1">
             <h2 class="text-sm font-semibold text-concierge-slate">Queue stats</h2>
             {% if queue_stats_error %}
                 <p class="mt-3 text-sm text-red-700">Failed to read stats: <code class="text-xs">{{ queue_stats_error }}</code></p>
@@ -51,12 +55,12 @@
                 <p class="mt-3 text-sm text-slate-500">Stats unavailable.</p>
             {% endif %}
         </div>
-        <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm lg:col-span-2">
+        <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-card lg:col-span-2">
             <h2 class="text-sm font-semibold text-concierge-slate">Maintenance</h2>
             <div class="mt-4 flex flex-wrap items-center gap-3">
                 <form method="post" action="{% url 'huey_run_cleanup_now' %}" class="inline">
                     {% csrf_token %}
-                    <button type="submit" class="rounded-concierge border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-900 hover:bg-emerald-50">
+                    <button type="submit" class="rounded-concierge border border-brand/20 bg-white px-3 py-1.5 text-xs font-semibold text-brand-ink hover:bg-brand-mist">
                         Run cleanup now
                     </button>
                 </form>
@@ -69,7 +73,7 @@
                         <span>
                             Status:
                             {% if cleanup_status.status == 'success' %}
-                                <span class="font-semibold text-emerald-700">Success</span>
+                                <span class="font-semibold text-brand">Success</span>
                             {% else %}
                                 <span class="font-semibold text-amber-700">{{ cleanup_status.status }}</span>
                             {% endif %}
@@ -105,7 +109,7 @@
 
     {% include "resume_app/_concierge_messages.html" %}
 
-    <div class="mb-6 overflow-hidden rounded-concierge border border-slate-200 bg-white shadow-sm">
+    <div class="mb-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card">
         <div class="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-concierge-slate">Periodic tasks</div>
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-200 text-sm">
@@ -146,13 +150,13 @@
                                 {% if t.is_revoked %}
                                     <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase text-slate-600">Paused</span>
                                 {% else %}
-                                    <span class="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-800">Active</span>
+                                    <span class="rounded-full bg-brand-soft px-2 py-0.5 text-[10px] font-bold uppercase text-brand-ink">Active</span>
                                 {% endif %}
                             </td>
                             <td class="whitespace-nowrap px-4 py-3 text-center">
                                 <form method="post" action="{% url 'huey_task_run_now' task_name=t.task_fn_name %}" class="inline">
                                     {% csrf_token %}
-                                    <button type="submit" class="rounded-concierge border border-emerald-200 bg-white px-2 py-1 text-xs font-semibold text-emerald-900 hover:bg-emerald-50" title="Enqueue this job on the Huey worker (or run in-process if immediate mode)">Run now</button>
+                                    <button type="submit" class="rounded-concierge border border-brand/20 bg-white px-2 py-1 text-xs font-semibold text-brand-ink hover:bg-brand-mist" title="Enqueue this job on the Huey worker (or run in-process if immediate mode)">Run now</button>
                                 </form>
                             </td>
                             <td class="whitespace-nowrap px-4 py-3 text-right">
@@ -214,7 +218,7 @@
     </div>
 
     {% if adhoc_run_tasks %}
-    <div class="mb-6 overflow-hidden rounded-concierge border border-slate-200 bg-white shadow-sm">
+    <div class="mb-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card">
         <div class="border-b border-slate-100 px-4 py-3">
             <div class="text-sm font-semibold text-concierge-slate">Other queueable tasks</div>
             <p class="mt-1 text-xs text-slate-500">One-off Huey jobs with no extra parameters. Resume optimization, a specific job search, vetting batches, and pipeline LLM extract runs are started from the boards or Searches.</p>
@@ -251,7 +255,7 @@
                             <td class="whitespace-nowrap px-4 py-3 text-center">
                                 <form method="post" action="{% url 'huey_task_run_now' task_name=t.task_fn_name %}" class="inline">
                                     {% csrf_token %}
-                                    <button type="submit" class="rounded-concierge border border-emerald-200 bg-white px-2 py-1 text-xs font-semibold text-emerald-900 hover:bg-emerald-50">Run now</button>
+                                    <button type="submit" class="rounded-concierge border border-brand/20 bg-white px-2 py-1 text-xs font-semibold text-brand-ink hover:bg-brand-mist">Run now</button>
                                 </form>
                             </td>
                         </tr>
@@ -295,7 +299,7 @@
     </div>
     {% endif %}
 
-    <div class="overflow-hidden rounded-concierge border border-slate-200 bg-white shadow-sm">
+    <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card">
         <div class="flex items-center justify-between border-b border-slate-100 px-4 py-3">
             <span class="text-sm font-semibold text-concierge-slate">Recent job-search runs</span>
             <span class="text-xs text-slate-500">Last 10</span>
@@ -320,7 +324,7 @@
                             </td>
                             <td class="px-4 py-3">
                                 {% if r.status == 'completed' %}
-                                    <span class="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-800">Done</span>
+                                    <span class="rounded-full bg-brand-soft px-2 py-0.5 text-[10px] font-bold uppercase text-brand-ink">Done</span>
                                 {% elif r.status == 'failed' %}
                                     <span class="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-bold uppercase text-red-800">Failed</span>
                                 {% else %}

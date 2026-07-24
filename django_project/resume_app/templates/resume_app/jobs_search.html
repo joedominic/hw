@@ -1,597 +1,63 @@
 {% extends "resume_app/base.html" %}
 
-{% block title %}Job search — ResumeElite{% endblock %}
+{% block title %}{% if is_power_user %}Job search{% else %}Find jobs{% endif %} — ResumeElite{% endblock %}
+
+{% block extra_head %}
+<style>
+    .line-clamp-3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    #job-search-options:not([open]) > summary { display: none; }
+</style>
+{% endblock %}
 
 {% block content %}
 <div class="mx-auto max-w-7xl">
-<div class="mb-8">
-        <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Job search</h1>
-        <p class="mt-1 text-sm text-slate-600">
-            Search for jobs, save favourites, run fit checks, and track matches.
-        </p>
+    {% include "resume_app/_onboarding_banner.html" %}
+    {% include "resume_app/_concierge_messages.html" %}
+
+    {% if disqualifier_prompt %}
+    <div class="mb-6 rounded-2xl border border-amber-200 bg-amber-50/40 p-4 shadow-sm">
+        <h2 class="text-sm font-semibold text-concierge-slate">Add phrase to avoid from "{{ disqualifier_prompt.title }}"</h2>
+        <p class="mt-1 text-xs text-slate-600">Use <strong>Phrases to avoid</strong> in the sidebar, or add from the job description below.</p>
+        <details class="mt-2">
+            <summary class="cursor-pointer text-xs font-medium text-slate-500">Show job description</summary>
+            <pre class="mt-2 max-h-48 overflow-auto rounded-lg border border-slate-200 bg-white p-2 text-xs">{{ disqualifier_prompt.description }}</pre>
+        </details>
     </div>
+    {% endif %}
 
-{% include "resume_app/_concierge_messages.html" %}
+    <meta name="csrf-token" content="{{ csrf_token }}">
 
-{% if disqualifier_prompt %}
-<div class="mb-6 rounded-concierge border border-amber-200 bg-amber-50/30 p-4 shadow-sm">
-            <h2 class="text-sm font-semibold text-concierge-slate">Add disqualifier from "{{ disqualifier_prompt.title }}" @ {{ disqualifier_prompt.company_name }}</h2>
-                <p class="mt-2 text-xs text-slate-600">Add a phrase from the description, or use the section below anytime.</p>
-                <details class="mt-2">
-                    <summary class="cursor-pointer text-xs font-medium text-slate-500">Show job description</summary>
-                    <pre class="mt-2 max-h-48 overflow-auto rounded-concierge border border-slate-200 bg-slate-50 p-2 text-xs">{{ disqualifier_prompt.description }}</pre>
-                </details>
-</div>
-{% endif %}
-
-<div class="mb-6 rounded-concierge border border-slate-200 bg-white p-4 shadow-sm" id="disqualifiers-section">
-            <div class="mb-1 text-sm font-semibold text-concierge-slate">Your disqualifiers</div>
-            <p class="mb-3 text-xs text-slate-500">Jobs containing any phrase below are hidden.</p>
-                <form id="disqualifier-add-form" class="mb-3 flex flex-wrap items-end gap-2">
-                    <div class="min-w-[200px] flex-1">
-                        <label class="sr-only" for="disqualifier-phrase-input">Phrase to avoid</label>
-                        <input type="text" class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm" name="phrase" id="disqualifier-phrase-input" placeholder="e.g. no visa sponsorship" maxlength="500" autocomplete="off">
-                    </div>
-                    <button type="submit" class="rounded-concierge bg-concierge-slate px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800">Add</button>
-                </form>
-                <div id="disqualifiers-list" class="flex flex-wrap gap-2">
-                    {% for d in current_disqualifiers %}
-                    <span class="disqualifier-badge inline-flex items-center gap-1 rounded-full bg-slate-700 px-2 py-1 text-xs font-medium text-white" data-id="{{ d.id }}">
-                        <span class="disqualifier-phrase">{{ d.phrase|truncatechars:50 }}</span>
-                        <button type="button" class="disqualifier-remove rounded px-1 text-white/90 hover:bg-white/20 hover:text-white" title="Remove" aria-label="Remove">&times;</button>
-                    </span>
-                    {% empty %}
-                    <span class="text-sm text-slate-500" id="disqualifiers-empty">No disqualifiers yet.</span>
-                    {% endfor %}
+    <div id="job-search-loading"
+         class="fixed inset-0 z-[70] hidden items-center justify-center bg-slate-900/40 p-4 backdrop-blur-[1px]"
+         role="alertdialog"
+         aria-modal="true"
+         aria-labelledby="job-search-loading-title"
+         aria-busy="true">
+        <div class="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
+            <div class="flex items-start gap-3">
+                <span class="mt-0.5 h-8 w-8 shrink-0 animate-spin rounded-full border-2 border-brand/30 border-t-brand" aria-hidden="true"></span>
+                <div class="min-w-0 flex-1">
+                    <p id="job-search-loading-title" class="text-sm font-semibold text-concierge-slate">Searching job boards…</p>
+                    <p id="job-search-loading-subtitle" class="mt-1 text-xs text-slate-500">This can take a little while. Please wait — do not click Search again.</p>
+                    <p id="job-search-loading-quote"
+                       class="job-search-loading-quote mt-3 border-t border-slate-100 pt-3 text-xs italic leading-relaxed text-brand-ink/80"
+                       aria-live="polite"></p>
                 </div>
-</div>
-<script>
-(function() {
-    var apiBase = '/api/resume/jobs';
-    var csrfToken = document.querySelector('meta[name="csrf-token"]') && document.querySelector('meta[name="csrf-token"]').getAttribute('content');
-    if (!csrfToken) {
-        var input = document.querySelector('input[name="csrfmiddlewaretoken"]');
-        if (input) csrfToken = input.value;
-    }
-    function headers() {
-        var h = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
-        if (csrfToken) h['X-CSRFToken'] = csrfToken;
-        return h;
-    }
-    var form = document.getElementById('disqualifier-add-form');
-    var listEl = document.getElementById('disqualifiers-list');
-    var inputEl = document.getElementById('disqualifier-phrase-input');
-    var emptyEl = document.getElementById('disqualifiers-empty');
-    form && form.addEventListener('submit', function(e) {
-        e.preventDefault();
-        var phrase = (inputEl && inputEl.value || '').trim();
-        if (!phrase || phrase.length < 2) return;
-        fetch(apiBase + '/disqualifiers', { method: 'POST', credentials: 'same-origin', headers: headers(), body: JSON.stringify({ phrase: phrase }) })
-            .then(function(r) {
-                if (!r.ok) return r.json().then(function(j) { throw new Error(j.detail || j.message || 'Failed'); });
-                return r.json();
-            })
-            .then(function(data) {
-                if (emptyEl) { emptyEl.remove(); emptyEl = null; }
-                var phraseText = data.phrase.length > 50 ? data.phrase.substring(0, 50) + '…' : data.phrase;
-                var badge = document.createElement('span');
-                badge.className = 'disqualifier-badge inline-flex items-center gap-1 rounded-full bg-slate-700 px-2 py-1 text-xs font-medium text-white';
-                badge.setAttribute('data-id', data.id);
-                badge.innerHTML = '<span class="disqualifier-phrase">' + phraseText.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</span> <button type="button" class="disqualifier-remove rounded px-1 text-white/90 hover:bg-white/20" title="Remove" aria-label="Remove">&times;</button>';
-                listEl.appendChild(badge);
-                if (inputEl) inputEl.value = '';
-                badge.querySelector('.disqualifier-remove').addEventListener('click', removeHandler);
-            })
-            .catch(function(err) { alert(err.message || 'Could not add disqualifier.'); });
-    });
-    function removeHandler(e) {
-        var badge = e.target.closest('.disqualifier-badge');
-        if (!badge) return;
-        var id = badge.getAttribute('data-id');
-        if (!id) return;
-        e.target.disabled = true;
-        fetch(apiBase + '/disqualifiers/' + id, { method: 'DELETE', credentials: 'same-origin', headers: headers() })
-            .then(function(r) {
-                if (!r.ok) return r.json().then(function(j) { throw new Error(j.detail || j.message || 'Failed'); });
-                badge.remove();
-                if (listEl && listEl.querySelectorAll('.disqualifier-badge').length === 0) {
-                    var span = document.createElement('span');
-                    span.className = 'text-sm text-slate-500';
-                    span.id = 'disqualifiers-empty';
-                    span.textContent = 'No disqualifiers yet.';
-                    listEl.appendChild(span);
-                }
-            })
-            .catch(function(err) { alert(err.message || 'Could not remove.'); e.target.disabled = false; });
-    }
-    listEl && listEl.querySelectorAll('.disqualifier-remove').forEach(function(btn) { btn.addEventListener('click', removeHandler); });
-})();
-
-(function() {
-    // AJAX like/dislike so we don't trigger a full page reload or a new external job fetch.
-    var apiBase = '/api/resume/jobs';
-    var csrfToken = document.querySelector('meta[name="csrf-token"]') && document.querySelector('meta[name="csrf-token"]').getAttribute('content');
-    if (!csrfToken) {
-        var input = document.querySelector('input[name="csrfmiddlewaretoken"]');
-        if (input) csrfToken = input.value;
-    }
-    function headers() {
-        var h = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
-        if (csrfToken) h['X-CSRFToken'] = csrfToken;
-        return h;
-    }
-    function handleAction(jobId, action) {
-        if (!jobId) return;
-        var url = apiBase + '/' + jobId + '/' + action;
-        return fetch(url, {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: headers(),
-            body: JSON.stringify({}),
-        }).then(function(r) {
-            if (!r.ok) {
-                return r.json().then(function(j) {
-                    throw new Error(j.detail || j.message || 'Request failed');
-                }).catch(function() {
-                    throw new Error('Request failed');
-                });
-            }
-            return r.json().catch(function() { return {}; });
-        });
-    }
-    function attachHandlers() {
-        document.querySelectorAll('.job-result-row').forEach(function(row) {
-            var jobId = row.getAttribute('data-job-id');
-            var likeBtn = row.querySelector('.job-like-btn');
-            var dislikeBtn = row.querySelector('.job-dislike-btn');
-            if (likeBtn && jobId && !likeBtn.dataset.bound) {
-                likeBtn.dataset.bound = '1';
-                likeBtn.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    likeBtn.disabled = true;
-                    handleAction(jobId, 'like')
-                        .then(function() {
-                            likeBtn.className = 'rounded-concierge bg-concierge-slate px-2 py-1 text-xs font-medium text-white job-like-btn';
-                            likeBtn.textContent = 'Liked';
-                        })
-                        .catch(function(err) {
-                            alert(err.message || 'Could not like job.');
-                            likeBtn.disabled = false;
-                        });
-                });
-            }
-            if (dislikeBtn && jobId && !dislikeBtn.dataset.bound) {
-                dislikeBtn.dataset.bound = '1';
-                dislikeBtn.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    if (!confirm('Remove this job and hide similar ones?')) return;
-                    dislikeBtn.disabled = true;
-                    handleAction(jobId, 'dislike')
-                        .then(function() {
-                            row.remove();
-                        })
-                        .catch(function(err) {
-                            alert(err.message || 'Could not dislike job.');
-                            dislikeBtn.disabled = false;
-                        });
-                });
-            }
-        });
-    }
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', attachHandlers);
-    } else {
-        attachHandlers();
-    }
-})();
-</script>
-<meta name="csrf-token" content="{{ csrf_token }}">
-
-<!-- Primary search + filters -->
-<div class="mb-6 rounded-concierge border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
-                <form id="job-search-form" method="get" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-12 lg:items-end">
-                    <div class="sm:col-span-1 lg:col-span-3">
-                        <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="search-term-input">Search term</label>
-                        <input type="text" class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm" id="search-term-input" name="q"
-                               value="{{ query }}" placeholder="e.g. Python developer">
-                    </div>
-                    <div class="sm:col-span-1 lg:col-span-3">
-                        <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="location-input">Location (optional)</label>
-                        <input type="text" class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm" id="location-input" name="location"
-                               value="{{ location }}" placeholder="e.g. Dallas, TX">
-                    </div>
-                    <div class="sm:col-span-1 lg:col-span-2">
-                        <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="track-select">Target track</label>
-                        <select id="track-select" name="track" class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm">
-                            {% for t in job_tracks %}
-                                <option value="{{ t.slug }}" {% if job_search_track == t.slug %}selected{% endif %}>{{ t.label }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div class="sm:col-span-1 lg:col-span-3">
-                        <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="resume-select">Resume for match</label>
-                        <select id="resume-select" name="resume_id" class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm">
-                            <option value="" data-track="">
-                                Latest
-                            </option>
-                            {% for r in resumes %}
-                                <option value="{{ r.id }}"
-                                        {% if r.id == selected_resume_id %}selected{% endif %}
-                                        data-track="{{ r.track|default:'' }}">
-                                    {{ r.label }}
-                                </option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    <div class="sm:col-span-1 lg:col-span-2">
-                        <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="min-score-input">Min score</label>
-                        <input type="number" min="0" max="100" id="min-score-input" name="min_score"
-                               class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm" value="{{ min_score }}">
-                    </div>
-                    <div class="sm:col-span-1 lg:col-span-2">
-                        <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="results-wanted-input">Jobs to fetch</label>
-                        <input type="number" min="10" max="200" id="results-wanted-input" name="results_wanted"
-                               class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm" value="{{ results_wanted }}" title="Number of jobs to fetch from job search (10–200)">
-                    </div>
-                    <div class="sm:col-span-2 lg:col-span-4">
-                        <div class="mb-1 flex flex-wrap items-center justify-between gap-2">
-                            <span class="text-xs font-semibold uppercase text-slate-500">Sites</span>
-                            <span class="flex flex-wrap gap-2 text-xs">
-                                <button type="button" id="job-sites-select-all" class="font-medium text-concierge-slate hover:underline">Select all</button>
-                                <span class="text-slate-300">·</span>
-                                <button type="button" id="job-sites-select-none" class="font-medium text-concierge-slate hover:underline">Select none</button>
-                            </span>
-                        </div>
-                        <div id="job-sites-checkboxes" class="flex flex-wrap gap-3 rounded-concierge border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
-                            <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="indeed" class="job-site-cb h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" {% if "indeed" in selected_site_names %}checked{% endif %}> Indeed</label>
-                            <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="linkedin" class="job-site-cb h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" {% if "linkedin" in selected_site_names %}checked{% endif %}> LinkedIn</label>
-                            <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="dice" class="job-site-cb h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" {% if "dice" in selected_site_names %}checked{% endif %}> Dice</label>
-                            <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="adzuna" class="job-site-cb h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" {% if "adzuna" in selected_site_names %}checked{% endif %}> Adzuna</label>
-                        </div>
-                    </div>
-                    {% if job_search_llm_provider %}
-                    <div class="sm:col-span-1 lg:col-span-2">
-                        <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="llm-model-select">Model ({{ job_search_llm_provider }})</label>
-                        <select id="llm-model-select" name="llm_model" class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm" title="Used for LLM match score (Matching prompt)">
-                            {% for m in job_search_llm_models %}
-                                <option value="{{ m }}" {% if m == job_search_llm_model %}selected{% endif %}>{{ m }}</option>
-                            {% empty %}
-                                <option value="">—</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-                    {% else %}
-                    <div class="sm:col-span-1 lg:col-span-2">
-                        <label class="mb-1 block text-xs font-semibold uppercase text-slate-500">Model (Match)</label>
-                        <div class="rounded-concierge border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">Configure provider in Settings</div>
-                    </div>
-                    {% endif %}
-                    <div class="flex items-end sm:col-span-2 lg:col-span-1">
-                        <button type="submit" class="w-full rounded-concierge bg-concierge-slate px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 lg:w-auto">Search</button>
-                    </div>
-                </form>
-                <script>
-                (function() {
-                    var form = document.getElementById('job-search-form');
-                    var wrap = document.getElementById('job-sites-checkboxes');
-                    var btnAll = document.getElementById('job-sites-select-all');
-                    var btnNone = document.getElementById('job-sites-select-none');
-                    if (!form || !wrap) return;
-                    function siteBoxes() {
-                        return wrap.querySelectorAll('input.job-site-cb[type="checkbox"]');
-                    }
-                    if (btnAll) btnAll.addEventListener('click', function() {
-                        siteBoxes().forEach(function(cb) { cb.checked = true; });
-                    });
-                    if (btnNone) btnNone.addEventListener('click', function() {
-                        siteBoxes().forEach(function(cb) { cb.checked = false; });
-                    });
-                    form.addEventListener('submit', function(e) {
-                        var any = false;
-                        siteBoxes().forEach(function(cb) { if (cb.checked) any = true; });
-                        if (!any) {
-                            e.preventDefault();
-                            alert('Select at least one job site, or use Select all.');
-                        }
-                    });
-                })();
-                </script>
-</div>
-
-<div class="grid gap-6 lg:grid-cols-12">
-    <div class="lg:col-span-8">
-        <div class="rounded-concierge border border-slate-200 bg-white shadow-sm">
-            <div class="border-b border-slate-200 px-2 pt-2">
-                <nav class="flex flex-wrap gap-1" aria-label="Job list view">
-                        <a class="-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium {% if not show_favourites and not show_excluded %}border-concierge-slate text-concierge-slate{% else %}border-transparent text-slate-500 hover:border-slate-200 hover:text-slate-700{% endif %}"
-                           href="{% url 'jobs_search' %}?view=results&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}">
-                            Results
-                            {% if search_results and search_results.total %}
-                                <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{{ search_results.total }}</span>
-                            {% endif %}
-                        </a>
-                        <a class="-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium {% if show_favourites %}border-concierge-slate text-concierge-slate{% else %}border-transparent text-slate-500 hover:border-slate-200 hover:text-slate-700{% endif %}"
-                           href="{% url 'jobs_search' %}?view=favourites&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}">
-                            Favourites
-                            {% if saved_results and saved_results.total %}
-                                <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{{ saved_results.total }}</span>
-                            {% endif %}
-                        </a>
-                        <a class="-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium {% if show_excluded %}border-concierge-slate text-concierge-slate{% else %}border-transparent text-slate-500 hover:border-slate-200 hover:text-slate-700{% endif %}"
-                           href="{% url 'jobs_search' %}?view=excluded&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}">
-                            Excluded
-                            {% if excluded_results and excluded_results.total %}
-                                <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{{ excluded_results.total }}</span>
-                            {% endif %}
-                        </a>
-                </nav>
-                {% if not show_favourites and not show_excluded and query and search_results %}
-                <div class="border-b border-slate-100 px-4 py-2">
-                    <div class="flex flex-wrap items-center gap-3 text-xs">
-                        <span class="text-slate-500">Sort by:</span>
-                        <a href="{% url 'jobs_search' %}?view=results&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}&sort=focus{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}"
-                           class="font-semibold text-concierge-slate {% if sort_param != 'focus' %}font-normal text-slate-600{% endif %}">Focus</a>
-                        <span class="text-slate-300"> · </span>
-                        <a href="{% url 'jobs_search' %}?view=results&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}&refresh=1{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}"
-                           class="text-slate-600 hover:text-concierge-slate">Refresh</a>
-                        <span class="text-slate-300">|</span>
-                        <span class="text-slate-500">Insights:</span>
-                        <a href="#" id="insights-select-all" class="text-concierge-slate hover:underline" title="Check all job rows">Select all</a>
-                        <a href="#" id="insights-deselect-all" class="text-concierge-slate hover:underline" title="Uncheck all">Deselect all</a>
-                        <button type="button" class="inline-flex items-center gap-1.5 rounded-concierge bg-emerald-600 px-2 py-1 text-xs font-semibold text-white hover:bg-emerald-700" id="insights-btn" title="Get LLM insights across selected job descriptions">
-                            <span id="insights-btn-text">Insights</span>
-                            <span id="insights-spinner" class="hidden h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-white/40 border-t-white" role="status" aria-hidden="true"></span>
-                        </button>
-                        <span id="insights-status" class="ml-2" role="status" aria-live="polite"></span>
-                    </div>
-                </div>
-                {% endif %}
-            </div>
-            <div class="p-4 sm:p-5">
-                {% if show_favourites %}
-                    {% if not saved_results or not saved_results.jobs %}
-                        <p class="mb-0 text-sm text-slate-500">No saved jobs yet.</p>
-                    {% else %}
-                        <p class="text-sm text-slate-500">
-                            {{ saved_results.total }} saved job(s).
-                        </p>
-                        {% for j in saved_results.jobs %}
-                            <div class="mb-3 rounded-concierge border border-slate-200 bg-white p-3 shadow-sm">
-                                <div class="flex justify-between gap-3">
-                                    <div class="min-w-0">
-                                        <strong>{{ j.title }}</strong><br>
-                                        <span class="text-xs text-slate-500">
-                                            {{ j.company_name }} · {{ j.location|default:"—" }}
-                                        </span>
-                                        {% if j.snippet %}<div class="mt-1 text-xs text-slate-500">{{ j.snippet }}</div>{% endif %}
-                                    </div>
-                                    <div class="shrink-0 text-end">
-                                        {% if j.url %}
-                                            <a href="{{ j.url }}" target="_blank"
-                                               class="mb-1 rounded-concierge border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-concierge-slate hover:bg-slate-50">View</a>
-                                        {% endif %}
-                                        <form method="post" class="inline">
-                                            {% csrf_token %}
-                                            <input type="hidden" name="action" value="unsave">
-                                            <input type="hidden" name="job_id" value="{{ j.id }}">
-                                            <input type="hidden" name="next" value="{{ request.get_full_path }}">
-                                            <button type="submit" class="mb-1 rounded-concierge border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-800 hover:bg-red-50">
-                                                Remove
-                                            </button>
-                                        </form>
-                                    </div>
-                                </div>
-                            </div>
-                        {% endfor %}
-                    {% endif %}
-                {% elif show_excluded %}
-                    {% if not excluded_results or not excluded_results.jobs %}
-                        <p class="mb-0 text-sm text-slate-500">
-                            No excluded jobs. Dislike a job in Results to hide it from future searches.
-                        </p>
-                    {% else %}
-                        <p class="text-sm text-slate-500">
-                            {{ excluded_results.total }} job(s) are currently excluded from search results.
-                        </p>
-                        {% for j in excluded_results.jobs %}
-                            <div class="mb-3 rounded-concierge border border-slate-200 bg-white p-3 shadow-sm">
-                                <div class="flex justify-between gap-3">
-                                    <div class="min-w-0">
-                                        <strong>{{ j.title }}</strong>
-                                        {% if j.focus_percent is not None %}
-                                            <span class="ml-1 rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-900">Focus {{ j.focus_percent }}%</span>
-                                        {% endif %}
-                                        {% if j.matching_score is not None %}
-                                            <span class="ml-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">Match {{ j.matching_score }}</span>
-                                        {% endif %}
-                                        <br>
-                                        <span class="text-xs text-slate-500">
-                                            {{ j.company_name }} · {{ j.location|default:"—" }}
-                                        </span>
-                                        {% if j.snippet %}<div class="mt-1 text-xs text-slate-500">{{ j.snippet }}</div>{% endif %}
-                                    </div>
-                                    <div class="shrink-0 text-end">
-                                        {% if j.url %}
-                                            <a href="{{ j.url }}" target="_blank"
-                                               class="mb-1 rounded-concierge border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-concierge-slate hover:bg-slate-50">View</a>
-                                        {% endif %}
-                                        <form method="post" class="inline">
-                                            {% csrf_token %}
-                                            <input type="hidden" name="action" value="like">
-                                            <input type="hidden" name="job_id" value="{{ j.id }}">
-                                            <input type="hidden" name="next" value="{{ request.get_full_path }}">
-                                            <button type="submit" class="mb-1 rounded-concierge border border-sky-200 bg-white px-2 py-1 text-xs font-medium text-sky-900 hover:bg-sky-50">
-                                                Like (re-include)
-                                            </button>
-                                        </form>
-                                    </div>
-                                </div>
-                            </div>
-                        {% endfor %}
-                    {% endif %}
-                {% else %}
-                    {% if not search_results or not search_results.jobs %}
-                        <p class="mb-0 text-sm text-slate-500">
-                            {% if query %}
-                                No jobs found. Try a different search or location.
-                            {% else %}
-                                Enter a search term to get started.
-                            {% endif %}
-                        </p>
-                    {% else %}
-                        <p class="mb-2 text-sm text-slate-500">
-                            {{ search_results.total }} job(s). <strong>Check</strong> jobs, then <strong>Insights</strong> above for themes across roles; <strong>Tailor</strong> opens the optimizer. Badges: <span class="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-900">Fit</span> = match to liked jobs.
-                        </p>
-                        {% for j in search_results.jobs %}
-                            <div class="job-result-row mb-3 rounded-concierge border border-slate-200 bg-white p-3 shadow-sm" data-job-id="{{ j.id }}">
-                                <div class="flex justify-between gap-3">
-                                    <div class="flex min-w-0 items-start gap-2">
-                                        <div class="mt-1 shrink-0">
-                                            <input class="insights-job-cb h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" type="checkbox" value="{{ j.id }}" id="cb-{{ j.id }}" title="Select for Insights">
-                                            <label class="sr-only" for="cb-{{ j.id }}">Select for Insights</label>
-                                        </div>
-                                        <div class="min-w-0">
-                                        <strong>{{ j.title }}</strong>
-                                        <span class="mt-1 inline-flex flex-wrap items-center gap-1 md:ml-1 md:mt-0">
-                                        {% if j.focus_percent is not None %}
-                                            <span class="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-900" title="Fit to your liked jobs">Fit {{ j.focus_percent }}{% if j.focus_percent_after_penalty is not None %}→{{ j.focus_percent_after_penalty }}{% endif %}%</span>
-                                            <a href="{% url 'focus_breakdown' j.id %}?resume_id={{ selected_resume_id }}&track={{ job_search_track }}" class="rounded-concierge border border-sky-200 px-2 py-0.5 text-xs font-medium text-sky-900 hover:bg-sky-50" title="See score breakdown and AI Match reasoning">Why?</a>
-                                        {% endif %}
-                                        {% if j.preference_margin_percent is not None %}
-                                            {% if j.preference_margin_percent < -3 %}
-                                                <span class="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-900" title="Centroid-based margin: similarity to liked jobs minus similarity to disliked jobs (experimental metric)">Pref margin {{ j.preference_margin_percent }}%</span>
-                                            {% elif j.preference_margin_percent > 3 %}
-                                                <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900" title="Centroid-based margin: similarity to liked jobs minus similarity to disliked jobs (experimental metric)">Pref margin {{ j.preference_margin_percent }}%</span>
-                                            {% else %}
-                                                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700" title="Centroid-based margin: similarity to liked jobs minus similarity to disliked jobs (experimental metric)">Pref margin {{ j.preference_margin_percent }}%</span>
-                                            {% endif %}
-                                        {% endif %}
-                                        </span>
-                                        <br>
-                                        <span class="text-xs text-slate-500">
-                                            {{ j.company_name }} · {{ j.location|default:"—" }}
-                                        </span>
-                                        {% if j.posted_at or j.fetched_at %}
-                                            <span class="block text-xs text-slate-500">
-                                                {% if j.posted_at %}Posted {{ j.posted_at|date:"M j, Y" }}{% endif %}
-                                                {% if j.posted_at and j.fetched_at %} · {% endif %}
-                                                {% if j.fetched_at %}Added {{ j.fetched_at|date:"M j, Y" }}{% endif %}
-                                            </span>
-                                        {% endif %}
-                                        {% if j.focus_reason %}
-                                            <div class="mt-1 text-xs">
-                                                <span class="text-slate-500" title="This job is similar to jobs you liked">Why shown: similar to</span>
-                                                <ul class="mb-0 mt-0 list-disc pl-5">
-                                                    {% for r in j.focus_reason %}
-                                                        <li>{{ r.title }} @ {{ r.company_name }} — {{ r.similarity_percent }}% match</li>
-                                                    {% endfor %}
-                                                </ul>
-                                            </div>
-                                        {% endif %}
-                                        {% if j.snippet %}<div class="mt-1 text-xs text-slate-500">{{ j.snippet }}</div>{% endif %}
-                                        </div>
-                                    </div>
-                                    <div class="flex shrink-0 flex-col flex-wrap items-end justify-end gap-1 text-end sm:flex-row sm:items-end">
-                                        <a href="{% url 'resume_optimizer' %}?job_id={{ j.id }}{% if selected_resume_id %}&resume_id={{ selected_resume_id }}{% endif %}"
-                                           class="rounded-concierge bg-concierge-slate px-2 py-1 text-xs font-semibold text-white hover:bg-slate-800" title="Open resume optimizer to tailor your resume for this job">Tailor</a>
-                                        <button type="button"
-                                                class="job-assess-btn rounded-concierge border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-concierge-slate hover:bg-slate-50"
-                                                data-job-id="{{ j.id }}"
-                                                title="Assess this job against your selected resume using the Matching prompt">
-                                            Assess
-                                        </button>
-                                        <div class="flex flex-wrap justify-end gap-1">
-                                            <form method="post" class="inline">
-                                                {% csrf_token %}
-                                                <input type="hidden" name="action" value="save">
-                                                <input type="hidden" name="job_id" value="{{ j.id }}">
-                                                <input type="hidden" name="next" value="{{ request.get_full_path }}">
-                                                <button type="submit" class="rounded-concierge border border-emerald-200 bg-white px-2 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-50" title="Save to favourites">Save</button>
-                                            </form>
-                                            {% if j.url %}
-                                                <a href="{{ j.url }}" target="_blank" rel="noopener" class="rounded-concierge border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-concierge-slate hover:bg-slate-50" title="Open job posting">View</a>
-                                            {% endif %}
-                                            <button type="button"
-                                                    class="job-like-btn rounded-concierge border border-sky-200 bg-white px-2 py-1 text-xs font-medium text-sky-900 hover:bg-sky-50"
-                                                    data-job-id="{{ j.id }}"
-                                                    title="Like: similar jobs will rank higher">
-                                                Like
-                                            </button>
-                                            <button type="button"
-                                                    class="job-dislike-btn rounded-concierge border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-800 hover:bg-red-50"
-                                                    data-job-id="{{ j.id }}"
-                                                    title="Dislike: hide and rank similar jobs lower">
-                                                Dislike
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        {% endfor %}
-                    {% endif %}
-                {% endif %}
             </div>
         </div>
     </div>
 
-    <div class="lg:col-span-4">
-        <div class="rounded-concierge border border-slate-200 bg-white shadow-sm">
-            <div class="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-concierge-slate">
-                My matches
-            </div>
-            <div class="p-4">
-                {% if not matches %}
-                    <p class="mb-0 text-sm text-slate-500">
-                        No matches yet. Run fit checks on jobs to see them here.
-                    </p>
-                {% else %}
-                    {% for m in matches %}
-                        <div class="mb-3 rounded-concierge border border-slate-200 bg-white p-3 shadow-sm">
-                            <strong>{{ m.title }}</strong><br>
-                            <span class="text-xs text-slate-500">
-                                {{ m.company_name }} · {{ m.location|default:"—" }}
-                            </span>
-                            <div class="mt-1">
-                                {% if m.fit_score %}
-                                    <span class="rounded-full bg-concierge-slate px-2 py-0.5 text-xs font-medium text-white">Score {{ m.fit_score }}</span>
-                                {% else %}
-                                    <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">No score</span>
-                                {% endif %}
-                            </div>
-                            <p class="mb-1 text-xs text-slate-500">
-                                {{ m.reasoning|truncatechars:180 }}
-                            </p>
-                            <div class="flex items-center justify-between">
-                                <div>
-                                    {% if m.url %}
-                                        <a href="{{ m.url }}" target="_blank"
-                                           class="mb-1 rounded-concierge border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-concierge-slate hover:bg-slate-50">Open job</a>
-                                    {% endif %}
-                                </div>
-                                <div>
-                                    {% if m.status != "applied" %}
-                                        <form method="post" class="inline">
-                                            {% csrf_token %}
-                                            <input type="hidden" name="action" value="mark_applied">
-                                            <input type="hidden" name="job_id" value="{{ m.job_listing_id }}">
-                                            <input type="hidden" name="resume_id" value="{{ m.resume_id }}">
-                                            <input type="hidden" name="next" value="{{ request.get_full_path }}">
-                                            <button type="submit" class="mb-1 rounded-concierge border border-emerald-200 bg-white px-2 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-50">
-                                                Mark as applied
-                                            </button>
-                                        </form>
-                                    {% else %}
-                                        <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">Applied</span>
-                                    {% endif %}
-                                </div>
-                            </div>
-                        </div>
-                    {% endfor %}
-                {% endif %}
-            </div>
+    {% include "resume_app/_find_jobs_search_hero.html" %}
+
+    <div class="grid gap-6 lg:grid-cols-12 lg:items-start">
+        <div class="order-2 lg:order-1 lg:col-span-8">
+            {% include "resume_app/_find_jobs_results_panel.html" %}
+        </div>
+        <div class="order-1 lg:order-2 lg:col-span-4">
+            {% include "resume_app/_find_jobs_sidebar.html" %}
         </div>
     </div>
-</div>
 </div>
 
 <!-- LLM Assessment / Insights dialog -->
@@ -616,234 +82,781 @@
 <style>
 .assess-modal-markdown { line-height: 1.5; }
 .assess-modal-markdown h1, .assess-modal-markdown h2, .assess-modal-markdown h3 { margin-top: 1rem; margin-bottom: 0.5rem; font-weight: 600; }
-.assess-modal-markdown h1 { font-size: 1.25rem; }
-.assess-modal-markdown h2 { font-size: 1.1rem; }
-.assess-modal-markdown h3 { font-size: 1rem; }
 .assess-modal-markdown p { margin-bottom: 0.5rem; }
 .assess-modal-markdown ul, .assess-modal-markdown ol { margin-bottom: 0.5rem; padding-left: 1.5rem; }
-.assess-modal-markdown li { margin-bottom: 0.25rem; }
 .assess-modal-markdown code { background: #f1f5f9; padding: 0.15rem 0.35rem; border-radius: 0.25rem; font-size: 0.9em; }
 .assess-modal-markdown pre { background: #f1f5f9; padding: 0.75rem; border-radius: 0.25rem; overflow-x: auto; margin-bottom: 0.5rem; }
-.assess-modal-markdown pre code { padding: 0; background: none; }
-.assess-modal-markdown hr { margin: 1rem 0; border: 0; border-top: 1px solid #e2e8f0; }
-.assess-modal-markdown strong { font-weight: 600; }
+.job-search-loading-quote {
+    opacity: 1;
+    transition: opacity 0.35s ease;
+}
+.job-search-loading-quote.is-fading {
+    opacity: 0;
+}
 </style>
 
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
+
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    function renderMarkdown(text) {
-        if (!text || typeof text !== 'string') return '';
-        if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
-            var html = marked.parse(text, { gfm: true, breaks: true });
-            return DOMPurify.sanitize(html, { ALLOWED_TAGS: ['p','br','strong','em','b','i','u','h1','h2','h3','h4','ul','ol','li','code','pre','hr','blockquote','a','span'], ALLOWED_ATTR: ['href','target','rel'] });
+(function() {
+    function openSearchOptions() {
+        var details = document.getElementById('job-search-options');
+        if (details) {
+            details.open = true;
+            details.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
-        return text.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
     }
-    function setModalContent(el, content) {
-        if (!el) return;
-        el.innerHTML = renderMarkdown(content);
+    var filterBtn = document.getElementById('job-search-filter-btn');
+    var details = document.getElementById('job-search-options');
+    if (filterBtn) filterBtn.addEventListener('click', openSearchOptions);
+    if (details && filterBtn) {
+        details.addEventListener('toggle', function() {
+            filterBtn.setAttribute('aria-expanded', details.open ? 'true' : 'false');
+        });
     }
+})();
+</script>
+
+<script>
+(function() {
+    var interval = document.getElementById('schedule-interval');
+    var timeWrap = document.getElementById('schedule-time-wrap');
+    if (!interval || !timeWrap) return;
+    function sync() {
+        var off = interval.value === 'off';
+        timeWrap.classList.toggle('opacity-50', off);
+        var timeInput = document.getElementById('schedule-time');
+        if (timeInput) timeInput.disabled = off;
+    }
+    interval.addEventListener('change', sync);
+    sync();
+})();
+</script>
+
+<script>
+(function() {
+    var overlay = document.getElementById('job-search-loading');
+    var titleEl = document.getElementById('job-search-loading-title');
+    var subtitleEl = document.getElementById('job-search-loading-subtitle');
+    var quoteEl = document.getElementById('job-search-loading-quote');
+    var quoteTimer = null;
+    var quoteIndex = 0;
+    window.__jobSearchBusy = false;
+
+    var SEARCH_QUOTES = [
+        'Your future inbox is about to get a little more interesting.',
+        'Somewhere out there, a job description is waiting to meet its match.',
+        'We’re asking the internet politely… and thoroughly.',
+        'Good things take a minute. Great roles take a search.',
+        'Hang tight — the boards are shuffling opportunities.',
+        'Coffee optional. Patience recommended.',
+        'If job hunting were a sport, you’d be warming up right now.',
+        'We’re filtering noise so you don’t have to.',
+        'Almost there. Worse than waiting for a recruiter callback, better than rewriting your resume again.',
+        'Collecting openings like a magpie with better taste.',
+        'One click for you. A small adventure across several job boards for us.',
+        'Still searching. Your next “tell me about yourself” is not far.',
+        'Rejecting “competitive salary” fluff so the real roles can shine.',
+        'Progress: more listings in, fewer tabs for you to open.',
+        'Keep calm and let the crawlers crawl.',
+    ];
+
+    function shuffleQuotes(list) {
+        var arr = list.slice();
+        for (var i = arr.length - 1; i > 0; i--) {
+            var j = Math.floor(Math.random() * (i + 1));
+            var tmp = arr[i];
+            arr[i] = arr[j];
+            arr[j] = tmp;
+        }
+        return arr;
+    }
+
+    var quoteQueue = shuffleQuotes(SEARCH_QUOTES);
+
+    function setQuoteImmediate(text) {
+        if (!quoteEl) return;
+        quoteEl.classList.remove('is-fading');
+        quoteEl.textContent = text;
+    }
+
+    function showNextQuote(animate) {
+        if (!quoteEl || !quoteQueue.length) return;
+        var next = quoteQueue[quoteIndex % quoteQueue.length];
+        quoteIndex += 1;
+        if (quoteIndex >= quoteQueue.length) {
+            quoteQueue = shuffleQuotes(SEARCH_QUOTES);
+            quoteIndex = 0;
+        }
+        if (!animate) {
+            setQuoteImmediate(next);
+            return;
+        }
+        quoteEl.classList.add('is-fading');
+        window.setTimeout(function() {
+            quoteEl.textContent = next;
+            quoteEl.classList.remove('is-fading');
+        }, 320);
+    }
+
+    function startQuoteRotation() {
+        stopQuoteRotation();
+        showNextQuote(false);
+        quoteTimer = window.setInterval(function() {
+            showNextQuote(true);
+        }, 4500);
+    }
+
+    function stopQuoteRotation() {
+        if (quoteTimer) {
+            window.clearInterval(quoteTimer);
+            quoteTimer = null;
+        }
+        if (quoteEl) {
+            quoteEl.classList.remove('is-fading');
+            quoteEl.textContent = '';
+        }
+    }
+
+    window.showJobSearchOverlay = function(title, subtitle) {
+        window.__jobSearchBusy = true;
+        if (titleEl && title) titleEl.textContent = title;
+        if (subtitleEl && subtitle) subtitleEl.textContent = subtitle;
+        if (overlay) {
+            overlay.classList.remove('hidden');
+            overlay.classList.add('flex');
+            overlay.style.display = 'flex';
+        }
+        startQuoteRotation();
+    };
+    window.hideJobSearchOverlay = function() {
+        window.__jobSearchBusy = false;
+        stopQuoteRotation();
+        if (overlay) {
+            overlay.classList.add('hidden');
+            overlay.classList.remove('flex');
+            overlay.style.display = '';
+        }
+    };
+})();
+</script>
+
+<script>
+(function() {
+    var searchForm = document.getElementById('job-search-form');
+    var saveForm = document.getElementById('save-search-form');
+    if (!searchForm || !saveForm) return;
+    var originalPresetId = (document.getElementById('save-preset-id') || {}).value || '';
+    var originalPresetName = (document.getElementById('saved-search-name-input') || {}).value || '';
+
+    function copySearchFieldsIntoSaveForm() {
+        function val(name) {
+            var el = searchForm.querySelector('[name="' + name + '"]');
+            return el ? el.value : '';
+        }
+        document.getElementById('save-field-q').value = val('q');
+        document.getElementById('save-field-location').value = val('location');
+        document.getElementById('save-field-track').value = val('track');
+        document.getElementById('save-field-resume').value = val('resume_id');
+        document.getElementById('save-field-min-score').value = val('min_score');
+        document.getElementById('save-field-results-wanted').value = val('results_wanted');
+        document.getElementById('save-field-llm-model').value = val('llm_model');
+        var sitesWrap = document.getElementById('save-field-sites');
+        sitesWrap.innerHTML = '';
+        var checked = searchForm.querySelectorAll('input[name="site_name"]:checked');
+        checked.forEach(function(cb) {
+            var inp = document.createElement('input');
+            inp.type = 'hidden';
+            inp.name = 'site_name';
+            inp.value = cb.value;
+            sitesWrap.appendChild(inp);
+        });
+        return checked.length;
+    }
+
+    function flashSaveMessage(text, isError) {
+        var host = document.querySelector('.mx-auto.max-w-7xl') || document.body;
+        var el = document.createElement('div');
+        el.className = isError
+            ? 'mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800'
+            : 'mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900';
+        el.setAttribute('role', 'status');
+        el.textContent = text;
+        host.insertBefore(el, host.firstChild);
+        setTimeout(function() { el.remove(); }, 5000);
+    }
+
+    saveForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        if (window.__jobSearchBusy) return;
+
+        var siteCount = copySearchFieldsIntoSaveForm();
+        if (!siteCount) {
+            alert('Select at least one job site before saving.');
+            return;
+        }
+        var presetEl = document.getElementById('save-preset-id');
+        var nameInput = document.getElementById('saved-search-name-input');
+        var isSaveAsNew = !!(e.submitter && e.submitter.name === 'save_as_new');
+        if (isSaveAsNew) {
+            if (presetEl) presetEl.value = '';
+            var newName = nameInput ? nameInput.value.trim() : '';
+            if (!newName || newName === originalPresetName) {
+                if (nameInput) {
+                    nameInput.value = '';
+                    nameInput.placeholder = 'Name for new saved search';
+                    nameInput.required = true;
+                    nameInput.focus();
+                }
+                alert('Enter a new name for this saved search, then click Save as new again.');
+                return;
+            }
+        } else if (originalPresetId && presetEl) {
+            if (!presetEl.value) presetEl.value = originalPresetId;
+            if (nameInput && !nameInput.value.trim() && originalPresetName) {
+                nameInput.value = originalPresetName;
+            }
+        }
+
+        var fd = new FormData(saveForm);
+        if (isSaveAsNew) fd.set('save_as_new', '1');
+        window.showJobSearchOverlay(
+            isSaveAsNew ? 'Saving new search…' : 'Saving search…',
+            'Updating your saved search. Results on this page will stay as they are.'
+        );
+        Array.prototype.forEach.call(saveForm.querySelectorAll('button[type="submit"]'), function(btn) {
+            btn.disabled = true;
+        });
+
+        fetch(window.location.pathname, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest',
+                'Accept': 'application/json'
+            },
+            body: fd
+        }).then(function(r) {
+            return r.json().then(function(data) {
+                if (!r.ok || !data.success) {
+                    throw new Error((data && data.detail) || 'Could not save search.');
+                }
+                return data;
+            });
+        }).then(function(data) {
+            // Soft reload with from_save=1: refreshes pills/context without re-querying boards.
+            window.location.assign((data.preset && data.preset.url) || (window.location.pathname + '?from_save=1'));
+        }).catch(function(err) {
+            window.hideJobSearchOverlay();
+            Array.prototype.forEach.call(saveForm.querySelectorAll('button[type="submit"]'), function(btn) {
+                btn.disabled = false;
+            });
+            flashSaveMessage(err.message || 'Could not save search.', true);
+        });
+    });
+
+    var saveAsNewBtn = document.getElementById('save-as-new-btn');
+    if (saveAsNewBtn) {
+        saveAsNewBtn.addEventListener('click', function() {
+            var nameInput = document.getElementById('saved-search-name-input');
+            if (nameInput && nameInput.value.trim() === originalPresetName) {
+                nameInput.select();
+            }
+        });
+    }
+})();
+</script>
+
+<script>
+(function() {
+    var form = document.getElementById('job-search-form');
+    var wrap = document.getElementById('job-sites-checkboxes');
+    var btnAll = document.getElementById('job-sites-select-all');
+    var btnNone = document.getElementById('job-sites-select-none');
+    var submitBtn = document.getElementById('job-search-submit-btn');
+    var submitLabel = document.getElementById('job-search-submit-label');
+    var submitSpinner = document.getElementById('job-search-submit-spinner');
+    if (!form) return;
+
+    function siteBoxes() {
+        return form.querySelectorAll('input.job-site-cb[type="checkbox"]');
+    }
+    function anySiteChecked() {
+        var any = false;
+        siteBoxes().forEach(function(cb) { if (cb.checked) any = true; });
+        return any;
+    }
+    // Safety: if nothing is checked on load (e.g. empty GET), select defaults.
+    if (!anySiteChecked()) {
+        siteBoxes().forEach(function(cb) {
+            if (cb.value === 'indeed' || cb.value === 'linkedin' || cb.value === 'dice' || cb.value === 'adzuna' || cb.value === 'levels') {
+                cb.checked = true;
+            }
+        });
+    }
+    if (btnAll) btnAll.addEventListener('click', function() { siteBoxes().forEach(function(cb) { cb.checked = true; }); });
+    if (btnNone) btnNone.addEventListener('click', function() { siteBoxes().forEach(function(cb) { cb.checked = false; }); });
+
+    function showSearchLoading(title, subtitle) {
+        if (typeof window.showJobSearchOverlay === 'function') {
+            window.showJobSearchOverlay(
+                title || 'Searching job boards…',
+                subtitle || 'This can take a little while. Please wait — do not click Search again.'
+            );
+        }
+        if (submitBtn) submitBtn.disabled = true;
+        if (submitLabel) submitLabel.textContent = 'Searching…';
+        if (submitSpinner) submitSpinner.classList.remove('hidden');
+        document.querySelectorAll('a[href*="jobs/search"]').forEach(function(a) {
+            a.style.pointerEvents = 'none';
+            a.setAttribute('aria-disabled', 'true');
+        });
+    }
+
+    function isJobBoardNavigation(href) {
+        if (!href) return false;
+        try {
+            var url = new URL(href, window.location.origin);
+            if (url.pathname.indexOf('/jobs/search') === -1) return false;
+            var view = (url.searchParams.get('view') || 'results').toLowerCase();
+            if (view === 'favourites' || view === 'excluded') return false;
+            // Saved search, refresh, explicit sort, or query submit all hit boards.
+            if (url.searchParams.has('preset')) return true;
+            if (url.searchParams.has('refresh')) return true;
+            if (url.searchParams.get('sort') === 'focus') return true;
+            return false;
+        } catch (err) {
+            return false;
+        }
+    }
+
+    form.addEventListener('submit', function(e) {
+        if (window.__jobSearchBusy) {
+            e.preventDefault();
+            return;
+        }
+        if (!anySiteChecked()) {
+            e.preventDefault();
+            // Open filters so the user can see site checkboxes.
+            var details = document.getElementById('job-search-options');
+            if (details) details.open = true;
+            alert('Select at least one job site.');
+            return;
+        }
+        showSearchLoading();
+    });
+
+    document.addEventListener('click', function(e) {
+        var link = e.target.closest('a[href*="jobs/search"], a[href*="preset="]');
+        if (!link || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) {
+            return;
+        }
+        if (window.__jobSearchBusy) {
+            e.preventDefault();
+            return;
+        }
+        if (!isJobBoardNavigation(link.getAttribute('href'))) return;
+        var isPreset = (link.getAttribute('href') || '').indexOf('preset=') !== -1;
+        showSearchLoading(
+            isPreset ? 'Loading saved search…' : 'Searching job boards…',
+            isPreset
+                ? 'Running your saved search against job boards. Please wait.'
+                : 'This can take a little while. Please wait — do not click Search again.'
+        );
+    });
+})();
+</script>
+
+<script>
+(function() {
     var apiBase = '/api/resume/jobs';
     var csrfToken = document.querySelector('meta[name="csrf-token"]') && document.querySelector('meta[name="csrf-token"]').getAttribute('content');
-    if (!csrfToken) {
-        var input = document.querySelector('input[name="csrfmiddlewaretoken"]');
-        if (input) csrfToken = input.value;
-    }
     function headers() {
         var h = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
         if (csrfToken) h['X-CSRFToken'] = csrfToken;
         return h;
     }
-    function setStatus(el, msg, isError) {
-        if (!el) return;
-        el.textContent = msg;
-        var prefix = el.id === 'insights-status' ? 'ml-2 ' : '';
-        el.className = prefix + 'text-sm ' + (isError ? 'font-semibold text-red-600' : 'text-slate-500');
+    var form = document.getElementById('disqualifier-add-form');
+    var listEl = document.getElementById('disqualifiers-list');
+    var inputEl = document.getElementById('disqualifier-phrase-input');
+    var emptyEl = document.getElementById('disqualifiers-empty');
+    function removeHandler(e) {
+        var badge = e.target.closest('.disqualifier-badge');
+        if (!badge) return;
+        var id = badge.getAttribute('data-id');
+        fetch(apiBase + '/disqualifiers/' + id, { method: 'DELETE', credentials: 'same-origin', headers: headers() })
+            .then(function(r) { if (!r.ok) throw new Error('Failed'); badge.remove(); })
+            .catch(function(err) { alert(err.message || 'Could not remove.'); });
     }
-    function setInsightsLoading(loading) {
-        var btn = document.getElementById('insights-btn');
-        var text = document.getElementById('insights-btn-text');
-        var spinner = document.getElementById('insights-spinner');
-        if (btn) btn.disabled = loading;
-        if (text) text.textContent = loading ? 'Running…' : 'Insights';
-        if (spinner) spinner.classList.toggle('hidden', !loading);
+    form && form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        var phrase = (inputEl && inputEl.value || '').trim();
+        if (phrase.length < 2) return;
+        fetch(apiBase + '/disqualifiers', { method: 'POST', credentials: 'same-origin', headers: headers(), body: JSON.stringify({ phrase: phrase }) })
+            .then(function(r) { return r.ok ? r.json() : r.json().then(function(j) { throw new Error(j.detail || 'Failed'); }); })
+            .then(function(data) {
+                if (emptyEl) { emptyEl.remove(); emptyEl = null; }
+                var badge = document.createElement('span');
+                badge.className = 'disqualifier-badge inline-flex items-center gap-1 rounded-full bg-slate-700 px-2.5 py-1 text-xs font-medium text-white';
+                badge.setAttribute('data-id', data.id);
+                badge.innerHTML = '<span class="disqualifier-phrase">' + data.phrase.replace(/</g, '&lt;') + '</span><button type="button" class="disqualifier-remove rounded px-1 hover:bg-white/20">&times;</button>';
+                listEl.appendChild(badge);
+                inputEl.value = '';
+                badge.querySelector('.disqualifier-remove').addEventListener('click', removeHandler);
+            })
+            .catch(function(err) { alert(err.message || 'Could not add.'); });
+    });
+    listEl && listEl.querySelectorAll('.disqualifier-remove').forEach(function(btn) { btn.addEventListener('click', removeHandler); });
+})();
+</script>
+
+<script>
+(function() {
+    var apiBase = '/api/resume/jobs';
+    var csrfToken = document.querySelector('meta[name="csrf-token"]') && document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+    function headers() {
+        var h = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+        if (csrfToken) h['X-CSRFToken'] = csrfToken;
+        return h;
     }
-    var selectAll = document.getElementById('insights-select-all');
-    var deselectAll = document.getElementById('insights-deselect-all');
+    function trackParam() {
+        var el = document.getElementById('track-select');
+        var track = el && el.value ? el.value.trim() : '';
+        return track ? ('?track=' + encodeURIComponent(track)) : '';
+    }
+    function handleAction(jobId, action) {
+        return fetch(apiBase + '/' + jobId + '/' + action + trackParam(), {
+            method: 'POST', credentials: 'same-origin', headers: headers(), body: JSON.stringify({})
+        }).then(function(r) {
+            if (!r.ok) {
+                return r.json().then(function(j) {
+                    var detail = j && j.detail;
+                    if (Array.isArray(detail)) {
+                        detail = detail.map(function(item) {
+                            return (item && (item.msg || item.message)) || JSON.stringify(item);
+                        }).join('; ');
+                    }
+                    throw new Error(detail || ('Request failed (' + r.status + ')'));
+                }).catch(function(err) {
+                    if (err && err.message && err.message.indexOf('Request failed') === 0) throw err;
+                    if (err && err.message && err.message !== 'Unexpected end of JSON input') throw err;
+                    throw new Error('Request failed (' + r.status + ')');
+                });
+            }
+            return r.json().catch(function() { return {}; });
+        });
+    }
+    function setIconFilled(icon, filled) {
+        if (!icon) return;
+        if (filled) {
+            icon.setAttribute('fill', 'currentColor');
+            icon.removeAttribute('stroke');
+        } else {
+            icon.setAttribute('fill', 'none');
+            icon.setAttribute('stroke', 'currentColor');
+        }
+    }
+    function setSaveButtonState(btn, saved) {
+        btn.dataset.saved = saved ? '1' : '0';
+        btn.setAttribute('aria-pressed', saved ? 'true' : 'false');
+        btn.setAttribute('aria-label', saved ? 'Unsave' : 'Save');
+        btn.title = saved ? 'Remove from favourites' : 'Save to favourites';
+        btn.classList.toggle('bg-brand-ink', saved);
+        btn.classList.toggle('bg-brand', !saved);
+        btn.classList.toggle('hover:bg-brand', saved);
+        btn.classList.toggle('hover:bg-brand-hover', !saved);
+        setIconFilled(btn.querySelector('.job-save-icon'), saved);
+        var label = btn.querySelector('.job-save-label');
+        if (label) label.textContent = saved ? 'Saved' : 'Save Job';
+    }
+    function setLikeButtonState(btn, liked) {
+        btn.dataset.liked = liked ? '1' : '0';
+        btn.setAttribute('aria-pressed', liked ? 'true' : 'false');
+        btn.setAttribute('aria-label', liked ? 'Unlike' : 'Like');
+        btn.title = liked ? 'Remove like' : 'Like — improve ranking for similar jobs';
+        btn.classList.toggle('bg-brand-mist', liked);
+        btn.classList.toggle('text-brand', liked);
+        btn.classList.toggle('text-slate-400', !liked);
+        setIconFilled(btn.querySelector('.job-like-icon'), liked);
+    }
+    function removeJobRow(row, jobId, action, actionBtn) {
+        if (actionBtn) actionBtn.disabled = true;
+        row.style.transition = 'opacity 0.2s ease, transform 0.2s ease';
+        row.style.opacity = '0';
+        row.style.transform = 'translateX(8px)';
+        var removeTimer = setTimeout(function() { row.remove(); }, 200);
+        return handleAction(jobId, action).catch(function(err) {
+            clearTimeout(removeTimer);
+            row.style.opacity = '1';
+            row.style.transform = '';
+            if (actionBtn) actionBtn.disabled = false;
+            throw err;
+        });
+    }
+    function attachHandlers() {
+        document.querySelectorAll('.job-result-row').forEach(function(row) {
+            var jobId = row.getAttribute('data-job-id');
+            var likeBtn = row.querySelector('.job-like-btn');
+            var dislikeBtn = row.querySelector('.job-dislike-btn');
+            var hideBtn = row.querySelector('.job-hide-btn');
+            var saveBtn = row.querySelector('.job-save-btn');
+            if (likeBtn && jobId && !likeBtn.dataset.bound) {
+                likeBtn.dataset.bound = '1';
+                likeBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    var currentlyLiked = likeBtn.dataset.liked === '1';
+                    var action = currentlyLiked ? 'unlike' : 'like';
+                    likeBtn.disabled = true;
+                    setLikeButtonState(likeBtn, !currentlyLiked);
+                    handleAction(jobId, action).catch(function(err) {
+                        setLikeButtonState(likeBtn, currentlyLiked);
+                        alert(err.message);
+                    }).finally(function() {
+                        likeBtn.disabled = false;
+                    });
+                });
+            }
+            if (saveBtn && jobId && !saveBtn.dataset.bound) {
+                saveBtn.dataset.bound = '1';
+                saveBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    var currentlySaved = saveBtn.dataset.saved === '1';
+                    var action = currentlySaved ? 'unsave' : 'save';
+                    saveBtn.disabled = true;
+                    setSaveButtonState(saveBtn, !currentlySaved);
+                    handleAction(jobId, action).catch(function(err) {
+                        setSaveButtonState(saveBtn, currentlySaved);
+                        alert(err.message);
+                    }).finally(function() {
+                        saveBtn.disabled = false;
+                    });
+                });
+            }
+            if (dislikeBtn && jobId && !dislikeBtn.dataset.bound) {
+                dislikeBtn.dataset.bound = '1';
+                dislikeBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    removeJobRow(row, jobId, 'dislike', dislikeBtn).catch(function(err) {
+                        alert(err.message);
+                    });
+                });
+            }
+            if (hideBtn && jobId && !hideBtn.dataset.bound) {
+                hideBtn.dataset.bound = '1';
+                hideBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    removeJobRow(row, jobId, 'hide', hideBtn).catch(function(err) {
+                        alert(err.message);
+                    });
+                });
+            }
+        });
+
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', attachHandlers);
+    else attachHandlers();
+})();
+</script>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    function renderMarkdown(text) {
+        if (!text || typeof text !== 'string') return '';
+        if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
+            return DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: true }));
+        }
+        return text.replace(/</g, '&lt;').replace(/\n/g, '<br>');
+    }
+    function escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+    var apiBase = '/api/resume/jobs';
+    var csrfToken = document.querySelector('meta[name="csrf-token"]') && document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+    function headers() {
+        var h = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+        if (csrfToken) h['X-CSRFToken'] = csrfToken;
+        return h;
+    }
+    function currentTrack() {
+        var trackSelect = document.getElementById('track-select');
+        if (trackSelect && trackSelect.value) return trackSelect.value;
+        return '{{ job_search_track|default:"" }}' || '';
+    }
     var insightsBtn = document.getElementById('insights-btn');
     var insightsStatus = document.getElementById('insights-status');
-    var assessStatus = document.getElementById('assess-modal-status');
-    var assessBody = document.getElementById('assessModalBody');
     var assessModalEl = document.getElementById('assessModal');
+    var assessBody = document.getElementById('assessModalBody');
+    var assessStatus = document.getElementById('assess-modal-status');
     var assessModalTitle = document.getElementById('assessModalLabel');
-    function openAssessDialog() {
-        if (!assessModalEl || typeof assessModalEl.showModal !== 'function') return;
-        try { assessModalEl.showModal(); } catch (e) {}
+    function openAssessDialog() { try { assessModalEl.showModal(); } catch (e) {} }
+    function openModal(title, loadingHtml) {
+        if (assessModalTitle) assessModalTitle.textContent = title;
+        if (assessStatus) assessStatus.textContent = '';
+        assessBody.innerHTML = loadingHtml || '<p class="text-sm text-slate-500">Loading…</p>';
+        openAssessDialog();
     }
-    function closeAssessDialog() {
-        if (assessModalEl && assessModalEl.open) assessModalEl.close();
+    document.getElementById('assessModalCloseBtn')?.addEventListener('click', function() { assessModalEl.close(); });
+    document.getElementById('assessModalFooterClose')?.addEventListener('click', function() { assessModalEl.close(); });
+
+    function renderFocusBreakdown(data) {
+        if (!data || !data.job) return '<p class="text-sm text-slate-500">No breakdown available.</p>';
+        var alpha = data.alpha != null ? data.alpha : 0.55;
+        var roleWeight = Math.round((1 - alpha) * 100) / 100;
+        var o = data.overall || {};
+        var html = '';
+        html += '<p class="mb-4 text-sm text-slate-600">Focus = ' + escapeHtml(alpha) + ' × title + ' + escapeHtml(roleWeight) + ' × role (vs liked jobs).</p>';
+        html += '<div class="mb-4 overflow-x-auto rounded-xl border border-slate-200">';
+        html += '<div class="border-b border-slate-100 bg-slate-50 px-3 py-2 text-sm font-semibold text-concierge-slate">' + escapeHtml(data.job.title) + ' @ ' + escapeHtml(data.job.company_name) + '</div>';
+        html += '<table class="min-w-full text-sm"><thead><tr class="border-b border-slate-100 text-left text-xs font-semibold uppercase text-slate-500"><th class="px-3 py-2">Component</th><th class="px-3 py-2">%</th></tr></thead><tbody>';
+        html += '<tr class="border-b border-slate-50"><td class="px-3 py-2">Title (vs liked)</td><td class="px-3 py-2 font-medium">' + escapeHtml(o.title_percent) + '%</td></tr>';
+        html += '<tr class="border-b border-slate-50"><td class="px-3 py-2">Role (vs liked)</td><td class="px-3 py-2 font-medium">' + escapeHtml(o.full_percent) + '%</td></tr>';
+        html += '<tr><td class="px-3 py-2 font-semibold">Combined</td><td class="px-3 py-2 font-bold">' + escapeHtml(o.combined_percent) + '%</td></tr>';
+        html += '</tbody></table></div>';
+
+        var pm = data.preference_margin;
+        if (pm) {
+            html += '<div class="mb-4 overflow-x-auto rounded-xl border border-slate-200 p-3">';
+            html += '<p class="mb-2 text-sm font-semibold text-concierge-slate">Preference margin</p>';
+            html += '<table class="min-w-full text-sm"><tbody>';
+            html += '<tr class="border-b border-slate-50"><td class="py-1.5 pr-3">Similarity to liked</td><td>' + escapeHtml(pm.like_percent) + '%</td></tr>';
+            html += '<tr class="border-b border-slate-50"><td class="py-1.5 pr-3">Similarity to disliked</td><td>' + escapeHtml(pm.dislike_percent) + '%</td></tr>';
+            html += '<tr><td class="py-1.5 pr-3 font-semibold">Margin</td><td class="font-bold">' + escapeHtml(pm.margin_percent) + '%</td></tr>';
+            html += '</tbody></table></div>';
+        }
+
+        var liked = data.by_liked || [];
+        if (liked.length) {
+            html += '<div class="mb-4 overflow-x-auto rounded-xl border border-slate-200">';
+            html += '<div class="border-b border-slate-100 bg-slate-50 px-3 py-2 text-sm font-semibold text-concierge-slate">Per liked job</div>';
+            html += '<table class="min-w-full text-sm"><thead><tr class="border-b border-slate-100 text-left text-xs font-semibold uppercase text-slate-500"><th class="px-3 py-2">Liked job</th><th class="px-3 py-2">Title %</th><th class="px-3 py-2">Role %</th><th class="px-3 py-2">Comb.</th></tr></thead><tbody>';
+            liked.forEach(function(row) {
+                html += '<tr class="border-b border-slate-50"><td class="px-3 py-2">' + escapeHtml(row.title) + ' @ ' + escapeHtml(row.company_name) + '</td>';
+                html += '<td class="px-3 py-2">' + escapeHtml(row.title_percent) + '%</td>';
+                html += '<td class="px-3 py-2">' + escapeHtml(row.full_percent) + '%</td>';
+                html += '<td class="px-3 py-2 font-semibold">' + escapeHtml(row.combined_percent) + '%</td></tr>';
+            });
+            html += '</tbody></table></div>';
+        }
+
+        var disliked = data.by_disliked || [];
+        if (disliked.length) {
+            html += '<div class="overflow-x-auto rounded-xl border border-slate-200">';
+            html += '<div class="border-b border-slate-100 bg-slate-50 px-3 py-2 text-sm font-semibold text-concierge-slate">Per disliked job (penalty)</div>';
+            html += '<table class="min-w-full text-sm"><thead><tr class="border-b border-slate-100 text-left text-xs font-semibold uppercase text-slate-500"><th class="px-3 py-2">Disliked job</th><th class="px-3 py-2">Title %</th><th class="px-3 py-2">Role %</th><th class="px-3 py-2">Comb.</th></tr></thead><tbody>';
+            disliked.forEach(function(row) {
+                html += '<tr class="border-b border-slate-50"><td class="px-3 py-2">' + escapeHtml(row.title) + ' @ ' + escapeHtml(row.company_name) + '</td>';
+                html += '<td class="px-3 py-2">' + escapeHtml(row.title_percent) + '%</td>';
+                html += '<td class="px-3 py-2">' + escapeHtml(row.full_percent) + '%</td>';
+                html += '<td class="px-3 py-2 font-semibold">' + escapeHtml(row.combined_percent) + '%</td></tr>';
+            });
+            html += '</tbody></table></div>';
+        }
+        return html;
     }
-    var assessCloseBtn = document.getElementById('assessModalCloseBtn');
-    var assessFooterClose = document.getElementById('assessModalFooterClose');
-    if (assessCloseBtn) assessCloseBtn.addEventListener('click', closeAssessDialog);
-    if (assessFooterClose) assessFooterClose.addEventListener('click', closeAssessDialog);
-    if (selectAll) selectAll.addEventListener('click', function(e) { e.preventDefault(); document.querySelectorAll('.insights-job-cb').forEach(function(cb) { cb.checked = true; }); });
-    if (deselectAll) deselectAll.addEventListener('click', function(e) { e.preventDefault(); document.querySelectorAll('.insights-job-cb').forEach(function(cb) { cb.checked = false; }); });
+
+    document.addEventListener('click', function(e) {
+        var descBtn = e.target.closest('.job-toggle-desc');
+        if (descBtn) {
+            e.preventDefault();
+            var descJobId = parseInt(descBtn.getAttribute('data-job-id') || '0', 10);
+            if (!descJobId) return;
+            openModal('Job description');
+            fetch(apiBase + '/' + descJobId, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+                .then(function(r) { return r.ok ? r.json() : r.json().then(function(j) { throw new Error(j.detail || 'Failed to load description'); }); })
+                .then(function(data) {
+                    var title = escapeHtml(data.title || 'Job');
+                    var company = escapeHtml(data.company_name || '');
+                    var desc = (data.description || '').trim();
+                    var body = '<p class="mb-3 text-sm font-semibold text-concierge-slate">' + title + (company ? ' <span class="font-normal text-slate-500">@ ' + company + '</span>' : '') + '</p>';
+                    if (!desc) {
+                        body += '<p class="text-sm text-slate-500">No description available.</p>';
+                    } else {
+                        body += '<div class="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">' + escapeHtml(desc) + '</div>';
+                    }
+                    if (data.url) {
+                        body += '<p class="mt-4"><a href="' + escapeHtml(data.url) + '" target="_blank" rel="noopener" class="text-sm font-semibold text-brand hover:underline">View original posting</a></p>';
+                    }
+                    assessBody.innerHTML = body;
+                })
+                .catch(function(err) {
+                    assessBody.innerHTML = '<p class="text-sm text-red-600">' + escapeHtml(err.message || 'Failed') + '</p>';
+                });
+            return;
+        }
+
+        var whyBtn = e.target.closest('.job-why-fit-btn');
+        if (whyBtn) {
+            e.preventDefault();
+            var whyJobId = parseInt(whyBtn.getAttribute('data-job-id') || '0', 10);
+            if (!whyJobId) return;
+            openModal('Why this fit?');
+            var track = currentTrack();
+            var url = apiBase + '/focus-breakdown/' + whyJobId + (track ? ('?track=' + encodeURIComponent(track)) : '');
+            fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+                .then(function(r) {
+                    return r.ok ? r.json() : r.json().then(function(j) {
+                        throw new Error(j.detail || (r.status === 404 ? 'Like some jobs first to see fit details.' : 'Failed to load fit breakdown'));
+                    });
+                })
+                .then(function(data) { assessBody.innerHTML = renderFocusBreakdown(data); })
+                .catch(function(err) {
+                    assessBody.innerHTML = '<p class="text-sm text-red-600">' + escapeHtml(err.message || 'Failed') + '</p>';
+                });
+        }
+    });
+
     if (insightsBtn) {
         insightsBtn.addEventListener('click', function() {
             var checked = Array.prototype.slice.call(document.querySelectorAll('.insights-job-cb:checked')).map(function(cb) { return parseInt(cb.value, 10); }).filter(Boolean);
             if (!checked.length) {
-                setStatus(insightsStatus, 'Select at least one job (check the boxes next to jobs).', true);
+                if (insightsStatus) insightsStatus.textContent = 'Select at least one job first.';
                 return;
             }
-            var modelSelect = document.getElementById('llm-model-select');
-            var llmModel = modelSelect && modelSelect.value ? modelSelect.value : null;
-            setStatus(insightsStatus, 'Running Insights for ' + checked.length + ' job(s)…', false);
-            setInsightsLoading(true);
-            if (assessModalTitle) assessModalTitle.textContent = 'Insights';
-            setStatus(assessStatus, 'Loading…', false);
-            assessBody.innerHTML = '<p class="mb-0 flex items-center gap-2 text-sm text-slate-500"><span class="inline-block h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-concierge-slate"></span>Running Insights…</p>';
-            openAssessDialog();
+            var llmModel = document.getElementById('llm-model-select')?.value || null;
+            var spinner = document.getElementById('insights-spinner');
+            var text = document.getElementById('insights-btn-text');
+            insightsBtn.disabled = true;
+            if (text) text.textContent = 'Running…';
+            if (spinner) spinner.classList.remove('hidden');
+            openModal('Insights', '<p class="text-sm text-slate-500">Running insights…</p>');
             fetch(apiBase + '/insights', {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: headers(),
-                body: JSON.stringify({
-                    job_listing_ids: checked,
-                    llm_provider: '{{ job_search_llm_provider|default_if_none:"" }}' || null,
-                    llm_model: llmModel
-                })
-            })
-                .then(function(r) {
-                    if (!r.ok) {
-                        return r.json().then(function(j) { throw new Error(j.detail || j.message || 'Insights failed'); }).catch(function() { throw new Error('Request failed (status ' + r.status + ')'); });
-                    }
-                    return r.json();
-                })
-                .then(function(data) {
-                    setStatus(insightsStatus, 'Done.', false);
-                    setStatus(assessStatus, '', false);
-                    var effectiveProvider = data.provider || ('{{ job_search_llm_provider|default_if_none:"" }}' || '');
-                    var effectiveModel = data.model || (llmModel || '');
-                    var headerLines = [];
-                    if (effectiveProvider) headerLines.push('Provider: ' + effectiveProvider);
-                    if (effectiveModel) headerLines.push('Model: ' + effectiveModel);
-                    var header = headerLines.length ? headerLines.join(' | ') + '\n\n' : '';
-                    var content = header + (data.content || '');
-                    if (data.prompt) content += '\n\n--- Prompt ---\n' + data.prompt;
-                    setModalContent(assessBody, content);
-                    openAssessDialog();
-                })
-                .catch(function(err) {
-                    setStatus(insightsStatus, 'Error: ' + (err.message || 'Request failed'), true);
-                    setStatus(assessStatus, 'Error: ' + (err.message || 'Request failed'), true);
-                    assessBody.innerHTML = '';
-                    openAssessDialog();
-                })
-                .finally(function() { setInsightsLoading(false); });
+                method: 'POST', credentials: 'same-origin', headers: headers(),
+                body: JSON.stringify({ job_listing_ids: checked, llm_provider: '{{ job_search_llm_provider|default_if_none:"" }}' || null, llm_model: llmModel })
+            }).then(function(r) { return r.ok ? r.json() : r.json().then(function(j) { throw new Error(j.detail || 'Failed'); }); })
+              .then(function(data) {
+                  assessBody.innerHTML = renderMarkdown(data.content || '');
+                  if (insightsStatus) insightsStatus.textContent = 'Done.';
+              })
+              .catch(function(err) {
+                  if (insightsStatus) insightsStatus.textContent = err.message;
+                  assessBody.innerHTML = '';
+              })
+              .finally(function() {
+                  insightsBtn.disabled = false;
+                  if (text) text.textContent = 'Generate';
+                  if (spinner) spinner.classList.add('hidden');
+              });
         });
     }
-
-    // Per-job "Assess" button: run Matching prompt for a single job and show reasoning in modal.
-    function runAssess(jobId) {
-        if (!jobId) {
-            setStatus(assessStatus, 'Missing job id for assessment.', true);
-            assessBody.innerHTML = '';
-            openAssessDialog();
-            return;
-        }
-        var resumeSelect = document.getElementById('resume-select');
-        var resumeId = null;
-        if (resumeSelect) {
-            var v = resumeSelect.value;
-            if (v) resumeId = parseInt(v, 10);
-            else if (resumeSelect.options && resumeSelect.options.length > 1 && resumeSelect.options[1].value)
-                resumeId = parseInt(resumeSelect.options[1].value, 10);
-        }
-        if (!resumeId || isNaN(resumeId)) {
-            setStatus(assessStatus, 'No resume available. Upload a resume first (e.g. "Latest" or a specific resume).', true);
-            openAssessDialog();
-            return;
-        }
-        var modelSelect = document.getElementById('llm-model-select');
-        var llmModel = modelSelect && modelSelect.value ? modelSelect.value : null;
-        if (assessModalTitle) assessModalTitle.textContent = 'Job assessment';
-        setStatus(assessStatus, 'Running assessment…', false);
-        assessBody.textContent = '';
-        fetch(apiBase + '/ai-match', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: headers(),
-            body: JSON.stringify({
-                resume_id: resumeId,
-                job_listing_ids: [jobId],
-                llm_provider: '{{ job_search_llm_provider|default_if_none:"" }}' || null,
-                llm_model: llmModel
-            })
-        })
-        .then(function(r) {
-            if (!r.ok) {
-                return r.json().then(function(j) { throw new Error(j.detail || j.message || 'Assessment failed'); })
-                    .catch(function() { throw new Error('Request failed (status ' + r.status + ')'); });
-            }
-            return r.json();
-        })
-        .then(function(data) {
-            var item = data.results && data.results.length ? data.results[0] : null;
-            if (!item) {
-                setStatus(assessStatus, 'No assessment result returned.', true);
-                openAssessDialog();
-                return;
-            }
-            var effectiveProvider = item.provider || ('{{ job_search_llm_provider|default_if_none:"" }}' || '');
-            var effectiveModel = item.model || (llmModel || '');
-            var headerLines = [];
-            if (effectiveProvider) headerLines.push('Provider: ' + effectiveProvider);
-            if (effectiveModel) headerLines.push('Model: ' + effectiveModel);
-            var header = headerLines.length ? headerLines.join(' | ') + '\n\n' : '';
-            var content = header + 'Score: ' + (item.score != null ? item.score : 'N/A') + ' / 100\n\nReasoning:\n' + (item.reasoning || '');
-            if (item.prompt) {
-                content += '\n\n--- Prompt ---\n' + item.prompt;
-            }
-            setModalContent(assessBody, content);
-            setStatus(assessStatus, '', false);
-            openAssessDialog();
-        })
-        .catch(function(err) {
-            setStatus(assessStatus, 'Error: ' + (err.message || 'Request failed'), true);
-            openAssessDialog();
-        });
-    }
-
-    document.querySelectorAll('.job-assess-btn').forEach(function(btn) {
-        if (btn.dataset.bound === '1') return;
-        btn.dataset.bound = '1';
-        btn.addEventListener('click', function(e) {
-            e.preventDefault();
-            var jobId = parseInt(btn.getAttribute('data-job-id') || '0', 10);
-            runAssess(jobId);
-        });
-    });
 });
 </script>
+
 <script>
 (function() {
-    const resumeSelect = document.getElementById('resume-select');
-    const trackSelect = document.getElementById('track-select');
+    var resumeSelect = document.getElementById('resume-select');
+    var trackSelect = document.getElementById('track-select');
     if (!resumeSelect || !trackSelect) return;
-
     function syncTrackFromResume() {
-        const opt = resumeSelect.options[resumeSelect.selectedIndex];
-        const t = (opt && opt.getAttribute && opt.getAttribute('data-track')) ? opt.getAttribute('data-track') : '';
-        if (t && t !== trackSelect.value) {
-            trackSelect.value = t;
-        }
+        var opt = resumeSelect.options[resumeSelect.selectedIndex];
+        var t = opt && opt.getAttribute('data-track') ? opt.getAttribute('data-track') : '';
+        if (t && trackSelect.value !== t) trackSelect.value = t;
     }
-
     resumeSelect.addEventListener('change', syncTrackFromResume);
-    // Initial sync so the UI reflects the stored resume track.
     syncTrackFromResume();
 })();
 </script>

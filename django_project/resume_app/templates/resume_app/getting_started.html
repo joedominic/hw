@@ -1,0 +1,107 @@
+{% extends "resume_app/base.html" %}
+
+{% block title %}Getting started — ResumeElite{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-2xl">
+    <div class="mb-8">
+        <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Welcome to ResumeElite</h1>
+        <p class="mt-2 text-sm text-slate-600">
+            Complete these steps to start your job search. AI features use the platform default when available—you can add your own API key later in Settings.
+        </p>
+    </div>
+
+    {% include "resume_app/_concierge_messages.html" %}
+
+    {% if progress.platform_llm %}
+    <div class="mb-4 rounded-2xl border border-brand/20 bg-brand-mist px-4 py-3 text-sm text-brand-ink">
+        <strong>AI ready.</strong> Resume tailoring and job matching use ResumeElite's built-in provider. You can optionally connect your own key in Settings.
+    </div>
+    {% elif progress.llm_done %}
+    <div class="mb-4 rounded-2xl border border-brand/20 bg-brand-mist px-4 py-3 text-sm text-brand-ink">
+        <strong>Your AI key is connected.</strong> You can change providers anytime in Settings.
+    </div>
+    {% endif %}
+
+    <ol class="space-y-4">
+        <li class="rounded-2xl border {% if progress.resume_done %}border-brand/20 bg-brand-mist/60{% else %}border-slate-200 bg-white{% endif %} p-5 shadow-card">
+            <div class="flex items-start gap-3">
+                <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full {% if progress.resume_done %}bg-brand text-white{% else %}bg-slate-200 text-slate-600{% endif %} text-sm font-semibold" aria-hidden="true">
+                    {% if progress.resume_done %}✓{% else %}1{% endif %}
+                </span>
+                <div class="min-w-0 flex-1">
+                    <h2 class="font-semibold text-concierge-slate">Upload your resume</h2>
+                    <p class="mt-1 text-sm text-slate-600">PDF only. Saved to your default job target ({{ default_track }}).</p>
+                    {% if progress.resume_done %}
+                        <p class="mt-2 text-sm font-medium text-brand">Resume on file</p>
+                    {% else %}
+                        <form method="post" enctype="multipart/form-data" class="mt-3 flex flex-wrap items-end gap-3">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="upload_resume">
+                            <label class="block text-sm">
+                                <span class="sr-only">Resume PDF</span>
+                                <input type="file" name="resume_file" accept="application/pdf,.pdf" required
+                                       class="block w-full max-w-xs text-sm text-slate-600 file:mr-3 file:rounded-concierge file:border-0 file:bg-brand-soft file:px-3 file:py-2 file:text-sm file:font-medium file:text-brand-ink">
+                            </label>
+                            <button type="submit" class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover">
+                                Upload
+                            </button>
+                        </form>
+                    {% endif %}
+                </div>
+            </div>
+        </li>
+
+        <li class="rounded-2xl border {% if progress.search_done %}border-brand/20 bg-brand-mist/60{% else %}border-slate-200 bg-white{% endif %} p-5 shadow-card">
+            <div class="flex items-start gap-3">
+                <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full {% if progress.search_done %}bg-brand text-white{% else %}bg-slate-200 text-slate-600{% endif %} text-sm font-semibold" aria-hidden="true">
+                    {% if progress.search_done %}✓{% else %}2{% endif %}
+                </span>
+                <div class="min-w-0 flex-1">
+                    <h2 class="font-semibold text-concierge-slate">Find your first jobs</h2>
+                    <p class="mt-1 text-sm text-slate-600">Run a search and save roles you like to your pipeline.</p>
+                    {% if progress.search_done %}
+                        <p class="mt-2 text-sm font-medium text-brand">Search activity recorded</p>
+                    {% else %}
+                        <a href="{{ jobs_search_url }}" class="mt-3 inline-flex rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover">
+                            Search jobs
+                        </a>
+                    {% endif %}
+                </div>
+            </div>
+        </li>
+    </ol>
+
+    {% if progress.show_byok_hint %}
+    <div class="mt-6 rounded-concierge border border-dashed border-slate-300 bg-slate-50/50 p-5">
+        <h2 class="text-sm font-semibold text-concierge-slate">Optional: use your own AI provider</h2>
+        <p class="mt-1 text-sm text-slate-600">
+            No platform AI key is configured for this install. Add your own API key in Settings to enable resume tailoring and job matching—or ask your admin to enable the system default.
+        </p>
+        <a href="{{ settings_llm_url }}" class="mt-3 inline-flex rounded-concierge border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50">
+            Add API key (optional)
+        </a>
+    </div>
+    {% endif %}
+
+    <div class="mt-8 flex flex-wrap items-center gap-3 border-t border-slate-200 pt-6">
+        {% if progress.steps_complete %}
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="finish">
+                <button type="submit" class="rounded-concierge bg-brand px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-hover">
+                    Go to My jobs
+                </button>
+            </form>
+        {% else %}
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="dismiss">
+                <button type="submit" class="rounded-concierge border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-concierge-slate hover:bg-slate-50">
+                    Skip for now → My jobs
+                </button>
+            </form>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

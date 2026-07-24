@@ -2,6 +2,9 @@
 Redis-backed RPM + TPM limiting for LLM calls (shared across Huey workers).
 
 Fails open when Redis is unavailable if LLM_RATE_LIMIT_FAIL_OPEN is True.
+
+Preference lookups and Redis keys are scoped per user for BYOK credentials;
+platform/env keys share a ``platform`` namespace.
 """
 from __future__ import annotations
 
@@ -86,11 +89,35 @@ def _get_redis():
         return _redis_client
 
 
-def _get_limits_from_preferences(provider: str, model: str | None) -> Optional[tuple[int, int]]:
+def _rate_limit_scope_key(user, provider: str) -> str:
+    """BYOK → per-user bucket; platform/env keys → shared platform bucket."""
+    if user is None or not getattr(user, "is_authenticated", False):
+        return "platform"
+    try:
+        from .models import LLMProviderConfig
+
+        has_byok = (
+            LLMProviderConfig.objects.for_user(user)
+            .filter(provider=provider)
+            .exclude(encrypted_api_key="")
+            .exists()
+        )
+        if has_byok:
+            return f"u{int(user.pk)}"
+    except Exception:
+        pass
+    return "platform"
+
+
+def _get_limits_from_preferences(
+    provider: str, model: str | None, *, user
+) -> Optional[tuple[int, int]]:
     """Match LLMProviderPreference row: exact model first, then blank model as provider wildcard."""
     try:
         from .models import LLMProviderPreference
     except Exception:
+        return None
+    if user is None:
         return None
     prov = (provider or "").strip()
     if not prov:
@@ -98,7 +125,7 @@ def _get_limits_from_preferences(provider: str, model: str | None) -> Optional[t
     m = (model or "").strip()
     base = (
         LLMProviderPreference.objects.select_related("provider_config")
-        .filter(provider_config__provider=prov)
+        .filter(provider_config__owner=user, provider_config__provider=prov)
         .order_by("priority", "id")
     )
     picked = base.filter(model=m).first() if m else None
@@ -112,11 +139,13 @@ def _get_limits_from_preferences(provider: str, model: str | None) -> Optional[t
     return None
 
 
-def get_preference_row_for_provider_model(provider: str, model: str | None):
+def get_preference_row_for_provider_model(provider: str, model: str | None, *, user):
     """Return matching LLMProviderPreference or None (exact model, then blank model)."""
     try:
         from .models import LLMProviderPreference
     except Exception:
+        return None
+    if user is None:
         return None
     prov = (provider or "").strip()
     if not prov:
@@ -124,7 +153,7 @@ def get_preference_row_for_provider_model(provider: str, model: str | None):
     m = (model or "").strip()
     base = (
         LLMProviderPreference.objects.select_related("provider_config")
-        .filter(provider_config__provider=prov)
+        .filter(provider_config__owner=user, provider_config__provider=prov)
         .order_by("priority", "id")
     )
     picked = base.filter(model=m).first() if m else None
@@ -133,34 +162,35 @@ def get_preference_row_for_provider_model(provider: str, model: str | None):
     return picked
 
 
-def get_cooldown_seconds_for_provider_model(provider: str, model: str | None) -> int:
-    row = get_preference_row_for_provider_model(provider, model)
+def get_cooldown_seconds_for_provider_model(provider: str, model: str | None, *, user) -> int:
+    row = get_preference_row_for_provider_model(provider, model, user=user)
     if row and row.rate_limit_cooldown_seconds and int(row.rate_limit_cooldown_seconds) > 0:
         return int(row.rate_limit_cooldown_seconds)
     return DEFAULT_LLM_COOLDOWN_SECONDS
 
 
-def llm_cooldown_redis_key(provider: str, model: str | None) -> str:
+def llm_cooldown_redis_key(provider: str, model: str | None, *, user) -> str:
     sk_model = _safe_key_part(model)
-    return f"llm:cooldown:v1:{_safe_key_part(provider)}:{sk_model}"
+    scope = _rate_limit_scope_key(user, provider)
+    return f"llm:cooldown:v2:{scope}:{_safe_key_part(provider)}:{sk_model}"
 
 
-def set_llm_cooldown(provider: str, model: str | None, seconds: int) -> None:
+def set_llm_cooldown(provider: str, model: str | None, seconds: int, *, user) -> None:
     """Mark provider+model unavailable for approximately `seconds` (Redis TTL)."""
     if seconds <= 0:
         return
     try:
         r = _get_redis()
-        r.setex(llm_cooldown_redis_key(provider, model), int(seconds), "1")
+        r.setex(llm_cooldown_redis_key(provider, model, user=user), int(seconds), "1")
     except Exception as e:
         logger.warning("llm cooldown set failed: %s", e)
 
 
-def get_llm_cooldown_ttl(provider: str, model: str | None) -> Optional[int]:
+def get_llm_cooldown_ttl(provider: str, model: str | None, *, user) -> Optional[int]:
     """Remaining cooldown seconds, or None if unavailable / key missing / Redis error."""
     try:
         r = _get_redis()
-        ttl = r.ttl(llm_cooldown_redis_key(provider, model))
+        ttl = r.ttl(llm_cooldown_redis_key(provider, model, user=user))
     except Exception as e:
         logger.debug("llm cooldown ttl failed: %s", e)
         return None
@@ -169,8 +199,8 @@ def get_llm_cooldown_ttl(provider: str, model: str | None) -> Optional[int]:
     return int(ttl)
 
 
-def is_llm_on_cooldown(provider: str, model: str | None) -> bool:
-    ttl = get_llm_cooldown_ttl(provider, model)
+def is_llm_on_cooldown(provider: str, model: str | None, *, user) -> bool:
+    ttl = get_llm_cooldown_ttl(provider, model, user=user)
     return ttl is not None and ttl > 0
 
 
@@ -187,12 +217,12 @@ def _get_limits_from_settings(provider: str) -> Optional[tuple[int, int]]:
     return (rpm, tpm)
 
 
-def _get_limits(provider: str, model: str | None = None) -> Optional[tuple[int, int]]:
+def _get_limits(provider: str, model: str | None = None, *, user) -> Optional[tuple[int, int]]:
     from django.conf import settings
 
     if not getattr(settings, "LLM_RATE_LIMIT_ENABLED", False):
         return None
-    db_lim = _get_limits_from_preferences(provider, model)
+    db_lim = _get_limits_from_preferences(provider, model, user=user)
     if db_lim:
         return db_lim
     return _get_limits_from_settings(provider)
@@ -202,21 +232,24 @@ def _try_acquire_once_internal(
     provider: str,
     model: str | None,
     estimated_input_tokens: int,
+    *,
+    user,
 ) -> Optional[_RateLimitReservation]:
-    lim = _get_limits(provider, model)
+    lim = _get_limits(provider, model, user=user)
     if not lim:
         return None
     rpm, tpm = lim
     est = max(1, int(estimated_input_tokens))
     sk_model = _safe_key_part(model)
+    scope = _rate_limit_scope_key(user, provider)
     try:
         r = _get_redis()
     except Exception as e:
         logger.warning("llm_rate_limit redis connect failed: %s", e)
         return None
     minute = int(time.time() // 60)
-    req_key = f"llm:rl:v1:req:{_safe_key_part(provider)}:{sk_model}:{minute}"
-    tok_key = f"llm:rl:v1:tok:{_safe_key_part(provider)}:{sk_model}:{minute}"
+    req_key = f"llm:rl:v2:req:{scope}:{_safe_key_part(provider)}:{sk_model}:{minute}"
+    tok_key = f"llm:rl:v2:tok:{scope}:{_safe_key_part(provider)}:{sk_model}:{minute}"
     import redis as redis_lib
 
     try:
@@ -252,6 +285,7 @@ def try_acquire_llm_slot(
     model: str | None,
     estimated_input_tokens: int,
     *,
+    user,
     prefer_failover: bool = False,
 ) -> tuple[Optional[Callable[[int], None]], Optional[Callable[[], None]]]:
     """
@@ -265,14 +299,14 @@ def try_acquire_llm_slot(
     """
     from django.conf import settings
 
-    lim = _get_limits(provider, model)
+    lim = _get_limits(provider, model, user=user)
     if not lim:
         noop = lambda *a, **k: None
         return noop, noop
 
-    fail_open = getattr(settings, "LLM_RATE_LIMIT_FAIL_OPEN", True) and not prefer_failover
+    fail_open = getattr(settings, "LLM_RATE_LIMIT_FAIL_OPEN", False) and not prefer_failover
     try:
-        res = _try_acquire_once_internal(provider, model, estimated_input_tokens)
+        res = _try_acquire_once_internal(provider, model, estimated_input_tokens, user=user)
     except Exception as e:
         logger.warning("try_acquire_llm_slot failed: %s", e)
         if fail_open:
@@ -314,6 +348,8 @@ def acquire_llm_slot(
     provider: str,
     model: str | None,
     estimated_input_tokens: int,
+    *,
+    user,
 ) -> tuple[Callable[[int], None], Callable[[], None]]:
     """
     Reserve one request and estimated_input_tokens against the current minute window.
@@ -325,12 +361,12 @@ def acquire_llm_slot(
     """
     from django.conf import settings
 
-    lim = _get_limits(provider, model)
+    lim = _get_limits(provider, model, user=user)
     if not lim:
         noop = lambda *a, **k: None
         return noop, noop
 
-    fail_open = getattr(settings, "LLM_RATE_LIMIT_FAIL_OPEN", True)
+    fail_open = getattr(settings, "LLM_RATE_LIMIT_FAIL_OPEN", False)
     max_wait = float(getattr(settings, "LLM_RATE_LIMIT_MAX_WAIT_SECONDS", 120))
 
     deadline = time.time() + max_wait
@@ -344,7 +380,7 @@ def acquire_llm_slot(
         raise
 
     while time.time() < deadline:
-        res = _try_acquire_once_internal(provider, model, estimated_input_tokens)
+        res = _try_acquire_once_internal(provider, model, estimated_input_tokens, user=user)
         if res is not None:
 
             def _reconcile(actual: int, _r=res):
@@ -354,7 +390,6 @@ def acquire_llm_slot(
                 _r.release_on_invoke_failure()
 
             return _reconcile, _release
-        # wait until next window or short spin
         sleep_for = min(1.5, max(0.05, deadline - time.time()))
         if sleep_for <= 0:
             break

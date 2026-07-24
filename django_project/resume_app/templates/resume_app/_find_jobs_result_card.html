@@ -1,0 +1,121 @@
+{# Single job result card — CareerFlow-inspired layout. #}
+{% with match_pct=j.focus_percent_after_penalty|default:j.focus_percent %}
+<div class="job-result-row group rounded-2xl border border-slate-200/90 bg-white p-5 shadow-card transition hover:border-brand/20 hover:shadow-md" data-job-id="{{ j.id }}">
+    <div class="flex gap-4">
+        <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-brand-mist text-sm font-bold uppercase text-brand" aria-hidden="true">
+            {{ j.company_name|default:"?"|slice:":1" }}
+        </div>
+        <div class="min-w-0 flex-1">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="min-w-0 flex-1">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <input class="insights-job-cb h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand" type="checkbox" value="{{ j.id }}" id="cb-{{ j.id }}" title="Select for insights">
+                        <h3 class="text-base font-bold leading-snug text-concierge-slate sm:text-lg">{{ j.title }}</h3>
+                    </div>
+                    <p class="mt-1 text-sm text-slate-500">
+                        <span class="font-medium text-slate-600">{{ j.company_name|default:"—" }}</span>
+                        {% if j.location %}<span class="mx-1.5 text-slate-300">·</span>{{ j.location }}{% endif %}
+                    </p>
+                </div>
+                <div class="flex shrink-0 flex-col items-end gap-2 sm:flex-row sm:items-center">
+                    {% if match_pct is not None %}
+                    <span class="inline-flex items-center rounded-full bg-brand-soft px-2.5 py-1 text-xs font-bold text-brand-ink" title="Fit to jobs you liked">
+                        {{ match_pct }}% Match
+                    </span>
+                    {% endif %}
+                    <div class="flex items-center gap-0.5">
+                        <button type="button"
+                                class="job-like-btn rounded-lg p-2 transition-colors {% if j.is_liked %}bg-brand-mist text-brand{% else %}text-slate-400 hover:bg-brand-mist hover:text-brand{% endif %}"
+                                data-job-id="{{ j.id }}"
+                                data-liked="{% if j.is_liked %}1{% else %}0{% endif %}"
+                                title="{% if j.is_liked %}Remove like{% else %}Like — improve ranking for similar jobs{% endif %}"
+                                aria-label="{% if j.is_liked %}Unlike{% else %}Like{% endif %}"
+                                aria-pressed="{% if j.is_liked %}true{% else %}false{% endif %}">
+                            <svg class="job-like-icon h-5 w-5" viewBox="0 0 24 24" aria-hidden="true"
+                                 {% if j.is_liked %}fill="currentColor"{% else %}fill="none" stroke="currentColor"{% endif %}>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3H14zM7 22H4a2 2 0 01-2-2v-7a2 2 0 012-2h3"/>
+                            </svg>
+                        </button>
+                        <button type="button"
+                                class="job-dislike-btn rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                                data-job-id="{{ j.id }}"
+                                title="Dislike — hide from results and lower FIT for similar jobs"
+                                aria-label="Dislike">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 15v4a3 3 0 003 3l4-9V2H5.72a2 2 0 00-2 1.7l-1.38 9a2 2 0 002 2.3H10zM17 2h3a2 2 0 012 2v7a2 2 0 01-2 2h-3"/>
+                            </svg>
+                        </button>
+                        <button type="button"
+                                class="job-hide-btn rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+                                data-job-id="{{ j.id }}"
+                                title="Hide from future searches without changing FIT"
+                                aria-label="Hide job">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-3 flex flex-wrap items-center gap-2">
+                {% if j.source_display or j.source %}
+                <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-medium text-slate-600">{{ j.source_display|default:j.source }}</span>
+                {% endif %}
+                {% if j.posted_at %}
+                <span class="text-[11px] text-slate-400">Posted {{ j.posted_at|timesince }} ago</span>
+                {% elif j.fetched_at %}
+                <span class="text-[11px] text-slate-400">Added {{ j.fetched_at|timesince }} ago</span>
+                {% endif %}
+                {% if j.url %}
+                <a href="{{ j.url }}" target="_blank" rel="noopener" class="text-[11px] font-semibold text-brand hover:underline">View Original</a>
+                {% endif %}
+                {% if match_pct is not None and request.user.is_staff %}
+                <button type="button"
+                        class="job-why-fit-btn text-[11px] font-medium text-slate-500 hover:text-brand hover:underline"
+                        data-job-id="{{ j.id }}">Why this fit?</button>
+                {% endif %}
+            </div>
+
+            {% if j.snippet %}
+            <div class="mt-3">
+                <p class="job-snippet-preview line-clamp-2 text-sm leading-relaxed text-slate-600">{{ j.snippet }}</p>
+            </div>
+            {% endif %}
+
+            {% if j.focus_reason and is_power_user %}
+            <div class="mt-2 text-xs text-slate-500">
+                <span class="font-medium">Similar to:</span>
+                {% for r in j.focus_reason|slice:":2" %}
+                    {{ r.title }} @ {{ r.company_name }}{% if not forloop.last %}; {% endif %}
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <div class="mt-4 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-4">
+                <button type="button"
+                        class="job-toggle-desc inline-flex items-center rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                        data-job-id="{{ j.id }}">
+                    Show Description
+                </button>
+                <a href="{% url 'resume_optimizer' %}?job_id={{ j.id }}{% if selected_resume_id %}&resume_id={{ selected_resume_id }}{% endif %}"
+                   class="inline-flex items-center rounded-xl border border-brand/30 bg-white px-3.5 py-2 text-sm font-semibold text-brand hover:bg-brand-mist">
+                    Tailor Resume
+                </a>
+                <button type="button"
+                        class="job-save-btn inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-sm font-semibold transition {% if j.is_saved %}bg-brand-ink text-white hover:bg-brand{% else %}bg-brand text-white hover:bg-brand-hover{% endif %}"
+                        data-job-id="{{ j.id }}"
+                        data-saved="{% if j.is_saved %}1{% else %}0{% endif %}"
+                        title="{% if j.is_saved %}Remove from favourites{% else %}Save to favourites{% endif %}"
+                        aria-pressed="{% if j.is_saved %}true{% else %}false{% endif %}">
+                    <svg class="job-save-icon h-4 w-4" viewBox="0 0 24 24" aria-hidden="true"
+                         {% if j.is_saved %}fill="currentColor"{% else %}fill="none" stroke="currentColor"{% endif %}>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"/>
+                    </svg>
+                    <span class="job-save-label">{% if j.is_saved %}Saved{% else %}Save Job{% endif %}</span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endwith %}
