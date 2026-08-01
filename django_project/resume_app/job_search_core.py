@@ -35,14 +35,14 @@ logger = logging.getLogger(__name__)
 VETTING_MATCHING_JD_MIN_CHARS = 2000
 
 # Sources where a short stored description can be replaced via detail fetch (see dice/levels clients).
-ENRICHABLE_JD_SOURCES = frozenset({"dice", "levels"})
+ENRICHABLE_JD_SOURCES = frozenset({"dice", "levels", "builtin"})
 
 
 def effective_vetting_job_description(job: JobListing, *, enrich: bool = False) -> str:
     """
     Description used for vetting length checks and interview status.
 
-    When ``enrich`` is True, Dice/Levels listings below the vetting minimum may
+    When ``enrich`` is True, Dice/Levels/BuiltIn listings below the vetting minimum may
     fetch and persist full job-detail text (same path as Show description).
     """
     current = (job.description or "").strip()
@@ -57,6 +57,10 @@ def effective_vetting_job_description(job: JobListing, *, enrich: bool = False) 
         from .levels_client import enrich_levels_job_listing_description
 
         return (enrich_levels_job_listing_description(job) or current).strip()
+    if src == "builtin":
+        from .builtin_client import enrich_builtin_job_listing_description
+
+        return (enrich_builtin_job_listing_description(job) or current).strip()
     return current
 
 

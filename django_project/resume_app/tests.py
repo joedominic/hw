@@ -118,6 +118,12 @@ class NormalizeSiteNamesTestCase(TestCase):
             ["levels", "indeed"],
         )
 
+    def test_preserves_builtin(self):
+        self.assertEqual(
+            normalize_site_names(["builtin", "indeed"]),
+            ["builtin", "indeed"],
+        )
+
 
 class JobFetchHelpersTestCase(TestCase):
     def test_per_site_results_cap(self):
@@ -279,6 +285,7 @@ class DiceClientTestCase(TestCase):
         self.assertEqual(format_job_source_label("adzuna"), "Adzuna")
         self.assertEqual(format_job_source_label("dice"), "Dice")
         self.assertEqual(format_job_source_label("jobspy_indeed"), "Indeed")
+        self.assertEqual(format_job_source_label("builtin"), "Built In")
 
     def test_api_item_to_dict_normalizes_fields(self):
         from resume_app.dice_client import _api_item_to_dict
@@ -525,6 +532,171 @@ class LevelsClientTestCase(TestCase):
         )
         self.assertEqual(len(rows), 2)
         self.assertEqual(mock_request.call_count, 2)
+
+
+class BuiltInClientTestCase(TestCase):
+    def test_resolve_builtin_base_url(self):
+        from resume_app.builtin_client import _resolve_builtin_base_url
+
+        self.assertEqual(_resolve_builtin_base_url("Chicago, IL"), "https://www.builtinchicago.org")
+        self.assertEqual(_resolve_builtin_base_url("NYC"), "https://www.builtinnyc.com")
+        self.assertEqual(_resolve_builtin_base_url("San Francisco"), "https://www.builtinsf.com")
+        self.assertEqual(_resolve_builtin_base_url("Boston"), "https://www.builtinboston.com")
+        self.assertEqual(_resolve_builtin_base_url("Los Angeles"), "https://www.builtinla.com")
+        self.assertEqual(_resolve_builtin_base_url("Seattle"), "https://www.builtinseattle.com")
+        self.assertEqual(_resolve_builtin_base_url("Austin"), "https://www.builtinaustin.com")
+        self.assertEqual(_resolve_builtin_base_url("Colorado"), "https://www.builtincolorado.com")
+        self.assertEqual(_resolve_builtin_base_url("Remote"), "https://builtin.com")
+        self.assertEqual(_resolve_builtin_base_url(""), "https://builtin.com")
+
+    def test_parse_builtin_relative_date(self):
+        from resume_app.builtin_client import _parse_builtin_relative_date
+
+        self.assertIsNotNone(_parse_builtin_relative_date("Reposted 15 Minutes Ago"))
+        self.assertIsNotNone(_parse_builtin_relative_date("6 Hours Ago"))
+        self.assertIsNotNone(_parse_builtin_relative_date("2 Days Ago"))
+        self.assertIsNotNone(_parse_builtin_relative_date("1 Week Ago"))
+        self.assertIsNotNone(_parse_builtin_relative_date("Yesterday"))
+        self.assertIsNotNone(_parse_builtin_relative_date("Today"))
+
+    def test_extract_builtin_job_id(self):
+        from resume_app.builtin_client import extract_builtin_job_id
+
+        self.assertEqual(extract_builtin_job_id("10492500"), "10492500")
+        self.assertEqual(extract_builtin_job_id("builtin:10492500"), "10492500")
+        self.assertEqual(extract_builtin_job_id("https://builtin.com/job/senior-data-science-engineer/10201876"), "10201876")
+
+    @patch("resume_app.builtin_client.requests.get")
+    def test_fetch_builtin_jobs_parses_html_and_ld(self, mock_get):
+        from resume_app.builtin_client import fetch_builtin_jobs
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.text = """
+        <html>
+        <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@graph": [
+            {
+              "@type": "ItemList",
+              "itemListElement": [
+                {
+                  "@type": "ListItem",
+                  "position": 1,
+                  "name": "Senior Python Engineer",
+                  "url": "https://builtin.com/job/senior-python-engineer/10201876",
+                  "description": "Clean list item snippet."
+                }
+              ]
+            }
+          ]
+        }
+        </script>
+        </head>
+        <body>
+        <div id="job-card-10201876" class="job-bounded-responsive position-relative bg-white p-md rounded-3">
+            <a href="/company/draftkings" class="align-items-center">DraftKings</a>
+            <a href="/company/draftkings" data-id="company-title">DraftKings</a>
+            <a href="/job/senior-python-engineer/10201876" data-id="job-card-title" class="card-alias-after-overlay">Senior Python Engineer</a>
+            <div class="bounded-attribute-section">
+                <span>Reposted 15 Minutes Ago</span>
+                <span>Hybrid</span>
+                <span>Boston, MA, USA</span>
+                <span>Senior level</span>
+            </div>
+        </div>
+        </body>
+        </html>
+        """
+        mock_get.return_value = mock_resp
+
+        jobs = fetch_builtin_jobs("python", location="Boston", results_wanted=5)
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]["title"], "Senior Python Engineer")
+        self.assertEqual(jobs[0]["company_name"], "DraftKings")
+        self.assertEqual(jobs[0]["location"], "Boston, MA, USA (Hybrid)")
+        self.assertEqual(jobs[0]["description"], "Clean list item snippet.")
+        self.assertEqual(jobs[0]["source"], "builtin")
+        self.assertEqual(jobs[0]["external_id"], "builtin:10201876")
+
+    @patch("resume_app.builtin_client.requests.get")
+    def test_fetch_builtin_job_detail_parses_jobposting(self, mock_get):
+        from resume_app.builtin_client import fetch_builtin_job_detail
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.text = """
+        <html>
+        <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@graph": [
+            {
+              "@type": "JobPosting",
+              "title": "Senior Python Engineer",
+              "description": "<p>Build great APIs in Python.</p><br/>- Use AWS",
+              "hiringOrganization": {
+                "@type": "Organization",
+                "name": "DraftKings"
+              },
+              "jobLocation": {
+                "@type": "Place",
+                "address": {
+                  "@type": "PostalAddress",
+                  "addressLocality": "Boston",
+                  "addressRegion": "MA",
+                  "addressCountry": "USA"
+                }
+              },
+              "datePosted": "2026-08-01T14:52:10Z"
+            }
+          ]
+        }
+        </script>
+        </head>
+        </html>
+        """
+        mock_get.return_value = mock_resp
+
+        detail = fetch_builtin_job_detail("https://builtin.com/job/senior-python-engineer/10201876")
+        self.assertEqual(detail["title"], "Senior Python Engineer")
+        self.assertEqual(detail["company_name"], "DraftKings")
+        self.assertEqual(detail["location"], "Boston, MA, USA")
+        self.assertEqual(detail["description"], "Build great APIs in Python.\n\n- Use AWS")
+
+    @patch("resume_app.builtin_client.fetch_builtin_job_detail")
+    def test_enrich_builtin_job_listing_description(self, mock_detail):
+        from datetime import datetime
+        from resume_app.builtin_client import enrich_builtin_job_listing_description
+        from resume_app.models import JobListing
+
+        mock_detail.return_value = {
+            "title": "Full Rich Title",
+            "company_name": "Full Co",
+            "location": "Boston, MA",
+            "description": "A very long detailed job description that passes the threshold easily.",
+            "job_url": "https://builtin.com/job/enriched/999",
+            "date_posted": datetime(2026, 8, 1, 14, 52, 10),
+        }
+
+        job = JobListing.objects.create(
+            source="builtin",
+            external_id="builtin:999",
+            title="Untitled",
+            company_name="Unknown",
+            description="Short desc",
+            url="https://builtin.com/job/enriched/999",
+        )
+
+        desc = enrich_builtin_job_listing_description(job)
+        self.assertIn("A very long detailed", desc)
+        job.refresh_from_db()
+        self.assertEqual(job.title, "Full Rich Title")
+        self.assertEqual(job.company_name, "Full Co")
+        self.assertEqual(job.description, desc)
 
 
 class FetchJobsOrchestratorTestCase(TestCase):

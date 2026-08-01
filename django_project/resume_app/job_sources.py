@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # JobSpy boards (matches jobspy.model.Site string values).
 JOBSPY_SITE_NAMES = ["indeed", "linkedin"]
 # Custom scrapers (not in upstream python-jobspy).
-CUSTOM_SCRAPER_SITE_NAMES = ["dice", "levels"]
+CUSTOM_SCRAPER_SITE_NAMES = ["dice", "levels", "builtin"]
 # REST API providers.
 API_SITE_NAMES = ["adzuna"]
 ALLOWED_SITE_NAMES = JOBSPY_SITE_NAMES + CUSTOM_SCRAPER_SITE_NAMES + API_SITE_NAMES
@@ -70,12 +70,13 @@ def _dedupe_fetch_rows(rows: List[dict]) -> List[dict]:
     return out
 
 
-def _partition_sites(sites: List[str]) -> tuple[List[str], bool, bool, bool]:
+def _partition_sites(sites: List[str]) -> tuple[List[str], bool, bool, bool, bool]:
     jobspy = [s for s in sites if s in JOBSPY_SITE_NAMES]
     use_dice = "dice" in sites
     use_adzuna = "adzuna" in sites
     use_levels = "levels" in sites
-    return jobspy, use_dice, use_adzuna, use_levels
+    use_builtin = "builtin" in sites
+    return jobspy, use_dice, use_adzuna, use_levels, use_builtin
 
 
 def _normalize_site_name(site: str) -> str:
@@ -355,7 +356,7 @@ def fetch_jobs(
         hours_old = getattr(settings, "JOB_SEARCH_HOURS_OLD", None)
 
     per_cap = _per_site_results_cap(results_wanted, len(sites))
-    jobspy_sites, use_dice, use_adzuna, use_levels = _partition_sites(sites)
+    jobspy_sites, use_dice, use_adzuna, use_levels, use_builtin = _partition_sites(sites)
     merged: List[dict] = []
 
     if jobspy_sites:
@@ -406,6 +407,18 @@ def fetch_jobs(
                 location=location,
                 results_wanted=per_cap,
                 hours_old=hours_old,
+                timeout_seconds=timeout_seconds,
+            )
+        )
+
+    if use_builtin:
+        from .builtin_client import fetch_builtin_jobs
+
+        merged.extend(
+            fetch_builtin_jobs(
+                search_term,
+                location=location,
+                results_wanted=per_cap,
                 timeout_seconds=timeout_seconds,
             )
         )
