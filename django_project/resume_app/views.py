@@ -2661,13 +2661,29 @@ def _count_unique_library_resumes(user) -> int:
 def _track_list_context(request, user, tracks_qs):
     """Build template context for the Track Management page."""
     from django.db.models import Count
-
     from .models import UserResume
+    from .experience import is_power_user
 
+    power_user = is_power_user(user)
     sort = _track_list_sort_param(request)
-    order_field = "label" if sort == "label" else "slug"
-    tracks = list(tracks_qs.order_by(order_field))
-    default_track_slug = Track.get_default_slug(user)
+    if power_user:
+        order_field = "label" if sort == "label" else "slug"
+        tracks = list(tracks_qs.order_by(order_field))
+        default_track_slug = Track.get_default_slug(user)
+    else:
+        order_field = "name" if sort == "label" else "slug"
+        tracks = []
+        for p in tracks_qs.order_by(order_field):
+            p.label = p.name
+            tracks.append(p)
+        default_track_slug = ""
+        for t in tracks:
+            if t.is_default:
+                default_track_slug = t.slug
+                break
+        if not default_track_slug and tracks:
+            default_track_slug = tracks[0].slug
+
     default_track = next((t for t in tracks if t.is_default), None)
     if default_track is None and tracks:
         default_track = tracks[0]
@@ -2756,9 +2772,27 @@ def track_list_view(request):
     default track, delete). POST `action` distinguishes create_track, edit_track,
     upload_resume, assign_resume_tracks, delete_resume.
     """
-    tracks_qs = Track.ensure_baseline(request.user)
-    tracks = list(tracks_qs)
-    default_track_slug = Track.get_default_slug(request.user)
+    from .experience import is_power_user
+    from .models import SearchProfile
+
+    power_user = is_power_user(request.user)
+    if power_user:
+        tracks_qs = Track.ensure_baseline(request.user)
+        tracks = list(tracks_qs)
+        default_track_slug = Track.get_default_slug(request.user)
+    else:
+        tracks_qs = SearchProfile.objects.for_user(request.user)
+        tracks = []
+        for p in tracks_qs:
+            p.label = p.name
+            tracks.append(p)
+        default_track_slug = ""
+        for t in tracks:
+            if t.is_default:
+                default_track_slug = t.slug
+                break
+        if not default_track_slug and tracks:
+            default_track_slug = tracks[0].slug
 
     # Keep this bounded: track management should stay snappy even with many resumes.
     from .models import UserResume
@@ -2867,30 +2901,57 @@ def track_list_view(request):
             description = (request.POST.get("description") or "").strip()
             is_default = bool(request.POST.get("is_default"))
 
-            track = Track.objects.for_user(request.user).filter(slug=original_slug).first()
-            if not track:
-                messages.error(request, "Track not found.")
-                return redirect("track_list")
-            if not new_slug:
-                messages.error(request, "Slug is required.")
-                return redirect("track_list")
-            if not label:
-                messages.error(request, "Label is required.")
-                return redirect("track_list")
-            if new_slug != original_slug and Track.objects.for_user(request.user).filter(slug=new_slug).exists():
-                messages.error(request, f"Track with slug '{new_slug}' already exists.")
-                return redirect("track_list")
+            if power_user:
+                track = Track.objects.for_user(request.user).filter(slug=original_slug).first()
+                if not track:
+                    messages.error(request, "Track not found.")
+                    return redirect("track_list")
+                if not new_slug:
+                    messages.error(request, "Slug is required.")
+                    return redirect("track_list")
+                if not label:
+                    messages.error(request, "Label is required.")
+                    return redirect("track_list")
+                if new_slug != original_slug and Track.objects.for_user(request.user).filter(slug=new_slug).exists():
+                    messages.error(request, f"Track with slug '{new_slug}' already exists.")
+                    return redirect("track_list")
 
-            if is_default:
-                Track.objects.for_user(request.user).update(is_default=False)
-            if new_slug != original_slug:
-                _cascade_track_slug_rename(request.user, original_slug, new_slug)
-                track.slug = new_slug
-            track.label = label
-            track.description = description
-            track.is_default = is_default
-            track.save(update_fields=["slug", "label", "description", "is_default"])
-            messages.success(request, f"Track \"{track.label}\" updated.")
+                if is_default:
+                    Track.objects.for_user(request.user).update(is_default=False)
+                if new_slug != original_slug:
+                    _cascade_track_slug_rename(request.user, original_slug, new_slug)
+                    track.slug = new_slug
+                track.label = label
+                track.description = description
+                track.is_default = is_default
+                track.save(update_fields=["slug", "label", "description", "is_default"])
+                messages.success(request, f"Track \"{track.label}\" updated.")
+            else:
+                profile = SearchProfile.objects.for_user(request.user).filter(slug=original_slug).first()
+                if not profile:
+                    messages.error(request, "Search profile not found.")
+                    return redirect("track_list")
+                if not new_slug:
+                    messages.error(request, "Slug is required.")
+                    return redirect("track_list")
+                if not label:
+                    messages.error(request, "Label/Name is required.")
+                    return redirect("track_list")
+                if new_slug != original_slug and SearchProfile.objects.for_user(request.user).filter(slug=new_slug).exists():
+                    messages.error(request, f"Search profile with slug '{new_slug}' already exists.")
+                    return redirect("track_list")
+
+                if is_default:
+                    SearchProfile.objects.for_user(request.user).update(is_default=False)
+                if new_slug != original_slug:
+                    _cascade_track_slug_rename(request.user, original_slug, new_slug)
+                    profile.slug = new_slug
+                    profile.profile_slug = new_slug
+                profile.name = label
+                profile.description = description
+                profile.is_default = is_default
+                profile.save(update_fields=["slug", "profile_slug", "name", "description", "is_default"])
+                messages.success(request, f"Search profile \"{profile.name}\" updated.")
             return redirect("track_list")
 
         if action == "create_track":
@@ -2901,20 +2962,38 @@ def track_list_view(request):
             if not slug:
                 messages.error(request, "Slug is required.")
             elif not label:
-                messages.error(request, "Label is required.")
-            elif Track.objects.for_user(request.user).filter(slug=slug).exists():
-                messages.error(request, f"Track with slug '{slug}' already exists.")
+                messages.error(request, "Label/Name is required.")
             else:
-                if is_default:
-                    Track.objects.for_user(request.user).update(is_default=False)
-                track = Track.objects.create(
-                    owner=request.user,
-                    slug=slug,
-                    label=label,
-                    description=description,
-                    is_default=is_default,
-                )
-                messages.success(request, f"Track \"{track.label}\" created.")
+                if power_user:
+                    if Track.objects.for_user(request.user).filter(slug=slug).exists():
+                        messages.error(request, f"Track with slug '{slug}' already exists.")
+                    else:
+                        if is_default:
+                            Track.objects.for_user(request.user).update(is_default=False)
+                        track = Track.objects.create(
+                            owner=request.user,
+                            slug=slug,
+                            label=label,
+                            description=description,
+                            is_default=is_default,
+                        )
+                        messages.success(request, f"Track \"{track.label}\" created.")
+                else:
+                    if SearchProfile.objects.for_user(request.user).filter(slug=slug).exists():
+                        messages.error(request, f"Search profile with slug '{slug}' already exists.")
+                    else:
+                        if is_default:
+                            SearchProfile.objects.for_user(request.user).update(is_default=False)
+                        profile = SearchProfile.objects.create(
+                            owner=request.user,
+                            slug=slug,
+                            profile_slug=slug,
+                            name=label,
+                            search_term=label,
+                            description=description,
+                            is_default=is_default,
+                        )
+                        messages.success(request, f"Search profile \"{profile.name}\" created.")
             return redirect("track_list")
 
     context = _track_list_context(request, request.user, tracks_qs)
@@ -2931,16 +3010,38 @@ def track_delete_view(request, slug: str):
     if request.method != "POST":
         return redirect("track_list")
 
-    track = Track.objects.for_user(request.user).filter(slug=slug).first()
-    if not track:
-        messages.error(request, "Track not found.")
-        return redirect("track_list")
+    from .experience import is_power_user
+    from .models import SearchProfile
 
-    if Track.objects.for_user(request.user).count() <= 1:
-        messages.error(request, "Cannot delete the only remaining track.")
-        return redirect("track_list")
+    power_user = is_power_user(request.user)
+    if power_user:
+        track = Track.objects.for_user(request.user).filter(slug=slug).first()
+        if not track:
+            messages.error(request, "Track not found.")
+            return redirect("track_list")
 
-    slug_val = track.slug
+        if Track.objects.for_user(request.user).count() <= 1:
+            messages.error(request, "Cannot delete the only remaining track.")
+            return redirect("track_list")
+
+        slug_val = track.slug
+        was_default = track.is_default
+        label = track.label or track.slug
+        track.delete()
+    else:
+        profile = SearchProfile.objects.for_user(request.user).filter(slug=slug).first()
+        if not profile:
+            messages.error(request, "Search profile not found.")
+            return redirect("track_list")
+
+        if SearchProfile.objects.for_user(request.user).count() <= 1:
+            messages.error(request, "Cannot delete the only remaining search profile.")
+            return redirect("track_list")
+
+        slug_val = profile.slug
+        was_default = profile.is_default
+        label = profile.name or profile.slug
+        profile.delete()
 
     # Disassociate any resumes assigned to this track.
     try:
@@ -2964,15 +3065,17 @@ def track_delete_view(request, slug: str):
         # Best-effort; failure here should not block delete.
         pass
 
-    was_default = track.is_default
-    label = track.label or track.slug
-    track.delete()
-
     if was_default:
         # Ensure we still have a default track.
-        Track.ensure_baseline(request.user)
+        if power_user:
+            Track.ensure_baseline(request.user)
+        else:
+            first_p = SearchProfile.objects.for_user(request.user).first()
+            if first_p:
+                first_p.is_default = True
+                first_p.save(update_fields=["is_default"])
 
-    messages.success(request, f"Track \"{label}\" and its associated tasks/pipeline/actions were deleted.")
+    messages.success(request, f"Track/Profile \"{label}\" and its associated tasks/pipeline/actions were deleted.")
     return redirect("track_list")
 
 

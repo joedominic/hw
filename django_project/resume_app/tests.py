@@ -2877,6 +2877,25 @@ class JobListingUpsertTestCase(TestCase):
 
 
 class TrackListLibraryResumeTestCase(TenantTestCase):
+    def setUp(self):
+        super().setUp()
+        from resume_app.experience import set_experience_mode
+        from resume_app.models import UserExperienceSettings, Track
+
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_staff"])
+        set_experience_mode(self.user, UserExperienceSettings.ExperienceMode.POWER)
+        Track.objects.get_or_create(
+            owner=self.user,
+            slug="ic",
+            defaults={"label": "IC", "is_default": False},
+        )
+        Track.objects.get_or_create(
+            owner=self.user,
+            slug="mgmt",
+            defaults={"label": "Management", "is_default": False},
+        )
+
     def test_track_list_shows_only_library_resumes(self):
         library = UserResume.objects.create(
             owner=self.user,
