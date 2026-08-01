@@ -40,11 +40,13 @@ Apply-agent generic fill: 1× `llm_requests` at run start; each browser-use turn
 
 | Path | Routing |
 |------|---------|
-| Optimizer / matching / fit check | `agents` → gateway |
-| Job prep, job insights, AI match | `job_prep` / `jobs_api` → gateway |
-| Pipeline skill extract + consolidate | `pipeline_llm_skill_extract` → `invoke_llm_messages` |
+| Optimizer / Writer / ATS / Recruiter / optimizer JD-cleanse step | `agents` → gateway **cloud-only** (`allow_local=False`) |
+| Pipeline JD cleanse (`JDCleanserService`) | **Ollama Local only** (`only_local=True`); heuristic fallback |
+| Vetting match / fit check / other non-optimizer product LLM | Prefer **Ollama Local** (`prefer_local=True`) |
+| Job prep, job insights, AI match | Prefer local via gateway defaults |
+| Pipeline skill extract + consolidate | `pipeline_llm_skill_extract` → gateway (prefer local) |
 | `POST /llm/complete` | gateway (requires plan `api_access`; size-capped) |
-| Apply-agent browser-use | `wrap_browser_use_llm` (policy) |
+| Apply-agent browser-use | `wrap_browser_use_llm` (policy; dedicated apply LLM setting) |
 | Settings connect / Ollama guard | Direct `get_llm` ping only (not product metering) |
 
 ## Quotas And budgets
@@ -103,8 +105,8 @@ When `llm_override` is unset:
 
 1. Build candidates from `LLMProviderPreference` (connected keys).
 2. Skip models on cooldown.
-3. Prefer local when `prefer_local=True` (optional non-optimizer paths). When `prefer_local=False`, **remote/cloud candidates are tried first**.
-4. Resume optimization sets `allow_local=False`: **Ollama Local is never used**; if no cloud candidate remains, the run fails with `LLMUnavailableError` / `NO_CLOUD_LLM_MESSAGE`.
+3. Prefer local when `prefer_local=True` (pipeline JD cleanse, vetting match, and other non-optimizer paths). Resume-optimizer nodes pass `prefer_local=False` + `allow_local=False` (**cloud only**).
+4. Resume optimization sets `allow_local=False`: **Ollama Local is never used in the optimizer graph**; if no cloud candidate remains, the run fails with `LLMUnavailableError` / `NO_CLOUD_LLM_MESSAGE`.
 5. `Ollama Local` is always treated as local even if the preference row’s `is_local` flag was left unchecked.
 6. Pin successful provider/model to `job_cache_key` in Redis (2-day TTL). A local pin is ignored when the caller asked for remote-first / disallow-local and remotes exist.
 7. On 429/quota: cooldown, clear pin, try next candidate.

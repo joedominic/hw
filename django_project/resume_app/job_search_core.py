@@ -7,6 +7,7 @@ import re
 from typing import List, Optional, Tuple, Dict
 
 from django.conf import settings
+from django.utils import timezone
 
 from .models import JobListing, JobListingAction, JobListingTrackMetrics, PipelineEntry
 from .track_actions import excluded_listing_id_set, liked_listing_id_set, normalize_track_slug, saved_listing_id_set
@@ -29,6 +30,58 @@ from . import embeddings as embedding_module
 from .utils import format_job_source_label
 
 logger = logging.getLogger(__name__)
+
+# Keep in sync with tasks.VETTING_MATCHING_JD_MIN_CHARS
+VETTING_MATCHING_JD_MIN_CHARS = 2000
+
+# Sources where a short stored description can be replaced via detail fetch (see dice/levels clients).
+ENRICHABLE_JD_SOURCES = frozenset({"dice", "levels"})
+
+
+def effective_vetting_job_description(job: JobListing, *, enrich: bool = False) -> str:
+    """
+    Description used for vetting length checks and interview status.
+
+    When ``enrich`` is True, Dice/Levels listings below the vetting minimum may
+    fetch and persist full job-detail text (same path as Show description).
+    """
+    current = (job.description or "").strip()
+    if not enrich or len(current) >= VETTING_MATCHING_JD_MIN_CHARS:
+        return current
+    src = (job.source or "").strip().lower()
+    if src == "dice":
+        from .dice_client import enrich_dice_job_listing_description
+
+        return (enrich_dice_job_listing_description(job) or current).strip()
+    if src == "levels":
+        from .levels_client import enrich_levels_job_listing_description
+
+        return (enrich_levels_job_listing_description(job) or current).strip()
+    return current
+
+
+def resolve_interview_display_status(
+    *,
+    description: str,
+    interview_probability: Optional[int],
+    source: str = "",
+) -> Optional[str]:
+    """
+    When interview_probability is set, returns None (UI shows scored pill).
+
+    Otherwise returns ``short_jd`` or ``pending`` for Review/Applying boards.
+    Dice/Levels rows with a short *stored* snippet show pending — full text is
+    fetched before vetting matching runs (same as Show description).
+    """
+    if interview_probability is not None:
+        return None
+    raw_jd = (description or "").strip()
+    if len(raw_jd) >= VETTING_MATCHING_JD_MIN_CHARS:
+        return "pending"
+    src = (source or "").strip().lower()
+    if src in ENRICHABLE_JD_SOURCES:
+        return "pending"
+    return "short_jd"
 
 
 def _safe_display_str(val: Optional[str]) -> str:
@@ -492,6 +545,75 @@ def recompute_preferences_for_jobs(
     return by_id
 
 
+def persist_preference_metrics_for_jobs(
+    *,
+    user,
+    track: str,
+    job_listings: List[JobListing],
+    payloads: Optional[List[JobPayload]] = None,
+    scores: Optional[Dict[int, dict]] = None,
+) -> int:
+    """
+    Write JobListingTrackMetrics for (owner, track, job_listing).
+
+    Prefer ``payloads`` or ``scores`` from a recent rank pass to avoid a second
+    embedding batch; recompute only for rows still missing focus or margin.
+
+    Returns the number of rows written.
+    """
+    if not job_listings:
+        return 0
+    track_slug = (track or "").strip().lower()
+    if not track_slug:
+        return 0
+
+    from .search_profile_scope import dual_write_track_fields
+
+    dw = dual_write_track_fields(user=user, slug=track_slug)
+
+    if scores is None:
+        scores = {}
+    if payloads:
+        for payload in payloads:
+            scores[payload.id] = {
+                "focus_percent": getattr(payload, "focus_percent", None),
+                "focus_after_penalty": getattr(payload, "focus_percent_after_penalty", None),
+                "preference_margin": getattr(payload, "preference_margin_percent", None),
+            }
+
+    needs_recompute = [
+        job
+        for job in job_listings
+        if not scores.get(job.id)
+        or (
+            scores[job.id].get("focus_percent") is None
+            and scores[job.id].get("preference_margin") is None
+        )
+    ]
+    if needs_recompute:
+        recomputed = recompute_preferences_for_jobs(needs_recompute, track=track_slug, user=user)
+        scores.update(recomputed)
+
+    now = timezone.now()
+    written = 0
+    for job in job_listings:
+        data = scores.get(job.id) or {}
+        JobListingTrackMetrics.objects.update_or_create(
+            owner=user,
+            job_listing=job,
+            track=track_slug,
+            defaults={
+                "search_profile": dw["search_profile"],
+                "focus_percent": data.get("focus_percent"),
+                "focus_after_penalty": data.get("focus_after_penalty"),
+                "preference_margin": data.get("preference_margin"),
+                "last_scored_at": now,
+            },
+        )
+        written += 1
+    return written
+
+
 def pipeline_jobs_to_payloads(
     job_listings: List[JobListing],
     track: Optional[str],
@@ -520,17 +642,16 @@ def pipeline_jobs_to_payloads(
         ):
             metrics_map[m.job_listing_id] = m
 
-    # Vetting-only: interview probability + reasoning (stored on PipelineEntry).
-    interview_map: Dict[int, PipelineEntry] = {}
+    # Interview probability + reasoning (stored on PipelineEntry; persists across stages).
+    entry_map: Dict[int, PipelineEntry] = {}
     if track_slug and job_ids:
         for e in PipelineEntry.objects.filter(
             owner=user,
             track=track_slug,
             job_listing_id__in=job_ids,
-            stage=PipelineEntry.Stage.VETTING,
             removed_at__isnull=True,
         ):
-            interview_map[e.job_listing_id] = e
+            entry_map[e.job_listing_id] = e
 
     jobs_with_meta: List[Tuple[JobListing, JobPayload]] = []
     for job in job_listings:
@@ -542,10 +663,15 @@ def pipeline_jobs_to_payloads(
             payload.focus_percent_after_penalty = metrics.focus_after_penalty
             payload.preference_margin_percent = metrics.preference_margin
 
-        interview_entry = interview_map.get(job.id)
+        interview_entry = entry_map.get(job.id)
         if interview_entry:
             payload.interview_probability = interview_entry.vetting_interview_probability
             payload.interview_reasoning = interview_entry.vetting_interview_reasoning
+        payload.interview_status = resolve_interview_display_status(
+            description=job.description or "",
+            interview_probability=payload.interview_probability,
+            source=job.source or "",
+        )
         jobs_with_meta.append((job, payload))
 
     # Sort descending by preference margin, then focus percent; jobs without

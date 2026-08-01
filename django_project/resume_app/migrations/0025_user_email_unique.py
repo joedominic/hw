@@ -26,6 +26,11 @@ def create_email_unique_index(apps, schema_editor):
             f"CREATE UNIQUE INDEX IF NOT EXISTS {INDEX_NAME} "
             "ON auth_user (email) WHERE email <> ''"
         )
+    elif vendor == "mysql":
+        # MariaDB/MySQL: no partial indexes; empty emails must already be cleared.
+        sql = (
+            f"CREATE UNIQUE INDEX {INDEX_NAME} ON auth_user (email)"
+        )
     else:
         # Fallback: full unique index (empty-string duplicates must already be cleared).
         sql = f"CREATE UNIQUE INDEX IF NOT EXISTS {INDEX_NAME} ON auth_user (email)"
@@ -36,12 +41,16 @@ def drop_email_unique_index(apps, schema_editor):
     vendor = schema_editor.connection.vendor
     if vendor == "postgresql":
         schema_editor.execute(f"DROP INDEX IF EXISTS {INDEX_NAME}")
+    elif vendor == "mysql":
+        schema_editor.execute(f"DROP INDEX `{INDEX_NAME}` ON `auth_user`")
     else:
         # SQLite / others
         schema_editor.execute(f"DROP INDEX IF EXISTS {INDEX_NAME}")
 
 
 class Migration(migrations.Migration):
+    # MySQL/MariaDB cannot run CREATE INDEX DDL inside an atomic transaction.
+    atomic = False
 
     dependencies = [
         ("auth", "0012_alter_user_first_name_max_length"),

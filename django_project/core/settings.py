@@ -4,7 +4,9 @@ Django settings for core project.
 
 from pathlib import Path
 import os
+import sys
 import environ
+from django.core.exceptions import ImproperlyConfigured
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -16,6 +18,9 @@ env = environ.Env(
 _env_file = os.environ.get("ENV_FILE") or os.path.join(BASE_DIR.parent, ".env")
 if os.path.isfile(_env_file):
     environ.Env.read_env(_env_file)
+
+# Detect manage.py test / pytest early (used by DATABASES and cache).
+_IN_TEST = "test" in sys.argv or "pytest" in (sys.argv[0] if sys.argv else "")
 
 # SECURITY: keep the secret key used in production secret!
 SECRET_KEY = env("SECRET_KEY", default="django-insecure-+a#*@w#!qb+w*1_6vd4my0q2q^!ddes#&#%jueou)q7(5(=v*n")
@@ -53,6 +58,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "hijack.middleware.HijackUserMiddleware",
     "resume_app.middleware.LoginRequiredMiddleware",
+    "resume_app.abuse.AbuseThrottleMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -70,6 +76,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "resume_app.context_processors.dev_tools",
+                "resume_app.context_processors.experience_context",
             ],
         },
     },
@@ -80,17 +87,74 @@ WSGI_APPLICATION = "core.wsgi.application"
 
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
+#
+# MySQL/MariaDB when MYSQL_DATABASE is set; otherwise SQLite.
+# Tests always use SQLite unless MYSQL_USE_FOR_TESTS=1 (avoids wiping shared MariaDB).
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
-        # Huey + runserver (or multiple workers) contending on SQLite — longer wait + WAL (see resume_app.apps).
-        "OPTIONS": {
-            "timeout": 30,
-        },
+_MYSQL_DATABASE = env("MYSQL_DATABASE", default="")
+_USE_MYSQL = bool(_MYSQL_DATABASE) and (
+    not _IN_TEST or env.bool("MYSQL_USE_FOR_TESTS", default=False)
+)
+
+if _USE_MYSQL:
+    try:
+        import pymysql
+
+        pymysql.install_as_MySQLdb()
+    except ImportError as exc:  # pragma: no cover - misconfigured deploy
+        raise ImproperlyConfigured(
+            "MYSQL_DATABASE is set but PyMySQL is not installed. "
+            "Install with: pip install PyMySQL"
+        ) from exc
+
+    # TLS: the MariaDB server negotiates TLS by default. Keep encryption on unless
+    # MYSQL_SSL_DISABLED=1. Provide MYSQL_SSL_CA to upgrade to verified TLS.
+    _mysql_options = {
+        "charset": "utf8mb4",
+        "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",
     }
-}
+    _mysql_ssl_ca = env("MYSQL_SSL_CA", default="")
+    if _mysql_ssl_ca:
+        # Verified TLS: encrypt + validate the server certificate against the CA.
+        _mysql_options["ssl"] = {"ca": _mysql_ssl_ca}
+        _mysql_options["ssl_verify_cert"] = True
+        _mysql_options["ssl_verify_identity"] = env.bool(
+            "MYSQL_SSL_VERIFY_IDENTITY", default=True
+        )
+    elif env.bool("MYSQL_SSL_DISABLED", default=False):
+        # Explicit opt-out (e.g. local socket) — plaintext connection.
+        _mysql_options["ssl_disabled"] = True
+    # else: default opportunistic TLS (encrypted, unverified) as negotiated by the server.
+
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.mysql",
+            "NAME": _MYSQL_DATABASE,
+            "USER": env("MYSQL_USER", default=""),
+            "PASSWORD": env("MYSQL_PASSWORD", default=""),
+            "HOST": env("MYSQL_HOST", default="127.0.0.1"),
+            "PORT": env("MYSQL_PORT", default="3306"),
+            "OPTIONS": _mysql_options,
+            "CONN_MAX_AGE": env.int("MYSQL_CONN_MAX_AGE", default=60),
+            "CONN_HEALTH_CHECKS": env.bool("MYSQL_CONN_HEALTH_CHECKS", default=True),
+            # Dedicated test database so `manage.py test` never touches the app DB.
+            "TEST": {
+                "NAME": env("MYSQL_TEST_DATABASE", default=f"test_{_MYSQL_DATABASE}"),
+                "CHARSET": "utf8mb4",
+            },
+        }
+    }
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+            # Huey + runserver (or multiple workers) contending on SQLite — longer wait + WAL (see resume_app.apps).
+            "OPTIONS": {
+                "timeout": 30,
+            },
+        }
+    }
 
 # Default primary key type (silences models.W042)
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
@@ -141,14 +205,79 @@ MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 
 # --- Authentication ---
 LOGIN_URL = "/accounts/login/"
-LOGIN_REDIRECT_URL = "home"
+LOGIN_REDIRECT_URL = "pipeline"
 LOGOUT_REDIRECT_URL = "login"
 SIGNUP_ENABLED = env.bool("SIGNUP_ENABLED", default=True)
+DEFAULT_EXPERIENCE_MODE = env("DEFAULT_EXPERIENCE_MODE", default="normal")
+REQUIRE_EMAIL_VERIFICATION = env.bool("REQUIRE_EMAIL_VERIFICATION", default=False)
 LOGIN_EXEMPT_URL_PREFIXES = (
     "/accounts/",
     "/admin/",
     "/static/",
+    "/billing/stripe/webhook/",
+    "/legal/",
 )
+
+# Transactional email (console backend for local/dev; configure SMTP in production)
+EMAIL_BACKEND = env("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
+EMAIL_HOST = env("EMAIL_HOST", default="localhost")
+EMAIL_PORT = env.int("EMAIL_PORT", default=25)
+EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=False)
+EMAIL_USE_SSL = env.bool("EMAIL_USE_SSL", default=False)
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="ResumeElite <noreply@localhost>")
+ACCOUNT_EMAIL_BASE_URL = env("ACCOUNT_EMAIL_BASE_URL", default="")
+
+# Fernet encryption: comma-separated urlsafe keys (newest first). Empty = derive from SECRET_KEY.
+FERNET_KEYS = env("FERNET_KEYS", default="")
+
+# SaaS plans / quotas / Stripe
+SAAS_DEFAULT_PLAN_SLUG = env("SAAS_DEFAULT_PLAN_SLUG", default="free")
+SAAS_ENFORCE_QUOTAS = env.bool(
+    "SAAS_ENFORCE_QUOTAS",
+    default=not _IN_TEST,
+)
+# When True, staff/superuser skip plan quotas (default False for SaaS safety).
+SAAS_STAFF_BYPASS_QUOTAS = env.bool("SAAS_STAFF_BYPASS_QUOTAS", default=False)
+STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY", default="")
+STRIPE_PUBLISHABLE_KEY = env("STRIPE_PUBLISHABLE_KEY", default="")
+STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET", default="")
+
+# Abuse throttling
+ABUSE_THROTTLE_ENABLED = env.bool("ABUSE_THROTTLE_ENABLED", default=True)
+ABUSE_AUTH_LIMIT = env.int("ABUSE_AUTH_LIMIT", default=20)
+ABUSE_AUTH_WINDOW_SECONDS = env.int("ABUSE_AUTH_WINDOW_SECONDS", default=300)
+ABUSE_API_LIMIT = env.int("ABUSE_API_LIMIT", default=120)
+ABUSE_API_WINDOW_SECONDS = env.int("ABUSE_API_WINDOW_SECONDS", default=60)
+
+# Production HTTPS / cookies (enabled when DEBUG is False unless overridden)
+SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=not DEBUG)
+SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=not DEBUG)
+CSRF_COOKIE_SECURE = env.bool("CSRF_COOKIE_SECURE", default=not DEBUG)
+SECURE_HSTS_SECONDS = env.int("SECURE_HSTS_SECONDS", default=(31536000 if not DEBUG else 0))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", default=not DEBUG)
+SECURE_HSTS_PRELOAD = env.bool("SECURE_HSTS_PRELOAD", default=False)
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
+
+# Optional S3-compatible media (django-storages). Leave bucket empty for local filesystem.
+AWS_STORAGE_BUCKET_NAME = env("AWS_STORAGE_BUCKET_NAME", default="")
+AWS_S3_REGION_NAME = env("AWS_S3_REGION_NAME", default="")
+AWS_S3_ENDPOINT_URL = env("AWS_S3_ENDPOINT_URL", default="")
+AWS_ACCESS_KEY_ID = env("AWS_ACCESS_KEY_ID", default="")
+AWS_SECRET_ACCESS_KEY = env("AWS_SECRET_ACCESS_KEY", default="")
+AWS_DEFAULT_ACL = env("AWS_DEFAULT_ACL", default="private")
+AWS_QUERYSTRING_AUTH = env.bool("AWS_QUERYSTRING_AUTH", default=True)
+if AWS_STORAGE_BUCKET_NAME:
+    STORAGES = {
+        "default": {
+            "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }
 
 # django-hijack: support staff impersonation
 HIJACK_PERMISSION_CHECK = "resume_app.hijack_permissions.can_hijack"
@@ -156,6 +285,21 @@ HIJACK_INSERT_BEFORE = "<main"
 
 # Per-user LLM usage limits (0 = unlimited)
 LLM_USER_DAILY_REQUEST_LIMIT = env.int("LLM_USER_DAILY_REQUEST_LIMIT", default=0)
+# Daily token budgets by plan slug (0 = unlimited). Optional LLM_USER_DAILY_TOKEN_LIMIT is a hard ceiling.
+LLM_USER_DAILY_TOKEN_LIMIT = env.int("LLM_USER_DAILY_TOKEN_LIMIT", default=0)
+LLM_DAILY_TOKEN_LIMIT_BY_PLAN = {
+    "free": env.int("LLM_DAILY_TOKEN_LIMIT_FREE", default=200_000),
+    "pro": env.int("LLM_DAILY_TOKEN_LIMIT_PRO", default=2_000_000),
+    "unlimited": env.int("LLM_DAILY_TOKEN_LIMIT_UNLIMITED", default=0),
+}
+# Shared burn cap for platform/env API keys across all users (0 = unlimited).
+LLM_PLATFORM_DAILY_TOKEN_LIMIT = env.int("LLM_PLATFORM_DAILY_TOKEN_LIMIT", default=5_000_000)
+# Wall-clock timeout per gateway/browser-use LLM invoke (seconds; 0 = disabled).
+LLM_INVOKE_TIMEOUT_SECONDS = env.int("LLM_INVOKE_TIMEOUT_SECONDS", default=180)
+# Max concurrent in-flight LLM calls per user (0 = unlimited).
+LLM_USER_MAX_CONCURRENT = env.int("LLM_USER_MAX_CONCURRENT", default=2)
+# Free-form POST /llm/complete: max combined system+user characters.
+LLM_COMPLETE_MAX_INPUT_CHARS = env.int("LLM_COMPLETE_MAX_INPUT_CHARS", default=16_000)
 
 # Optional simple auth for public APIs (deprecated; session auth is primary).
 # When API_ACCESS_TOKEN is set, API endpoints that call _require_api_auth
@@ -169,13 +313,7 @@ ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY", default=None)
 GROQ_API_KEY = env("GROQ_API_KEY", default=None)
 GOOGLE_API_KEY = env("GOOGLE_API_KEY", default=None)
 
-# Preference vector cache for job focus ranking (Django-only embeddings)
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "OPTIONS": {"MAX_ENTRIES": 100},
-    }
-}
+# Preference / abuse cache — configured after Huey Redis settings below.
 # Bump when embedding formula changes (v5 = sentence-level role similarity, pref_role_sentences)
 PREFERENCE_VECTOR_CACHE_KEY = "job_preference_vector_v5"
 # Hybrid focus: alpha * title_sim + (1-alpha) * role_sim (then optionally blended with BM25 keyword score).
@@ -214,6 +352,12 @@ OPTIMIZER_RETRIEVAL_TOP_K = 28
 OPTIMIZER_RETRIEVAL_MAX_PACK_CHARS = 12000
 OPTIMIZER_RETRIEVAL_DENSE_WEIGHT = 0.75
 OPTIMIZER_RETRIEVAL_KEYWORD_WEIGHT = 0.25
+# Judge steps: cap draft + cleansed JD payloads; prefer local/small models when configured.
+OPTIMIZER_JUDGE_RESUME_MAX_CHARS = 12000
+OPTIMIZER_JUDGE_JD_MAX_CHARS = 8000
+# When True, ATS/Recruiter judges prefer an is_local (Ollama) preference row.
+# Default False: resume optimization should use cloud/remote LLMs whenever available.
+OPTIMIZER_JUDGES_PREFER_LOCAL = env.bool("OPTIMIZER_JUDGES_PREFER_LOCAL", default=False)
 # Title gate: when title_sim (cosine) is below this, role can add at most JOB_FOCUS_ROLE_MAX_LIFT.
 JOB_FOCUS_TITLE_GATE = 0.30  # cosine in [-1,1]; ~25% when converted to 0-100
 JOB_FOCUS_ROLE_MAX_LIFT = 0.15  # max extra from role when below gate (so combined <= title_sim + this)
@@ -227,6 +371,17 @@ ADZUNA_APP_ID = env("ADZUNA_APP_ID", default="")
 ADZUNA_APP_KEY = env("ADZUNA_APP_KEY", default="")
 ADZUNA_COUNTRY = env("ADZUNA_COUNTRY", default="us")
 ADZUNA_MAX_PAGES = env.int("ADZUNA_MAX_PAGES", default=3)
+
+# Dice job search (JSON API used by dice.com; optional override of public browser key).
+DICE_API_KEY = env("DICE_API_KEY", default="")
+DICE_COUNTRY_CODE = env("DICE_COUNTRY_CODE", default="US")
+DICE_RADIUS_MILES = env.int("DICE_RADIUS_MILES", default=30)
+
+# Levels.fyi job search (undocumented encrypted API used by levels.fyi/jobs).
+LEVELS_FYI_STANDARD_LEVELS = env("LEVELS_FYI_STANDARD_LEVELS", default="")
+LEVELS_FYI_OFFSET_STEP = env.int("LEVELS_FYI_OFFSET_STEP", default=10)
+LEVELS_FYI_PAGE_DELAY = env.float("LEVELS_FYI_PAGE_DELAY", default=0.35)
+LEVELS_FYI_MAX_SCAN_PAGES = env.int("LEVELS_FYI_MAX_SCAN_PAGES", default=30)
 # Disliked-job similarity: penalize results similar to disliked (listing-level embedding).
 JOB_DISLIKED_SIMILARITY_PENALTY_WEIGHT = 0.4  # penalty = weight * disliked_sim (0–1)
 JOB_DISLIKED_SIMILARITY_THRESHOLD = 0.3  # only penalize when similarity above this (0–1)
@@ -234,24 +389,53 @@ JOB_DISLIKED_SIMILARITY_THRESHOLD = 0.3  # only penalize when similarity above t
 JOB_DISLIKED_SIMILARITY_HIDE_THRESHOLD = 100
 
 # Huey async task queue (Redis). Set HUEY_IMMEDIATE=1 to run without Redis (tasks run in-process).
+# Defaults target a local, private Redis. Point HUEY_REDIS_HOST at your broker and set
+# REDIS_PASSWORD when the instance requires AUTH (recommended on any shared network).
 HUEY_IMMEDIATE = env.bool("HUEY_IMMEDIATE", default=False)
-HUEY_REDIS_HOST = env("HUEY_REDIS_HOST", default="192.168.2.174")
+HUEY_REDIS_HOST = env("HUEY_REDIS_HOST", default="127.0.0.1")
 HUEY_REDIS_PORT = env.int("HUEY_REDIS_PORT", default=6379)
 HUEY_REDIS_DB = env.int("HUEY_REDIS_DB", default=0)
+# Shared Redis AUTH password for Huey, cache, and LLM limiter (empty = no auth).
+REDIS_PASSWORD = env("REDIS_PASSWORD", default="")
+# Enable TLS to Redis (rediss://) when the broker terminates TLS.
+REDIS_USE_TLS = env.bool("REDIS_USE_TLS", default=False)
+# Queue name must be unique per app checkout when sharing a Redis instance
+# (e.g. JobApp-Main vs JobApp-Jules). Colliding names steal each other's tasks.
+HUEY_NAME = env("HUEY_NAME", default="jobapp-main")
+
+# Task results expire instead of accumulating forever: RedisExpireHuey stores each
+# result under its own key with a TTL. Plain RedisHuey keeps them in a hash that is
+# only pruned when a caller reads the result — nothing here does, so it grows unbounded.
+HUEY_RESULT_EXPIRE_SECONDS = env.int("HUEY_RESULT_EXPIRE_SECONDS", default=86_400)
+
+_huey_connection = {
+    "host": HUEY_REDIS_HOST,
+    "port": HUEY_REDIS_PORT,
+    "db": HUEY_REDIS_DB,
+    "read_timeout": 1,
+    # Storage kwarg consumed by RedisExpireStorage.
+    "expire_time": HUEY_RESULT_EXPIRE_SECONDS,
+}
+if REDIS_PASSWORD:
+    _huey_connection["password"] = REDIS_PASSWORD
+if REDIS_USE_TLS:
+    # redis-py: ssl connections require the SSL connection class.
+    import ssl as _ssl
+
+    _huey_connection["connection_class"] = __import__(
+        "redis.connection", fromlist=["SSLConnection"]
+    ).SSLConnection
+    _huey_connection["ssl_cert_reqs"] = _ssl.CERT_NONE
+
 HUEY = {
-    "name": "jobapplier",
-    "huey_class": "huey.RedisHuey",
+    "name": HUEY_NAME,
+    "huey_class": "huey.RedisExpireHuey",
     "results": True,
     "store_none": False,
     "immediate": HUEY_IMMEDIATE,
     "utc": True,
     "blocking": True,
-    "connection": {
-        "host": HUEY_REDIS_HOST,
-        "port": HUEY_REDIS_PORT,
-        "db": HUEY_REDIS_DB,
-        "read_timeout": 1,
-    },
+    "connection": _huey_connection,
     "consumer": {
         "workers": 2,
         # thread: works on Windows. process: not picklable on Windows (spawn).
@@ -261,10 +445,45 @@ HUEY = {
     },
 }
 
+
+def _build_redis_url(db: int) -> str:
+    """Compose a redis[s]:// URL for cache / limiter from the shared Redis config."""
+    scheme = "rediss" if REDIS_USE_TLS else "redis"
+    auth = f":{REDIS_PASSWORD}@" if REDIS_PASSWORD else ""
+    return f"{scheme}://{auth}{HUEY_REDIS_HOST}:{HUEY_REDIS_PORT}/{db}"
+
+# Django cache: Redis shares abuse counters across Gunicorn workers.
+# LocMem for DEBUG / tests / HUEY_IMMEDIATE, or when DJANGO_CACHE_USE_REDIS=0.
+_DJANGO_CACHE_URL = env("DJANGO_CACHE_URL", default="")
+_USE_REDIS_CACHE = env.bool(
+    "DJANGO_CACHE_USE_REDIS",
+    default=(
+        bool(_DJANGO_CACHE_URL)
+        or (not DEBUG and not HUEY_IMMEDIATE and not _IN_TEST)
+    ),
+)
+if _USE_REDIS_CACHE:
+    _cache_location = _DJANGO_CACHE_URL or _build_redis_url(
+        env.int("DJANGO_CACHE_REDIS_DB", default=1)
+    )
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": _cache_location,
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "OPTIONS": {"MAX_ENTRIES": 1000},
+        }
+    }
+
 # --- Autonomous Apply Agent ---
-# Mock-first URL resolution: when true (dev/CI default), resolve_and_detect uses a
-# deterministic URL map instead of live Playwright redirect following.
-APPLY_USE_MOCK_RESOLVER = env.bool("APPLY_USE_MOCK_RESOLVER", default=True)
+# When true, resolve_and_detect uses a deterministic URL map (CI/unit tests).
+# Default false so real Indeed/LinkedIn aggregator URLs use live Playwright resolution.
+APPLY_USE_MOCK_RESOLVER = env.bool("APPLY_USE_MOCK_RESOLVER", default=False)
 # Max concurrent browser automation steps (keep low; Chromium is memory-heavy).
 APPLY_BROWSER_CONCURRENCY = env.int("APPLY_BROWSER_CONCURRENCY", default=2)
 # Hard wall-clock cap per browser-touching orchestrator step (seconds).
@@ -275,17 +494,20 @@ APPLY_BROWSER_HEADLESS = env.bool("APPLY_BROWSER_HEADLESS", default=False)
 # --- LLM rate limits (Redis, shared across workers). Only providers listed in
 # LLM_RATE_LIMIT_BY_PROVIDER are throttled; tune via env vars.
 LLM_RATE_LIMIT_ENABLED = env.bool("LLM_RATE_LIMIT_ENABLED", default=True)
-LLM_RATE_LIMIT_FAIL_OPEN = env.bool("LLM_RATE_LIMIT_FAIL_OPEN", default=True)
+# Fail-open only in DEBUG by default; production should fail closed when Redis is down.
+LLM_RATE_LIMIT_FAIL_OPEN = env.bool("LLM_RATE_LIMIT_FAIL_OPEN", default=DEBUG)
 LLM_RATE_LIMIT_MAX_WAIT_SECONDS = env.int("LLM_RATE_LIMIT_MAX_WAIT_SECONDS", default=120)
 LLM_RATE_LIMIT_REDIS_URL = env("LLM_RATE_LIMIT_REDIS_URL", default="")
 LLM_RATE_LIMIT_REDIS_DB = env.int("LLM_RATE_LIMIT_REDIS_DB", default=HUEY_REDIS_DB)
 LLM_RATE_LIMIT_GROQ_RPM = env.int("LLM_RATE_LIMIT_GROQ_RPM", default=30)
 LLM_RATE_LIMIT_GROQ_TPM = env.int("LLM_RATE_LIMIT_GROQ_TPM", default=6000)
+LLM_RATE_LIMIT_OPENAI_RPM = env.int("LLM_RATE_LIMIT_OPENAI_RPM", default=60)
+LLM_RATE_LIMIT_OPENAI_TPM = env.int("LLM_RATE_LIMIT_OPENAI_TPM", default=90_000)
 
 LLM_RATE_LIMIT_BY_PROVIDER = {
     "Groq": (LLM_RATE_LIMIT_GROQ_RPM, LLM_RATE_LIMIT_GROQ_TPM),
+    "OpenAI": (LLM_RATE_LIMIT_OPENAI_RPM, LLM_RATE_LIMIT_OPENAI_TPM),
 }
-# Optional: set LLM_RATE_LIMIT_OPENAI_RPM / TPM in future by extending this dict in code or env-driven wiring.
 
 # Pipeline resume summary — LLM batch extraction (OpenAI)
 PIPELINE_LLM_BATCH_SIZE = env.int("PIPELINE_LLM_BATCH_SIZE", default=1)

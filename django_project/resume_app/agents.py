@@ -232,6 +232,12 @@ def _llm_invoke_with_retry(
     only_local: bool = False,
     allow_local: bool = True,
 ):
+    """
+    Invoke via the gateway.
+
+    Defaults favor Ollama Local for non-optimizer product work. Resume-optimizer
+    nodes pass prefer_local=False and allow_local=False for cloud-only routing.
+    """
     from .llm_gateway import call_invoke_llm_messages
 
     if user is None:
@@ -245,7 +251,8 @@ def _llm_invoke_with_retry(
         job_cache_key=job_cache_key,
         structured_schema=structured_schema,
         config=config,
-        llm_override=llm,
+        # None means gateway selection; do not force a caller-built local client.
+        llm_override=llm if llm is not None else None,
         max_attempts_per_model=max_attempts,
         usage_query_kind=usage_query_kind,
         prefer_local=prefer_local,
@@ -433,6 +440,9 @@ def run_fit_check(
             structured_schema=FitCheckResult,
             job_cache_key=job_cache_key,
             usage_query_kind=_qk,
+            prefer_local=True,
+            only_local=False,
+            allow_local=True,
         )
         if isinstance(result, FitCheckResult):
             return {"score": result.score, "reasoning": result.reasoning, "thoughts": result.thoughts}
@@ -441,7 +451,14 @@ def run_fit_check(
     except Exception as e:
         logger.warning("fit_check structured output failed: %s", e)
         raw = _llm_invoke_with_retry(
-            llm, messages, user=user, job_cache_key=job_cache_key, usage_query_kind=_qk
+            llm,
+            messages,
+            user=user,
+            job_cache_key=job_cache_key,
+            usage_query_kind=_qk,
+            prefer_local=True,
+            only_local=False,
+            allow_local=True,
         )
         content = raw.content if hasattr(raw, "content") else str(raw)
         parsed = _parse_fit_check_fallback_from_parsers(content)
@@ -492,7 +509,14 @@ def run_matching(
     dbg = "\n\n---\n\n".join(f"{type(m).__name__}:{getattr(m, 'content', '')}" for m in messages)
     logger.info("[matching] messages=%s total_chars=%s", len(messages), len(dbg))
     raw = _llm_invoke_with_retry(
-        llm, messages, user=user, job_cache_key=job_cache_key, usage_query_kind=_qk
+        llm,
+        messages,
+        user=user,
+        job_cache_key=job_cache_key,
+        usage_query_kind=_qk,
+        prefer_local=True,
+        only_local=True,
+        allow_local=True,
     )
     content = getattr(raw, "content", None)
     if content is None:

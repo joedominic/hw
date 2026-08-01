@@ -14,7 +14,7 @@ from django.utils import timezone
 from ninja.errors import HttpError
 
 from .experience import has_my_jobs_search_profile, is_power_user
-from .job_search_core import pipeline_jobs_to_payloads
+from .job_search_core import pipeline_jobs_to_payloads, VETTING_MATCHING_JD_MIN_CHARS
 from .saved_searches import backfill_saved_search_profile_tracks, pipeline_track_tabs_for_board
 from .search_profile_scope import resolve_active_profile_slug
 from .jobs_api import (
@@ -631,6 +631,7 @@ def pipeline_board_view(request, board_stage: str):
         "pipeline_resume_llm_providers": pipeline_resume_llm_providers,
         "pipeline_resume_llm_provider": pipeline_resume_llm_provider,
         "pipeline_resume_llm_configured": pipeline_resume_llm_configured,
+        "vetting_jd_min_chars": VETTING_MATCHING_JD_MIN_CHARS,
     }
     return render(request, "resume_app/pipeline_board.html", context)
 

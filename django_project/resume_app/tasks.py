@@ -24,7 +24,10 @@ from .models import (
 )
 from datetime import timedelta
 from .job_sources import normalize_site_names
-from .job_search_core import run_job_search_core, recompute_preferences_for_jobs
+from .job_search_core import (
+    run_job_search_core,
+    persist_preference_metrics_for_jobs,
+)
 from .agents import (
     create_workflow,
     DEFAULT_WRITER_PROMPT,
@@ -730,6 +733,29 @@ def _run_job_search_task_impl(user_id, task_id):
     except Exception:
         logger.exception("[run_job_search_task] post-search dedupe failed task_id=%s", task_id)
 
+    if jobs_out and task.track:
+        try:
+            job_ids = [p.id for p in jobs_out]
+            jobs = list(JobListing.objects.filter(id__in=job_ids))
+            persist_preference_metrics_for_jobs(
+                user=user,
+                track=task.track,
+                job_listings=jobs,
+                payloads=jobs_out,
+            )
+        except Exception:
+            logger.exception(
+                "[run_job_search_task] persist preference metrics failed task_id=%s",
+                task_id,
+            )
+        try:
+            apply_pipeline_auto_promotions(user)
+        except Exception:
+            logger.exception(
+                "[run_job_search_task] apply_pipeline_auto_promotions failed task_id=%s",
+                task_id,
+            )
+
     run.jobs_fetched = jobs_fetched
     run.jobs_after_filter = jobs_after_filter
     run.jobs_added_to_pipeline = jobs_added_to_pipeline
@@ -855,8 +881,9 @@ def evaluate_vetting_matching_task(
                 continue
 
             from .jd_cleanser import JDCleanserService
+            from .job_search_core import effective_vetting_job_description
 
-            raw_jd = (entry.job_listing.description or "").strip()
+            raw_jd = effective_vetting_job_description(entry.job_listing, enrich=True)
             if not raw_jd or len(raw_jd) < VETTING_MATCHING_JD_MIN_CHARS:
                 skipped += 1
                 continue
@@ -972,7 +999,9 @@ def try_vetting_match_debug(
         logger.exception("try_vetting_match_debug resume parse entry_id=%s", entry.id)
         return {"ok": False, "skip_reason": "resume_parse_error", "error": str(e)}
     resume_snippet = resume_text[:RESUME_MATCHING_SNIPPET_CHARS]
-    jd = (entry.job_listing.description or "").strip()
+    from .job_search_core import effective_vetting_job_description
+
+    jd = effective_vetting_job_description(entry.job_listing, enrich=True)
     jd_len = len(jd)
     if not jd or jd_len < VETTING_MATCHING_JD_MIN_CHARS:
         return {
@@ -1109,7 +1138,7 @@ def apply_pipeline_auto_promotions(user) -> int:
     promoted: list[int] = []
     for entry in entries:
         m = (
-            JobListingTrackMetrics.objects.filter(
+            JobListingTrackMetrics.objects.for_user(user).filter(
                 job_listing_id=entry.job_listing_id,
                 track=entry.track,
             )
@@ -1130,7 +1159,7 @@ def apply_pipeline_auto_promotions(user) -> int:
         entry = PipelineEntry.objects.for_user(user).get(id=entry_id)
         # Heuristic: If margin is very high (e.g. > 50), skip Vetting and go to Applying
         # In a real scenario, we might also check the Ollama Guard status here if persisted
-        m = JobListingTrackMetrics.objects.filter(
+        m = JobListingTrackMetrics.objects.for_user(user).filter(
             job_listing_id=entry.job_listing_id, track=entry.track
         ).first()
 
@@ -1247,7 +1276,9 @@ def apply_cleanup_retention_purge(cfg: AppAutomationSettings) -> int:
     ]
     now = timezone.now()
     user = cfg.owner
-    track_slugs = list(Track.objects.for_user(user).values_list("slug", flat=True))
+    from .search_profile_scope import profile_slugs_for_pipeline
+
+    track_slugs = profile_slugs_for_pipeline(user)
     if not track_slugs:
         return 0
     removed = 0
@@ -1320,7 +1351,9 @@ def pipeline_manager():
 
 
 def _pipeline_manager_for_user(user):
-    track_slugs = list(Track.objects.for_user(user).values_list("slug", flat=True))
+    from .search_profile_scope import profile_slugs_for_pipeline
+
+    track_slugs = profile_slugs_for_pipeline(user)
     if not track_slugs:
         return None
     now = timezone.now()
@@ -1355,20 +1388,11 @@ def _pipeline_manager_for_user(user):
                 jobs = list(JobListing.objects.filter(id__in=batch_ids))
                 if not jobs:
                     continue
-                scores = recompute_preferences_for_jobs(jobs, track=track, user=user)
-                for job in jobs:
-                    data = scores.get(job.id) or {}
-                    JobListingTrackMetrics.objects.update_or_create(
-                        owner=user,
-                        job_listing=job,
-                        track=track,
-                        defaults={
-                            "focus_percent": data.get("focus_percent"),
-                            "focus_after_penalty": data.get("focus_after_penalty"),
-                            "preference_margin": data.get("preference_margin"),
-                            "last_scored_at": timezone.now(),
-                        },
-                    )
+                persist_preference_metrics_for_jobs(
+                    user=user,
+                    track=track,
+                    job_listings=jobs,
+                )
 
             bad_ids = list(
                 JobListingTrackMetrics.objects.for_user(user).filter(

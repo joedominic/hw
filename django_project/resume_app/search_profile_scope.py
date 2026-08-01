@@ -68,6 +68,33 @@ def available_profile_slugs(user) -> set[str]:
     return slugs
 
 
+def profile_slugs_for_pipeline(user) -> list[str]:
+    """
+    Slugs that need pipeline scoring, purge, and retention.
+
+    Union of Track + SearchProfile slugs plus any bucket with active pipeline
+    entries or scheduled search tasks (covers SP-only profiles mid-migration).
+    """
+    slugs = set(available_profile_slugs(user))
+    slugs.update(
+        PipelineEntry.objects.for_user(user)
+        .filter(removed_at__isnull=True)
+        .exclude(track="")
+        .values_list("track", flat=True)
+        .distinct()
+    )
+    from .models import JobSearchTask
+
+    slugs.update(
+        JobSearchTask.objects.for_user(user)
+        .filter(is_active=True)
+        .exclude(track="")
+        .values_list("track", flat=True)
+        .distinct()
+    )
+    return sorted(s for s in slugs if s)
+
+
 def resolve_active_profile_slug(
     user,
     *,

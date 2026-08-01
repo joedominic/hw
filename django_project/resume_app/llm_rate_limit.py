@@ -19,6 +19,10 @@ from typing import Callable, Optional
 logger = logging.getLogger(__name__)
 
 DEFAULT_LLM_COOLDOWN_SECONDS = 300
+# Minute-bucket counter TTL. Must exceed the acquire window (60s) and the LLM
+# wall-clock deadline (180s) so reconcile/refund cannot recreate expired keys.
+# Keep in sync with acquire EXPIRE calls.
+RATE_LIMIT_BUCKET_TTL_SECONDS = 300
 
 
 def _safe_key_part(s: str | None) -> str:
@@ -42,7 +46,11 @@ class _RateLimitReservation:
         if delta == 0:
             return
         try:
-            self.redis.incrby(self.tok_key, delta)
+            # INCRBY recreates an expired key with no TTL; always re-apply expiry.
+            pipe = self.redis.pipeline()
+            pipe.incrby(self.tok_key, delta)
+            pipe.expire(self.tok_key, RATE_LIMIT_BUCKET_TTL_SECONDS)
+            pipe.execute()
         except Exception as e:
             logger.warning("llm_rate_limit token reconcile failed: %s", e)
 
@@ -51,9 +59,14 @@ class _RateLimitReservation:
         if not self.acquired:
             return
         try:
+            # DECR/INCRBY recreate expired keys with no TTL (LLM wall-clock can
+            # exceed RATE_LIMIT_BUCKET_TTL_SECONDS). Re-apply expiry so refunds
+            # cannot leave permanent negative counters behind.
             pipe = self.redis.pipeline()
             pipe.decr(self.req_key)
+            pipe.expire(self.req_key, RATE_LIMIT_BUCKET_TTL_SECONDS)
             pipe.incrby(self.tok_key, -int(self.estimated_tokens))
+            pipe.expire(self.tok_key, RATE_LIMIT_BUCKET_TTL_SECONDS)
             pipe.execute()
         except Exception as e:
             logger.warning("llm_rate_limit release_on_invoke_failure failed: %s", e)
@@ -80,12 +93,20 @@ def _get_redis():
             _redis_client = redis.from_url(url, decode_responses=True)
         else:
             db = getattr(settings, "LLM_RATE_LIMIT_REDIS_DB", settings.HUEY_REDIS_DB)
-            _redis_client = redis.Redis(
-                host=settings.HUEY_REDIS_HOST,
-                port=settings.HUEY_REDIS_PORT,
-                db=db,
-                decode_responses=True,
-            )
+            kwargs = {
+                "host": settings.HUEY_REDIS_HOST,
+                "port": settings.HUEY_REDIS_PORT,
+                "db": db,
+                "decode_responses": True,
+            }
+            # Shared Redis AUTH / TLS (see core.settings REDIS_PASSWORD / REDIS_USE_TLS).
+            password = getattr(settings, "REDIS_PASSWORD", "")
+            if password:
+                kwargs["password"] = password
+            if getattr(settings, "REDIS_USE_TLS", False):
+                kwargs["ssl"] = True
+                kwargs["ssl_cert_reqs"] = None
+            _redis_client = redis.Redis(**kwargs)
         return _redis_client
 
 
@@ -265,8 +286,8 @@ def _try_acquire_once_internal(
                 pipe.multi()
                 pipe.incr(req_key)
                 pipe.incrby(tok_key, est)
-                pipe.expire(req_key, 120)
-                pipe.expire(tok_key, 120)
+                pipe.expire(req_key, RATE_LIMIT_BUCKET_TTL_SECONDS)
+                pipe.expire(tok_key, RATE_LIMIT_BUCKET_TTL_SECONDS)
                 pipe.execute()
                 return _RateLimitReservation(
                     redis=r, req_key=req_key, tok_key=tok_key, estimated_tokens=est, acquired=True

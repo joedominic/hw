@@ -19,7 +19,8 @@ This document describes the Resume Optimizer page: layout, actions, and backend 
 ### LLM configuration
 
 - **Provider** dropdown (GET submit) and **Model** select (from the main form). Key status message: “Using connected key for X” or “No API key configured” with a **Go to Settings** link. API keys are managed on the **Settings** (Integrations) page, not on the optimizer.
-- **Cloud-only routing (default):** Writer, ATS, and Recruiter require a remote/cloud LLM (`allow_local=False`). **Ollama Local is never used for resume optimization**; if no cloud provider is available, the run fails with a clear “No cloud LLM available” error. Ollama Cloud / Groq / OpenAI / etc. are eligible.
+- **Cloud-only routing (optimizer graph):** Writer, ATS, Recruiter, and the in-graph `jd_cleanse` step require a remote/cloud LLM (`allow_local=False`). **Ollama Local is never used inside resume optimization.**
+- **Local for everything else:** Pipeline JD cleanse (`JDCleanserService`) and vetting match use **Ollama Local**; other non-optimizer product LLM calls prefer local.
 
 ### Prompts
 
@@ -36,7 +37,7 @@ This document describes the Resume Optimizer page: layout, actions, and backend 
 - **Single form** (`action=run_optimizer`) with: resume file (or prefill from Match), job description textarea, model select, **ATS profile** select, workflow preset, debug checkbox, rate limit delay, max iterations (1–5; see §4 — loop is not active in the default graph).
 - **Run mode** toggle: “Full run” | “Step by step”. Full run shows “Run optimizer”; step by step shows the step-by-step card.
 - **Run optimizer** (Full run): Submits the form. If a file is present, the form is submitted via AJAX to `/api/resume/optimize`; the page stays in place and the status panel shows progress and polls until completed/failed. If no file (e.g. prefill resume only), the form submits normally and redirects to the same page with `?resume_id=<id>`.
-- **Optimization status** (card “3. Optimization status”): Always visible. When a run is active (from URL `resume_id` or from AJAX start), the body shows status, ATS/recruiter scores, token usage, and an **editable draft textarea** when the run completes. Use **Save draft** to persist edits; **Export PDF/Word** uses the saved text. While the run is still in progress, the draft is read-only until completion. Status is polled every 2s until completed or failed (no full-page reload when started via AJAX).
+- **Optimization status** (card “3. Optimization status”): Always visible. When a run is active (from URL `resume_id` or from AJAX start), the body shows status, ATS/recruiter scores, token usage, and an **editable draft textarea** when the run completes. Use **Save draft** to persist edits; **Export PDF/Word** auto-saves the current editor text to the active `resume_id` first (so a stale prior-run save URL cannot apply), then downloads with cache-busting. While the run is still in progress, the draft is read-only until completion. Status is polled every 2s until completed or failed (no full-page reload when started via AJAX).
 
 ### 2. Step by step (when Run mode = Step by step)
 
@@ -59,7 +60,7 @@ The compiled graph runs **once**: **Writer → ATS judge → Recruiter judge →
 1. **Step-by-step:** you re-run Writer and the UI/API passes prior judge feedback in `feedback`, or
 2. **Custom workflow:** a step list places a judge *before* a later Writer (e.g. `recruiter_first`: Recruiter → Writer → ATS → Recruiter). `feedback` is accumulated with LangGraph `operator.add`.
 
-**LLM calls per full run:** 3 remote/paid calls when judges are remote; **1 Writer (strong) + 2 judge (local when configured)** in the hybrid setup. Adding `jd_cleanse` adds one more call (prefers local). Pipeline enqueue may also add a **local JD cleanse** call before optimization.
+**LLM calls per full run:** 3 cloud calls (Writer + ATS + Recruiter). Adding in-graph `jd_cleanse` adds one more **cloud** call. Pipeline enqueue / vetting may also run a separate **local** JD cleanse via `JDCleanserService`.
 
 ### Writer node inputs
 

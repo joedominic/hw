@@ -1712,6 +1712,15 @@ def _apply_export_replacements(content: str, request) -> str:
     return content
 
 
+def _export_file_response(buf: io.BytesIO, *, filename: str, content_type: str) -> FileResponse:
+    """Return a download response that must not be served from browser/proxy cache."""
+    response = FileResponse(buf, as_attachment=True, filename=filename, content_type=content_type)
+    response["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response["Pragma"] = "no-cache"
+    response["Expires"] = "0"
+    return response
+
+
 @router.get("/export/{resume_id}/pdf")
 def export_pdf(request, resume_id: int):
     """Export optimized resume as PDF. Returns 404 if not found or not completed."""
@@ -1723,7 +1732,7 @@ def export_pdf(request, resume_id: int):
     buf = _build_export_pdf(content)
     if buf is None:
         raise HttpError(503, "PDF export requires reportlab; install with: pip install reportlab")
-    return FileResponse(buf, as_attachment=True, filename="optimized_resume.pdf", content_type="application/pdf")
+    return _export_file_response(buf, filename="optimized_resume.pdf", content_type="application/pdf")
 
 
 @router.get("/export/{resume_id}/docx")
@@ -1737,4 +1746,8 @@ def export_docx(request, resume_id: int):
     buf = _build_export_docx(content)
     if buf is None:
         raise HttpError(503, "Word export requires python-docx; install with: pip install python-docx")
-    return FileResponse(buf, as_attachment=True, filename="optimized_resume.docx", content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    return _export_file_response(
+        buf,
+        filename="optimized_resume.docx",
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )

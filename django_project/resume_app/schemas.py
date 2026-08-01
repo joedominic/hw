@@ -34,6 +34,7 @@ class JobPayload(Schema):
     matching_score: Optional[int] = None
     interview_probability: Optional[int] = None
     interview_reasoning: Optional[str] = None
+    interview_status: Optional[str] = None  # "pending" | "short_jd" when no interview_probability
     posted_at: Optional[datetime] = None  # when the job was posted on the source board
     fetched_at: Optional[datetime] = None  # when we first ingested the job into the app
     optimized_resume_id: Optional[int] = None  # latest OptimizedResume for Applying board (pipeline-linked)

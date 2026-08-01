@@ -123,6 +123,13 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
   - if an entry was soft-deleted (`removed_at != null`), it does not re-add it
 - **Post-search step:** runs de-duplication for the task track only:
   - calls `dedupe_pipeline_entries(track_slug=task.track, stage="pipeline", include_done=False)`
+- **Persist Fit/Pref:** writes `JobListingTrackMetrics` for ranked payloads via `persist_preference_metrics_for_jobs` (embedding-based **Fit %** and **Pref %**; not LLM `JobMatchResult.fit_score`).
+- **Auto-promote:** calls `apply_pipeline_auto_promotions()` so strong Pref margins can move rows to Vetting without waiting for `pipeline_manager`.
+
+**Score vocabulary (My jobs board):**
+- **Fit %** / **Pref %** — cached preference metrics from likes/dislikes (`JobListingTrackMetrics`).
+- **Interview %** — LLM resume↔JD vetting score on Review rows (`PipelineEntry.vetting_interview_*`); local Ollama only in auto-pipeline paths.
+- **fit_score** on keyword/manual match APIs — separate `JobMatchResult` path; not used for scheduled search ingest.
 
 **Returns:**
 - On success: `{"status": "success", "task_id": task_id}`
@@ -275,7 +282,11 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 - Every 30 minutes.
 
 **Purpose:**
-- Maintain **Pipeline-stage** (`""` or `pipeline`) entries only: preference/focus metrics refresh, purge weak fits, then optional auto-promote to Vetting.
+- Maintain **Pipeline-stage** (`""` or `pipeline`) entries only: refresh stale preference/focus metrics, purge weak Pref margins, then optional auto-promote to Vetting.
+
+**Profile scope:** iterates `profile_slugs_for_pipeline(user)` — union of Track + SearchProfile slugs plus any bucket with active pipeline entries or scheduled search tasks (covers SearchProfile-only slugs that have no legacy Track row).
+
+**Note:** Scheduled search (`run_job_search_task`) already persists Fit/Pref at ingest; this task refreshes metrics older than `PIPELINE_MANAGER_STATS_MAX_AGE_DAYS` and handles profiles that did not run through a recent search.
 
 **Per-stage age cleanup** (Pipeline, Vetting, Applying, Done by `PipelineEntry.added_at`) is handled by **`cleanup_manager()`** using **Settings → App automation → Cleanup Manager retention days** (`0` = skip that stage).
 
@@ -285,7 +296,7 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 - `PIPELINE_MANAGER_BATCH_SIZE` (default `100`).
 
 **What it does (per track, errors isolated per track):**
-1. **Metrics:** gathers `job_listing_id` from active Pipeline-stage rows only (not saved-only listings), selects jobs needing scores, batches `recompute_preferences_for_jobs`, `JobListingTrackMetrics.update_or_create(...)`.
+1. **Metrics:** gathers `job_listing_id` from active Pipeline-stage rows only (not saved-only listings), selects jobs needing scores, batches `persist_preference_metrics_for_jobs` → `JobListingTrackMetrics.update_or_create(...)`.
 2. **Margin purge:** same stage filter; for job ids with `preference_margin < PIPELINE_MANAGER_PURGE_MARGIN_MAX`, removes entries via hard-delete unless the job has liked/disliked actions (then `mark_deleted()`).
 3. **Promotion:** `apply_pipeline_auto_promotions()` (may enqueue `evaluate_vetting_matching_task` for newly promoted ids).
 

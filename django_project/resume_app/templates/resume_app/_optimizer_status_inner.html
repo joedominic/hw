@@ -47,8 +47,8 @@
     </div>
     <p class="mt-3 text-sm text-slate-500">Define replacement tokens in Settings → Replacements. Those values are applied automatically when exporting PDF or Word.</p>
     <div class="mt-4 flex flex-wrap gap-3">
-        <a id="export-pdf-btn" class="inline-flex items-center rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover export-button" href="/api/resume/export/{{ rid }}/pdf" data-base-href="/api/resume/export/{{ rid }}/pdf">Export PDF</a>
-        <a id="export-docx-btn" class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50 export-button" href="/api/resume/export/{{ rid }}/docx" data-base-href="/api/resume/export/{{ rid }}/docx">Export Word</a>
+        <a id="export-pdf-btn" class="inline-flex items-center rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover export-button" href="/api/resume/export/{{ rid }}/pdf" data-base-href="/api/resume/export/{{ rid }}/pdf" data-resume-id="{{ rid }}">Export PDF</a>
+        <a id="export-docx-btn" class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50 export-button" href="/api/resume/export/{{ rid }}/docx" data-base-href="/api/resume/export/{{ rid }}/docx" data-resume-id="{{ rid }}">Export Word</a>
         <a class="inline-flex items-center text-sm font-medium text-slate-500 hover:text-concierge-slate" href="{% url 'resume_optimizer' %}">Run again</a>
     </div>
 </div>

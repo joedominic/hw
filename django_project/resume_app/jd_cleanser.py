@@ -8,7 +8,8 @@ class JDCleanserService:
     """
     Service to cleanse job descriptions by stripping boilerplate and fluff sections
     to focus on core responsibilities and requirements.
-    Uses Local Ollama for high-quality extraction, with a heuristic fallback.
+    Pipeline/vetting LLM cleanses use Ollama Local; falls back to heuristics.
+    (Resume-optimizer JD cleanse goes through the optimizer graph and stays cloud-only.)
     """
 
     @staticmethod
@@ -37,7 +38,7 @@ class JDCleanserService:
     @staticmethod
     def cleanse_with_llm(description: str, title: str = "", *, user) -> Optional[str]:
         """
-        Use LLM to extract core job information, preferring local models.
+        Use Ollama Local to extract core job information (pipeline / vetting path).
         """
         try:
             from .llm_gateway import USAGE_QUERY_JD_CLEANSE, invoke_llm_messages
@@ -56,6 +57,7 @@ class JDCleanserService:
                 user=user,
                 prefer_local=True,
                 only_local=True,
+                allow_local=True,
                 usage_query_kind=USAGE_QUERY_JD_CLEANSE,
             )
             content = response.content if hasattr(response, 'content') else str(response)

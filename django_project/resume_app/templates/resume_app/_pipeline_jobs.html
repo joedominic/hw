@@ -110,12 +110,8 @@
                                 <a href="{% url 'focus_breakdown' j.id %}?track={{ pipeline_track }}" class="rounded-concierge border border-sky-200 px-2 py-0.5 text-xs font-medium text-sky-800 hover:bg-sky-50">Why?</a>
                                 {% endif %}
                             {% endif %}
-                            {% if stage_label == "vetting" and j.interview_probability is not None %}
-                                <span class="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900" title="{{ j.interview_reasoning|default:''|truncatechars:180 }}">
-                                    Interview {{ j.interview_probability }}%
-                                </span>
-                            {% elif stage_label == "vetting" %}
-                                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600" title="Automation could not parse a numeric interview % from the model. Use Match debug to see the raw reply.">Interview n/a</span>
+                            {% if stage_label == "vetting" or stage_label == "applying" %}
+                                {% include "resume_app/_pipeline_interview_badge.html" with j=j vetting_jd_min_chars=vetting_jd_min_chars %}
                             {% endif %}
                             {% if j.preference_margin_percent is not None %}
                                 <span class="rounded-full px-2 py-0.5 text-xs font-medium {% if j.preference_margin_percent < -3 %}bg-red-100 text-red-900{% elif j.preference_margin_percent > 3 %}bg-emerald-100 text-emerald-900{% else %}bg-slate-100 text-slate-700{% endif %}">Pref {{ j.preference_margin_percent }}%</span>
@@ -257,6 +253,119 @@
                 for (let i = 0; i < checkboxes.length; i++) {
                     checkboxes[i].checked = selectAll.checked;
                 }
+            });
+        })();
+        (function() {
+            var wraps = document.querySelectorAll('.pipeline-interview-wrap');
+            if (!wraps.length) return;
+            var hoverCapable = window.matchMedia('(hover: hover)').matches;
+            var activeWrap = null;
+
+            function getPop(wrap) {
+                var popId = wrap.getAttribute('data-pop-id');
+                return popId ? document.getElementById(popId) : wrap.querySelector('.pipeline-interview-popover');
+            }
+
+            function ensurePortaled(pop, wrap) {
+                if (pop.parentElement !== document.body) {
+                    pop._anchorWrap = wrap;
+                    document.body.appendChild(pop);
+                }
+            }
+
+            function positionPop(btn, pop) {
+                pop.classList.remove('hidden');
+                pop.style.visibility = 'hidden';
+                pop.style.top = '0px';
+                pop.style.left = '0px';
+                var popW = pop.offsetWidth;
+                var popH = pop.offsetHeight;
+                var rect = btn.getBoundingClientRect();
+                var gap = 6;
+                var top = rect.bottom + gap;
+                if (top + popH > window.innerHeight - 8) {
+                    top = Math.max(8, rect.top - popH - gap);
+                }
+                var left = rect.right - popW;
+                left = Math.max(8, Math.min(left, window.innerWidth - popW - 8));
+                pop.style.top = top + 'px';
+                pop.style.left = left + 'px';
+                pop.style.visibility = '';
+            }
+
+            function showPop(wrap) {
+                var btn = wrap.querySelector('.pipeline-interview-pill');
+                var pop = getPop(wrap);
+                if (!pop || !btn) return;
+                ensurePortaled(pop, wrap);
+                positionPop(btn, pop);
+                btn.setAttribute('aria-expanded', 'true');
+                activeWrap = wrap;
+            }
+
+            function hidePop(wrap, force) {
+                if (!force && wrap.classList.contains('is-open')) return;
+                var btn = wrap.querySelector('.pipeline-interview-pill');
+                var pop = getPop(wrap);
+                if (!pop || !btn) return;
+                pop.classList.add('hidden');
+                btn.setAttribute('aria-expanded', 'false');
+                if (activeWrap === wrap) activeWrap = null;
+            }
+
+            function closeAll(except) {
+                wraps.forEach(function(w) {
+                    if (w === except) return;
+                    w.classList.remove('is-open');
+                    hidePop(w, true);
+                });
+            }
+
+            wraps.forEach(function(wrap) {
+                var btn = wrap.querySelector('.pipeline-interview-pill');
+                var pop = getPop(wrap);
+                if (!btn || !pop) return;
+
+                if (hoverCapable) {
+                    wrap.addEventListener('mouseenter', function() { showPop(wrap); });
+                    wrap.addEventListener('mouseleave', function() {
+                        setTimeout(function() {
+                            if (!pop.matches(':hover') && !wrap.classList.contains('is-open')) {
+                                hidePop(wrap, false);
+                            }
+                        }, 80);
+                    });
+                    pop.addEventListener('mouseenter', function() {
+                        if (!wrap.classList.contains('is-open')) showPop(wrap);
+                    });
+                    pop.addEventListener('mouseleave', function() {
+                        if (!wrap.classList.contains('is-open')) hidePop(wrap, false);
+                    });
+                }
+
+                btn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    var willPin = !wrap.classList.contains('is-open');
+                    closeAll(willPin ? wrap : null);
+                    if (willPin) {
+                        wrap.classList.add('is-open');
+                        showPop(wrap);
+                    } else {
+                        wrap.classList.remove('is-open');
+                        hidePop(wrap, true);
+                    }
+                });
+
+                pop.addEventListener('click', function(e) { e.stopPropagation(); });
+            });
+
+            document.addEventListener('click', function() { closeAll(null); });
+            window.addEventListener('scroll', function() {
+                if (activeWrap) showPop(activeWrap);
+            }, true);
+            window.addEventListener('resize', function() {
+                if (activeWrap) showPop(activeWrap);
             });
         })();
         (function() {

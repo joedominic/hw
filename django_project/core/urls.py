@@ -6,19 +6,54 @@ from ninja.security import django_auth
 from resume_app.api import router as resume_router
 from resume_app import views as resume_views
 from resume_app import apply_views
-from resume_app.auth_views import AppLoginView, AppLogoutView, SignupView
+from resume_app.auth_views import AppLoginView, AppLogoutView, SignupView, landing_view, privacy_view, terms_view
+from resume_app import account_views
+from resume_app import billing_views
 from resume_app import staff_views
+from resume_app import onboarding_views
+from resume_app.api_keys import SessionOrApiKeyAuth
 
-api = NinjaAPI(auth=django_auth)
+api = NinjaAPI(auth=[django_auth, SessionOrApiKeyAuth()])
 api.add_router("/resume", resume_router)
 urlpatterns = [
     path("accounts/login/", AppLoginView.as_view(), name="login"),
     path("accounts/logout/", AppLogoutView.as_view(), name="logout"),
     path("accounts/signup/", SignupView.as_view(), name="signup"),
+    path("accounts/password-reset/", account_views.AppPasswordResetView.as_view(), name="password_reset"),
+    path(
+        "accounts/password-reset/done/",
+        account_views.AppPasswordResetDoneView.as_view(),
+        name="password_reset_done",
+    ),
+    path(
+        "accounts/reset/<uidb64>/<token>/",
+        account_views.AppPasswordResetConfirmView.as_view(),
+        name="password_reset_confirm",
+    ),
+    path(
+        "accounts/reset/done/",
+        account_views.AppPasswordResetCompleteView.as_view(),
+        name="password_reset_complete",
+    ),
+    path(
+        "accounts/verify-email/<uidb64>/<token>/",
+        account_views.verify_email_view,
+        name="verify_email",
+    ),
+    path(
+        "accounts/resend-verification/",
+        account_views.resend_verification_view,
+        name="resend_verification",
+    ),
+    path("billing/", billing_views.billing_view, name="billing"),
+    path("billing/stripe/webhook/", billing_views.stripe_webhook, name="stripe_webhook"),
     path("hijack/", include("hijack.urls", namespace="hijack")),
     path("staff/users/", staff_views.staff_users_view, name="staff_users"),
-    # Primary entry point: Django UI
-    path("", resume_views.optimizer_view, name="home"),
+    path("staff/users/<int:user_id>/action/", staff_views.staff_user_action_view, name="staff_user_action"),
+    path("legal/privacy/", privacy_view, name="privacy"),
+    path("legal/terms/", terms_view, name="terms"),
+    path("", landing_view, name="landing"),
+    path("getting-started/", onboarding_views.getting_started_view, name="getting_started"),
     path("admin/", admin.site.urls),
     path("api/", api.urls),
     path("resume/optimizer/", resume_views.optimizer_view, name="resume_optimizer"),

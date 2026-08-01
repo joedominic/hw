@@ -1,0 +1,29 @@
+{# Interview badge for Review / Applying stages. Insight shows on hover or click of scored pill. #}
+{% if j.interview_probability is not None %}
+<div class="relative inline-block pipeline-interview-wrap" data-pop-id="interview-pop-{{ j.id }}">
+    <button type="button"
+            class="pipeline-interview-pill inline-flex items-center rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800 ring-1 ring-amber-100 hover:bg-amber-100/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+            {% if j.interview_reasoning %}aria-controls="interview-pop-{{ j.id }}" aria-expanded="false"{% endif %}
+            aria-label="{{ j.interview_probability }}% interview probability{% if j.interview_reasoning %}; click or hover for insight{% endif %}">
+        {{ j.interview_probability }}% interview
+    </button>
+    {% if j.interview_reasoning %}
+    <div id="interview-pop-{{ j.id }}"
+         class="pipeline-interview-popover fixed z-[200] hidden w-72 max-w-[min(18rem,calc(100vw-2rem))] rounded-xl border border-amber-200 bg-white p-3 shadow-lg ring-1 ring-amber-100 sm:w-80"
+         role="tooltip">
+        <p class="text-[10px] font-semibold uppercase tracking-wide text-amber-900">Interview insight</p>
+        <p class="mt-1.5 max-h-48 overflow-y-auto text-sm leading-relaxed text-slate-700">{{ j.interview_reasoning }}</p>
+    </div>
+    {% endif %}
+</div>
+{% elif j.interview_status == "short_jd" %}
+<span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200/80"
+      title="Stored job description is under {{ vetting_jd_min_chars|default:2000 }} characters and cannot be expanded from this job board.">
+    Interview n/a (short JD)
+</span>
+{% elif j.interview_status == "pending" %}
+<span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200/80"
+      title="Local LLM resume check is queued or in progress. Dice/Levels jobs fetch the full description automatically before scoring.">
+    Interview pending
+</span>
+{% endif %}

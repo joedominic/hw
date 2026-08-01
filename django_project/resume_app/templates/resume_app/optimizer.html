@@ -1035,8 +1035,8 @@
             html += '<span id="save-draft-status" class="text-xs text-slate-500" aria-live="polite"></span></div>';
             html += '<p class="mt-3 text-sm text-slate-500">Replacement tokens from Settings apply on export.</p>';
             html += '<div class="mt-4 flex flex-wrap gap-3">';
-            html += '<a class="inline-flex items-center rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover" href="/api/resume/export/' + esc(resumeId) + '/pdf">Export PDF</a>';
-            html += '<a class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50" href="/api/resume/export/' + esc(resumeId) + '/docx">Export Word</a>';
+            html += '<a id="export-pdf-btn" class="inline-flex items-center rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover export-button" href="/api/resume/export/' + esc(resumeId) + '/pdf" data-base-href="/api/resume/export/' + esc(resumeId) + '/pdf" data-resume-id="' + esc(resumeId) + '">Export PDF</a>';
+            html += '<a id="export-docx-btn" class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50 export-button" href="/api/resume/export/' + esc(resumeId) + '/docx" data-base-href="/api/resume/export/' + esc(resumeId) + '/docx" data-resume-id="' + esc(resumeId) + '">Export Word</a>';
             html += '<a class="inline-flex items-center text-sm font-medium text-slate-500 hover:text-concierge-slate" href="{% url 'resume_optimizer' %}">Run again</a></div>';
         } else {
             html += '<h4 class="text-lg font-semibold text-concierge-slate">Draft so far</h4>';
@@ -1312,6 +1312,27 @@
         }
     });
 
+    function draftSaveUrlFor(resumeId) {
+        // Always derive from the active resume id — never reuse a stale data-save-draft-url
+        // left over from a previous run on the same page.
+        return "/resume/status/" + resumeId + "/draft/";
+    }
+
+    function saveDraftContent(resumeId, content) {
+        statusContainer.setAttribute("data-save-draft-url", draftSaveUrlFor(resumeId));
+        return fetch(draftSaveUrlFor(resumeId), {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-CSRFToken": getCsrfOptimizer(),
+                "X-Requested-With": "XMLHttpRequest"
+            },
+            body: JSON.stringify({ optimized_content: content })
+        }).then(function (r) {
+            return r.json().then(function (d) { return { ok: r.ok, data: d }; });
+        });
+    }
+
     statusBody.addEventListener("click", function (e) {
         var genClBtn = e.target.closest("#generate-cover-letter-btn");
         if (genClBtn && !genClBtn.disabled) {
@@ -1381,26 +1402,43 @@
             });
             return;
         }
+
+        var exportLink = e.target.closest("a.export-button");
+        if (exportLink) {
+            e.preventDefault();
+            var exportRid = exportLink.getAttribute("data-resume-id")
+                || statusContainer.getAttribute("data-resume-id");
+            var exportTa = document.getElementById("optimizer-draft-editor");
+            var exportStatus = document.getElementById("save-draft-status");
+            var baseHref = exportLink.getAttribute("data-base-href") || exportLink.getAttribute("href");
+            if (!exportRid || !exportTa || !baseHref) return;
+            if (exportStatus) { exportStatus.textContent = "Saving before export…"; exportStatus.className = "text-xs text-slate-500"; }
+            saveDraftContent(exportRid, exportTa.value).then(function (res) {
+                if (res.ok && res.data && res.data.ok) {
+                    window.__optimizerDraftDirty = false;
+                    if (exportStatus) { exportStatus.textContent = "Saved"; exportStatus.className = "text-xs text-brand"; }
+                    // Cache-bust so the browser does not serve a prior PDF/DOCX for the same URL.
+                    var sep = baseHref.indexOf("?") >= 0 ? "&" : "?";
+                    window.location.href = baseHref + sep + "_t=" + Date.now();
+                } else {
+                    var exportErr = (res.data && res.data.error) ? res.data.error : "Save failed — export cancelled";
+                    if (exportStatus) { exportStatus.textContent = exportErr; exportStatus.className = "text-xs text-red-700"; }
+                }
+            }).catch(function () {
+                if (exportStatus) { exportStatus.textContent = "Save failed — export cancelled"; exportStatus.className = "text-xs text-red-700"; }
+            });
+            return;
+        }
+
         var saveBtn = e.target.closest("#save-draft-btn");
         if (saveBtn && !saveBtn.disabled) {
             var rid = saveBtn.getAttribute("data-resume-id");
             var ta = document.getElementById("optimizer-draft-editor");
             var statusEl = document.getElementById("save-draft-status");
-            var draftUrl = statusContainer.getAttribute("data-save-draft-url") || ("/resume/status/" + rid + "/draft/");
             if (!rid || !ta) return;
             saveBtn.disabled = true;
             if (statusEl) { statusEl.textContent = "Saving…"; statusEl.className = "text-xs text-slate-500"; }
-            fetch(draftUrl, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "X-CSRFToken": getCsrfOptimizer(),
-                    "X-Requested-With": "XMLHttpRequest"
-                },
-                body: JSON.stringify({ optimized_content: ta.value })
-            }).then(function (r) {
-                return r.json().then(function (d) { return { ok: r.ok, data: d }; });
-            }).then(function (res) {
+            saveDraftContent(rid, ta.value).then(function (res) {
                 saveBtn.disabled = false;
                 if (res.ok && res.data && res.data.ok) {
                     window.__optimizerDraftDirty = false;
@@ -1522,6 +1560,8 @@
                     var statusUrl = "/resume/status/" + rid + "/";
                     statusContainer.setAttribute("data-resume-id", rid);
                     statusContainer.setAttribute("data-status-url", statusUrl);
+                    // Keep save-draft URL in sync with the active run (do not leave a prior resume_id).
+                    statusContainer.setAttribute("data-save-draft-url", "/resume/status/" + rid + "/draft/");
                     var ph = document.getElementById("optimizer-status-placeholder");
                     if (ph) ph.remove();
                     statusBody.innerHTML = "<p class=\"text-sm text-slate-500\">Starting…</p>";

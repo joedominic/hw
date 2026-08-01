@@ -1800,6 +1800,286 @@ class PipelineAutomationTestCase(TestCase):
         self.assertEqual(pe.stage, PipelineEntry.Stage.VETTING)
 
 
+class FitPrefScoringTestCase(TestCase):
+    """Scheduled search persists Fit/Pref; managers cover SP-only slugs."""
+
+    def setUp(self):
+        self.user = create_user("fitpref")
+
+    def _job_payload(self, job, *, focus_percent=72, preference_margin_percent=15):
+        from .schemas import JobPayload
+
+        return JobPayload(
+            id=job.id,
+            title=job.title,
+            company_name=job.company_name,
+            location="",
+            snippet="snippet",
+            url="https://example.com/j",
+            source="test",
+            focus_percent=focus_percent,
+            preference_margin_percent=preference_margin_percent,
+        )
+
+    def test_persist_metrics_for_search_profile_only_slug(self):
+        from resume_app.models import SearchProfile
+        from resume_app.job_search_core import (
+            persist_preference_metrics_for_jobs,
+            pipeline_jobs_to_payloads,
+        )
+        from resume_app.search_profile_scope import profile_slugs_for_pipeline
+
+        sp = SearchProfile.objects.create(
+            owner=self.user,
+            name="FinCrimes",
+            slug="fincrimes",
+            search_term="AML",
+        )
+        track_slugs = list(Track.objects.for_user(self.user).values_list("slug", flat=True))
+        self.assertNotIn("fincrimes", track_slugs)
+        self.assertIn("fincrimes", profile_slugs_for_pipeline(self.user))
+
+        job = JobListing.objects.create(
+            source="test",
+            external_id="sp-only-1",
+            title="Analyst",
+            company_name="Bank",
+        )
+        PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=job,
+            track="fincrimes",
+            stage=PipelineEntry.Stage.PIPELINE,
+            search_profile=sp,
+        )
+        payload = self._job_payload(job)
+
+        written = persist_preference_metrics_for_jobs(
+            user=self.user,
+            track="fincrimes",
+            job_listings=[job],
+            payloads=[payload],
+        )
+        self.assertEqual(written, 1)
+        metrics = JobListingTrackMetrics.objects.get(
+            owner=self.user, job_listing=job, track="fincrimes"
+        )
+        self.assertEqual(metrics.focus_percent, 72)
+        self.assertEqual(metrics.preference_margin, 15)
+        self.assertEqual(metrics.search_profile_id, sp.id)
+
+        board_payloads = pipeline_jobs_to_payloads([job], "fincrimes", user=self.user)
+        self.assertEqual(board_payloads[0].focus_percent, 72)
+        self.assertEqual(board_payloads[0].preference_margin_percent, 15)
+
+    def test_pipeline_manager_visits_search_profile_only_slug(self):
+        from resume_app.models import SearchProfile
+        from resume_app.tasks import _pipeline_manager_for_user
+
+        SearchProfile.objects.create(
+            owner=self.user,
+            name="FinCrimes",
+            slug="fincrimes",
+            search_term="AML",
+        )
+        job = JobListing.objects.create(
+            source="test",
+            external_id="pm-sp-1",
+            title="Analyst",
+            company_name="Bank",
+        )
+        PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=job,
+            track="fincrimes",
+            stage=PipelineEntry.Stage.PIPELINE,
+        )
+
+        with patch(
+            "resume_app.tasks.persist_preference_metrics_for_jobs", return_value=1
+        ) as mock_persist:
+            _pipeline_manager_for_user(self.user)
+
+        mock_persist.assert_called()
+        tracks_called = {c.kwargs["track"] for c in mock_persist.call_args_list}
+        self.assertIn("fincrimes", tracks_called)
+
+    def test_apply_pipeline_auto_promotion_uses_owner_scoped_metrics(self):
+        other = create_user("fitpref-other")
+        job = JobListing.objects.create(
+            source="test",
+            external_id="owner-scope",
+            title="Engineer",
+            company_name="ACME",
+        )
+        pe = PipelineEntry.objects.create(
+            owner=self.user, job_listing=job, track="ic", stage=""
+        )
+        JobListingTrackMetrics.objects.create(
+            owner=other,
+            job_listing=job,
+            track="ic",
+            preference_margin=99,
+        )
+        cfg = AppAutomationSettings.get_for_user(self.user)
+        cfg.pipeline_to_vetting_enabled = True
+        cfg.pipeline_preference_margin_min = 5
+        cfg.save()
+
+        with patch("resume_app.tasks.evaluate_vetting_matching_task") as mock_ev:
+            n = apply_pipeline_auto_promotions(self.user)
+        self.assertEqual(n, 0)
+        pe.refresh_from_db()
+        self.assertEqual(pe.stage, "")
+        mock_ev.assert_not_called()
+
+        JobListingTrackMetrics.objects.create(
+            owner=self.user,
+            job_listing=job,
+            track="ic",
+            preference_margin=10,
+        )
+        with patch("resume_app.tasks.evaluate_vetting_matching_task") as mock_ev:
+            n = apply_pipeline_auto_promotions(self.user)
+        self.assertEqual(n, 1)
+        pe.refresh_from_db()
+        self.assertEqual(pe.stage, PipelineEntry.Stage.VETTING)
+        mock_ev.assert_called_once()
+
+    def test_run_job_search_task_persists_metrics_from_payloads(self):
+        from resume_app.models import JobSearchTask, SearchProfile
+        from resume_app.tasks import _run_job_search_task_impl
+
+        sp = SearchProfile.objects.create(
+            owner=self.user,
+            name="Data",
+            slug="dataeng",
+            search_term="data",
+        )
+        task = JobSearchTask.objects.create(
+            owner=self.user,
+            search_term="data engineer",
+            track="dataeng",
+            frequency="0 9 * * *",
+            saved_search=sp,
+        )
+        job = JobListing.objects.create(
+            source="test",
+            external_id="ingest-1",
+            title="Data Engineer",
+            company_name="Co",
+        )
+        payload = self._job_payload(job, focus_percent=80, preference_margin_percent=20)
+
+        with patch(
+            "resume_app.tasks.run_job_search_core", return_value=(1, 1, [payload], [])
+        ), patch(
+            "resume_app.job_dedupe.dedupe_pipeline_entries",
+            return_value={"entries_removed": 0, "duplicate_groups": 0},
+        ), patch(
+            "resume_app.tasks.apply_pipeline_auto_promotions"
+        ) as mock_promo:
+            result = _run_job_search_task_impl(self.user.id, task.id)
+
+        self.assertEqual(result["status"], "success")
+        metrics = JobListingTrackMetrics.objects.get(
+            owner=self.user, job_listing=job, track="dataeng"
+        )
+        self.assertEqual(metrics.focus_percent, 80)
+        self.assertEqual(metrics.preference_margin, 20)
+        mock_promo.assert_called_once_with(self.user)
+
+    def test_pipeline_payloads_include_interview_on_applying_stage(self):
+        from resume_app.job_search_core import pipeline_jobs_to_payloads
+
+        job = JobListing.objects.create(
+            source="test",
+            external_id="interview-applying",
+            title="Engineer",
+            company_name="ACME",
+        )
+        PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=job,
+            track="ic",
+            stage=PipelineEntry.Stage.APPLYING,
+            vetting_interview_probability=43,
+            vetting_interview_reasoning="Strong AML domain overlap; leadership gap on sanctions tooling.",
+        )
+        payloads = pipeline_jobs_to_payloads([job], "ic", user=self.user)
+        self.assertEqual(len(payloads), 1)
+        self.assertEqual(payloads[0].interview_probability, 43)
+        self.assertIn("AML", payloads[0].interview_reasoning)
+
+    def test_interview_status_pending_vs_short_jd(self):
+        from resume_app.job_search_core import (
+            pipeline_jobs_to_payloads,
+            resolve_interview_display_status,
+        )
+
+        self.assertEqual(
+            resolve_interview_display_status(description="x" * 500, interview_probability=None),
+            "short_jd",
+        )
+        self.assertEqual(
+            resolve_interview_display_status(description="x" * 2500, interview_probability=None),
+            "pending",
+        )
+        self.assertIsNone(
+            resolve_interview_display_status(description="", interview_probability=42),
+        )
+
+        short_job = JobListing.objects.create(
+            source="test",
+            external_id="short-jd",
+            title="Role",
+            company_name="Co",
+            description="brief",
+        )
+        long_job = JobListing.objects.create(
+            source="test",
+            external_id="long-jd",
+            title="Role",
+            company_name="Co",
+            description="x" * 2500,
+        )
+        PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=short_job,
+            track="ic",
+            stage=PipelineEntry.Stage.VETTING,
+        )
+        PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=long_job,
+            track="ic",
+            stage=PipelineEntry.Stage.VETTING,
+        )
+        by_id = {
+            p.id: p
+            for p in pipeline_jobs_to_payloads([short_job, long_job], "ic", user=self.user)
+        }
+        self.assertEqual(by_id[short_job.id].interview_status, "short_jd")
+        self.assertEqual(by_id[long_job.id].interview_status, "pending")
+
+        dice_job = JobListing.objects.create(
+            source="dice",
+            external_id="dice-short",
+            title="Role",
+            company_name="Co",
+            description="brief dice snippet",
+            url="https://www.dice.com/job-detail/guid-123",
+        )
+        PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=dice_job,
+            track="ic",
+            stage=PipelineEntry.Stage.VETTING,
+        )
+        dice_payload = pipeline_jobs_to_payloads([dice_job], "ic", user=self.user)[0]
+        self.assertEqual(dice_payload.interview_status, "pending")
+
+
 class JobDedupeTestCase(TestCase):
     def setUp(self):
         self.user = create_user("dedupe")
@@ -2098,6 +2378,40 @@ class SaveOptimizedDraftTestCase(TestCase):
         )
         with self.assertRaises(DraftSaveError):
             save_optimized_draft_content(opt.id, "   ", user=user)
+
+    def test_export_uses_saved_draft_not_original(self):
+        """Regression: after Save draft, PDF/Word must export the edited text."""
+        from resume_app.models import JobDescription, OptimizedResume, UserResume
+        from resume_app.services import save_optimized_draft_content
+
+        user = create_user("savedraftexport")
+        ur = UserResume.objects.create(owner=user, file="test.pdf", original_filename="t.pdf")
+        jd = JobDescription.objects.create(content="JD")
+        opt = OptimizedResume.objects.create(
+            owner=user,
+            original_resume=ur,
+            job_description=jd,
+            status=OptimizedResume.STATUS_COMPLETED,
+            optimized_content="## Original Heading\nOld body",
+        )
+        save_optimized_draft_content(opt.id, "## Edited Heading\nUNIQUE_EXPORT_MARKER_XYZ", user=user)
+
+        client = Client()
+        client.force_login(user)
+        captured = {}
+
+        def _capture_pdf(content):
+            captured["content"] = content
+            import io
+
+            return io.BytesIO(b"%PDF-1.4 fake")
+
+        with patch("resume_app.api._build_export_pdf", side_effect=_capture_pdf):
+            resp = client.get(f"/api/resume/export/{opt.id}/pdf")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("no-store", resp.get("Cache-Control", ""))
+        self.assertIn("UNIQUE_EXPORT_MARKER_XYZ", captured.get("content", ""))
+        self.assertNotIn("Old body", captured.get("content", ""))
 
 
 class AtsJudgeProfilePromptTestCase(TestCase):
