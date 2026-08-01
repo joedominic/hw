@@ -605,10 +605,11 @@ def settings_view(request):
     from .llm_services import list_models_for_provider
     from langchain_core.messages import HumanMessage
 
-    active_provider = _get_active_llm_provider(request.user, request)
+    user = get_active_user(request)
+    active_provider = _get_active_llm_provider(user, request)
     provider_infos = []
     for p in sorted(LLM_PROVIDERS):
-        config = LLMProviderConfig.objects.for_user(request.user).filter(provider=p).first()
+        config = LLMProviderConfig.objects.for_user(user).filter(provider=p).first()
         provider_infos.append({
             "name": p,
             "key_stored": bool(config and config.encrypted_api_key),
@@ -628,8 +629,10 @@ def settings_view(request):
         if action == "save_experience_mode":
             from .experience import set_experience_mode
             from .models import UserExperienceSettings
+            from .tenancy import get_real_user
 
-            if not request.user.is_staff:
+            real_user = get_real_user(request)
+            if not getattr(real_user, "is_staff", False):
                 messages.error(request, "Experience mode is managed by admins.")
                 return redirect(reverse("settings") + "?tab=general")
             mode = (request.POST.get("experience_mode") or "").strip().lower()
@@ -639,13 +642,13 @@ def settings_view(request):
             ):
                 messages.error(request, "Invalid experience mode.")
             else:
-                set_experience_mode(request.user, mode)
+                set_experience_mode(user, mode)
                 label = "Advanced" if mode == UserExperienceSettings.ExperienceMode.POWER else "Simple"
                 messages.success(request, f"Experience mode set to {label}.")
             return redirect(reverse("settings") + "?tab=general")
         if action == "refresh_provider_models":
             cached: dict[str, list] = {}
-            for cfg in _get_provider_preferences(request.user):
+            for cfg in _get_provider_preferences(user):
                 if not cfg.encrypted_api_key:
                     continue
                 try:
@@ -664,28 +667,28 @@ def settings_view(request):
             )
             return redirect(reverse("settings") + "?tab=llm")
         if action == "reset_llm_usage_stats":
-            solo = LLMAppUsageTotals.get_for_user(request.user)
+            solo = LLMAppUsageTotals.get_for_user(user)
             LLMAppUsageTotals.objects.filter(pk=solo.pk).update(
                 total_input_tokens=0,
                 total_output_tokens=0,
                 total_requests=0,
                 total_estimated_invokes=0,
             )
-            LLMUsageByModel.objects.for_user(request.user).delete()
-            LLMUsageByQuery.objects.for_user(request.user).delete()
+            LLMUsageByModel.objects.for_user(user).delete()
+            LLMUsageByQuery.objects.for_user(user).delete()
             messages.success(
                 request,
                 "LLM usage totals and per-model / per-query counters were reset.",
             )
             return redirect(reverse("settings") + "?tab=usage")
         if action == "save_stop_llm_requests":
-            automation = AppAutomationSettings.get_for_user(request.user)
+            automation = AppAutomationSettings.get_for_user(user)
             automation.stop_llm_requests = bool(request.POST.get("stop_llm_requests"))
             automation.save(update_fields=["stop_llm_requests", "updated_at"])
             messages.success(request, "LLM safety settings saved.")
             return redirect(reverse("settings") + "?tab=llm")
         if action == "save_app_automation":
-            automation = AppAutomationSettings.get_for_user(request.user)
+            automation = AppAutomationSettings.get_for_user(user)
             automation.pipeline_to_vetting_enabled = bool(
                 request.POST.get("pipeline_to_vetting_enabled")
             )
@@ -714,7 +717,7 @@ def settings_view(request):
             if raw_wf:
                 from .prompt_store import get_optimizer_workflow_by_id
 
-                wf = get_optimizer_workflow_by_id(int(raw_wf), request.user) if raw_wf.isdigit() else None
+                wf = get_optimizer_workflow_by_id(int(raw_wf), user) if raw_wf.isdigit() else None
                 if wf is None:
                     messages.error(request, "Invalid optimizer workflow selection.")
                     return redirect(reverse("settings") + "?tab=app")
@@ -723,7 +726,7 @@ def settings_view(request):
                 automation.applying_optimizer_workflow = None
 
             _save_optimizer_supporting_context(
-                request.user,
+                user,
                 (request.POST.get("optimization_notes") or "").strip(),
                 (request.POST.get("pipeline_skills_json") or "").strip(),
                 (request.POST.get("job_highlights") or "").strip(),
@@ -779,7 +782,7 @@ def settings_view(request):
                 token = (request.POST.get(f"replacement_token_{i}") or "").strip()
                 value = (request.POST.get(f"replacement_value_{i}") or "").strip()
                 replacements.append({"token": token, "value": value})
-            automation = AppAutomationSettings.get_for_user(request.user)
+            automation = AppAutomationSettings.get_for_user(user)
             stored = automation.set_export_replacements(replacements)
             # Keep session mirror for in-flight tabs; DB is the source of truth.
             request.session["export_replacements"] = stored
@@ -794,7 +797,7 @@ def settings_view(request):
             include_done = bool(request.POST.get("dedupe_include_done"))
             try:
                 result = dedupe_pipeline_entries(
-                    user=request.user,
+                    user=user,
                     track_slug=track,
                     stage=stage,
                     include_done=include_done,
@@ -882,7 +885,7 @@ def settings_view(request):
                     messages.error(request, f"Priority for {provider} must be a whole number.")
                     return redirect(reverse("settings") + "?tab=llm")
                 cfg = (
-                    LLMProviderConfig.objects.for_user(request.user)
+                    LLMProviderConfig.objects.for_user(user)
                     .filter(provider=provider)
                     .exclude(encrypted_api_key="")
                     .first()
@@ -896,12 +899,12 @@ def settings_view(request):
                         if rid in remove_ids:
                             LLMProviderPreference.objects.filter(
                                 id=rid,
-                                provider_config__owner=request.user,
+                                provider_config__owner=user,
                             ).delete()
                             continue
                         pref_obj = LLMProviderPreference.objects.filter(
                             id=rid,
-                            provider_config__owner=request.user,
+                            provider_config__owner=user,
                         ).first()
                     except (TypeError, ValueError):
                         pref_obj = None
@@ -928,15 +931,15 @@ def settings_view(request):
             if remove_ids:
                 LLMProviderPreference.objects.filter(
                     id__in=remove_ids,
-                    provider_config__owner=request.user,
+                    provider_config__owner=user,
                 ).delete()
 
-            if AppAutomationSettings.get_for_user(request.user).stop_llm_requests:
+            if AppAutomationSettings.get_for_user(user).stop_llm_requests:
                 messages.info(request, "Skipped connectivity ping while Stop LLM requests is enabled.")
             for row in saved_rows:
                 cfg = row.provider_config
                 model = (row.model or cfg.default_model or "").strip()
-                if cfg.encrypted_api_key and model and not AppAutomationSettings.get_for_user(request.user).stop_llm_requests:
+                if cfg.encrypted_api_key and model and not AppAutomationSettings.get_for_user(user).stop_llm_requests:
                     try:
                         api_key_decrypted = decrypt_api_key(cfg.encrypted_api_key)
                         llm = get_llm(cfg.provider, api_key_decrypted, model=model)
@@ -981,17 +984,17 @@ def settings_view(request):
                     messages.error(request, "Enter an API key before connecting.")
             else:
                 try:
-                    had_active_provider = bool(_get_active_llm_provider(request.user, request))
+                    had_active_provider = bool(_get_active_llm_provider(user, request))
                     api_llm_connect(request, ConnectRequest(provider=provider, api_key=api_key))
                     if not had_active_provider:
-                        _set_active_llm_provider(request.user, provider)
+                        _set_active_llm_provider(user, provider)
                         request.session["active_llm_provider"] = provider
                         request.session.modified = True
                     request.session.pop("settings_provider_models_map", None)
                     messages.success(request, f"API key for {provider} validated and saved.")
                     from .experience import mark_onboarding_step
 
-                    mark_onboarding_step(request.user, "llm")
+                    mark_onboarding_step(user, "llm")
                     return redirect(reverse("settings") + "?tab=llm")
                 except HttpError as e:
                     messages.error(request, str(e))
@@ -1001,7 +1004,7 @@ def settings_view(request):
             if not valid_connected:
                 messages.error(request, "Choose a connected provider.")
             else:
-                _set_active_llm_provider(request.user, provider)
+                _set_active_llm_provider(user, provider)
                 request.session["active_llm_provider"] = provider
                 request.session.modified = True
                 messages.success(request, f"{provider} is now the active provider.")
@@ -1010,9 +1013,9 @@ def settings_view(request):
     tab = (request.GET.get("tab") or "llm").strip().lower()
     if tab not in ("llm", "app", "usage", "replacements", "candidate_context", "general", "account"):
         tab = "llm"
-    provider_preference_list = list(_get_provider_preferences(request.user))
+    provider_preference_list = list(_get_provider_preferences(user))
     connected_provider_names = [cfg.provider for cfg in provider_preference_list]
-    pref_rows = list(_get_provider_preference_rows(request.user).order_by("priority", "id"))
+    pref_rows = list(_get_provider_preference_rows(user).order_by("priority", "id"))
     if not pref_rows and connected_provider_names:
         for cfg in provider_preference_list:
             LLMProviderPreference.objects.create(
@@ -1020,7 +1023,7 @@ def settings_view(request):
                 model=cfg.default_model or "",
                 priority=cfg.priority,
             )
-        pref_rows = list(_get_provider_preference_rows(request.user).order_by("priority", "id"))
+        pref_rows = list(_get_provider_preference_rows(user).order_by("priority", "id"))
     raw_session_models = request.session.get("settings_provider_models_map")
     if not isinstance(raw_session_models, dict):
         models_cache: dict[str, list] = {}
@@ -1045,9 +1048,9 @@ def settings_view(request):
         if cfg.provider not in provider_models_map:
             provider_models_map[cfg.provider] = _models_for_settings_preferences(cfg.provider, cfg)
 
-    tracks_for_dedupe = list(Track.ensure_baseline(request.user))
-    usage_totals = LLMAppUsageTotals.get_for_user(request.user)
-    stats_map = {(r.provider, r.model): r for r in LLMUsageByModel.objects.for_user(request.user)}
+    tracks_for_dedupe = list(Track.ensure_baseline(user))
+    usage_totals = LLMAppUsageTotals.get_for_user(user)
+    stats_map = {(r.provider, r.model): r for r in LLMUsageByModel.objects.for_user(user)}
     usage_rows = []
     usage_cooldown_error = False
     pref_keys_seen = set()
@@ -1060,7 +1063,7 @@ def settings_view(request):
         pref_keys_seen.add((prov, mkey))
         ttl = None
         try:
-            ttl = get_llm_cooldown_ttl(prov, m_gl, user=request.user)
+            ttl = get_llm_cooldown_ttl(prov, m_gl, user=user)
         except Exception:
             usage_cooldown_error = True
         st = stats_map.get((prov, mkey))
@@ -1084,13 +1087,13 @@ def settings_view(request):
                 "avg_tokens": avg,
             }
         )
-    for st in LLMUsageByModel.objects.for_user(request.user).order_by("-last_used_at", "provider"):
+    for st in LLMUsageByModel.objects.for_user(user).order_by("-last_used_at", "provider"):
         if (st.provider, st.model) in pref_keys_seen:
             continue
         ttl = None
         m_gl = None if st.model == "__default__" else st.model
         try:
-            ttl = get_llm_cooldown_ttl(st.provider, m_gl, user=request.user)
+            ttl = get_llm_cooldown_ttl(st.provider, m_gl, user=user)
         except Exception:
             usage_cooldown_error = True
         rc = int(st.request_count)
@@ -1118,7 +1121,7 @@ def settings_view(request):
         )
 
     usage_by_query_rows = []
-    for r in LLMUsageByQuery.objects.for_user(request.user).order_by("query_kind", "provider", "model"):
+    for r in LLMUsageByQuery.objects.for_user(user).order_by("query_kind", "provider", "model"):
         qk = r.query_kind or ""
         usage_by_query_rows.append(
             {
@@ -1138,7 +1141,7 @@ def settings_view(request):
 
     from .entitlements import METRIC_LLM_REQUESTS, METRIC_LLM_TOKENS, subscription_summary
 
-    plan_usage = subscription_summary(request.user)
+    plan_usage = subscription_summary(user)
     daily_llm_quota = {
         "requests": plan_usage["usage"].get(METRIC_LLM_REQUESTS) or {},
         "tokens": plan_usage["usage"].get(METRIC_LLM_TOKENS) or {},
@@ -1146,7 +1149,7 @@ def settings_view(request):
     }
 
     optimizer_supporting_context = _get_optimizer_supporting_context(request)
-    automation_for_replacements = AppAutomationSettings.get_for_user(request.user)
+    automation_for_replacements = AppAutomationSettings.get_for_user(user)
     raw_replacements = automation_for_replacements.export_replacements or []
     # One-time migrate legacy session-only tokens into durable settings.
     if not any(
@@ -1174,10 +1177,10 @@ def settings_view(request):
         "provider_models_map": provider_models_map,
         "active_provider": active_provider,
         "settings_tab": tab,
-        "app_automation": AppAutomationSettings.get_for_user(request.user),
-        "experience_settings": UserExperienceSettings.get_for_user(request.user),
-        "is_power_user": is_power_user(request.user),
-        "optimizer_workflows": list_optimizer_workflows(request.user),
+        "app_automation": AppAutomationSettings.get_for_user(user),
+        "experience_settings": UserExperienceSettings.get_for_user(user),
+        "is_power_user": is_power_user(user),
+        "optimizer_workflows": list_optimizer_workflows(user),
         "optimizer_supporting_context": optimizer_supporting_context,
         "dedupe_tracks": tracks_for_dedupe,
         "usage_totals": usage_totals,
@@ -1188,7 +1191,7 @@ def settings_view(request):
         "daily_llm_quota": daily_llm_quota,
         "replacement_entries": replacement_entries,
     }
-    context.update(account_settings_context(request.user))
+    context.update(account_settings_context(user))
     return render(request, "resume_app/settings.html", context)
 
 
