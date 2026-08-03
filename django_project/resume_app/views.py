@@ -667,6 +667,9 @@ def settings_view(request):
             )
             return redirect(reverse("settings") + "?tab=llm")
         if action == "reset_llm_usage_stats":
+            if not request.user.is_staff:
+                messages.error(request, "Permission denied.")
+                return redirect(reverse("settings") + "?tab=usage")
             solo = LLMAppUsageTotals.get_for_user(user)
             LLMAppUsageTotals.objects.filter(pk=solo.pk).update(
                 total_input_tokens=0,
@@ -1148,6 +1151,55 @@ def settings_view(request):
         "plan_name": plan_usage.get("plan_name") or "—",
     }
 
+    tenant_usage_rows = []
+    if request.user.is_staff:
+        from collections import defaultdict
+        tenant_usage = defaultdict(lambda: {
+            "username": "",
+            "email": "",
+            "local_requests": 0,
+            "local_input_tokens": 0,
+            "local_output_tokens": 0,
+            "remote_requests": 0,
+            "remote_input_tokens": 0,
+            "remote_output_tokens": 0,
+        })
+        # Preload local preferences to find is_local status efficiently
+        local_prefs = set(
+            LLMProviderPreference.objects.filter(is_local=True).values_list(
+                "provider_config__owner_id", "provider_config__provider", "model"
+            )
+        )
+        all_stats = LLMUsageByModel.objects.select_related("owner").all()
+        for st in all_stats:
+            o_id = st.owner_id
+            t = tenant_usage[o_id]
+            if not t["username"]:
+                t["username"] = st.owner.username
+                t["email"] = st.owner.email or ""
+
+            # check if local
+            is_local = False
+            if str(st.provider).strip().lower() == "ollama local":
+                is_local = True
+            else:
+                key = (o_id, st.provider, st.model)
+                if key in local_prefs:
+                    is_local = True
+                elif (o_id, st.provider, "__default__") in local_prefs:
+                    is_local = True
+
+            if is_local:
+                t["local_requests"] += st.request_count
+                t["local_input_tokens"] += st.sum_input_tokens
+                t["local_output_tokens"] += st.sum_output_tokens
+            else:
+                t["remote_requests"] += st.request_count
+                t["remote_input_tokens"] += st.sum_input_tokens
+                t["remote_output_tokens"] += st.sum_output_tokens
+
+        tenant_usage_rows = sorted(tenant_usage.values(), key=lambda x: x["username"])
+
     optimizer_supporting_context = _get_optimizer_supporting_context(request)
     automation_for_replacements = AppAutomationSettings.get_for_user(user)
     raw_replacements = automation_for_replacements.export_replacements or []
@@ -1190,6 +1242,7 @@ def settings_view(request):
         "usage_by_query_rows": usage_by_query_rows,
         "daily_llm_quota": daily_llm_quota,
         "replacement_entries": replacement_entries,
+        "tenant_usage_rows": tenant_usage_rows,
     }
     context.update(account_settings_context(user))
     return render(request, "resume_app/settings.html", context)

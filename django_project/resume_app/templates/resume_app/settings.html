@@ -262,6 +262,7 @@
     </div>
     {% elif settings_tab == 'usage' %}
     <div class="space-y-6">
+        {% if request.user.is_staff %}
         <form method="post" class="rounded-concierge border border-slate-200 bg-slate-50/80 p-4 flex flex-wrap items-center justify-between gap-3">
             {% csrf_token %}
             <input type="hidden" name="action" value="reset_llm_usage_stats">
@@ -273,6 +274,7 @@
                 Reset LLM usage stats
             </button>
         </form>
+        {% endif %}
         {% if app_automation.stop_llm_requests %}
         <div class="rounded-concierge border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
             <strong>Stop LLM requests</strong> is on. No provider calls will be made until you turn it off in LLM settings.
@@ -411,6 +413,47 @@
                 </tbody>
             </table>
         </div>
+
+        {% if request.user.is_staff and tenant_usage_rows %}
+        <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm overflow-x-auto">
+            <h2 class="text-lg font-semibold text-concierge-slate">Usage by Tenant (Admins Only)</h2>
+            <p class="mt-1 text-sm text-slate-600">Lifetime LLM usage aggregated per tenant, split by local (Ollama Local or preferred local models) and remote (cloud APIs) execution.</p>
+            <table class="mt-4 min-w-full text-left text-sm">
+                <thead>
+                    <tr class="border-b border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        <th class="py-2 pr-4">Tenant</th>
+                        <th class="py-2 pr-4 text-center" colspan="3">Local Usage</th>
+                        <th class="py-2 pr-4 text-center" colspan="3">Remote Usage</th>
+                    </tr>
+                    <tr class="border-b border-slate-200 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                        <th class="py-1 pr-4">Username / Email</th>
+                        <th class="py-1 pr-2 text-right">Reqs</th>
+                        <th class="py-1 pr-2 text-right">Tokens In</th>
+                        <th class="py-1 pr-4 text-right">Tokens Out</th>
+                        <th class="py-1 pr-2 text-right">Reqs</th>
+                        <th class="py-1 pr-2 text-right">Tokens In</th>
+                        <th class="py-1 text-right">Tokens Out</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for t_row in tenant_usage_rows %}
+                    <tr class="border-b border-slate-100 hover:bg-slate-50">
+                        <td class="py-2.5 pr-4">
+                            <span class="font-semibold text-concierge-slate">{{ t_row.username }}</span>
+                            {% if t_row.email %}<span class="block text-xs text-slate-500 font-normal">{{ t_row.email }}</span>{% endif %}
+                        </td>
+                        <td class="py-2.5 pr-2 text-right tabular-nums">{{ t_row.local_requests|default:0 }}</td>
+                        <td class="py-2.5 pr-2 text-right tabular-nums text-slate-600">{{ t_row.local_input_tokens|default:0 }}</td>
+                        <td class="py-2.5 pr-4 text-right tabular-nums text-slate-600">{{ t_row.local_output_tokens|default:0 }}</td>
+                        <td class="py-2.5 pr-2 text-right tabular-nums">{{ t_row.remote_requests|default:0 }}</td>
+                        <td class="py-2.5 pr-2 text-right tabular-nums text-slate-600">{{ t_row.remote_input_tokens|default:0 }}</td>
+                        <td class="py-2.5 text-right tabular-nums text-slate-600">{{ t_row.remote_output_tokens|default:0 }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
     </div>
     {% elif settings_tab == 'replacements' %}
     <div class="space-y-6">

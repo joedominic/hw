@@ -168,6 +168,7 @@ class AdzunaClientTestCase(TestCase):
 
     @patch("resume_app.adzuna_client.requests.get")
     @patch("resume_app.adzuna_client._adzuna_credentials", return_value=("id", "key"))
+    @override_settings(ADZUNA_MAX_PAGES=1)
     def test_fetch_adzuna_jobs_parses_response(self, _creds, mock_get):
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
@@ -907,12 +908,13 @@ class APITestCase(TenantTestCase):
 
 class TaskTestCase(TestCase):
     @override_settings(HUEY_IMMEDIATE=True)
+    @patch("resume_app.llm_gateway.cloud_llm_available", return_value=True)
     @patch("resume_app.tasks.build_optimizer_graph_prompt_state")
     @patch("resume_app.tasks.build_optimizer_context_state")
     @patch("resume_app.tasks.parse_pdf")
     @patch("resume_app.tasks.create_workflow")
     def test_optimize_resume_task_updates_status_on_success(
-        self, mock_create_workflow, mock_parse_pdf, mock_ctx, mock_prompt_state
+        self, mock_create_workflow, mock_parse_pdf, mock_ctx, mock_prompt_state, mock_cloud_llm_avail
     ):
         from .tasks import optimize_resume_task
         from .models import AgentLog
@@ -1493,6 +1495,12 @@ class PipelineResumeSummaryAPITestCase(TenantTestCase):
 
     @patch("resume_app.tasks.pipeline_resume_llm_extract_task")
     def test_pipeline_resume_summary_start_enqueues(self, mock_task, _mock_key, _mock_api):
+        from .models import Track
+        Track.objects.get_or_create(
+            owner=self.user,
+            slug="ic",
+            defaults={"label": "IC", "is_default": False},
+        )
         jd = "Requirements: Python and Kubernetes."
         job = JobListing.objects.create(
             source="test",
@@ -1530,6 +1538,12 @@ class PipelineResumeSummaryAPITestCase(TenantTestCase):
 
     @patch("resume_app.tasks.pipeline_resume_llm_extract_task")
     def test_pipeline_resume_summary_stop_idempotent(self, mock_task, _mock_key, _mock_api):
+        from .models import Track
+        Track.objects.get_or_create(
+            owner=self.user,
+            slug="ic",
+            defaults={"label": "IC", "is_default": False},
+        )
         jd = "Requirements: Python."
         job = JobListing.objects.create(
             source="test",
