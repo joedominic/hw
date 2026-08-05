@@ -507,6 +507,42 @@ def invoke_llm_messages(
 
     est = estimate_tokens_from_messages(messages)
 
+    if llm_override is None and job_cache_key and job_cache_key.strip().isdigit() and usage_query_kind:
+        try:
+            from .models import OptimizedResume, LLMProviderConfig
+            from .crypto import decrypt_api_key
+            from .llm_factory import get_llm
+
+            opt = OptimizedResume.objects.select_related("optimizer_workflow").get(id=int(job_cache_key))
+            wf = opt.optimizer_workflow
+            if wf and wf.step_llm_config:
+                # Map usage_query_kind to workflow step type keys ('writer', 'jd_cleanse', etc.)
+                step_key_map = {
+                    "jd_cleanse": "jd_cleanse",
+                    "optimizer_writer": "writer",
+                    "optimizer_ats_judge": "ats_judge",
+                    "optimizer_recruiter_judge": "recruiter_judge",
+                }
+                step_key = step_key_map.get(usage_query_kind)
+                if step_key and step_key in wf.step_llm_config:
+                    cfg = wf.step_llm_config[step_key]
+                    prov = (cfg.get("provider") or "").strip()
+                    model_to_use = (cfg.get("model") or "").strip() or None
+                    if prov:
+                        provider_config = LLMProviderConfig.objects.for_user(user).filter(provider=prov).first()
+                        if provider_config:
+                            api_key = decrypt_api_key(provider_config.encrypted_api_key or "")
+                            if api_key:
+                                custom_llm = get_llm(prov, api_key, model_to_use)
+                                if custom_llm is not None:
+                                    logger.info(
+                                        "[llm_gateway] Workflow step LLM override applied: step_key=%s -> provider=%s, model=%s",
+                                        step_key, prov, model_to_use
+                                    )
+                                    llm_override = custom_llm
+        except Exception as e:
+            logger.warning("Failed to apply workflow step LLM override: %s", e)
+
     if llm_override is not None:
         provider_hint = getattr(llm_override, "_resume_provider", None) or ""
         if not allow_local and provider_is_local(provider_hint):

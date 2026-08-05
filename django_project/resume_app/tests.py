@@ -3132,3 +3132,79 @@ class SystemOptimizerWorkflowTestCase(TestCase):
         resp = self.client.get("/workspace/workflows/")
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "JD-Rec-ATS-Writer-ATS")
+
+
+class WorkflowStepLLMOverrideTestCase(TestCase):
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        from resume_app.models import OptimizerWorkflow, LLMProviderConfig
+        from resume_app.crypto import encrypt_api_key
+
+        User = get_user_model()
+        self.user = User.objects.create_user(username="step_user", password="pass")
+
+        # Set up provider configurations
+        LLMProviderConfig.objects.create(
+            owner=self.user,
+            provider="OpenAI",
+            encrypted_api_key=encrypt_api_key("sk-fake-openai"),
+        )
+        LLMProviderConfig.objects.create(
+            owner=self.user,
+            provider="Ollama Local",
+            encrypted_api_key=encrypt_api_key("localhost-fake"),
+        )
+
+        # Create workflow with step-specific overrides
+        self.workflow = OptimizerWorkflow.objects.create(
+            owner=self.user,
+            name="Multi-LLM test",
+            steps=["jd_cleanse", "writer"],
+            step_llm_config={
+                "jd_cleanse": {"provider": "Ollama Local", "model": "nemotron"},
+                "writer": {"provider": "OpenAI", "model": "gpt-4o"},
+            }
+        )
+
+    @patch("resume_app.rate_limits.check_user_llm_rate_limit")
+    @patch("resume_app.llm_policy.assert_llm_kill_switch")
+    @patch("resume_app.llm_gateway._invoke_single_llm")
+    def test_invoke_llm_messages_resolves_workflow_overrides(self, mock_invoke, _kill, _rate):
+        from resume_app.models import OptimizedResume, JobDescription, UserResume
+        from resume_app.llm_gateway import invoke_llm_messages
+
+        resume = UserResume.objects.create(owner=self.user, file="test.pdf")
+        jd = JobDescription.objects.create(content="JD")
+        opt = OptimizedResume.objects.create(
+            owner=self.user,
+            original_resume=resume,
+            job_description=jd,
+            status=OptimizedResume.STATUS_QUEUED,
+            optimizer_workflow=self.workflow,
+        )
+
+        # Test step 1: jd_cleanse
+        invoke_llm_messages(
+            messages=[],
+            user=self.user,
+            job_cache_key=str(opt.id),
+            usage_query_kind="jd_cleanse",
+        )
+        mock_invoke.assert_called_once()
+        llm_called = mock_invoke.call_args[0][0]
+        self.assertEqual(llm_called._resume_provider, "Ollama Local")
+        self.assertEqual(llm_called._resume_model, "nemotron")
+
+        mock_invoke.reset_mock()
+
+        # Test step 2: writer (optimizer_writer)
+        invoke_llm_messages(
+            messages=[],
+            user=self.user,
+            job_cache_key=str(opt.id),
+            usage_query_kind="optimizer_writer",
+        )
+        mock_invoke.assert_called_once()
+        llm_called = mock_invoke.call_args[0][0]
+        self.assertEqual(llm_called._resume_provider, "OpenAI")
+        self.assertEqual(llm_called._resume_model, "gpt-4o")

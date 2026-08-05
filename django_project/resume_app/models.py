@@ -934,6 +934,11 @@ class OptimizerWorkflow(models.Model):
     steps = models.JSONField(
         help_text="Ordered list of step ids, e.g. ['writer', 'ats_judge', 'recruiter_judge']"
     )
+    step_llm_config = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Step-specific LLM config mapping step ids ('writer', 'jd_cleanse', etc.) to {'provider': '...', 'model': '...'}"
+    )
     loop_to = models.CharField(max_length=64, blank=True)
     max_iterations = models.PositiveSmallIntegerField(default=3)
     score_threshold = models.PositiveSmallIntegerField(default=85)

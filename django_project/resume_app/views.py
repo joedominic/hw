@@ -1611,11 +1611,15 @@ def workflow_list_view(request):
 
 def _workflow_form_context(request, workflow, steps_json: str) -> dict:
     from .prompt_store import list_ats_judge_profiles
+    from .llm_services import LLM_PROVIDERS, DEFAULT_MODELS
 
     return {
         "workflow": workflow,
         "workflow_steps_json": steps_json,
         "ats_profiles": list_ats_judge_profiles(),
+        "step_llm_config_json": json.dumps(workflow.step_llm_config) if workflow else "{}",
+        "llm_providers": sorted(LLM_PROVIDERS),
+        "llm_default_models_json": json.dumps(DEFAULT_MODELS),
     }
 
 
@@ -1649,6 +1653,11 @@ def workflow_create_view(request):
             score_threshold = max(0, min(100, int(request.POST.get("score_threshold") or 85)))
         except (TypeError, ValueError):
             score_threshold = 85
+        step_llm_raw = request.POST.get("step_llm_config", "")
+        try:
+            step_llm_config = json.loads(step_llm_raw) if step_llm_raw else {}
+        except json.JSONDecodeError:
+            step_llm_config = {}
         ats_prof = None
         raw_ats = (request.POST.get("ats_judge_profile_id") or "").strip()
         if raw_ats.isdigit():
@@ -1657,6 +1666,7 @@ def workflow_create_view(request):
             owner=None,
             name=name,
             steps=steps,
+            step_llm_config=step_llm_config,
             loop_to=loop_to,
             max_iterations=max_iterations,
             score_threshold=score_threshold,
@@ -1709,6 +1719,11 @@ def workflow_edit_view(request, workflow_id):
             score_threshold = max(0, min(100, int(request.POST.get("score_threshold") or 85)))
         except (TypeError, ValueError):
             score_threshold = 85
+        step_llm_raw = request.POST.get("step_llm_config", "")
+        try:
+            step_llm_config = json.loads(step_llm_raw) if step_llm_raw else {}
+        except json.JSONDecodeError:
+            step_llm_config = {}
         raw_ats = (request.POST.get("ats_judge_profile_id") or "").strip()
         if raw_ats.isdigit():
             ats_prof = AtsJudgeProfile.objects.filter(owner__isnull=True, pk=int(raw_ats)).first()
@@ -1716,6 +1731,7 @@ def workflow_edit_view(request, workflow_id):
             ats_prof = None
         workflow.name = name
         workflow.steps = steps
+        workflow.step_llm_config = step_llm_config
         workflow.loop_to = loop_to
         workflow.max_iterations = max_iterations
         workflow.score_threshold = score_threshold
