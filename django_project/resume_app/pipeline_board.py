@@ -596,7 +596,20 @@ def pipeline_board_view(request, board_stage: str):
         elif pipeline_resume_llm_providers:
             pipeline_resume_llm_provider = pipeline_resume_llm_providers[0]
 
+    from .models import JobListingAction, UserResume
+    from .track_actions import q_preference_embedding_track
+
+    liked_actions = JobListingAction.objects.for_user(user).filter(
+        action=JobListingAction.ActionType.LIKED,
+    )
+    liked_actions = liked_actions.filter(q_preference_embedding_track(raw_track, user))
+    missing_liked_jobs = not liked_actions.exists()
+
+    missing_library_resume = not UserResume.objects.for_user(user).filter(is_library=True).exists()
+
     context = {
+        "missing_liked_jobs": missing_liked_jobs,
+        "missing_library_resume": missing_library_resume,
         "pipeline_jobs": pipeline_jobs,
         "pipeline_track": raw_track,
         "pipeline_search_query": search_q if search_q else None,

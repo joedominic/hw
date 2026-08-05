@@ -576,7 +576,7 @@ class AppAutomationSettings(models.Model):
         on_delete=models.CASCADE,
         related_name="automation_settings",
     )
-    pipeline_to_vetting_enabled = models.BooleanField(default=False)
+    pipeline_to_vetting_enabled = models.BooleanField(default=True)
     pipeline_preference_margin_min = models.IntegerField(
         default=0,
         help_text="Promote Pipeline → Vetting when Pref margin (same as pipeline badge) is >= this value.",
@@ -704,7 +704,7 @@ class AppAutomationSettings(models.Model):
         obj, _created = cls.objects.get_or_create(
             owner=user,
             defaults={
-                "pipeline_to_vetting_enabled": False,
+                "pipeline_to_vetting_enabled": True,
                 "pipeline_preference_margin_min": 0,
                 "vetting_to_applying_enabled": False,
                 "vetting_interview_probability_min": 70,

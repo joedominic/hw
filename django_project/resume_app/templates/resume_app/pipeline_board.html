@@ -97,6 +97,43 @@
     </div>
 
     {% include "resume_app/_concierge_messages.html" %}
+
+    {% if board_stage == "pipeline" and missing_liked_jobs %}
+    <div class="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 shadow-sm">
+        <div class="flex items-start gap-3">
+            <span class="mt-0.5 shrink-0 text-amber-600" aria-hidden="true">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                </svg>
+            </span>
+            <div>
+                <strong class="font-semibold text-amber-900">Auto-Matching Paused: Like jobs to activate preference metrics.</strong>
+                <p class="mt-1 text-amber-700">
+                    The background optimizer cannot auto-promote listings from <span class="font-semibold text-amber-900">New</span> to <span class="font-semibold text-amber-900">Review/Vetting</span> because no jobs have been liked yet for this track. Please search for jobs and click the <strong>"Like"</strong> (heart) button on at least one posting to seed your preference vectors and activate automatic matching.
+                </p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if missing_library_resume %}
+    <div class="mb-5 rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800 shadow-sm">
+        <div class="flex items-start gap-3">
+            <span class="mt-0.5 shrink-0 text-blue-600" aria-hidden="true">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                </svg>
+            </span>
+            <div>
+                <strong class="font-semibold text-blue-900">Resume Upload Required: Connect your profile to enable vetting.</strong>
+                <p class="mt-1 text-blue-700">
+                    Background vetting matching is paused because no primary/library resume is uploaded. Go to <a href="{% url 'track_list' %}" class="font-semibold text-blue-900 underline hover:text-blue-950">Search profiles &amp; resumes</a> to upload a PDF resume and mark it as a library resume to enable automated interview probability evaluations.
+                </p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     {% include "resume_app/_pipeline_stage_tabs.html" %}
 
     {% if show_pipeline_resume_summary %}
