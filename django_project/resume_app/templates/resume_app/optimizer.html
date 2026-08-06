@@ -1348,7 +1348,7 @@
             if (genSt) genSt.textContent = "Calling LLM…";
             fetch("/api/resume/status/" + rid + "/generate-cover-letter", {
                 method: "POST",
-                headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                headers: { "Content-Type": "application/json", "Accept": "application/json", "X-CSRFToken": getCsrfOptimizer() },
                 body: JSON.stringify({})
             }).then(function(r) {
                 return r.json().then(function(d) { return { ok: r.ok, data: d }; });
@@ -1383,7 +1383,7 @@
             if (saveClSt) saveClSt.textContent = "Saving…";
             fetch("/api/resume/status/" + rid2 + "/save-cover-letter", {
                 method: "POST",
-                headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                headers: { "Content-Type": "application/json", "Accept": "application/json", "X-CSRFToken": getCsrfOptimizer() },
                 body: JSON.stringify({ cover_letter: clTa2.value })
             }).then(function(r) {
                 return r.json().then(function(d) { return { ok: r.ok, data: d }; });
