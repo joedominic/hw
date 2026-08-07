@@ -665,6 +665,20 @@ def run_job_search_task(user_id, task_id):
         cache.delete(JOB_SEARCH_TASK_LOCK_KEY)
 
 
+def _prune_old_runs(task):
+    """Keep only the last 5 runs for a task."""
+    try:
+        keep_ids = list(
+            JobSearchTaskRun.objects.filter(task=task)
+            .order_by("-started_at")
+            .values_list("id", flat=True)[:5]
+        )
+        if keep_ids:
+            JobSearchTaskRun.objects.filter(task=task).exclude(id__in=keep_ids).delete()
+    except Exception:
+        logger.exception("[run_job_search_task] Pruning old runs failed for task_id=%s", task.id)
+
+
 def _run_job_search_task_impl(user_id, task_id):
     user = _task_user(user_id)
     try:
@@ -695,6 +709,7 @@ def _run_job_search_task_impl(user_id, task_id):
         run.finished_at = timezone.now()
         run.error_message = str(e)
         run.save()
+        _prune_old_runs(task)
         return {"status": "error", "message": str(e)}
 
     jobs_added_to_pipeline = 0
@@ -762,6 +777,7 @@ def _run_job_search_task_impl(user_id, task_id):
     run.status = JobSearchTaskRun.STATUS_COMPLETED
     run.finished_at = timezone.now()
     run.save()
+    _prune_old_runs(task)
     logger.info(
         "[run_job_search_task] task_id=%s done: fetched=%d after_filter=%d added=%d",
         task_id, jobs_fetched, jobs_after_filter, jobs_added_to_pipeline,

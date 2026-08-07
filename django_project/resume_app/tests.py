@@ -3208,3 +3208,121 @@ class WorkflowStepLLMOverrideTestCase(TestCase):
         llm_called = mock_invoke.call_args[0][0]
         self.assertEqual(llm_called._resume_provider, "OpenAI")
         self.assertEqual(llm_called._resume_model, "gpt-4o")
+
+
+class ScheduledSearchLogsTestCase(TestCase):
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        from resume_app.models import SearchProfile, JobSearchTask
+
+        User = get_user_model()
+        self.user = User.objects.create_user(username="log_tenant_user", password="pass")
+        self.power_user = User.objects.create_user(username="log_power_user", password="pass", is_staff=True)
+
+        # Create SearchProfile (saved search)
+        self.profile = SearchProfile.objects.create(
+            owner=self.user,
+            slug="log-test",
+            profile_slug="log-test",
+            name="Log Test Profile",
+            search_term="Engineer",
+        )
+
+        # Create JobSearchTask
+        self.task = JobSearchTask.objects.create(
+            owner=self.user,
+            saved_search=self.profile,
+            search_term="Engineer",
+            track="log-test",
+            frequency="0 9 * * *",
+        )
+
+    def test_pruning_keeps_exactly_last_5_runs(self):
+        from resume_app.models import JobSearchTaskRun
+        from resume_app.tasks import _prune_old_runs
+        import datetime
+        from django.utils import timezone
+
+        # Create 10 runs for this task
+        for i in range(10):
+            run = JobSearchTaskRun.objects.create(
+                task=self.task,
+                status=JobSearchTaskRun.STATUS_COMPLETED,
+            )
+            # manually stagger started_at
+            run.started_at = timezone.now() - datetime.timedelta(hours=10 - i)
+            run.save()
+
+        self.assertEqual(JobSearchTaskRun.objects.filter(task=self.task).count(), 10)
+
+        # Prune old runs
+        _prune_old_runs(self.task)
+
+        # Should only keep the last 5
+        self.assertEqual(JobSearchTaskRun.objects.filter(task=self.task).count(), 5)
+
+    def test_track_list_context_populates_runs_for_normal_user(self):
+        from resume_app.models import JobSearchTaskRun, SearchProfile
+        from resume_app.views import _track_list_context
+        from django.test import RequestFactory
+
+        # Create 3 runs with specific metrics
+        # Run 1: fetched 10, after_filter 8 (eliminated 2), saved 3
+        JobSearchTaskRun.objects.create(
+            task=self.task,
+            status=JobSearchTaskRun.STATUS_COMPLETED,
+            jobs_fetched=10,
+            jobs_after_filter=8,
+            jobs_added_to_pipeline=3,
+        )
+        # Run 2: fetched 5, after_filter 2 (eliminated 3), saved 1
+        JobSearchTaskRun.objects.create(
+            task=self.task,
+            status=JobSearchTaskRun.STATUS_COMPLETED,
+            jobs_fetched=5,
+            jobs_after_filter=2,
+            jobs_added_to_pipeline=1,
+        )
+
+        request = RequestFactory().get("/jobs/tracks/")
+        request.user = self.user
+
+        # Non-power-user track query
+        tracks_qs = SearchProfile.objects.for_user(self.user)
+
+        context = _track_list_context(request, self.user, tracks_qs)
+        runs_log = context.get("execution_runs")
+
+        self.assertIsNotNone(runs_log)
+        self.assertEqual(len(runs_log), 2)
+
+        # The most recent should be first
+        latest = runs_log[0]
+        self.assertEqual(latest["profile_name"], "Log Test Profile")
+        self.assertEqual(latest["jobs_fetched"], 5)
+        self.assertEqual(latest["jobs_eliminated"], 3)
+        self.assertEqual(latest["jobs_saved"], 1)
+
+        older = runs_log[1]
+        self.assertEqual(older["jobs_fetched"], 10)
+        self.assertEqual(older["jobs_eliminated"], 2)
+        self.assertEqual(older["jobs_saved"], 3)
+
+    def test_track_list_context_empty_for_power_user(self):
+        from resume_app.models import Track, UserExperienceSettings
+        from resume_app.views import _track_list_context
+        from django.test import RequestFactory
+
+        # Set experience mode to POWER for power user
+        exp = UserExperienceSettings.get_for_user(self.power_user)
+        exp.experience_mode = UserExperienceSettings.ExperienceMode.POWER
+        exp.save()
+
+        request = RequestFactory().get("/jobs/tracks/")
+        request.user = self.power_user
+
+        tracks_qs = Track.ensure_baseline(self.power_user)
+        context = _track_list_context(request, self.power_user, tracks_qs)
+
+        # Power users should not see tenant execution log
+        self.assertEqual(context.get("execution_runs"), [])

@@ -2796,6 +2796,28 @@ def _track_list_context(request, user, tracks_qs):
             }
         )
 
+    execution_runs = []
+    if not power_user:
+        from .models import JobSearchTaskRun
+        runs_qs = (
+            JobSearchTaskRun.objects.filter(task__owner=user)
+            .select_related("task", "task__saved_search")
+            .order_by("-started_at")[:5]
+        )
+        for r in runs_qs:
+            eliminated = max(0, r.jobs_fetched - r.jobs_after_filter)
+            profile_name = r.task.saved_search.name if r.task.saved_search else (r.task.name or r.task.search_term)
+            execution_runs.append({
+                "run": r,
+                "profile_name": profile_name,
+                "started_at": r.started_at,
+                "status": r.get_status_display(),
+                "jobs_fetched": r.jobs_fetched,
+                "jobs_eliminated": eliminated,
+                "jobs_saved": r.jobs_added_to_pipeline,
+                "error_message": r.error_message,
+            })
+
     return {
         "tracks": tracks,
         "resume_rows": resume_rows,
@@ -2808,6 +2830,7 @@ def _track_list_context(request, user, tracks_qs):
             "resume_rows_count": len(resume_rows),
             "default_track": default_track,
         },
+        "execution_runs": execution_runs,
     }
 
 
