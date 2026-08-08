@@ -3262,9 +3262,18 @@ class ScheduledSearchLogsTestCase(TestCase):
         self.assertEqual(JobSearchTaskRun.objects.filter(task=self.task).count(), 5)
 
     def test_track_list_context_populates_runs_for_normal_user(self):
-        from resume_app.models import JobSearchTaskRun, SearchProfile
+        from resume_app.models import JobSearchTaskRun, SearchProfile, JobListing, JobListingAction
         from resume_app.views import _track_list_context
         from django.test import RequestFactory
+
+        # Create some liked and disliked actions for this profile (track: log-test)
+        job1 = JobListing.objects.create(title="Backend Dev", company_name="Co1", source="indeed", external_id="ext-1")
+        job2 = JobListing.objects.create(title="Frontend Dev", company_name="Co2", source="indeed", external_id="ext-2")
+        job3 = JobListing.objects.create(title="Product Mgr", company_name="Co3", source="indeed", external_id="ext-3")
+
+        JobListingAction.objects.create(owner=self.user, job_listing=job1, action=JobListingAction.ActionType.LIKED, track="log-test")
+        JobListingAction.objects.create(owner=self.user, job_listing=job2, action=JobListingAction.ActionType.LIKED, track="log-test")
+        JobListingAction.objects.create(owner=self.user, job_listing=job3, action=JobListingAction.ActionType.DISLIKED, track="log-test")
 
         # Create 3 runs with specific metrics
         # Run 1: fetched 10, after_filter 8 (eliminated 2), saved 3
@@ -3307,6 +3316,13 @@ class ScheduledSearchLogsTestCase(TestCase):
         self.assertEqual(older["jobs_fetched"], 10)
         self.assertEqual(older["jobs_eliminated"], 2)
         self.assertEqual(older["jobs_saved"], 3)
+
+        # Verify liked_count and disliked_count on track/profile
+        context_tracks = context.get("tracks")
+        self.assertEqual(len(context_tracks), 1)
+        profile_track = context_tracks[0]
+        self.assertEqual(profile_track.liked_count, 2)
+        self.assertEqual(profile_track.disliked_count, 1)
 
     def test_track_list_context_empty_for_power_user(self):
         from resume_app.models import Track, UserExperienceSettings

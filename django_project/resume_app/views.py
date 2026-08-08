@@ -2779,9 +2779,29 @@ def _track_list_context(request, user, tracks_qs):
             )
     for slug in slugs:
         resume_counts_by_slug.setdefault(slug, 0)
+
+    from .models import JobListingAction
+    liked_qs = (
+        JobListingAction.objects.for_user(user)
+        .filter(action=JobListingAction.ActionType.LIKED, track__in=slugs)
+        .values("track")
+        .annotate(c=Count("id"))
+    )
+    liked_counts = {row["track"]: row["c"] for row in liked_qs}
+
+    disliked_qs = (
+        JobListingAction.objects.for_user(user)
+        .filter(action=JobListingAction.ActionType.DISLIKED, track__in=slugs)
+        .values("track")
+        .annotate(c=Count("id"))
+    )
+    disliked_counts = {row["track"]: row["c"] for row in disliked_qs}
+
     for track in tracks:
         track.library_resume_count = resume_counts_by_slug.get(track.slug, 0)
         track.library_resume_names = resume_names_by_slug.get(track.slug, [])
+        track.liked_count = liked_counts.get(track.slug, 0)
+        track.disliked_count = disliked_counts.get(track.slug, 0)
 
     resume_rows = []
     for resume in _user_library_resumes(user).order_by("-uploaded_at")[:200]:

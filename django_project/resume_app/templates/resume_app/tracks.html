@@ -92,6 +92,14 @@
                                         <span class="shrink-0 rounded bg-brand-soft px-1.5 py-0.5 text-[10px] font-bold uppercase text-brand-ink">Default</span>
                                     {% endif %}
                                     <span class="hidden font-mono text-[11px] text-slate-400 sm:inline">· {{ t.slug }}</span>
+                                    <span class="inline-flex items-center gap-1 rounded bg-green-50 px-1.5 py-0.5 text-[10px] font-semibold text-green-700" title="Liked training jobs in this profile">
+                                        <svg class="h-3 w-3 text-green-500" fill="currentColor" viewBox="0 0 20 20"><path d="M2 10.5a1.5 1.5 0 113 0v6a1.5 1.5 0 01-3 0v-6zM6 10.333v5.43a2 2 0 00.458 1.258l3 3.5a1 1 0 001.096.252A11.503 11.503 0 0011 16c0-2.31.25-4.62.75-6.9a1.5 1.5 0 011.458-1.1h1.792a1.5 1.5 0 001.117-2.5l-2.617-2.944a1.5 1.5 0 00-2.234 0L6.5 5.586A2 2 0 006 7.001v3.332z"/></svg>
+                                        {{ t.liked_count }} Liked
+                                    </span>
+                                    <span class="inline-flex items-center gap-1 rounded bg-red-50 px-1.5 py-0.5 text-[10px] font-semibold text-red-700" title="Disliked training jobs in this profile">
+                                        <svg class="h-3 w-3 text-red-500" fill="currentColor" viewBox="0 0 20 20"><path d="M18 9.5a1.5 1.5 0 11-3 0v-6a1.5 1.5 0 013 0v6zM14 9.667v-5.43a2 2 0 00-.458-1.258l-3-3.5a1 1 0 00-1.096-.252A11.503 11.503 0 009 4c0 2.31-.25 4.62-.75 6.9a1.5 1.5 0 01-1.458 1.1H5.001a1.5 1.5 0 00-1.117 2.5l2.617 2.944a1.5 1.5 0 002.234 0L13.5 14.415a2 2 0 00.5-1.415V9.667z"/></svg>
+                                        {{ t.disliked_count }} Disliked
+                                    </span>
                                 </div>
                                 <div class="flex min-w-0 max-w-[11rem] flex-col items-end gap-0.5 sm:max-w-xs">
                                     {% if t.library_resume_names %}
