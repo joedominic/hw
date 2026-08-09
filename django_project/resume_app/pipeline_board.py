@@ -276,12 +276,28 @@ def pipeline_board_view(request, board_stage: str):
                     messages.info(request, "Those jobs already have an apply attempt in progress.")
             return redirect(next_url)
 
-        if action in {"bulk_delete", "bulk_like", "bulk_dislike"}:
+        if action in {"bulk_delete", "bulk_like", "bulk_dislike", "bulk_promote"}:
             if not selected_ids:
                 messages.info(request, "Select at least one job before running a bulk action.")
                 return redirect(next_url)
             success_count = 0
-            if action == "bulk_delete":
+            if action == "bulk_promote":
+                for jid in selected_ids:
+                    try:
+                        jid_int = int(jid)
+                    except (ValueError, TypeError):
+                        continue
+                    entries = PipelineEntry.objects.for_user(user).filter(
+                        job_listing_id=jid_int,
+                        track=track_from_form,
+                        removed_at__isnull=True,
+                    )
+                    for entry in entries:
+                        _apply_save_action(entry, board_stage, request)
+                        success_count += 1
+                if success_count:
+                    messages.success(request, f"Promoted {success_count} job(s) to the next stage.")
+            elif action == "bulk_delete":
                 for jid in selected_ids:
                     try:
                         jid_int = int(jid)
@@ -409,6 +425,9 @@ def pipeline_board_view(request, board_stage: str):
     except ValueError:
         pref_max = None
 
+    age_days_raw = (request.GET.get("age_days") or "").strip()
+    sort_by = (request.GET.get("sort_by") or "newest").strip().lower()
+
     pipeline_jobs = list(pipeline_jobs_full)
     if source_filter:
         pipeline_jobs = [j for j in pipeline_jobs if j.source == source_filter]
@@ -425,6 +444,41 @@ def pipeline_board_view(request, board_stage: str):
             return True
 
         pipeline_jobs = [j for j in pipeline_jobs if _pref_in_range(j)]
+
+    if age_days_raw:
+        try:
+            max_age_days = int(age_days_raw)
+            from django.utils import timezone
+            now = timezone.now()
+            filtered_jobs = []
+            for j in pipeline_jobs:
+                job_date = j.posted_at or j.fetched_at
+                if job_date:
+                    diff = now - job_date
+                    if diff.days <= max_age_days:
+                        filtered_jobs.append(j)
+                else:
+                    filtered_jobs.append(j)
+            pipeline_jobs = filtered_jobs
+        except ValueError:
+            pass
+
+    # Sort the final pipeline_jobs list according to the selected criterion
+    from django.utils import timezone
+    from datetime import datetime
+    def get_job_date(j):
+        return j.posted_at or j.fetched_at or datetime.min.replace(tzinfo=timezone.utc)
+
+    if sort_by == "newest":
+        pipeline_jobs.sort(key=get_job_date, reverse=True)
+    elif sort_by == "oldest":
+        pipeline_jobs.sort(key=get_job_date)
+    elif sort_by == "focus":
+        pipeline_jobs.sort(key=lambda j: j.focus_percent_after_penalty or j.focus_percent or 0, reverse=True)
+    elif sort_by == "preference":
+        pipeline_jobs.sort(key=lambda j: j.preference_margin_percent or 0, reverse=True)
+    elif sort_by == "interview":
+        pipeline_jobs.sort(key=lambda j: j.interview_probability or 0, reverse=True)
 
     pipeline_count_before_text_search = len(pipeline_jobs)
 
@@ -449,7 +503,7 @@ def pipeline_board_view(request, board_stage: str):
         ]
 
     pipeline_has_active_filters = bool(
-        search_q or source_filter or pref_min_raw != "" or pref_max_raw != ""
+        search_q or source_filter or pref_min_raw != "" or pref_max_raw != "" or age_days_raw != "" or sort_by != "newest"
     )
 
     if board_stage in ("vetting", "applying"):

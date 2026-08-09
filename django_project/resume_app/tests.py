@@ -3439,3 +3439,205 @@ class ScheduledSearchLogsTestCase(TestCase):
         task_power.refresh_from_db()
         self.assertTrue(task_power.is_active)
         self.assertEqual(task_power.frequency, "0 10 * * 1-5")
+
+
+class PipelineFiltersAndActionsTestCase(TestCase):
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        from resume_app.models import Track, SearchProfile, PipelineEntry, JobListing, UserExperienceSettings
+        from resume_app.experience import set_experience_mode
+        import datetime
+        from django.utils import timezone
+
+        User = get_user_model()
+        self.user = User.objects.create_user(username="pipeline_tester", password="pass")
+        Track.ensure_baseline(self.user)
+        set_experience_mode(self.user, "power")
+
+        # Create search profile / track
+        self.profile = SearchProfile.objects.create(
+            owner=self.user,
+            slug="engineering",
+            profile_slug="engineering",
+            name="Engineering",
+            search_term="Python",
+        )
+
+        # Create jobs with specific dates and scores
+        self.now = timezone.now()
+
+        from resume_app.models import JobListingTrackMetrics
+
+        # Job 1: 1 day ago, focus=90, pref=20, interview=80
+        self.job1 = JobListing.objects.create(
+            title="Senior Dev", company_name="Co A", source="builtin", external_id="builtin-1",
+            posted_at=self.now - datetime.timedelta(days=1)
+        )
+        self.entry1 = PipelineEntry.objects.create(
+            owner=self.user, job_listing=self.job1, track="engineering", stage=PipelineEntry.Stage.PIPELINE,
+            vetting_interview_probability=80
+        )
+        JobListingTrackMetrics.objects.create(
+            owner=self.user, job_listing=self.job1, track="engineering",
+            focus_percent=90, focus_after_penalty=90, preference_margin=20
+        )
+
+        # Job 2: 5 days ago, focus=95, pref=10, interview=60
+        self.job2 = JobListing.objects.create(
+            title="Junior Dev", company_name="Co B", source="indeed", external_id="indeed-1",
+            posted_at=self.now - datetime.timedelta(days=5)
+        )
+        self.entry2 = PipelineEntry.objects.create(
+            owner=self.user, job_listing=self.job2, track="engineering", stage=PipelineEntry.Stage.PIPELINE,
+            vetting_interview_probability=60
+        )
+        JobListingTrackMetrics.objects.create(
+            owner=self.user, job_listing=self.job2, track="engineering",
+            focus_percent=95, focus_after_penalty=95, preference_margin=10
+        )
+
+        # Job 3: 15 days ago, focus=80, pref=40, interview=90
+        self.job3 = JobListing.objects.create(
+            title="Lead Dev", company_name="Co C", source="builtin", external_id="builtin-2",
+            posted_at=self.now - datetime.timedelta(days=15)
+        )
+        self.entry3 = PipelineEntry.objects.create(
+            owner=self.user, job_listing=self.job3, track="engineering", stage=PipelineEntry.Stage.PIPELINE,
+            vetting_interview_probability=90
+        )
+        JobListingTrackMetrics.objects.create(
+            owner=self.user, job_listing=self.job3, track="engineering",
+            focus_percent=80, focus_after_penalty=80, preference_margin=40
+        )
+
+        # Job 4: 20 days ago, focus=70, pref=5, interview=40 (Vetting stage)
+        self.job4 = JobListing.objects.create(
+            title="Manager", company_name="Co D", source="linkedin", external_id="linkedin-1",
+            posted_at=self.now - datetime.timedelta(days=20)
+        )
+        self.entry4 = PipelineEntry.objects.create(
+            owner=self.user, job_listing=self.job4, track="engineering", stage=PipelineEntry.Stage.VETTING,
+            vetting_interview_probability=40
+        )
+        JobListingTrackMetrics.objects.create(
+            owner=self.user, job_listing=self.job4, track="engineering",
+            focus_percent=70, focus_after_penalty=70, preference_margin=5
+        )
+
+    def test_job_age_filtering(self):
+        from django.test import Client
+        client = Client()
+        client.force_login(self.user)
+
+        # 1. Fetch only jobs younger than 3 days
+        response = client.get("/jobs/pipeline/", {"track": "engineering", "age_days": "3"})
+        self.assertEqual(response.status_code, 200)
+        jobs = response.context["pipeline_jobs"]
+        # Only Job 1 (1 day ago) should remain in the pipeline stage list
+        job_ids = [j.id for j in jobs]
+        self.assertIn(self.job1.id, job_ids)
+        self.assertNotIn(self.job2.id, job_ids)
+        self.assertNotIn(self.job3.id, job_ids)
+
+        # 2. Fetch only jobs younger than 7 days
+        response = client.get("/jobs/pipeline/", {"track": "engineering", "age_days": "7"})
+        self.assertEqual(response.status_code, 200)
+        jobs = response.context["pipeline_jobs"]
+        # Job 1 (1 day) and Job 2 (5 days) should be in list
+        job_ids = [j.id for j in jobs]
+        self.assertIn(self.job1.id, job_ids)
+        self.assertIn(self.job2.id, job_ids)
+        self.assertNotIn(self.job3.id, job_ids)
+
+        # 3. Fetch jobs with no age filter
+        response = client.get("/jobs/pipeline/", {"track": "engineering"})
+        self.assertEqual(response.status_code, 200)
+        jobs = response.context["pipeline_jobs"]
+        # All three pipeline stage jobs should be returned
+        self.assertEqual(len(jobs), 3)
+
+    def test_sorting_options(self):
+        from django.test import Client
+        client = Client()
+        client.force_login(self.user)
+
+        # 1. Sort by newest (default)
+        response = client.get("/jobs/pipeline/", {"track": "engineering", "sort_by": "newest"})
+        jobs = response.context["pipeline_jobs"]
+        # Expected: Job 1, Job 2, Job 3
+        self.assertEqual(jobs[0].id, self.job1.id)
+        self.assertEqual(jobs[1].id, self.job2.id)
+        self.assertEqual(jobs[2].id, self.job3.id)
+
+        # 2. Sort by oldest
+        response = client.get("/jobs/pipeline/", {"track": "engineering", "sort_by": "oldest"})
+        jobs = response.context["pipeline_jobs"]
+        # Expected: Job 3, Job 2, Job 1
+        self.assertEqual(jobs[0].id, self.job3.id)
+        self.assertEqual(jobs[1].id, self.job2.id)
+        self.assertEqual(jobs[2].id, self.job1.id)
+
+        # 3. Sort by focus score
+        response = client.get("/jobs/pipeline/", {"track": "engineering", "sort_by": "focus"})
+        jobs = response.context["pipeline_jobs"]
+        # Expected: Job 2 (95%), Job 1 (90%), Job 3 (80%)
+        self.assertEqual(jobs[0].id, self.job2.id)
+        self.assertEqual(jobs[1].id, self.job1.id)
+        self.assertEqual(jobs[2].id, self.job3.id)
+
+        # 4. Sort by preference margin
+        response = client.get("/jobs/pipeline/", {"track": "engineering", "sort_by": "preference"})
+        jobs = response.context["pipeline_jobs"]
+        # Expected: Job 3 (40%), Job 1 (20%), Job 2 (10%)
+        self.assertEqual(jobs[0].id, self.job3.id)
+        self.assertEqual(jobs[1].id, self.job1.id)
+        self.assertEqual(jobs[2].id, self.job2.id)
+
+        # 5. Sort by interview probability
+        response = client.get("/jobs/pipeline/", {"track": "engineering", "sort_by": "interview"})
+        jobs = response.context["pipeline_jobs"]
+        # Expected: Job 3 (90%), Job 1 (80%), Job 2 (60%)
+        self.assertEqual(jobs[0].id, self.job3.id)
+        self.assertEqual(jobs[1].id, self.job1.id)
+        self.assertEqual(jobs[2].id, self.job2.id)
+
+    def test_bulk_promote(self):
+        from django.test import Client
+        from resume_app.models import PipelineEntry
+        client = Client()
+        client.force_login(self.user)
+
+        # Check initial stages
+        self.assertEqual(self.entry1.stage, PipelineEntry.Stage.PIPELINE)
+        self.assertEqual(self.entry2.stage, PipelineEntry.Stage.PIPELINE)
+        self.assertEqual(self.entry4.stage, PipelineEntry.Stage.VETTING)
+
+        # Promote entry1 and entry2 from pipeline to vetting
+        response = client.post(
+            "/jobs/pipeline/",
+            {
+                "action": "bulk_promote",
+                "track": "engineering",
+                "job_ids": [str(self.job1.id), str(self.job2.id)]
+            },
+            follow=True
+        )
+        self.assertEqual(response.status_code, 200)
+        self.entry1.refresh_from_db()
+        self.entry2.refresh_from_db()
+        self.assertEqual(self.entry1.stage, PipelineEntry.Stage.VETTING)
+        self.assertEqual(self.entry2.stage, PipelineEntry.Stage.VETTING)
+
+        # Promote entry4 from vetting to applying
+        response = client.post(
+            "/jobs/vetting/",
+            {
+                "action": "bulk_promote",
+                "track": "engineering",
+                "job_ids": [str(self.job4.id)]
+            },
+            follow=True
+        )
+        self.assertEqual(response.status_code, 200)
+        self.entry4.refresh_from_db()
+        self.assertEqual(self.entry4.stage, PipelineEntry.Stage.APPLYING)
