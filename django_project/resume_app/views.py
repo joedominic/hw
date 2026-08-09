@@ -2797,11 +2797,36 @@ def _track_list_context(request, user, tracks_qs):
     )
     disliked_counts = {row["track"]: row["c"] for row in disliked_qs}
 
+    from .saved_search_schedule import schedule_from_cron
+
+    # Fetch all user tasks to map scheduling
+    tasks_map = {}
+    for task in JobSearchTask.objects.for_user(user):
+        # Identify the mapping criteria
+        if power_user:
+            tasks_map[task.track] = task
+        elif task.saved_search_id:
+            tasks_map[task.saved_search_id] = task
+
     for track in tracks:
         track.library_resume_count = resume_counts_by_slug.get(track.slug, 0)
         track.library_resume_names = resume_names_by_slug.get(track.slug, [])
         track.liked_count = liked_counts.get(track.slug, 0)
         track.disliked_count = disliked_counts.get(track.slug, 0)
+
+        # Map task schedule options to the track/profile
+        task_id_key = track.slug if power_user else track.pk
+        task = tasks_map.get(task_id_key)
+        if task and task.is_active:
+            parsed = schedule_from_cron(task.frequency)
+            if parsed:
+                track.schedule_interval, track.schedule_time = parsed
+            else:
+                track.schedule_interval = "custom"
+                track.schedule_time = "09:00"
+        else:
+            track.schedule_interval = "off"
+            track.schedule_time = "09:00"
 
     resume_rows = []
     for resume in _user_library_resumes(user).order_by("-uploaded_at")[:200]:
@@ -3012,6 +3037,8 @@ def track_list_view(request):
             label = (request.POST.get("label") or "").strip()
             description = (request.POST.get("description") or "").strip()
             is_default = bool(request.POST.get("is_default"))
+            schedule_interval = (request.POST.get("schedule_interval") or "off").strip().lower()
+            schedule_time = (request.POST.get("schedule_time") or "09:00").strip()
 
             if power_user:
                 track = Track.objects.for_user(request.user).filter(slug=original_slug).first()
@@ -3037,6 +3064,30 @@ def track_list_view(request):
                 track.description = description
                 track.is_default = is_default
                 track.save(update_fields=["slug", "label", "description", "is_default"])
+
+                # Handle scheduling for Power User Track tasks
+                task = JobSearchTask.objects.for_user(request.user).filter(track=track.slug).first()
+                if schedule_interval == "off":
+                    if task:
+                        task.is_active = False
+                        task.save(update_fields=["is_active", "updated_at"])
+                else:
+                    from .saved_search_schedule import cron_from_schedule, parse_schedule_time
+                    frequency = cron_from_schedule(schedule_interval, schedule_time)
+                    start_time = parse_schedule_time(schedule_time)
+                    if not task:
+                        task = JobSearchTask(
+                            owner=request.user,
+                            name=f"{track.label} Search",
+                            search_term=track.label,
+                            track=track.slug,
+                        )
+                    task.frequency = frequency
+                    task.start_time = start_time
+                    task.is_active = True
+                    task.next_run_at = get_next_run_at(task.frequency)
+                    task.save()
+
                 messages.success(request, f"Track \"{track.label}\" updated.")
             else:
                 profile = SearchProfile.objects.for_user(request.user).filter(slug=original_slug).first()
@@ -3063,6 +3114,19 @@ def track_list_view(request):
                 profile.description = description
                 profile.is_default = is_default
                 profile.save(update_fields=["slug", "profile_slug", "name", "description", "is_default"])
+
+                # Handle scheduling for normal User SearchProfile
+                from .saved_search_schedule import set_saved_search_schedule
+                try:
+                    set_saved_search_schedule(
+                        request.user,
+                        profile.id,
+                        interval=schedule_interval,
+                        time_str=schedule_time,
+                    )
+                except ValueError as e:
+                    messages.error(request, f"Error saving schedule: {e}")
+
                 messages.success(request, f"Search profile \"{profile.name}\" updated.")
             return redirect("track_list")
 
@@ -3071,6 +3135,9 @@ def track_list_view(request):
             label = (request.POST.get("label") or "").strip()
             description = (request.POST.get("description") or "").strip()
             is_default = bool(request.POST.get("is_default"))
+            schedule_interval = (request.POST.get("schedule_interval") or "off").strip().lower()
+            schedule_time = (request.POST.get("schedule_time") or "09:00").strip()
+
             if not slug:
                 messages.error(request, "Slug is required.")
             elif not label:
@@ -3089,6 +3156,23 @@ def track_list_view(request):
                             description=description,
                             is_default=is_default,
                         )
+
+                        # Handle scheduling for Power User Track tasks
+                        if schedule_interval != "off":
+                            from .saved_search_schedule import cron_from_schedule, parse_schedule_time
+                            frequency = cron_from_schedule(schedule_interval, schedule_time)
+                            start_time = parse_schedule_time(schedule_time)
+                            JobSearchTask.objects.create(
+                                owner=request.user,
+                                name=f"{track.label} Search",
+                                search_term=track.label,
+                                track=track.slug,
+                                frequency=frequency,
+                                start_time=start_time,
+                                is_active=True,
+                                next_run_at=get_next_run_at(frequency),
+                            )
+
                         messages.success(request, f"Track \"{track.label}\" created.")
                 else:
                     if SearchProfile.objects.for_user(request.user).filter(slug=slug).exists():
@@ -3105,6 +3189,20 @@ def track_list_view(request):
                             description=description,
                             is_default=is_default,
                         )
+
+                        # Handle scheduling for normal User SearchProfile
+                        if schedule_interval != "off":
+                            from .saved_search_schedule import set_saved_search_schedule
+                            try:
+                                set_saved_search_schedule(
+                                    request.user,
+                                    profile.id,
+                                    interval=schedule_interval,
+                                    time_str=schedule_time,
+                                )
+                            except ValueError as e:
+                                messages.error(request, f"Error saving schedule: {e}")
+
                         messages.success(request, f"Search profile \"{profile.name}\" created.")
             return redirect("track_list")
 

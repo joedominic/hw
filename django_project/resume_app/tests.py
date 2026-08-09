@@ -3342,3 +3342,100 @@ class ScheduledSearchLogsTestCase(TestCase):
 
         # Power users should not see tenant execution log
         self.assertEqual(context.get("execution_runs"), [])
+
+    def test_track_creation_and_editing_with_scheduling(self):
+        from resume_app.models import Track, SearchProfile, JobSearchTask, UserExperienceSettings
+        from django.test import Client
+
+        # 1. Test normal user creating a scheduled SearchProfile
+        client = Client()
+        client.force_login(self.user)
+
+        response = client.post(
+            "/jobs/tracks/",
+            {
+                "action": "create_track",
+                "slug": "scheduled-profile-1",
+                "label": "Scheduled Profile 1",
+                "description": "Desc",
+                "is_default": "",
+                "schedule_interval": "daily",
+                "schedule_time": "14:30",
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        profile = SearchProfile.objects.for_user(self.user).filter(slug="scheduled-profile-1").first()
+        self.assertIsNotNone(profile)
+        task = JobSearchTask.objects.for_user(self.user).filter(saved_search=profile).first()
+        self.assertIsNotNone(task)
+        self.assertTrue(task.is_active)
+        self.assertEqual(task.frequency, "30 14 * * *")
+
+        # 2. Test normal user editing a scheduled SearchProfile to 'off'
+        response = client.post(
+            "/jobs/tracks/",
+            {
+                "action": "edit_track",
+                "original_slug": "scheduled-profile-1",
+                "slug": "scheduled-profile-1",
+                "label": "Scheduled Profile 1 Updated",
+                "description": "Desc updated",
+                "is_default": "",
+                "schedule_interval": "off",
+                "schedule_time": "14:30",
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        task.refresh_from_db()
+        self.assertFalse(task.is_active)
+
+        # 3. Test power user creating a scheduled Track
+        client_power = Client()
+        client_power.force_login(self.power_user)
+        # Ensure experience mode is POWER
+        exp = UserExperienceSettings.get_for_user(self.power_user)
+        exp.experience_mode = UserExperienceSettings.ExperienceMode.POWER
+        exp.save()
+
+        response = client_power.post(
+            "/jobs/tracks/",
+            {
+                "action": "create_track",
+                "slug": "scheduled-track-1",
+                "label": "Scheduled Track 1",
+                "description": "Desc",
+                "is_default": "",
+                "schedule_interval": "weekly",
+                "schedule_time": "08:15",
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        track = Track.objects.for_user(self.power_user).filter(slug="scheduled-track-1").first()
+        self.assertIsNotNone(track)
+        task_power = JobSearchTask.objects.for_user(self.power_user).filter(track=track.slug).first()
+        self.assertIsNotNone(task_power)
+        self.assertTrue(task_power.is_active)
+        self.assertEqual(task_power.frequency, "15 8 * * 1")
+
+        # 4. Test power user editing a scheduled Track
+        response = client_power.post(
+            "/jobs/tracks/",
+            {
+                "action": "edit_track",
+                "original_slug": "scheduled-track-1",
+                "slug": "scheduled-track-1",
+                "label": "Scheduled Track 1 Updated",
+                "description": "Desc updated",
+                "is_default": "",
+                "schedule_interval": "weekdays",
+                "schedule_time": "10:00",
+            },
+            follow=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        task_power.refresh_from_db()
+        self.assertTrue(task_power.is_active)
+        self.assertEqual(task_power.frequency, "0 10 * * 1-5")

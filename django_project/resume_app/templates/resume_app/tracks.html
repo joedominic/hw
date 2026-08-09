@@ -116,7 +116,9 @@
                                             class="edit-track-btn text-[11px] font-medium text-brand hover:text-brand-ink"
                                             data-slug="{{ t.slug }}"
                                             data-label="{{ t.label|escape }}"
-                                            data-is-default="{% if t.is_default %}1{% else %}0{% endif %}">
+                                            data-is-default="{% if t.is_default %}1{% else %}0{% endif %}"
+                                            data-schedule-interval="{{ t.schedule_interval|default:'off' }}"
+                                            data-schedule-time="{{ t.schedule_time|default:'09:00' }}">
                                         Edit
                                     </button>
                                     {% if tracks|length > 1 %}
@@ -135,6 +137,87 @@
                         </li>
                     {% endfor %}
                 </ul>
+            {% endif %}
+
+            {% if not is_power_user %}
+            <div class="mt-8 rounded-concierge border border-slate-200 bg-white shadow-sm overflow-hidden">
+                <div class="border-b border-slate-100 bg-slate-50/50 px-5 py-4 flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                        <h2 class="text-sm font-semibold text-concierge-slate">Scheduled Execution Log</h2>
+                        <p class="text-xs text-slate-500 mt-0.5">Shows status and stats for the last 5 scheduled search executions.</p>
+                    </div>
+                    <span class="rounded bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">Last 5 executions</span>
+                </div>
+                <div class="overflow-x-auto">
+                    {% if not execution_runs %}
+                        <p class="p-6 text-sm text-slate-500 text-center">No scheduled executions have run yet in the last 5 days.</p>
+                    {% else %}
+                        <table class="w-full min-w-[600px] text-left border-collapse">
+                            <thead>
+                                <tr class="border-b border-slate-100 bg-slate-50/30 text-xs font-semibold uppercase tracking-wider text-slate-500">
+                                    <th class="px-5 py-3">
+                                        <span class="block">Profile / Search Term</span>
+                                        <span class="block text-[10px] font-normal lowercase tracking-normal text-slate-400">search profile</span>
+                                    </th>
+                                    <th class="px-5 py-3">
+                                        <span class="block">Date / Time</span>
+                                        <span class="block text-[10px] font-normal lowercase tracking-normal text-slate-400">execution start</span>
+                                    </th>
+                                    <th class="px-5 py-3">
+                                        <span class="block">Status</span>
+                                        <span class="block text-[10px] font-normal lowercase tracking-normal text-slate-400">run state</span>
+                                    </th>
+                                    <th class="px-5 py-3 text-right">
+                                        <span class="block">Fetched</span>
+                                        <span class="block text-[10px] font-normal lowercase tracking-normal text-slate-400">raw jobs</span>
+                                    </th>
+                                    <th class="px-5 py-3 text-right">
+                                        <span class="block">Eliminated</span>
+                                        <span class="block text-[10px] font-normal lowercase tracking-normal text-slate-400">filtered</span>
+                                    </th>
+                                    <th class="px-5 py-3 text-right font-semibold text-brand">
+                                        <span class="block text-brand">Saved</span>
+                                        <span class="block text-[10px] font-normal lowercase tracking-normal text-brand-soft">to pipeline</span>
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100 text-sm">
+                                {% for run in execution_runs %}
+                                    <tr class="hover:bg-slate-50/60">
+                                        <td class="px-5 py-3.5 font-medium text-concierge-slate">
+                                            {{ run.profile_name }}
+                                        </td>
+                                        <td class="px-5 py-3.5 text-xs text-slate-500 tabular-nums">
+                                            {{ run.started_at|date:"M d, Y" }} · {{ run.started_at|date:"h:i A" }}
+                                        </td>
+                                        <td class="px-5 py-3.5 text-xs">
+                                            {% if run.run.status == "completed" %}
+                                                <span class="inline-flex items-center gap-1 rounded bg-green-50 px-1.5 py-0.5 font-semibold text-green-700">
+                                                    <span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>
+                                                    Completed
+                                                </span>
+                                            {% elif run.run.status == "running" %}
+                                                <span class="inline-flex items-center gap-1 rounded bg-blue-50 px-1.5 py-0.5 font-semibold text-blue-700">
+                                                    <span class="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+                                                    Running
+                                                </span>
+                                            {% else %}
+                                                <span class="inline-flex items-center gap-1 rounded bg-red-50 px-1.5 py-0.5 font-semibold text-red-700" title="{{ run.error_message }}">
+                                                    <span class="h-1.5 w-1.5 rounded-full bg-red-500"></span>
+                                                    Failed
+                                                </span>
+                                            {% endif %}
+                                        </td>
+                                        <td class="px-5 py-3.5 text-right tabular-nums font-medium text-slate-700">{{ run.jobs_fetched }}</td>
+                                        <td class="px-5 py-3.5 text-right tabular-nums text-slate-400">{{ run.jobs_eliminated }}</td>
+                                        <td class="px-5 py-3.5 text-right tabular-nums font-semibold text-brand">{{ run.jobs_saved }}</td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    {% endif %}
+                </div>
+            </div>
             {% endif %}
         </section>
 
@@ -239,69 +322,6 @@
             </div>
         </aside>
     </div>
-
-    {% if not is_power_user %}
-    <div class="mt-8 rounded-concierge border border-slate-200 bg-white shadow-sm overflow-hidden">
-        <div class="border-b border-slate-100 bg-slate-50/50 px-5 py-4 flex items-center justify-between">
-            <div>
-                <h2 class="text-sm font-semibold text-concierge-slate">Scheduled Execution Log</h2>
-                <p class="text-xs text-slate-500 mt-0.5">Shows status and stats for the last 5 scheduled search executions.</p>
-            </div>
-            <span class="rounded bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">Last 5 executions</span>
-        </div>
-        <div class="overflow-x-auto">
-            {% if not execution_runs %}
-                <p class="p-6 text-sm text-slate-500 text-center">No scheduled executions have run yet in the last 5 days.</p>
-            {% else %}
-                <table class="w-full min-w-[600px] text-left border-collapse">
-                    <thead>
-                        <tr class="border-b border-slate-100 bg-slate-50/30 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                            <th class="px-5 py-3">Profile / Search Term</th>
-                            <th class="px-5 py-3">Date / Time</th>
-                            <th class="px-5 py-3">Status</th>
-                            <th class="px-5 py-3 text-right">Fetched</th>
-                            <th class="px-5 py-3 text-right">Eliminated</th>
-                            <th class="px-5 py-3 text-right font-semibold text-brand">Saved</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-slate-100 text-sm">
-                        {% for run in execution_runs %}
-                            <tr class="hover:bg-slate-50/60">
-                                <td class="px-5 py-3.5 font-medium text-concierge-slate">
-                                    {{ run.profile_name }}
-                                </td>
-                                <td class="px-5 py-3.5 text-xs text-slate-500 tabular-nums">
-                                    {{ run.started_at|date:"M d, Y" }} · {{ run.started_at|date:"h:i A" }}
-                                </td>
-                                <td class="px-5 py-3.5 text-xs">
-                                    {% if run.run.status == "completed" %}
-                                        <span class="inline-flex items-center gap-1 rounded bg-green-50 px-1.5 py-0.5 font-semibold text-green-700">
-                                            <span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>
-                                            Completed
-                                        </span>
-                                    {% elif run.run.status == "running" %}
-                                        <span class="inline-flex items-center gap-1 rounded bg-blue-50 px-1.5 py-0.5 font-semibold text-blue-700">
-                                            <span class="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse"></span>
-                                            Running
-                                        </span>
-                                    {% else %}
-                                        <span class="inline-flex items-center gap-1 rounded bg-red-50 px-1.5 py-0.5 font-semibold text-red-700" title="{{ run.error_message }}">
-                                            <span class="h-1.5 w-1.5 rounded-full bg-red-500"></span>
-                                            Failed
-                                        </span>
-                                    {% endif %}
-                                </td>
-                                <td class="px-5 py-3.5 text-right tabular-nums font-medium text-slate-700">{{ run.jobs_fetched }}</td>
-                                <td class="px-5 py-3.5 text-right tabular-nums text-slate-400">{{ run.jobs_eliminated }}</td>
-                                <td class="px-5 py-3.5 text-right tabular-nums font-semibold text-brand">{{ run.jobs_saved }}</td>
-                            </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            {% endif %}
-        </div>
-    </div>
-    {% endif %}
 </div>
 
 <dialog id="new-track-dialog" class="concierge-dialog track-form-dialog p-0">
@@ -328,6 +348,23 @@
                 <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="track-description">Description (optional)</label>
                 <textarea id="track-description" name="description" rows="2" placeholder="Short note"
                           class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"></textarea>
+            </div>
+            <div class="grid grid-cols-2 gap-2 border-t border-slate-100 pt-3">
+                <div>
+                    <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="track-schedule-interval">Run Schedule</label>
+                    <select id="track-schedule-interval" name="schedule_interval"
+                            class="w-full rounded-concierge border border-slate-200 bg-white px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                        <option value="off">Off</option>
+                        <option value="daily">Daily</option>
+                        <option value="weekdays">Weekdays</option>
+                        <option value="weekly">Weekly (Mon)</option>
+                    </select>
+                </div>
+                <div id="track-schedule-time-wrap">
+                    <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="track-schedule-time">Run Time</label>
+                    <input type="time" id="track-schedule-time" name="schedule_time" value="09:00"
+                           class="w-full rounded-concierge border border-slate-200 bg-white px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                </div>
             </div>
             <label class="flex items-center gap-2 text-sm text-slate-700">
                 <input class="h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" type="checkbox" value="1" id="track-is-default" name="is_default">
@@ -366,6 +403,26 @@
                 <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="edit-track-description">Description (optional)</label>
                 <textarea id="edit-track-description" name="description" rows="2"
                           class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"></textarea>
+            </div>
+            <div id="edit-track-schedule-custom-warning" class="hidden rounded bg-amber-50 border border-amber-200 p-2 text-xs text-amber-800">
+                This search profile uses a custom cron schedule configured on the Job Automation dashboard. Modifying schedule options here will overwrite your custom cron schedule.
+            </div>
+            <div class="grid grid-cols-2 gap-2 border-t border-slate-100 pt-3">
+                <div>
+                    <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="edit-track-schedule-interval">Run Schedule</label>
+                    <select id="edit-track-schedule-interval" name="schedule_interval"
+                            class="w-full rounded-concierge border border-slate-200 bg-white px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                        <option value="off">Off</option>
+                        <option value="daily">Daily</option>
+                        <option value="weekdays">Weekdays</option>
+                        <option value="weekly">Weekly (Mon)</option>
+                    </select>
+                </div>
+                <div id="edit-track-schedule-time-wrap">
+                    <label class="mb-1 block text-xs font-semibold uppercase text-slate-500" for="edit-track-schedule-time">Run Time</label>
+                    <input type="time" id="edit-track-schedule-time" name="schedule_time" value="09:00"
+                           class="w-full rounded-concierge border border-slate-200 bg-white px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                </div>
             </div>
             <label class="flex items-center gap-2 text-sm text-slate-700">
                 <input class="h-4 w-4 rounded border-slate-300 text-concierge-slate focus:ring-concierge-slate" type="checkbox" value="1" id="edit-track-is-default" name="is_default">
@@ -415,6 +472,34 @@
     var editLabel = document.getElementById("edit-track-label");
     var editDescription = document.getElementById("edit-track-description");
     var editDefault = document.getElementById("edit-track-is-default");
+    var editScheduleInterval = document.getElementById("edit-track-schedule-interval");
+    var editScheduleTime = document.getElementById("edit-track-schedule-time");
+    var editScheduleTimeWrap = document.getElementById("edit-track-schedule-time-wrap");
+    var editCustomWarning = document.getElementById("edit-track-schedule-custom-warning");
+
+    function syncScheduleTimeFields(selectEl, wrapEl) {
+        if (!selectEl || !wrapEl) return;
+        var off = selectEl.value === 'off';
+        wrapEl.classList.toggle('opacity-50', off);
+        var timeInput = wrapEl.querySelector('input[type="time"]');
+        if (timeInput) timeInput.disabled = off;
+    }
+
+    var createScheduleSelect = document.getElementById("track-schedule-interval");
+    var createScheduleWrap = document.getElementById("track-schedule-time-wrap");
+    if (createScheduleSelect && createScheduleWrap) {
+        createScheduleSelect.addEventListener("change", function() {
+            syncScheduleTimeFields(createScheduleSelect, createScheduleWrap);
+        });
+        syncScheduleTimeFields(createScheduleSelect, createScheduleWrap);
+    }
+
+    if (editScheduleInterval && editScheduleTimeWrap) {
+        editScheduleInterval.addEventListener("change", function() {
+            syncScheduleTimeFields(editScheduleInterval, editScheduleTimeWrap);
+            if (editCustomWarning) editCustomWarning.classList.add("hidden");
+        });
+    }
 
     function decodeAttr(value) {
         if (!value) return "";
@@ -433,6 +518,26 @@
             if (editLabel) editLabel.value = decodeAttr(btn.getAttribute("data-label"));
             if (editDescription) editDescription.value = descEl ? descEl.textContent : "";
             if (editDefault) editDefault.checked = btn.getAttribute("data-is-default") === "1";
+
+            var interval = btn.getAttribute("data-schedule-interval") || "off";
+            var timeVal = btn.getAttribute("data-schedule-time") || "09:00";
+
+            if (editScheduleInterval) {
+                editScheduleInterval.value = interval === "custom" ? "off" : interval;
+            }
+            if (editScheduleTime) {
+                editScheduleTime.value = timeVal;
+            }
+            if (editScheduleInterval && editScheduleTimeWrap) {
+                syncScheduleTimeFields(editScheduleInterval, editScheduleTimeWrap);
+            }
+            if (editCustomWarning) {
+                if (interval === "custom") {
+                    editCustomWarning.classList.remove("hidden");
+                } else {
+                    editCustomWarning.classList.add("hidden");
+                }
+            }
             editControls.open();
         });
     });
