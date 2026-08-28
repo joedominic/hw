@@ -67,7 +67,8 @@ class JDCleanserService:
 
             return None
         except Exception as e:
-            logger.warning("[JDCleanser] LLM cleansing failed: %s", e)
+            tenant_label = getattr(user, "username", getattr(user, "id", "unknown")) if user else "unknown"
+            logger.warning("[JDCleanser] tenant=%s LLM cleansing failed: %s", tenant_label, e)
             return None
 
     @staticmethod

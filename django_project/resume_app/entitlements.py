@@ -50,7 +50,7 @@ def staff_bypasses_quotas(user: AbstractBaseUser | None) -> bool:
 
 
 def ensure_default_plans() -> None:
-    """Idempotently create built-in plans (safe to call from AppConfig / migrate)."""
+    """Idempotently create built-in plans if missing (safe to call from AppConfig / migrate)."""
     from .models import Plan
 
     defaults = [
@@ -58,7 +58,9 @@ def ensure_default_plans() -> None:
             "slug": "free",
             "name": "Free",
             "description": "Starter limits for individual job seekers.",
+            "price_display": "$0 / mo",
             "llm_requests_per_day": 50,
+            "llm_tokens_per_day": 100000,
             "job_searches_per_day": 20,
             "apply_runs_per_day": 5,
             "storage_mb": 250,
@@ -70,7 +72,9 @@ def ensure_default_plans() -> None:
             "slug": "pro",
             "name": "Pro",
             "description": "Higher limits plus customer API access.",
+            "price_display": "$29 / mo",
             "llm_requests_per_day": 500,
+            "llm_tokens_per_day": 1000000,
             "job_searches_per_day": 200,
             "apply_runs_per_day": 50,
             "storage_mb": 5000,
@@ -82,7 +86,9 @@ def ensure_default_plans() -> None:
             "slug": "unlimited",
             "name": "Unlimited",
             "description": "No daily quotas (0 = unlimited).",
+            "price_display": "$99 / mo",
             "llm_requests_per_day": 0,
+            "llm_tokens_per_day": 0,
             "job_searches_per_day": 0,
             "apply_runs_per_day": 0,
             "storage_mb": 0,
@@ -92,7 +98,7 @@ def ensure_default_plans() -> None:
         },
     ]
     for row in defaults:
-        Plan.objects.update_or_create(slug=row["slug"], defaults=row)
+        Plan.objects.get_or_create(slug=row["slug"], defaults=row)
 
 
 def get_or_create_subscription(user: AbstractBaseUser):
@@ -130,6 +136,8 @@ def get_user_plan(user: AbstractBaseUser):
 def plan_limit(plan, metric: str) -> int:
     """Return daily limit for metric; 0 means unlimited."""
     if metric == METRIC_LLM_TOKENS:
+        if plan and getattr(plan, "llm_tokens_per_day", 0):
+            return int(plan.llm_tokens_per_day)
         by_plan = getattr(settings, "LLM_DAILY_TOKEN_LIMIT_BY_PLAN", None) or {}
         slug = getattr(plan, "slug", None) or "free"
         limit = int(by_plan.get(slug, by_plan.get("free", 0)) or 0)

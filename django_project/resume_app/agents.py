@@ -262,13 +262,28 @@ def _llm_invoke_with_retry(
 
 
 def _state_user(state: dict):
-    """Resolve owning User from optimizer workflow state (user_id set by Huey task)."""
-    uid = _state_get(state, "user_id")
-    if not uid:
+    """Resolve owning User from optimizer workflow state (user object, user_id, or llm._resume_user)."""
+    if not state:
         return None
-    from django.contrib.auth import get_user_model
+    user_obj = _state_get(state, "user")
+    if user_obj is not None:
+        return user_obj
+    uid = _state_get(state, "user_id")
+    if uid:
+        try:
+            from django.contrib.auth import get_user_model
 
-    return get_user_model().objects.filter(pk=int(uid)).first()
+            found = get_user_model().objects.filter(pk=int(uid)).first()
+            if found:
+                return found
+        except Exception:
+            pass
+    llm = _state_get(state, "llm")
+    if llm is not None:
+        u_llm = getattr(llm, "_resume_user", None)
+        if u_llm is not None:
+            return u_llm
+    return None
 
 
 def _extract_json_object(content: str) -> Optional[dict]:

@@ -248,15 +248,32 @@
             {% if pipeline_source_options %}
             <label class="relative shrink-0 sm:w-44">
                 <span class="sr-only">Filter by source</span>
-                <select name="source"
+                <select name="source" onchange="this.form.submit()"
                         class="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white px-3 pr-8 text-sm text-slate-700 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
                     <option value="">Filter: All roles</option>
                     {% for src_val, src_label in pipeline_source_options %}
                     <option value="{{ src_val }}" {% if pipeline_source_selected == src_val %}selected{% endif %}>{{ src_label }}</option>
                     {% endfor %}
                 </select>
+                <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                </span>
             </label>
             {% endif %}
+            <label class="relative shrink-0 sm:w-44">
+                <span class="sr-only">Sort jobs</span>
+                <select name="sort_by" onchange="this.form.submit()"
+                        class="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white px-3 pr-8 text-sm text-slate-700 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
+                    <option value="latest" {% if pipeline_sort_by == "latest" %}selected{% endif %}>Sort: Latest</option>
+                    <option value="match" {% if pipeline_sort_by == "match" %}selected{% endif %}>Sort: Match %</option>
+                    <option value="interview" {% if pipeline_sort_by == "interview" %}selected{% endif %}>Sort: Interview %</option>
+                    <option value="preference" {% if pipeline_sort_by == "preference" %}selected{% endif %}>Sort: Preference %</option>
+                    <option value="oldest" {% if pipeline_sort_by == "oldest" %}selected{% endif %}>Sort: Oldest</option>
+                </select>
+                <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" aria-hidden="true">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                </span>
+            </label>
             <button type="submit" class="inline-flex h-11 items-center justify-center rounded-xl bg-brand px-5 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
                 Search
             </button>
@@ -274,12 +291,21 @@
                 {% endif %}
             </div>
         </div>
-        {% endif %}
-        {% if show_advanced_board_filters %}
         <div class="flex flex-col gap-3 rounded-concierge border border-slate-100 bg-slate-50/80 p-3 sm:flex-row sm:flex-wrap sm:items-end">
             <div class="flex min-w-[10rem] flex-col gap-1">
+                <label for="pipeline-sort-by" class="text-xs font-medium text-slate-500">Sort by</label>
+                <select id="pipeline-sort-by" name="sort_by" class="rounded-concierge border border-slate-200 bg-white px-2 py-2 text-sm text-concierge-slate" onchange="this.form.submit()">
+                    <option value="latest" {% if pipeline_sort_by == "latest" %}selected{% endif %}>Latest</option>
+                    <option value="match" {% if pipeline_sort_by == "match" %}selected{% endif %}>Match %</option>
+                    <option value="interview" {% if pipeline_sort_by == "interview" %}selected{% endif %}>Interview %</option>
+                    <option value="preference" {% if pipeline_sort_by == "preference" %}selected{% endif %}>Preference %</option>
+                    <option value="oldest" {% if pipeline_sort_by == "oldest" %}selected{% endif %}>Oldest</option>
+                </select>
+            </div>
+            {% if show_advanced_board_filters %}
+            <div class="flex min-w-[10rem] flex-col gap-1">
                 <label for="pipeline-filter-source" class="text-xs font-medium text-slate-500">Source (JobSpy)</label>
-                <select id="pipeline-filter-source" name="source" class="rounded-concierge border border-slate-200 bg-white px-2 py-2 text-sm text-concierge-slate">
+                <select id="pipeline-filter-source" name="source" class="rounded-concierge border border-slate-200 bg-white px-2 py-2 text-sm text-concierge-slate" onchange="this.form.submit()">
                     <option value="">All sources</option>
                     {% for src_val, src_label in pipeline_source_options %}
                         <option value="{{ src_val }}" {% if pipeline_source_selected == src_val %}selected{% endif %}>{{ src_label }}</option>
@@ -297,6 +323,7 @@
             <p class="text-xs text-slate-500 sm:max-w-xs sm:pb-1">
                 Pref is the preference margin % (liked vs disliked embeddings). Jobs without a score yet are hidden when a min/max is set.
             </p>
+            {% endif %}
         </div>
         {% endif %}
     </form>

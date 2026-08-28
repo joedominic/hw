@@ -301,7 +301,7 @@ def run_step(
     if not api_key:
         raise HttpError(400, f"API key required for {payload.llm_provider}. Connect an API key first.")
     model = payload.llm_model or (config.default_model if config else None) or None
-    llm = get_llm(payload.llm_provider, api_key, model)
+    llm = get_llm(payload.llm_provider, api_key, model, user=user)
 
     from .prompt_store import build_optimizer_graph_prompt_state
     from .optimizer_budget import build_optimizer_context_state_raw
@@ -361,6 +361,7 @@ def run_step(
                 "job_cache_key": jkey,
                 "debug": debug,
                 "max_iterations": 3,
+                "user": user,
                 "user_id": user.id,
             }
             out = jd_cleanse_node(state)
@@ -417,6 +418,8 @@ def run_step(
                 "recruiter_judge_prompt_legacy": _graph_prompts["recruiter_judge_prompt_legacy"],
                 "debug": debug,
                 "max_iterations": 3,
+                "user": user,
+                "user_id": user.id,
             }
             out = writer_node(state)
             return RunStepResponse(
@@ -470,6 +473,8 @@ def run_step(
                 "recruiter_judge_prompt_legacy": _graph_prompts["recruiter_judge_prompt_legacy"],
                 "debug": debug,
                 "max_iterations": 3,
+                "user": user,
+                "user_id": user.id,
             }
             if step == "ats_judge":
                 out = ats_judge_node(state)

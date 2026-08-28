@@ -598,16 +598,20 @@ class AppAutomationSettings(models.Model):
         default=False,
         help_text="When set, the app will not send any LLM API requests (kill switch).",
     )
+    cleanup_job_retention_days = models.PositiveSmallIntegerField(
+        default=14,
+        help_text="Cleanup Manager: remove non-applied jobs older than this many days (default 14 days / 2 weeks; 0 = off).",
+    )
     cleanup_pipeline_retention_days = models.PositiveSmallIntegerField(
-        default=2,
+        default=14,
         help_text="Cleanup Manager: remove Pipeline-stage rows older than this many days (0 = off).",
     )
     cleanup_vetting_retention_days = models.PositiveSmallIntegerField(
-        default=6,
+        default=14,
         help_text="Cleanup Manager: remove Vetting-stage rows older than this many days (0 = off).",
     )
     cleanup_applying_retention_days = models.PositiveSmallIntegerField(
-        default=10,
+        default=14,
         help_text="Cleanup Manager: remove Applying-stage rows older than this many days (0 = off).",
     )
     cleanup_done_retention_days = models.PositiveSmallIntegerField(
@@ -709,9 +713,10 @@ class AppAutomationSettings(models.Model):
                 "vetting_to_applying_enabled": False,
                 "vetting_interview_probability_min": 70,
                 "stop_llm_requests": False,
-                "cleanup_pipeline_retention_days": 2,
-                "cleanup_vetting_retention_days": 6,
-                "cleanup_applying_retention_days": 10,
+                "cleanup_job_retention_days": 14,
+                "cleanup_pipeline_retention_days": 14,
+                "cleanup_vetting_retention_days": 14,
+                "cleanup_applying_retention_days": 14,
                 "cleanup_done_retention_days": 0,
                 "cleanup_generated_resume_retention_days": 7,
             },
@@ -1684,9 +1689,19 @@ class Plan(models.Model):
     slug = models.SlugField(max_length=64, unique=True)
     name = models.CharField(max_length=128)
     description = models.TextField(blank=True, default="")
+    price_display = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        help_text="Commercial price display (e.g. $0, $29/mo, $99/mo).",
+    )
     llm_requests_per_day = models.PositiveIntegerField(
         default=50,
         help_text="Daily LLM invoke cap. 0 = unlimited.",
+    )
+    llm_tokens_per_day = models.PositiveIntegerField(
+        default=0,
+        help_text="Daily LLM token cap. 0 = unlimited or env default.",
     )
     job_searches_per_day = models.PositiveIntegerField(
         default=20,

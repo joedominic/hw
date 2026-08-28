@@ -65,13 +65,12 @@ PERIODIC_TASKS: list[dict[str, str]] = [
         "task_fn_name": "cleanup_manager",
         "display_name": "Cleanup Manager",
         "cron_string": "30 1 * * *",
-        "basic": "Once daily: dedupe Pipeline/Vetting/Applying rows, purge rows past per-stage age (Settings), then check Applying listings for closed postings.",
+        "basic": "Once daily: de-dupes jobs across all search profiles (keeping highest fit/match copy, excluding Applied), then purges jobs older than 2 weeks (tenant-configurable).",
         "advanced": (
-            "Order: (1) dedupe_pipeline_entries(track_slug=\"*\", stage=\"all\", include_done=False) across active "
-            "stages; (2) apply_cleanup_retention_purge() using AppAutomationSettings cleanup_*_retention_days "
-            "(0 = skip that stage; uses PipelineEntry.added_at); (3) purge_inactive_pipeline_entries(limit=400) — "
-            "URL checks for Applying-stage rows only. Liked/disliked jobs are soft-deleted on purge instead of "
-            "hard-deleted."
+            "Order: (1) dedupe_pipeline_entries(user=user, track_slug='*', stage='all', include_done=False) across all "
+            "search profiles for each tenant, keeping the profile entry with highest fit or match %; (2) apply_cleanup_retention_purge() "
+            "removing non-applied jobs older than tenant retention period (default 14 days / 2 weeks; uses PipelineEntry.added_at); "
+            "(3) purge_generated_user_resumes() for ephemeral PDFs. Liked/disliked jobs are soft-deleted on purge instead of hard-deleted."
         ),
     },
 ]

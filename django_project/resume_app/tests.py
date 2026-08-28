@@ -160,7 +160,8 @@ class AdzunaClientTestCase(TestCase):
         self.assertEqual(row["job_url"], "https://example.com/job/42")
 
     @patch("resume_app.adzuna_client.requests.get")
-    def test_fetch_adzuna_jobs_requires_keys(self, mock_get):
+    @patch("resume_app.adzuna_client._adzuna_credentials", return_value=(None, None))
+    def test_fetch_adzuna_jobs_requires_keys(self, _creds, mock_get):
         with self.assertRaises(RuntimeError) as ctx:
             fetch_adzuna_jobs("engineer", location="Boston", results_wanted=5)
         self.assertIn("not configured", str(ctx.exception))
@@ -3561,13 +3562,19 @@ class PipelineFiltersAndActionsTestCase(TestCase):
         client = Client()
         client.force_login(self.user)
 
-        # 1. Sort by newest (default)
+        # 1. Sort by newest / latest (default)
         response = client.get("/jobs/pipeline/", {"track": "engineering", "sort_by": "newest"})
         jobs = response.context["pipeline_jobs"]
         # Expected: Job 1, Job 2, Job 3
         self.assertEqual(jobs[0].id, self.job1.id)
         self.assertEqual(jobs[1].id, self.job2.id)
         self.assertEqual(jobs[2].id, self.job3.id)
+
+        response_latest = client.get("/jobs/pipeline/", {"track": "engineering", "sort_by": "latest"})
+        jobs_latest = response_latest.context["pipeline_jobs"]
+        self.assertEqual(jobs_latest[0].id, self.job1.id)
+        self.assertEqual(jobs_latest[1].id, self.job2.id)
+        self.assertEqual(jobs_latest[2].id, self.job3.id)
 
         # 2. Sort by oldest
         response = client.get("/jobs/pipeline/", {"track": "engineering", "sort_by": "oldest"})
@@ -3577,13 +3584,19 @@ class PipelineFiltersAndActionsTestCase(TestCase):
         self.assertEqual(jobs[1].id, self.job2.id)
         self.assertEqual(jobs[2].id, self.job1.id)
 
-        # 3. Sort by focus score
+        # 3. Sort by focus / match score
         response = client.get("/jobs/pipeline/", {"track": "engineering", "sort_by": "focus"})
         jobs = response.context["pipeline_jobs"]
         # Expected: Job 2 (95%), Job 1 (90%), Job 3 (80%)
         self.assertEqual(jobs[0].id, self.job2.id)
         self.assertEqual(jobs[1].id, self.job1.id)
         self.assertEqual(jobs[2].id, self.job3.id)
+
+        response_match = client.get("/jobs/pipeline/", {"track": "engineering", "sort_by": "match"})
+        jobs_match = response_match.context["pipeline_jobs"]
+        self.assertEqual(jobs_match[0].id, self.job2.id)
+        self.assertEqual(jobs_match[1].id, self.job1.id)
+        self.assertEqual(jobs_match[2].id, self.job3.id)
 
         # 4. Sort by preference margin
         response = client.get("/jobs/pipeline/", {"track": "engineering", "sort_by": "preference"})

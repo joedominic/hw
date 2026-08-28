@@ -295,6 +295,17 @@ def cloud_llm_available(user) -> bool:
     return False
 
 
+def local_llm_available(user) -> bool:
+    """True when at least one local preference candidate (e.g. Ollama) is configured and not on cooldown."""
+    for c in _preference_candidates(user):
+        if not c.get("is_local"):
+            continue
+        if is_llm_on_cooldown(c["provider"], c["model_get_llm"], user=user):
+            continue
+        return True
+    return False
+
+
 def _parse_pin(raw: str | None) -> tuple[str | None, str | None]:
     if not raw:
         return None, None
@@ -562,6 +573,7 @@ def invoke_llm_messages(
                 via="gateway-override",
             )
 
+    tenant_label = getattr(user, "username", getattr(user, "id", "anonymous")) if user else "anonymous"
     candidates = _ordered_eligible_candidates(
         user,
         job_cache_key,
@@ -571,13 +583,14 @@ def invoke_llm_messages(
     )
     if not candidates:
         if not allow_local:
-            raise LLMUnavailableError(NO_CLOUD_LLM_MESSAGE)
+            raise LLMUnavailableError(f"[tenant={tenant_label}] {NO_CLOUD_LLM_MESSAGE}")
         raise RuntimeError(
-            "No eligible LLM candidates (check provider keys, preferences, and cooldowns)."
+            f"[tenant={tenant_label}] No eligible LLM candidates (check provider keys, preferences, and cooldowns)."
         )
 
     logger.warning(
-        "[llm] candidate order for query=%s prefer_local=%s only_local=%s allow_local=%s: %s",
+        "[llm] tenant=%s candidate order for query=%s prefer_local=%s only_local=%s allow_local=%s: %s",
+        tenant_label,
         usage_query_kind or USAGE_QUERY_UNSPECIFIED,
         prefer_local,
         only_local,

@@ -13,6 +13,10 @@ django-environ>=0.13.0
 django-hijack>=3.7.4
 django-ninja>=1.5.3
 gunicorn>=22.0.0
+stripe>=11.0.0
+django-storages>=1.14.0
+boto3>=1.35.0
+PyMySQL>=1.1.0
 
 # --- Background tasks (Huey + Redis) ---
 huey>=2.6.0
@@ -37,11 +41,15 @@ tiktoken>=0.12.0
 ollama>=0.3.0
 
 # --- Embeddings & job ranking ---
-numpy>=1.26.3,<2
+numpy>=1.26.4,<2
 sentence-transformers>=2.2.0
 rank-bm25>=0.2.0
 
-# --- Job search (python-jobspy installed separately — see requirements-jobspy.txt) ---
+# --- Job search ---
+# python-jobspy is installed separately with --no-deps (see requirements-jobspy.txt)
+# because it pins markdownify<0.14 while browser-use needs markdownify>=1.2.
+# Packages below are JobSpy runtime deps we pin ourselves so --no-deps still works;
+# the app does not import them directly (except requests).
 beautifulsoup4>=4.12.2,<5.0.0
 tls-client>=1.0.1,<2.0.0
 pandas>=2.1.0,<3.0.0
@@ -50,10 +58,10 @@ requests>=2.32.5
 markdownify>=1.2.0,<2.0.0
 
 # --- Document I/O (PDF parse, resume export) ---
+# Pillow comes in transitively via pdfplumber / reportlab.
 pdfplumber>=0.11.9
 reportlab>=4.2.5
 python-docx>=1.1.2
-pillow>=12.1.1
 
 # --- Apply agent (ATS adapters + browser-use fallback) ---
 # browser-use 0.13.x pins groq==1.0.0 which conflicts with langchain-groq (<1.0.0).

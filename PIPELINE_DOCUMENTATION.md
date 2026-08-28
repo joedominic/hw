@@ -1,66 +1,88 @@
 # AI Resume Optimizer: Job Pipeline Documentation
 
-This document describes how job listings move through the various pipeline stages in the AI Resume Optimizer platform.
+This document describes how job listings are discovered, filtered, vetted, tailored, and applied to across the four lifecycle pipeline stages in ResumeElite.
 
-## Pipeline Overview
-The system uses a four-stage pipeline to manage the lifecycle of a job application:
-1. **Pipeline**: Initial landing area for fetched jobs.
-2. **Vetting**: Jobs undergoing detailed AI-based fit evaluation.
-3. **Applying**: Shortlisted jobs for which the user intends to tailor a resume and apply.
-4. **Done**: Jobs where the application process is complete.
-
----
-
-## 1. Pipeline Stage (Initial Ingest)
-
-### Discovery
-Jobs enter the system via **Job Search Tasks** (`JobSearchTask`). These tasks run on a cron schedule or are triggered manually ("Run now").
-
-### Filtering & Ranking
-During the fetch process (`run_job_search_core`):
-1. **Deduplication**: Jobs are deduplicated based on source and external ID.
-2. **Disqualifiers**: Descriptions are checked against user-defined disqualifier phrases.
-3. **Vector Ranking**:
-   - The system uses **SentenceTransformers** (`all-MiniLM-L6-v2`) to generate embeddings for the job title and description.
-   - Jobs are compared against the user's "Liked" and "Disliked" job embeddings.
-   - A **Preference Margin** is calculated (Like Similarity - Dislike Similarity).
-4. **Ollama Guard (New)**:
-   - For the top 10 ranked results, the system runs a fast seniority and fit check via Local Ollama (Nemotron 4B).
-   - Jobs that don't match the target seniority (e.g., Junior roles for a Principal track) are penalized.
-
-### Ingestion
-Jobs that pass filters are added to `PipelineEntry` with `stage="pipeline"` (or blank).
+```mermaid
+flowchart LR
+    Discovery[Multi-Source Search\nIndeed, LinkedIn, Dice,\nLevels.fyi, BuiltIn, Adzuna] --> Pipeline[1. Pipeline Board\nRaw Ingest & Pref Ranking]
+    Pipeline --> |Margin >= Threshold\nor Manual Save| Vetting[2. Vetting Board\nLLM JD Cleanse & Match]
+    Pipeline --> |Fast-Track Margin > 50| Applying
+    Vetting --> |Interview % >= Threshold\nor Manual Save| Applying[3. Applying Board\nResume Optimization\n& Apply Agent]
+    Applying --> |Submitted / Done| Done[4. Done Board\nApplied Tracking &\nInterview Prep AI]
+```
 
 ---
 
-## 2. Vetting Stage (Fit Evaluation)
+## 1. Pipeline Stage (Discovery & Ingest)
 
-### Transition Triggers
-- **Manual**: User clicks "Save" (favourite) on a job in the Pipeline board.
-- **Automated**: The `pipeline_manager` task promotes jobs from Pipeline to Vetting if their `preference_margin` meets the threshold.
+### Discovery & Job Sources
+Jobs enter the system via scheduled `JobSearchTask` runs (driven by cron expressions) or manual search triggers:
+- **Indeed & LinkedIn:** Scraped via `python-jobspy`.
+- **Dice:** Ingested via Dice JSON API / HTML scraper (`dice_client.py`).
+- **Levels.fyi:** Ingested via Levels.fyi encrypted API (`levels_client.py`).
+- **BuiltIn:** Ingested via BuiltIn API/scraper with proxy support (`builtin_client.py`).
+- **Adzuna:** Ingested via official REST API (`adzuna_client.py`).
 
-### Evaluation
-Once in Vetting, the `evaluate_vetting_matching_task` is triggered:
-1. **LLM-Based Cleansing**: The JD is sent to Local Ollama to extract core responsibilities and requirements, stripping all boilerplate.
-2. **Matching**: It uses an LLM to run a **Matching Prompt** comparing the cleansed JD against the user's resume.
-3. The LLM returns an **Interview Probability** (0-100) and **Reasoning**.
+### Filtering & Scoring Pipeline
+1. **Deduplication:** Jobs are deduplicated against existing `JobListing` records by `(source, external_id)` and by content fingerprinting (`job_dedupe.py`).
+2. **Disqualifiers (`UserDisqualifier`):** Descriptions are evaluated against user-defined phrase blocklists using a single compiled whole-word regex pattern.
+3. **Dense Vector Ranking (`JobListingEmbedding`):**
+   - Candidate job titles and descriptions are embedded using `sentence-transformers` (`all-MiniLM-L6-v2`).
+   - Embeddings are compared against the user's liked and disliked job centroids.
+   - **Preference Margin** (`Like Similarity - Dislike Similarity`) and **Fit %** are computed and cached in `JobListingTrackMetrics`.
+4. **Ollama Seniority Guard:**
+   - Top-ranked jobs undergo a fast seniority check via Local Ollama (Nemotron 4B). Clear seniority mismatches (e.g., Junior roles for Principal tracks) receive a penalty.
+
+### Stage Ingestion
+Listings that pass filters are created as `PipelineEntry` records with `stage="pipeline"` and mapped to the active `SearchProfile` or `Track`.
 
 ---
 
-## 3. Applying Stage (Tailoring)
+## 2. Vetting Stage (AI Fit Evaluation)
 
-### Transition Triggers
-- **Manual**: User clicks "Save" on a job in the Vetting board.
-- **Automated (Fast-Track)**: High-confidence matches (Preference Margin > 50) are automatically promoted from Pipeline directly to Applying, skipping the Vetting stage.
-- **Automated (Normal)**: Entries with an `interview_probability` >= threshold are promoted from Vetting to Applying.
+### Promotion Triggers
+- **Manual:** User clicks "Save" (favorite) on a listing in the Pipeline board.
+- **Automated:** Periodic `pipeline_manager` (every 30 mins) evaluates Pipeline rows and auto-promotes those meeting `pipeline_preference_margin_min`.
 
-### Optimization
-In the Applying stage, the user can trigger the **Resume Optimizer**. The JD is again cleansed via LLM to ensure the Optimizer agents focus only on relevant information.
+### Vetting Evaluation (`evaluate_vetting_matching_task`)
+1. **LLM JD Cleansing (`JDCleanserService`):**
+   - The job description is processed via Local Ollama to extract core requirements and responsibilities while stripping standard boilerplate (EEO, benefits, company overview), reducing token overhead by 40–60%.
+2. **Resume-to-Job Matching:**
+   - The cleansed JD is evaluated against the user's latest library resume for that track using the structured Matching prompt.
+3. **Scoring:**
+   - The LLM assigns an **Interview Probability** (0–100) and rationale (`vetting_interview_reasoning`), stored directly on the `PipelineEntry`.
 
 ---
 
-## 4. Done Stage (Completion)
+## 3. Applying Stage (Tailoring & Autonomous Submission)
 
-### Transition Triggers
-- **Manual**: User clicks "Save" on a job in the Applying board (indicating they have applied).
-- **Automated**: None currently.
+### Promotion Triggers
+- **Manual:** User clicks "Save" / "Move to Applying" on a Vetting entry.
+- **Automated (Fast-Track):** High-confidence listings with `preference_margin > 50` bypass Vetting and promote directly from Pipeline to Applying.
+- **Automated (Normal):** Vetting entries with `vetting_interview_probability >= vetting_interview_probability_min` auto-promote to Applying.
+
+### Resume Optimization
+- Users can trigger the multi-agent **Resume Optimizer** (Writer → ATS Judge → Recruiter Judge) to generate tailored resume text and cover letters.
+- Context is enriched with token budgets, dense bullet retrieval, and custom user notes.
+- Export options generate tailored PDF and DOCX documents with token replacements.
+
+### Autonomous Apply Agent (`apply_agent`)
+- Entries in Applying can be processed by the **Autonomous Apply Agent**:
+  1. **Resolve & Detect:** Playwright navigates from aggregator URLs to direct job postings and detects the ATS platform (Greenhouse, Lever, Ashby, iCIMS, or custom).
+  2. **Dry-Run Fill:** Dedicated ATS adapter or `browser-use` generic agent fills form fields using `ApplicantProfile` and `SiteCredential` data.
+  3. **Semi-Auto Mode:** Pauses at `AWAITING_APPROVAL` with screenshots and field summaries for user review and approval.
+  4. **Full-Auto Mode:** For graduated ATS adapters (after 10 consecutive clean submissions), the agent autonomously submits applications.
+
+---
+
+## 4. Done Stage (Tracking & Interview Preparation)
+
+### Promotion Triggers
+- **Manual:** User clicks "Mark Applied" / "Move to Done" on the Applying board.
+- **Automated:** Autonomous Apply Agent transitions the attempt and linked `PipelineEntry` to `DONE` upon confirmed form submission.
+
+### Interview Preparation AI
+- For jobs in the Done stage, users can generate on-demand tailored **Interview Prep** packages:
+  - Technical deep-dive questions based on the JD requirements and resume claims.
+  - Behavioral questions mapped to candidate experience.
+  - Company-specific talking points and reverse-interview questions.

@@ -71,8 +71,15 @@ huey_logger = logging.getLogger("huey")
 #
 # Vetting matching (resume vs job) evaluation
 #
-VETTING_MATCHING_LOCK_KEY = "vetting_matching_task_running"
+VETTING_MATCHING_LOCK_KEY = "vetting_matching_task_running"  # Legacy global fallback
 VETTING_MATCHING_LOCK_TIMEOUT = 3600  # 1 hour max
+
+
+def get_vetting_matching_lock_key(user_id: int | str) -> str:
+    """Per-tenant lock key to ensure task concurrency across multiple tenants."""
+    return f"vetting_matching_task_running:u{user_id}"
+
+
 RESUME_MATCHING_SNIPPET_CHARS = 8000
 VETTING_MATCHING_JD_MIN_CHARS = 2000
 # When interview_probability stays None (parse/model failure), do not enqueue again until this many hours pass
@@ -175,9 +182,16 @@ def get_next_run_at(cron_string: str, from_time=None):
     return next_dt
 
 
-# Lock key so only one job-search task runs at a time (avoids overlap)
-JOB_SEARCH_TASK_LOCK_KEY = "job_search_task_running"
+# Lock key so only one job-search task runs at a time per user/tenant (avoids overlap)
+JOB_SEARCH_TASK_LOCK_KEY = "job_search_task_running"  # Legacy global fallback
 JOB_SEARCH_TASK_LOCK_TIMEOUT = 3600  # 1 hour max
+
+
+def get_job_search_task_lock_key(user_id: int | str) -> str:
+    """Per-tenant lock key enabling concurrent search execution across distinct tenants."""
+    return f"job_search_task_running:u{user_id}"
+
+
 CLEANUP_STATUS_CACHE_KEY = "cleanup_inactive_pipeline_entries_last_status"
 CLEANUP_STATUS_CACHE_TTL_SECONDS = 60 * 60 * 24 * 7  # 7 days
 
@@ -654,15 +668,20 @@ def enqueue_applying_resume_optimization_task(
 def run_job_search_task(user_id, task_id):
     """
     Huey task: run one JobSearchTask (fetch, filter, rank, add to pipeline).
-    Uses a global lock so only one job-search task runs at a time.
+    Uses a per-tenant lock so concurrent job searches for different users run in parallel.
     """
-    if not cache.add(JOB_SEARCH_TASK_LOCK_KEY, 1, JOB_SEARCH_TASK_LOCK_TIMEOUT):
-        logger.warning("[run_job_search_task] Skipping task %s: another job search task is running", task_id)
-        return {"status": "skipped", "message": "Another job search task is running"}
+    lock_key = get_job_search_task_lock_key(user_id)
+    if not cache.add(lock_key, 1, JOB_SEARCH_TASK_LOCK_TIMEOUT):
+        logger.warning(
+            "[run_job_search_task] Skipping task %s: another job search task is running for user %s",
+            task_id,
+            user_id,
+        )
+        return {"status": "skipped", "message": "Another job search task is running for this user"}
     try:
         return _run_job_search_task_impl(user_id, task_id)
     finally:
-        cache.delete(JOB_SEARCH_TASK_LOCK_KEY)
+        cache.delete(lock_key)
 
 
 def _prune_old_runs(task):
@@ -811,12 +830,15 @@ def evaluate_vetting_matching_task(
         return {"status": "skipped", "message": "No pipeline_entry_ids provided"}
 
     user = _task_user(user_id)
+    lock_key = get_vetting_matching_lock_key(user.id)
 
-    if not cache.add(VETTING_MATCHING_LOCK_KEY, 1, VETTING_MATCHING_LOCK_TIMEOUT):
+    if not cache.add(lock_key, 1, VETTING_MATCHING_LOCK_TIMEOUT):
         logger.warning(
-            "[evaluate_vetting_matching_task] Skipping: another vetting matching task is running"
+            "[evaluate_vetting_matching_task] Skipping: another vetting matching task is running for tenant %s (user_id=%s)",
+            getattr(user, "username", str(user_id)),
+            getattr(user, "id", user_id),
         )
-        return {"status": "skipped", "message": "Another vetting matching task is running"}
+        return {"status": "skipped", "message": "Another vetting matching task is running for this user"}
 
     try:
         entries = list(
@@ -830,7 +852,7 @@ def evaluate_vetting_matching_task(
         if not entries:
             return {"status": "skipped", "message": "No entries in VETTING stage"}
 
-        from .llm_gateway import preference_candidates_available
+        from .llm_gateway import local_llm_available, preference_candidates_available
 
         llm_override = None
         if llm_provider:
@@ -838,7 +860,9 @@ def evaluate_vetting_matching_task(
                 llm_override = _build_llm_override(llm_provider, llm_model, user)
             except Exception as e:
                 logger.exception(
-                    "[evaluate_vetting_matching_task] invalid LLM override provider=%s model=%s: %s",
+                    "[evaluate_vetting_matching_task] invalid LLM override tenant=%s (user_id=%s) provider=%s model=%s: %s",
+                    getattr(user, "username", str(user_id)),
+                    getattr(user, "id", user_id),
                     llm_provider,
                     llm_model,
                     e,
@@ -847,8 +871,18 @@ def evaluate_vetting_matching_task(
                     "status": "error",
                     "message": f"Invalid LLM override: {e}",
                 }
-        elif not preference_candidates_available(user):
-            return {"status": "error", "message": "No LLM configured (add provider keys and preference rows)."}
+        elif not local_llm_available(user):
+            tenant_label = getattr(user, "username", str(user_id))
+            uid = getattr(user, "id", user_id)
+            logger.warning(
+                "[evaluate_vetting_matching_task] tenant=%s (user_id=%s): No local LLM (Ollama) configured or on cooldown. Skipping vetting matching.",
+                tenant_label,
+                uid,
+            )
+            return {
+                "status": "skipped",
+                "message": f"Tenant {tenant_label}: No local LLM (Ollama) configured or on cooldown.",
+            }
 
         jd_max_chars = getattr(settings, "JOB_MATCHING_JD_MAX_CHARS", 12000)
         now = timezone.now()
@@ -963,7 +997,9 @@ def evaluate_vetting_matching_task(
                 updated += 1
                 apply_vetting_to_applying_promotions(user, [entry.id])
             except Exception as e:
-                logger.exception("[evaluate_vetting_matching_task] entry_id=%s failed: %s", entry.id, e)
+                tenant_label = getattr(user, "username", str(user_id))
+                uid = getattr(user, "id", user_id)
+                logger.exception("[evaluate_vetting_matching_task] tenant=%s (user_id=%s) entry_id=%s failed: %s", tenant_label, uid, entry.id, e)
                 errors.append(f"Entry {entry.id}: {e}")
 
         return {
@@ -973,7 +1009,7 @@ def evaluate_vetting_matching_task(
             "errors": errors[:20],
         }
     finally:
-        cache.delete(VETTING_MATCHING_LOCK_KEY)
+        cache.delete(lock_key)
 
 
 def try_vetting_match_debug(
@@ -1199,66 +1235,82 @@ def apply_pipeline_auto_promotions(user) -> int:
     return len(promoted)
 
 
+@db_task()
+def process_user_vetting_matching_task(user_id: int):
+    """
+    Huey worker task: Evaluate due Vetting entries for a single user.
+    Enables distributed, parallel vetting evaluation across Huey workers.
+    """
+    try:
+        user = _task_user(user_id)
+        _evaluate_due_vetting_matching_for_user(user)
+    except Exception as e:
+        logger.exception("[process_user_vetting_matching_task] failed for user_id=%s: %s", user_id, e)
+
+
+def _evaluate_due_vetting_matching_for_user(user, max_to_enqueue: int = 20):
+    candidate_entries = (
+        PipelineEntry.objects.for_user(user).filter(
+            stage=PipelineEntry.Stage.VETTING,
+            removed_at__isnull=True,
+        )
+        .order_by("-added_at")[:200]
+        .only(
+            "id",
+            "track",
+            "vetting_interview_probability",
+            "vetting_interview_resume_id",
+            "vetting_interview_scored_at",
+        )
+    )
+    entries = list(candidate_entries)
+    if not entries:
+        apply_vetting_to_applying_promotions(user)
+        return
+
+    latest_overall = UserResume.objects.for_user(user).filter(is_library=True).order_by("-uploaded_at").first()
+    latest_by_track: dict[str, UserResume | None] = {}
+    for track in {e.track for e in entries if e.track}:
+        latest_by_track[track] = (
+            UserResume.objects.for_user(user).filter(is_library=True, track=track).order_by("-uploaded_at").first()
+            or latest_overall
+        )
+
+    cooldown_before = timezone.now() - timedelta(hours=VETTING_MATCHING_RETRY_COOLDOWN_HOURS)
+    to_enqueue: list[int] = []
+    for e in entries:
+        latest = latest_by_track.get(e.track)
+        if not latest:
+            continue
+        resume_outdated = e.vetting_interview_resume_id != latest.id
+        missing_prob = e.vetting_interview_probability is None
+        if not missing_prob and not resume_outdated:
+            continue
+        if missing_prob and not resume_outdated:
+            scored_at = e.vetting_interview_scored_at
+            if scored_at and scored_at > cooldown_before:
+                continue
+        to_enqueue.append(e.id)
+        if len(to_enqueue) >= max_to_enqueue:
+            break
+
+    if to_enqueue:
+        evaluate_vetting_matching_task(user.id, to_enqueue, llm_provider=None, llm_model=None, matching_prompt=None)
+
+    apply_vetting_to_applying_promotions(user)
+
+
 @db_periodic_task(crontab(minute="*/20"))
 def enqueue_due_vetting_matching_tasks():
     """
-    Periodically backfill vetting interview probability for entries missing it.
-    Keeps existing rows correct when the "latest" resume changes per track.
+    Periodic dispatcher (every 20 mins): Fans out vetting evaluation tasks per active user
+    so background Huey workers process them concurrently.
     """
     User = get_user_model()
-    max_to_enqueue = 20
-    for user in User.objects.filter(is_active=True):
-        candidate_entries = (
-            PipelineEntry.objects.for_user(user).filter(
-                stage=PipelineEntry.Stage.VETTING,
-                removed_at__isnull=True,
-            )
-            .order_by("-added_at")[:200]
-            .only(
-                "id",
-                "track",
-                "vetting_interview_probability",
-                "vetting_interview_resume_id",
-                "vetting_interview_scored_at",
-            )
-        )
-        entries = list(candidate_entries)
-        if not entries:
-            apply_vetting_to_applying_promotions(user)
-            continue
-
-        latest_overall = UserResume.objects.for_user(user).filter(is_library=True).order_by("-uploaded_at").first()
-        latest_by_track: dict[str, UserResume | None] = {}
-        for track in {e.track for e in entries if e.track}:
-            latest_by_track[track] = (
-                UserResume.objects.for_user(user).filter(is_library=True, track=track).order_by("-uploaded_at").first()
-                or latest_overall
-            )
-
-        cooldown_before = timezone.now() - timedelta(hours=VETTING_MATCHING_RETRY_COOLDOWN_HOURS)
-        to_enqueue: list[int] = []
-        for e in entries:
-            latest = latest_by_track.get(e.track)
-            if not latest:
-                continue
-            resume_outdated = e.vetting_interview_resume_id != latest.id
-            missing_prob = e.vetting_interview_probability is None
-            if not missing_prob and not resume_outdated:
-                continue
-            if missing_prob and not resume_outdated:
-                scored_at = e.vetting_interview_scored_at
-                if scored_at and scored_at > cooldown_before:
-                    continue
-            to_enqueue.append(e.id)
-            if len(to_enqueue) >= max_to_enqueue:
-                break
-
-        if to_enqueue:
-            evaluate_vetting_matching_task(user.id, to_enqueue, llm_provider=None, llm_model=None, matching_prompt=None)
-
-        apply_vetting_to_applying_promotions(user)
-
-    return None
+    active_user_ids = list(User.objects.filter(is_active=True).values_list("id", flat=True))
+    for uid in active_user_ids:
+        process_user_vetting_matching_task(uid)
+    return {"status": "dispatched", "users_count": len(active_user_ids)}
 
 
 def _pipeline_stage_filter() -> models.Q:
@@ -1281,15 +1333,10 @@ def _cleanup_retention_stage_q(stage_key: str) -> models.Q:
 
 def apply_cleanup_retention_purge(cfg: AppAutomationSettings) -> int:
     """
-    Remove pipeline rows past per-stage age (Settings). 0 days = skip that stage.
-    Same removal policy as pipeline_manager had: hard-delete unless liked/disliked.
+    Remove pipeline rows older than tenant retention policy (default 2 weeks / 14 days; configurable per tenant).
+    Excludes Applied (Done) stage jobs unless cleanup_done_retention_days is explicitly configured.
+    Same removal policy: hard-delete unless liked/disliked (which are soft-deleted with mark_deleted).
     """
-    rules: list[tuple[str, int]] = [
-        ("pipeline", int(cfg.cleanup_pipeline_retention_days or 0)),
-        ("vetting", int(cfg.cleanup_vetting_retention_days or 0)),
-        ("applying", int(cfg.cleanup_applying_retention_days or 0)),
-        ("done", int(cfg.cleanup_done_retention_days or 0)),
-    ]
     now = timezone.now()
     user = cfg.owner
     from .search_profile_scope import profile_slugs_for_pipeline
@@ -1297,6 +1344,16 @@ def apply_cleanup_retention_purge(cfg: AppAutomationSettings) -> int:
     track_slugs = profile_slugs_for_pipeline(user)
     if not track_slugs:
         return 0
+
+    general_days = int(getattr(cfg, "cleanup_job_retention_days", 14) or 14)
+
+    rules: list[tuple[str, int]] = [
+        ("pipeline", int(cfg.cleanup_pipeline_retention_days) if cfg.cleanup_pipeline_retention_days else general_days),
+        ("vetting", int(cfg.cleanup_vetting_retention_days) if cfg.cleanup_vetting_retention_days else general_days),
+        ("applying", int(cfg.cleanup_applying_retention_days) if cfg.cleanup_applying_retention_days else general_days),
+        ("done", int(cfg.cleanup_done_retention_days or 0)),
+    ]
+
     removed = 0
     for tslug in track_slugs:
         for stage_key, days in rules:
@@ -1352,18 +1409,32 @@ PIPELINE_MANAGER_PURGE_MARGIN_MAX = -2
 PIPELINE_MANAGER_BATCH_SIZE = 100
 
 
+@db_task()
+def process_user_pipeline_manager_task(user_id: int):
+    """
+    Huey worker task: Run pipeline scoring, purging, and auto-promotions for a single user.
+    Enables distributed, parallel pipeline maintenance across Huey workers.
+    """
+    try:
+        user = _task_user(user_id)
+        return _pipeline_manager_for_user(user)
+    except Exception as e:
+        logger.exception("[process_user_pipeline_manager_task] failed for user_id=%s: %s", user_id, e)
+        return {"status": "error", "message": str(e), "user_id": user_id}
+
+
 @db_periodic_task(crontab(minute="*/30"))
 def pipeline_manager():
     """
-    Every 30 minutes: maintain Pipeline-stage entries only—refresh stale/missing
-    fit metrics, purge low preference_margin rows, then auto-promote to Vetting when enabled.
-
-    Age-based removal for all stages is handled by Cleanup Manager (Settings retention days).
+    Periodic dispatcher (every 30 mins): Fans out pipeline maintenance tasks
+    to individual Huey worker tasks per active user for horizontal scalability.
     """
     User = get_user_model()
-    for user in User.objects.filter(is_active=True):
-        _pipeline_manager_for_user(user)
-    return None
+    active_user_ids = list(User.objects.filter(is_active=True).values_list("id", flat=True))
+    for uid in active_user_ids:
+        process_user_pipeline_manager_task(uid)
+    logger.info("[pipeline_manager] Dispatched pipeline maintenance for %d active user(s)", len(active_user_ids))
+    return {"status": "dispatched", "users_count": len(active_user_ids)}
 
 
 def _pipeline_manager_for_user(user):
@@ -1441,29 +1512,39 @@ def _pipeline_manager_for_user(user):
     return None
 
 
+MAX_DUE_JOB_SEARCH_TASKS_PER_TICK = 50
+
+
 @db_periodic_task(crontab(minute="*"))
 def enqueue_due_job_search_tasks():
     """
-    Runs every minute: find JobSearchTasks where next_run_at <= now, enqueue one,
-    then update next_run_at to the next occurrence. Only one task enqueued per tick
-    to avoid overlap (run_job_search_task also uses a lock).
+    Runs every minute: find JobSearchTasks across all users where next_run_at <= now,
+    enqueues individual run_job_search_task runs (isolated by per-user locks),
+    and updates next_run_at to the next occurrence.
     """
     now = timezone.now()
-    due = (
+    due = list(
         JobSearchTask.objects.filter(is_active=True, next_run_at__isnull=False)
         .filter(next_run_at__lte=now)
-        .order_by("next_run_at", "start_time")[:1]
+        .order_by("next_run_at", "start_time")[:MAX_DUE_JOB_SEARCH_TASKS_PER_TICK]
     )
+    enqueued_count = 0
     for task in due:
         try:
             next_run = get_next_run_at(task.frequency, from_time=now)
             task.next_run_at = next_run
             task.save(update_fields=["next_run_at", "updated_at"])
             run_job_search_task(task.owner_id, task.id)
-            logger.info("[enqueue_due_job_search_tasks] enqueued task_id=%s next_run_at=%s", task.id, next_run)
+            enqueued_count += 1
+            logger.info(
+                "[enqueue_due_job_search_tasks] enqueued task_id=%s owner_id=%s next_run_at=%s",
+                task.id,
+                task.owner_id,
+                next_run,
+            )
         except Exception as e:
             logger.exception("[enqueue_due_job_search_tasks] task_id=%s failed: %s", task.id, e)
-    return None
+    return {"status": "ok", "enqueued": enqueued_count}
 
 
 # Runs stuck in RUNNING longer than this are marked FAILED (worker likely died or fetch hung)
@@ -1494,124 +1575,104 @@ def mark_stale_job_search_runs_failed():
     return None
 
 
-@db_periodic_task(crontab(minute="30", hour="1"))
-def cleanup_manager():
+@db_task()
+def process_user_cleanup_task(user_id: int):
     """
-    Once daily (01:30): dedupe pipeline rows across Pipeline/Vetting/Applying; age purge
-    per stage (Settings); best-effort inactive URL check for Applying listings.
+    Huey worker task: Run deduplication and retention purges for a single user.
+    Enables distributed, parallel cleanup processing across Huey workers.
     """
-    started_at = timezone.now()
-    User = get_user_model()
-    retention_removed = 0
-    purge_result = {"checked": 0, "removed_inactive": 0, "active": 0, "unknown": 0}
-    dedupe_result = {"entries_removed": 0, "duplicate_groups": 0}
-    status = "success"
-    errors: list[str] = []
-
-    for user in User.objects.filter(is_active=True):
-        cfg = AppAutomationSettings.get_for_user(user)
-        try:
-            from .job_dedupe import dedupe_pipeline_entries
-
-            user_dedupe = dedupe_pipeline_entries(
-                user=user,
-                track_slug="*",
-                stage="all",
-                include_done=False,
-            )
-            dedupe_result["entries_removed"] += int(user_dedupe.get("entries_removed") or 0)
-            dedupe_result["duplicate_groups"] += int(user_dedupe.get("duplicate_groups") or 0)
-        except Exception as e:
-            status = "partial_failure"
-            errors.append(f"dedupe_cleanup(user={user.id}): {e}")
-            logger.exception("[cleanup_manager] dedupe failed user=%s: %s", user.id, e)
-
-        try:
-            retention_removed += apply_cleanup_retention_purge(cfg)
-        except Exception as e:
-            status = "partial_failure"
-            errors.append(f"retention_cleanup(user={user.id}): {e}")
-            logger.exception("[cleanup_manager] retention purge failed user=%s: %s", user.id, e)
-
-    generated_resumes_removed = 0
     try:
+        user = _task_user(user_id)
+        cfg = AppAutomationSettings.get_for_user(user)
+        from .job_dedupe import dedupe_pipeline_entries
+
+        dedupe_res = dedupe_pipeline_entries(
+            user=user,
+            track_slug="*",
+            stage="all",
+            include_done=False,
+        )
+        retention_res = apply_cleanup_retention_purge(cfg)
         from .resume_cleanup import purge_generated_user_resumes
 
-        for user in User.objects.filter(is_active=True):
-            cfg = AppAutomationSettings.get_for_user(user)
-            generated_resumes_removed += purge_generated_user_resumes(
-                int(cfg.cleanup_generated_resume_retention_days or 0),
-                user=user,
-            )
-        if generated_resumes_removed:
-            huey_logger.info(
-                "[cleanup_manager] generated resumes removed=%s",
-                generated_resumes_removed,
-            )
-            logger.info(
-                "[cleanup_manager] generated resumes removed=%s",
-                generated_resumes_removed,
-            )
+        resumes_res = purge_generated_user_resumes(
+            int(cfg.cleanup_generated_resume_retention_days or 0),
+            user=user,
+        )
+        return {
+            "user_id": user_id,
+            "dedupe": dedupe_res,
+            "retention_removed": retention_res,
+            "resumes_removed": resumes_res,
+        }
     except Exception as e:
-        status = "partial_failure"
-        errors.append(f"generated_resume_cleanup: {e}")
-        logger.exception("[cleanup_manager] generated resume purge failed: %s", e)
+        logger.exception("[process_user_cleanup_task] failed for user_id=%s: %s", user_id, e)
+        return {"user_id": user_id, "error": str(e)}
 
+
+@db_task()
+def purge_inactive_pipeline_entries_task(limit: int = 400):
+    """
+    Huey worker task: Best-effort inactive URL check for Applying listings.
+    """
     try:
         from .job_activity import purge_inactive_pipeline_entries
 
-        purge_result = purge_inactive_pipeline_entries(limit=400)
-        huey_logger.info(
-            "[cleanup_manager] inactive-check checked=%s removed_inactive=%s active=%s unknown=%s",
-            purge_result.get("checked"),
-            purge_result.get("removed_inactive"),
-            purge_result.get("active"),
-            purge_result.get("unknown"),
-        )
-        logger.info(
-            "[cleanup_manager] inactive-check checked=%s removed_inactive=%s active=%s unknown=%s",
-            purge_result.get("checked"),
-            purge_result.get("removed_inactive"),
-            purge_result.get("active"),
-            purge_result.get("unknown"),
-        )
+        return purge_inactive_pipeline_entries(limit=limit)
     except Exception as e:
-        status = "partial_failure"
-        errors.append(f"inactive_cleanup: {e}")
-        logger.exception("[cleanup_manager] inactive cleanup failed: %s", e)
+        logger.exception("[purge_inactive_pipeline_entries_task] failed: %s", e)
+        return {"error": str(e)}
 
-    finished_at = timezone.now()
+
+@db_periodic_task(crontab(minute="30", hour="1"))
+def cleanup_manager():
+    """
+    Once daily (01:30): Fan out user-scoped cross-profile dedupe and 14-day retention purges across
+    Huey workers for scalability.
+    """
+    started_at = timezone.now()
+    User = get_user_model()
+    active_user_ids = list(User.objects.filter(is_active=True).values_list("id", flat=True))
+    for uid in active_user_ids:
+        process_user_cleanup_task(uid)
+
     payload = {
-        "status": status,
+        "status": "dispatched",
         "started_at": started_at,
-        "finished_at": finished_at,
-        "retention_removed": int(retention_removed),
-        "checked": int(purge_result.get("checked") or 0),
-        "removed_inactive": int(purge_result.get("removed_inactive") or 0),
-        "active": int(purge_result.get("active") or 0),
-        "unknown": int(purge_result.get("unknown") or 0),
-        "dedupe_removed": int(dedupe_result.get("entries_removed") or 0),
-        "dedupe_groups": int(dedupe_result.get("duplicate_groups") or 0),
-        "generated_resumes_removed": int(generated_resumes_removed),
-        "errors": errors[:5],
+        "finished_at": timezone.now(),
+        "users_dispatched": len(active_user_ids),
     }
     cache.set(CLEANUP_STATUS_CACHE_KEY, payload, CLEANUP_STATUS_CACHE_TTL_SECONDS)
-    return None
+    logger.info("[cleanup_manager] Dispatched daily cleanup for %d active user(s)", len(active_user_ids))
+    return {"status": "dispatched", "users_dispatched": len(active_user_ids)}
 
 
-@db_periodic_task(crontab(minute="15", hour="*/6"))
-def purge_generated_resumes_periodic():
-    """Every 6 hours: remove old optimizer ephemeral UserResume PDFs."""
-    User = get_user_model()
-    from .resume_cleanup import purge_generated_user_resumes
-
-    for user in User.objects.filter(is_active=True):
+@db_task()
+def process_user_purge_generated_resumes_task(user_id: int):
+    """
+    Huey worker task: Remove old optimizer ephemeral UserResume PDFs for a single user.
+    """
+    try:
+        user = _task_user(user_id)
         cfg = AppAutomationSettings.get_for_user(user)
+        from .resume_cleanup import purge_generated_user_resumes
+
         purge_generated_user_resumes(
             int(cfg.cleanup_generated_resume_retention_days or 0),
             user=user,
         )
-    return None
+    except Exception as e:
+        logger.exception("[process_user_purge_generated_resumes_task] failed for user_id=%s: %s", user_id, e)
+
+
+@db_periodic_task(crontab(minute="15", hour="*/6"))
+def purge_generated_resumes_periodic():
+    """Every 6 hours: fan-out removal of old optimizer ephemeral UserResume PDFs per user."""
+    User = get_user_model()
+    active_user_ids = list(User.objects.filter(is_active=True).values_list("id", flat=True))
+    for uid in active_user_ids:
+        process_user_purge_generated_resumes_task(uid)
+    return {"status": "dispatched", "users_count": len(active_user_ids)}
 
 
 # Backward-compatible alias (imports, docs, manual enqueue).
@@ -1789,25 +1850,29 @@ def nudge_apply_attempts_for_pipeline_entry(user_id: int, pipeline_entry_id: int
 @db_periodic_task(crontab(minute="*"))
 def apply_agent_heartbeat():
     """
-    Primary orchestrator driver (every 60s): enqueue a step for each non-terminal
-    ApplicationAttempt. This is the source of truth for progression, so a missed
-    optimizer callback or a dead worker never strands an attempt.
+    Primary orchestrator driver (every 60s): queries active attempts for enabled
+    users and enqueues run_apply_agent_step for each. This is the source of truth
+    for progression, so a missed optimizer callback or a dead worker never strands an attempt.
     """
-    User = get_user_model()
-    from .models import ApplicationAttempt
+    from .models import ApplicationAttempt, AppAutomationSettings
 
-    enqueued = 0
-    for user in User.objects.filter(is_active=True):
-        cfg = AppAutomationSettings.get_for_user(user)
-        if not cfg.apply_agent_enabled:
-            continue
-        active = ApplicationAttempt.objects.filter(
-            pipeline_entry__owner=user,
+    enabled_user_ids = set(
+        AppAutomationSettings.objects.filter(apply_agent_enabled=True)
+        .values_list("owner_id", flat=True)
+    )
+    if not enabled_user_ids:
+        return {"status": "ok", "enqueued": 0}
+
+    active_attempts = list(
+        ApplicationAttempt.objects.filter(
+            pipeline_entry__owner_id__in=enabled_user_ids,
             status__in=ApplicationAttempt.ACTIVE_STATUSES,
-        ).values_list("id", flat=True)
-        for attempt_id in list(active):
-            run_apply_agent_step(user.id, attempt_id)
-            enqueued += 1
+        ).values_list("id", "pipeline_entry__owner_id")
+    )
+    enqueued = 0
+    for attempt_id, owner_id in active_attempts:
+        run_apply_agent_step(owner_id, attempt_id)
+        enqueued += 1
     if enqueued:
         logger.info("[apply_agent_heartbeat] enqueued %s step(s)", enqueued)
     return {"status": "ok", "enqueued": enqueued}

@@ -53,6 +53,7 @@ from .jobs_api import (
 )
 from .pipeline_board import applying_view, done_view, pipeline_view, vetting_view
 from .models import (
+    ApplicationAttempt,
     JobListingAction,
     PipelineEntry,
     JobSearchTask,
@@ -634,7 +635,7 @@ def settings_view(request):
             real_user = get_real_user(request)
             if not getattr(real_user, "is_staff", False):
                 messages.error(request, "Experience mode is managed by admins.")
-                return redirect(reverse("settings") + "?tab=general")
+                return redirect(reverse("settings") + "?tab=account")
             mode = (request.POST.get("experience_mode") or "").strip().lower()
             if mode not in (
                 UserExperienceSettings.ExperienceMode.NORMAL,
@@ -645,7 +646,7 @@ def settings_view(request):
                 set_experience_mode(user, mode)
                 label = "Advanced" if mode == UserExperienceSettings.ExperienceMode.POWER else "Simple"
                 messages.success(request, f"Experience mode set to {label}.")
-            return redirect(reverse("settings") + "?tab=general")
+            return redirect(reverse("settings") + "?tab=account")
         if action == "refresh_provider_models":
             cached: dict[str, list] = {}
             for cfg in _get_provider_preferences(user):
@@ -745,17 +746,21 @@ def settings_view(request):
                     return None
                 return v
 
-            cp = _cleanup_days("cleanup_pipeline_retention_days")
-            cv = _cleanup_days("cleanup_vetting_retention_days")
-            ca = _cleanup_days("cleanup_applying_retention_days")
+            cjob = _cleanup_days("cleanup_job_retention_days")
+            if cjob is None:
+                cjob = 14
+            cp = _cleanup_days("cleanup_pipeline_retention_days") or cjob
+            cv = _cleanup_days("cleanup_vetting_retention_days") or cjob
+            ca = _cleanup_days("cleanup_applying_retention_days") or cjob
             cd = _cleanup_days("cleanup_done_retention_days")
             cg = _cleanup_days("cleanup_generated_resume_retention_days")
-            if cp is None or cv is None or ca is None or cd is None or cg is None:
+            if cd is None or cg is None:
                 messages.error(
                     request,
                     "Cleanup retention days must be whole numbers from 0 (off) through 365.",
                 )
                 return redirect(reverse("settings") + "?tab=app")
+            automation.cleanup_job_retention_days = cjob
             automation.cleanup_pipeline_retention_days = cp
             automation.cleanup_vetting_retention_days = cv
             automation.cleanup_applying_retention_days = ca
@@ -769,6 +774,7 @@ def settings_view(request):
                     "vetting_to_applying_enabled",
                     "vetting_interview_probability_min",
                     "applying_optimizer_workflow",
+                    "cleanup_job_retention_days",
                     "cleanup_pipeline_retention_days",
                     "cleanup_vetting_retention_days",
                     "cleanup_applying_retention_days",
@@ -1013,9 +1019,9 @@ def settings_view(request):
                 messages.success(request, f"{provider} is now the active provider.")
                 return redirect(reverse("settings") + "?tab=llm")
 
-    tab = (request.GET.get("tab") or "llm").strip().lower()
-    if tab not in ("llm", "app", "usage", "replacements", "candidate_context", "general", "account"):
-        tab = "llm"
+    tab = (request.GET.get("tab") or "account").strip().lower()
+    if tab not in ("account", "llm", "usage", "replacements", "app"):
+        tab = "account"
     provider_preference_list = list(_get_provider_preferences(user))
     connected_provider_names = [cfg.provider for cfg in provider_preference_list]
     pref_rows = list(_get_provider_preference_rows(user).order_by("priority", "id"))
@@ -2384,10 +2390,19 @@ def huey_dashboard_view(request):
             }
         )
 
-    recent_runs = (
-        JobSearchTaskRun.objects.select_related("task")
-        .order_by("-started_at")[:10]
+    from datetime import timedelta
+    twenty_four_hours_ago = now - timedelta(hours=24)
+    searches_24h = JobSearchTaskRun.objects.filter(started_at__gte=twenty_four_hours_ago).count()
+    applies_24h = ApplicationAttempt.objects.filter(created_at__gte=twenty_four_hours_ago).count()
+    failed_24h = (
+        JobSearchTaskRun.objects.filter(started_at__gte=twenty_four_hours_ago, status="failed").count()
+        + ApplicationAttempt.objects.filter(created_at__gte=twenty_four_hours_ago, status=ApplicationAttempt.Status.FAILED).count()
     )
+    active_running = (
+        JobSearchTaskRun.objects.filter(status="running").count()
+        + ApplicationAttempt.objects.filter(status__in=ApplicationAttempt.ACTIVE_STATUSES).count()
+    )
+
     from .tasks import CLEANUP_STATUS_CACHE_KEY
     cleanup_status = cache.get(CLEANUP_STATUS_CACHE_KEY)
 
@@ -2402,13 +2417,70 @@ def huey_dashboard_view(request):
             }
         )
 
+    # Build unified recent activity items across search scrapes and apply agent attempts
+    recent_searches = list(
+        JobSearchTaskRun.objects.select_related("task", "task__owner")
+        .order_by("-started_at")[:20]
+    )
+    recent_applies = list(
+        ApplicationAttempt.objects.select_related("pipeline_entry", "pipeline_entry__owner", "pipeline_entry__job_listing")
+        .order_by("-created_at")[:20]
+    )
+
+    unified_activity = []
+    for s in recent_searches:
+        user_name = s.task.owner.get_username() if s.task and s.task.owner else "System"
+        title = s.task.name if s.task else "Job Search"
+        subtitle = s.task.search_term if s.task else ""
+        unified_activity.append({
+            "type": "Search Scrape",
+            "type_badge": "bg-sky-50 text-sky-700 border-sky-200",
+            "title": title,
+            "subtitle": subtitle,
+            "user": user_name,
+            "status": s.status,  # completed, failed, running
+            "started_at": s.started_at,
+            "finished_at": s.finished_at,
+            "items_count": getattr(s, "jobs_fetched", 0),
+            "error_message": s.error_message,
+        })
+
+    for a in recent_applies:
+        p_entry = getattr(a, "pipeline_entry", None)
+        user_name = p_entry.owner.get_username() if (p_entry and p_entry.owner) else "System"
+        company = p_entry.job_listing.company_name if (p_entry and p_entry.job_listing) else "Application Attempt"
+        job_title = p_entry.job_listing.title if (p_entry and p_entry.job_listing) else ""
+        status_val = "completed" if a.status == ApplicationAttempt.Status.SUCCEEDED else ("failed" if a.status == ApplicationAttempt.Status.FAILED else ("running" if a.status in ApplicationAttempt.ACTIVE_STATUSES else a.status))
+        started = a.started_at or a.created_at
+        finished = a.submitted_at or (a.updated_at if a.is_terminal else None)
+        unified_activity.append({
+            "type": "Apply Agent",
+            "type_badge": "bg-purple-50 text-purple-700 border-purple-200",
+            "title": company,
+            "subtitle": job_title,
+            "user": user_name,
+            "status": status_val,
+            "started_at": started,
+            "finished_at": finished,
+            "items_count": None,
+            "error_message": a.error_message or (f"Error code: {a.error_code}" if a.error_code else None),
+        })
+
+    unified_activity.sort(key=lambda x: x["started_at"] or now, reverse=True)
+    unified_activity = unified_activity[:25]
+
     context = {
         "immediate": immediate,
         "queue_stats": queue_stats,
         "queue_stats_error": queue_stats_error,
         "periodic_tasks": periodic_rows,
         "adhoc_run_tasks": adhoc_rows,
-        "recent_runs": recent_runs,
+        "recent_runs": recent_searches[:10],
+        "unified_activity": unified_activity,
+        "searches_24h": searches_24h,
+        "applies_24h": applies_24h,
+        "failed_24h": failed_24h,
+        "active_running": active_running,
         "cleanup_status": cleanup_status,
     }
     return render(request, "resume_app/huey_dashboard.html", context)
@@ -2847,7 +2919,7 @@ def _track_list_context(request, user, tracks_qs):
         runs_qs = (
             JobSearchTaskRun.objects.filter(task__owner=user)
             .select_related("task", "task__saved_search")
-            .order_by("-started_at")[:5]
+            .order_by("-started_at", "-id")[:5]
         )
         for r in runs_qs:
             eliminated = max(0, r.jobs_fetched - r.jobs_after_filter)

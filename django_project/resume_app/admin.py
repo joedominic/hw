@@ -34,7 +34,9 @@ class PlanAdmin(admin.ModelAdmin):
     list_display = (
         "slug",
         "name",
+        "price_display",
         "llm_requests_per_day",
+        "llm_tokens_per_day",
         "job_searches_per_day",
         "apply_runs_per_day",
         "api_access",
@@ -108,6 +110,7 @@ class AppAutomationSettingsAdmin(admin.ModelAdmin):
         "vetting_to_applying_enabled",
         "vetting_interview_probability_min",
         "applying_optimizer_workflow",
+        "cleanup_job_retention_days",
         "cleanup_pipeline_retention_days",
         "cleanup_vetting_retention_days",
         "cleanup_applying_retention_days",

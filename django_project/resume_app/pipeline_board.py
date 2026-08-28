@@ -426,7 +426,8 @@ def pipeline_board_view(request, board_stage: str):
         pref_max = None
 
     age_days_raw = (request.GET.get("age_days") or "").strip()
-    sort_by = (request.GET.get("sort_by") or "newest").strip().lower()
+    raw_sort = (request.GET.get("sort_by") or request.GET.get("sort") or "latest").strip().lower()
+    sort_by = raw_sort if raw_sort in ("latest", "newest", "match", "focus", "interview", "preference", "oldest") else "latest"
 
     pipeline_jobs = list(pipeline_jobs_full)
     if source_filter:
@@ -469,16 +470,31 @@ def pipeline_board_view(request, board_stage: str):
     def get_job_date(j):
         return j.posted_at or j.fetched_at or datetime.min.replace(tzinfo=timezone.utc)
 
-    if sort_by == "newest":
+    if sort_by in ("latest", "newest"):
         pipeline_jobs.sort(key=get_job_date, reverse=True)
     elif sort_by == "oldest":
         pipeline_jobs.sort(key=get_job_date)
-    elif sort_by == "focus":
-        pipeline_jobs.sort(key=lambda j: j.focus_percent_after_penalty or j.focus_percent or 0, reverse=True)
+    elif sort_by in ("match", "focus"):
+        def get_match_sort_key(j):
+            val = j.focus_percent_after_penalty if j.focus_percent_after_penalty is not None else j.focus_percent
+            has_val = val is not None
+            score = float(val) if has_val else -1.0
+            return (has_val, score, get_job_date(j))
+        pipeline_jobs.sort(key=get_match_sort_key, reverse=True)
     elif sort_by == "preference":
-        pipeline_jobs.sort(key=lambda j: j.preference_margin_percent or 0, reverse=True)
+        def get_pref_sort_key(j):
+            val = j.preference_margin_percent
+            has_val = val is not None
+            score = float(val) if has_val else -9999.0
+            return (has_val, score, get_job_date(j))
+        pipeline_jobs.sort(key=get_pref_sort_key, reverse=True)
     elif sort_by == "interview":
-        pipeline_jobs.sort(key=lambda j: j.interview_probability or 0, reverse=True)
+        def get_interview_sort_key(j):
+            val = j.interview_probability
+            has_val = val is not None
+            score = int(val) if has_val else -1
+            return (has_val, score, get_job_date(j))
+        pipeline_jobs.sort(key=get_interview_sort_key, reverse=True)
 
     pipeline_count_before_text_search = len(pipeline_jobs)
 
@@ -503,7 +519,7 @@ def pipeline_board_view(request, board_stage: str):
         ]
 
     pipeline_has_active_filters = bool(
-        search_q or source_filter or pref_min_raw != "" or pref_max_raw != "" or age_days_raw != "" or sort_by != "newest"
+        search_q or source_filter or pref_min_raw != "" or pref_max_raw != "" or age_days_raw != "" or (sort_by not in ("latest", "newest"))
     )
 
     if board_stage in ("vetting", "applying"):
@@ -672,6 +688,7 @@ def pipeline_board_view(request, board_stage: str):
         "pipeline_has_active_filters": pipeline_has_active_filters,
         "pipeline_source_options": pipeline_source_options,
         "pipeline_source_selected": source_filter,
+        "pipeline_sort_by": "latest" if sort_by in ("latest", "newest") else ("match" if sort_by in ("match", "focus") else sort_by),
         "pipeline_pref_min": pref_min_raw,
         "pipeline_pref_max": pref_max_raw,
         "pipeline_tracks": pipeline_track_tabs,
