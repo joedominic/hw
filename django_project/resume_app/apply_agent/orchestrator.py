@@ -61,8 +61,7 @@ def start_attempts_for_entries(entry_ids: list[int], *, user_id: int, mode: str 
     Skips entries that already have a non-terminal attempt (no duplicate runs).
     """
     user = get_user_model().objects.get(pk=int(user_id))
-    from ..entitlements import METRIC_APPLY_RUNS, QuotaExceeded, check_quota, consume_quota
-    from ..storage_quota import check_storage_quota
+    from ..subscriptions import METRIC_APPLY_RUNS, QuotaExceeded, check_quota, check_storage_quota, consume_quota
 
     try:
         check_quota(user, METRIC_APPLY_RUNS)
@@ -473,12 +472,10 @@ def _export_resume_file(attempt: ApplicationAttempt, fmt: str) -> str:
     payload = buf.getvalue()
     user = _attempt_user(attempt)
     try:
-        from ..storage_quota import check_storage_quota
+        from ..subscriptions import QuotaExceeded, check_storage_quota
 
         check_storage_quota(user, additional_bytes=len(payload))
     except Exception as exc:
-        from ..entitlements import QuotaExceeded
-
         if isinstance(exc, QuotaExceeded):
             logger.warning("storage quota blocked resume export attempt=%s: %s", attempt.id, exc)
             return ""
@@ -591,13 +588,12 @@ def _should_auto_submit(attempt: ApplicationAttempt, *, is_generic: bool, fill_o
 
 
 def _log_step(attempt: ApplicationAttempt, step_name: str, *, message: str = "", action_snapshot=None, network_log=None, screenshot_path: str = "") -> None:
-    ApplicationAttemptStep.objects.create(
-        attempt=attempt,
+    attempt.record_step(
         step_name=step_name[:64],
         message=message or "",
+        screenshot_path=screenshot_path or "",
         action_snapshot=action_snapshot,
         network_log=network_log or [],
-        screenshot_path=screenshot_path or "",
     )
 
 

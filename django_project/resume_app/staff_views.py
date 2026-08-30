@@ -9,8 +9,11 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
 
 from .account import is_email_verified
-from .entitlements import assign_plan, ensure_default_plans, get_or_create_subscription, subscription_summary
+from .subscriptions import assign_plan, ensure_default_plans, get_or_create_subscription, subscription_summary
 from .models import LLMAppUsageTotals, Plan
+
+import csv
+from django.http import HttpResponse
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -21,13 +24,22 @@ User = get_user_model()
 def staff_users_view(request):
     ensure_default_plans()
     query = (request.GET.get("q") or "").strip()
+    selected_plan = (request.GET.get("plan") or "").strip()
     show_inactive = request.GET.get("inactive") == "1"
+    export_csv = request.GET.get("export") == "csv"
+
     users = User.objects.all().order_by("-date_joined")
     if not show_inactive:
         users = users.filter(is_active=True)
     if query:
         users = users.filter(Q(username__icontains=query) | Q(email__icontains=query))
-    users = list(users[:100])
+    if selected_plan:
+        users = users.filter(subscription__plan__slug=selected_plan)
+
+    if not export_csv:
+        users = list(users[:100])
+    else:
+        users = list(users[:5000])
 
     rows = []
     for u in users:
@@ -52,12 +64,60 @@ def staff_users_view(request):
             }
         )
 
+    if export_csv:
+        response = HttpResponse(content_type="text/csv")
+        response["Content-Disposition"] = 'attachment; filename="resumeelite-users-export.csv"'
+        writer = csv.writer(response)
+        writer.writerow([
+            "User ID",
+            "Username",
+            "Email",
+            "Date Joined",
+            "Plan",
+            "Subscription Status",
+            "Email Verified",
+            "Is Active",
+            "Is Staff",
+            "LLM Requests Today",
+            "Searches Today",
+            "Applies Today",
+            "Storage (MB)",
+            "Lifetime Input Tokens",
+            "Lifetime Output Tokens",
+            "Lifetime Total Requests",
+        ])
+        for r in rows:
+            u = r["user"]
+            usg = r.get("usage") or {}
+            tok = r.get("tokens") or {}
+            stg = r.get("storage") or {}
+            writer.writerow([
+                u.pk,
+                u.username,
+                u.email or "",
+                u.date_joined.strftime("%Y-%m-%d %H:%M:%S") if u.date_joined else "",
+                r.get("plan_name") or r.get("plan_slug") or "",
+                r.get("sub_status") or "",
+                "Yes" if r.get("email_verified") else "No",
+                "Active" if u.is_active else "Suspended",
+                "Yes" if u.is_staff else "No",
+                usg.get("llm_requests", {}).get("used", 0),
+                usg.get("job_searches", {}).get("used", 0),
+                usg.get("apply_runs", {}).get("used", 0),
+                stg.get("used_mb", 0),
+                tok.get("input", 0),
+                tok.get("output", 0),
+                tok.get("requests", 0),
+            ])
+        return response
+
     return render(
         request,
         "resume_app/staff/users.html",
         {
             "rows": rows,
             "query": query,
+            "selected_plan": selected_plan,
             "show_inactive": show_inactive,
             "plans": list(Plan.objects.filter(is_active=True).order_by("sort_order")),
         },

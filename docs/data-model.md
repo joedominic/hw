@@ -14,6 +14,8 @@ Shared/global models:
 
 - `JobListing` - deduplicated external job catalog.
 - `JobDescription` - reusable job-description text for optimizer runs.
+- `SystemPromptProfile` - singleton system-wide prompt overrides (staff-managed).
+- `AtsJudgeProfile` - system-wide ATS judge prompt sets (`owner=null`; legacy per-user rows ignored).
 
 Per-user models include:
 
@@ -28,7 +30,6 @@ Per-user models include:
 - `JobMatchResult`
 - `JobSearchTask`
 - `OptimizerWorkflow`
-- `AtsJudgeProfile`
 - `LLMProviderConfig`
 - `LLMUsageByModel`
 - `LLMUsageByQuery`
@@ -37,10 +38,19 @@ Per-user models include:
 
 Per-user singleton-style models include:
 
-- `UserPromptProfile`
 - `AppAutomationSettings`
 - `ApplicantProfile`
 - `LLMAppUsageTotals`
+- `UserExperienceSettings` (experience mode, onboarding, `email_verified_at`, `pending_email`)
+- `UserPromptProfile` (legacy; unused at runtime)
+
+### SaaS Plans And Access
+
+- `Plan` - commercial tiers with daily quotas and `api_access`.
+- `Subscription` - per-user plan binding + Stripe IDs/status.
+- `UsageCounter` - durable per-day metric ledger.
+- `CustomerApiKey` - hashed bearer tokens for the JSON API.
+- `StripeWebhookEvent` - webhook idempotency log.
 
 Indirectly scoped models:
 
@@ -55,7 +65,7 @@ Indirectly scoped models:
 
 ### Identity And Staff
 
-- `User` is Django's built-in auth user.
+- `User` is Django's built-in auth user. Non-blank `email` values are unique at the database level (partial unique index `auth_user_email_uniq` from migration `0025`); emails are normalized to lowercase on save. Duplicate historical emails are cleared on the weaker accounts during that migration.
 - `ImpersonationAuditLog` records staff hijack sessions, including hijacker, target, IP, reason, and end time.
 - New users are seeded through `onboarding.py`.
 
@@ -64,14 +74,14 @@ Indirectly scoped models:
 - `Track` separates job-search contexts.
 - `UserResume` stores uploaded PDFs and may be tied to a track.
 - `ResumeChunk` stores parsed resume text and embeddings for retrieval.
-- `OptimizedResume` stores optimization status, generated content, scores, token usage, cover letter, and links to the source resume, job description, workflow, and optional pipeline entry.
+- `OptimizedResume` stores optimization status, generated content, scores, token usage, cover letter, and links to the source resume, job description, workflow, and optional pipeline entry. `optimizer_context_snapshot` (JSON) records the last run's char budgets for writer/judge JD and resume fields (from `optimizer_context_budget`).
 - `AgentLog` records optimizer step output.
 
 ### Prompts And Workflows
 
-- `UserPromptProfile` stores user-custom prompt text.
-- `AtsJudgeProfile` stores reusable ATS judge prompt sets.
-- `OptimizerWorkflow` stores configurable optimization steps and thresholds.
+- `SystemPromptProfile` stores the single admin-managed prompt set (empty fields → `prompts.py` defaults).
+- `AtsJudgeProfile` stores reusable ATS judge prompt sets (global `owner=null` rows).
+- `OptimizerWorkflow` stores configurable optimization step lists (system-wide when `owner` is null; staff-managed). Iteration/score fields remain for API compatibility but the default graph does not auto-loop to Writer.
 
 ### LLM Configuration And Usage
 
@@ -79,7 +89,7 @@ Indirectly scoped models:
 - `LLMProviderPreference` stores ordered provider/model candidates and optional RPM/TPM limits.
 - `LLMAppUsageTotals`, `LLMUsageByModel`, and `LLMUsageByQuery` track usage.
 
-LLM calls should go through `llm_gateway.py` so usage, rate limits, provider preferences, and user stop controls are honored.
+LLM calls should go through `llm_gateway.py` (or `llm_policy` for browser-use) so usage, request/token quotas, rate limits, provider preferences, and user stop controls are honored. Daily token usage is stored in `UsageCounter` with metric `llm_tokens`. Lifetime analytics live in `LLMAppUsageTotals` / `LLMUsageByModel` / `LLMUsageByQuery`. See [`resume_app/docs/LLM_GATEWAY.md`](../django_project/resume_app/docs/LLM_GATEWAY.md).
 
 ### Job Search And Pipeline
 

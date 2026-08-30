@@ -22,7 +22,7 @@ from .jobs_api import (
     jobs_like as api_jobs_like,
     jobs_save as api_jobs_save,
 )
-from .llm_session import get_active_llm_provider
+from .llm import get_active_llm_provider
 from .models import OptimizedResume, PipelineEntry, Track
 from .tasks import _resolve_user_resume_for_track
 from .prompt_store import get_effective_prompts
@@ -129,6 +129,10 @@ def _apply_save_action(entry: PipelineEntry | None, board_stage: str, request) -
         return
     if board_stage == "pipeline":
         entry.move_to_vetting(save=True)
+        from .domain.event_bus import event_bus
+        from .domain.events import JobPromotedToVetting
+
+        event_bus.publish(JobPromotedToVetting(user_id=request.user.id, entry_id=entry.id, track=entry.track))
         try:
             from .tasks import evaluate_vetting_matching_task
 
@@ -151,8 +155,16 @@ def _apply_save_action(entry: PipelineEntry | None, board_stage: str, request) -
             pass
     elif board_stage == "vetting":
         entry.move_to_applying(save=True)
+        from .domain.event_bus import event_bus
+        from .domain.events import JobPromotedToApplying
+
+        event_bus.publish(JobPromotedToApplying(user_id=request.user.id, entry_id=entry.id, track=entry.track))
     elif board_stage == "applying":
         entry.mark_done(save=True)
+        from .domain.event_bus import event_bus
+        from .domain.events import JobMarkedApplied
+
+        event_bus.publish(JobMarkedApplied(user_id=request.user.id, entry_id=entry.id, track=entry.track))
     # done: favourites only; stage unchanged
 
 
@@ -199,6 +211,13 @@ def pipeline_board_view(request, board_stage: str):
             },
         )
 
+    if not power_user and board_stage in ("vetting", "applying", "done"):
+        show_advanced_board_filters = False
+        show_pipeline_track_tabs = False
+    else:
+        show_advanced_board_filters = True
+        show_pipeline_track_tabs = True
+
     tracks_qs = Track.ensure_baseline(user)
     pipeline_track_tabs = pipeline_track_tabs_for_board(user, power_user=power_user)
     board_track_slugs = {t["slug"] for t in pipeline_track_tabs}
@@ -234,18 +253,6 @@ def pipeline_board_view(request, board_stage: str):
             if board_stage != "applying":
                 messages.info(request, "The apply agent can only be started from the Applying board.")
                 return redirect(next_url)
-            if not selected_ids:
-                messages.info(request, "Select at least one job before starting the apply agent.")
-                return redirect(next_url)
-            from .models import ApplicantProfile
-
-            profile = ApplicantProfile.get_for_user(user)
-            if not (profile.full_name and profile.email):
-                messages.error(
-                    request,
-                    "Set your name and email on the Apply Agent profile page before starting.",
-                )
-                return redirect(next_url)
             entry_ids: list[int] = []
             for jid in selected_ids:
                 try:
@@ -260,28 +267,44 @@ def pipeline_board_view(request, board_stage: str):
                 ).first()
                 if entry:
                     entry_ids.append(entry.id)
-            if entry_ids:
-                from .apply_agent import orchestrator
-                from .tasks import run_apply_agent_step
 
-                attempts = orchestrator.start_attempts_for_entries(entry_ids, user_id=user.id)
-                for attempt in attempts:
-                    run_apply_agent_step(user.id, attempt.id)
-                if attempts:
+            from .application.apply_services import ApplyApplicationService
+
+            result = ApplyApplicationService.start_attempts_for_jobs(user, entry_ids)
+            if result.success:
+                if result.started_attempts:
                     messages.success(
                         request,
-                        f"Started the apply agent for {len(attempts)} job(s). Track progress on the Apply Agent page.",
+                        f"Started the apply agent for {len(result.started_attempts)} job(s). Track progress on the Apply Agent page.",
                     )
                 else:
-                    messages.info(request, "Those jobs already have an apply attempt in progress.")
+                    messages.info(request, result.message)
+            else:
+                messages.error(request, result.message)
             return redirect(next_url)
 
-        if action in {"bulk_delete", "bulk_like", "bulk_dislike"}:
+        if action in {"bulk_delete", "bulk_like", "bulk_dislike", "bulk_promote"}:
             if not selected_ids:
                 messages.info(request, "Select at least one job before running a bulk action.")
                 return redirect(next_url)
             success_count = 0
-            if action == "bulk_delete":
+            if action == "bulk_promote":
+                for jid in selected_ids:
+                    try:
+                        jid_int = int(jid)
+                    except (ValueError, TypeError):
+                        continue
+                    entries = PipelineEntry.objects.for_user(user).filter(
+                        job_listing_id=jid_int,
+                        track=track_from_form,
+                        removed_at__isnull=True,
+                    )
+                    for entry in entries:
+                        _apply_save_action(entry, board_stage, request)
+                        success_count += 1
+                if success_count:
+                    messages.success(request, f"Promoted {success_count} job(s) to the next stage.")
+            elif action == "bulk_delete":
                 for jid in selected_ids:
                     try:
                         jid_int = int(jid)
@@ -409,6 +432,10 @@ def pipeline_board_view(request, board_stage: str):
     except ValueError:
         pref_max = None
 
+    age_days_raw = (request.GET.get("age_days") or "").strip()
+    raw_sort = (request.GET.get("sort_by") or request.GET.get("sort") or "latest").strip().lower()
+    sort_by = raw_sort if raw_sort in ("latest", "newest", "match", "focus", "interview", "preference", "oldest") else "latest"
+
     pipeline_jobs = list(pipeline_jobs_full)
     if source_filter:
         pipeline_jobs = [j for j in pipeline_jobs if j.source == source_filter]
@@ -425,6 +452,56 @@ def pipeline_board_view(request, board_stage: str):
             return True
 
         pipeline_jobs = [j for j in pipeline_jobs if _pref_in_range(j)]
+
+    if age_days_raw:
+        try:
+            max_age_days = int(age_days_raw)
+            from django.utils import timezone
+            now = timezone.now()
+            filtered_jobs = []
+            for j in pipeline_jobs:
+                job_date = j.posted_at or j.fetched_at
+                if job_date:
+                    diff = now - job_date
+                    if diff.days <= max_age_days:
+                        filtered_jobs.append(j)
+                else:
+                    filtered_jobs.append(j)
+            pipeline_jobs = filtered_jobs
+        except ValueError:
+            pass
+
+    # Sort the final pipeline_jobs list according to the selected criterion
+    from django.utils import timezone
+    from datetime import datetime
+    def get_job_date(j):
+        return j.posted_at or j.fetched_at or datetime.min.replace(tzinfo=timezone.utc)
+
+    if sort_by in ("latest", "newest"):
+        pipeline_jobs.sort(key=get_job_date, reverse=True)
+    elif sort_by == "oldest":
+        pipeline_jobs.sort(key=get_job_date)
+    elif sort_by in ("match", "focus"):
+        def get_match_sort_key(j):
+            val = j.focus_percent_after_penalty if j.focus_percent_after_penalty is not None else j.focus_percent
+            has_val = val is not None
+            score = float(val) if has_val else -1.0
+            return (has_val, score, get_job_date(j))
+        pipeline_jobs.sort(key=get_match_sort_key, reverse=True)
+    elif sort_by == "preference":
+        def get_pref_sort_key(j):
+            val = j.preference_margin_percent
+            has_val = val is not None
+            score = float(val) if has_val else -9999.0
+            return (has_val, score, get_job_date(j))
+        pipeline_jobs.sort(key=get_pref_sort_key, reverse=True)
+    elif sort_by == "interview":
+        def get_interview_sort_key(j):
+            val = j.interview_probability
+            has_val = val is not None
+            score = int(val) if has_val else -1
+            return (has_val, score, get_job_date(j))
+        pipeline_jobs.sort(key=get_interview_sort_key, reverse=True)
 
     pipeline_count_before_text_search = len(pipeline_jobs)
 
@@ -449,7 +526,7 @@ def pipeline_board_view(request, board_stage: str):
         ]
 
     pipeline_has_active_filters = bool(
-        search_q or source_filter or pref_min_raw != "" or pref_max_raw != ""
+        search_q or source_filter or pref_min_raw != "" or pref_max_raw != "" or age_days_raw != "" or (sort_by not in ("latest", "newest"))
     )
 
     if board_stage in ("vetting", "applying"):
@@ -576,7 +653,7 @@ def pipeline_board_view(request, board_stage: str):
     pipeline_resume_llm_provider: str | None = None
     pipeline_resume_llm_configured = False
     if show_pipeline_resume_summary:
-        from .llm_services import LLM_PROVIDERS
+        from .llm import LLM_PROVIDERS
         from .models import LLMProviderConfig
         from .pipeline_llm_skill_extract import resolve_provider_api_key
 
@@ -596,7 +673,20 @@ def pipeline_board_view(request, board_stage: str):
         elif pipeline_resume_llm_providers:
             pipeline_resume_llm_provider = pipeline_resume_llm_providers[0]
 
+    from .models import JobListingAction, UserResume
+    from .track_actions import q_preference_embedding_track
+
+    liked_actions = JobListingAction.objects.for_user(user).filter(
+        action=JobListingAction.ActionType.LIKED,
+    )
+    liked_actions = liked_actions.filter(q_preference_embedding_track(raw_track, user))
+    missing_liked_jobs = not liked_actions.exists()
+
+    missing_library_resume = not UserResume.objects.for_user(user).filter(is_library=True).exists()
+
     context = {
+        "missing_liked_jobs": missing_liked_jobs,
+        "missing_library_resume": missing_library_resume,
         "pipeline_jobs": pipeline_jobs,
         "pipeline_track": raw_track,
         "pipeline_search_query": search_q if search_q else None,
@@ -605,6 +695,7 @@ def pipeline_board_view(request, board_stage: str):
         "pipeline_has_active_filters": pipeline_has_active_filters,
         "pipeline_source_options": pipeline_source_options,
         "pipeline_source_selected": source_filter,
+        "pipeline_sort_by": "latest" if sort_by in ("latest", "newest") else ("match" if sort_by in ("match", "focus") else sort_by),
         "pipeline_pref_min": pref_min_raw,
         "pipeline_pref_max": pref_max_raw,
         "pipeline_tracks": pipeline_track_tabs,

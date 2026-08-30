@@ -183,3 +183,99 @@ class GenerateInterviewPrepTests(TestCase):
         self.entry.refresh_from_db()
         self.assertTrue(self.entry.interview_prep)
         self.assertIsNotNone(self.entry.interview_prep_generated_at)
+
+
+class CoverLetterSizingAndExportTests(TestCase):
+    def setUp(self):
+        self.user = create_user("clexport")
+        self.job = JobListing.objects.create(
+            source="dice",
+            external_id="clexport-1",
+            title="Lead Engineer",
+            company_name="Innovate Corp",
+            description="Need Python and cloud architect.",
+            url="https://example.com/job/1",
+        )
+        self.entry = PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=self.job,
+            track="ic",
+            stage=PipelineEntry.Stage.APPLYING,
+        )
+        self.jd = JobDescription.objects.create(content="Need Python.")
+        self.resume = UserResume.objects.create(
+            owner=self.user, file="r.pdf", original_filename="r.pdf", track="ic", is_library=True
+        )
+        self.opt = OptimizedResume.objects.create(
+            owner=self.user,
+            original_resume=self.resume,
+            job_description=self.jd,
+            optimized_content="Tailored resume for Innovate Corp.",
+            status=OptimizedResume.STATUS_COMPLETED,
+            pipeline_entry=self.entry,
+            cover_letter="Dear Innovate Corp Team,\n\nI am writing to express my strong interest in the Lead Engineer position.\n\nSincerely,\nCandidate",
+        )
+
+    @patch("resume_app.job_prep._llm_invoke_with_retry")
+    def test_generate_cover_letter_with_length_short(self, mock_invoke):
+        mock_invoke.return_value = MagicMock(content="Short punchy cover letter.")
+        letter, prompt = generate_cover_letter(self.opt, llm=MagicMock(), length="short")
+        self.assertEqual(letter, "Short punchy cover letter.")
+        self.assertIn("Keep the cover letter short", prompt)
+
+    @patch("resume_app.job_prep._llm_invoke_with_retry")
+    def test_generate_cover_letter_with_length_detailed(self, mock_invoke):
+        mock_invoke.return_value = MagicMock(content="Detailed cover letter.")
+        letter, prompt = generate_cover_letter(self.opt, llm=MagicMock(), length="detailed")
+        self.assertEqual(letter, "Detailed cover letter.")
+        self.assertIn("In-depth, comprehensive cover letter", prompt)
+
+    @patch("resume_app.job_prep._llm_invoke_with_retry")
+    def test_generate_cover_letter_shorter_references_existing_draft(self, mock_invoke):
+        mock_invoke.return_value = MagicMock(content="Condensed letter.")
+        letter, prompt = generate_cover_letter(self.opt, llm=MagicMock(), length="shorter")
+        self.assertEqual(letter, "Condensed letter.")
+        self.assertIn("Current Draft Cover Letter to scale:", prompt)
+        self.assertIn("Condense and shorten", prompt)
+
+    def test_export_cover_letter_pdf_success(self):
+        from django.test import Client
+        client = Client()
+        client.force_login(self.user)
+
+        res = client.get(f"/api/resume/export/{self.opt.id}/cover-letter/pdf")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res["Content-Type"], "application/pdf")
+        self.assertIn("cover_letter", res["Content-Disposition"])
+        body = res.getvalue() if hasattr(res, "getvalue") else b"".join(res.streaming_content)
+        self.assertTrue(body.startswith(b"%PDF"))
+
+    def test_export_cover_letter_docx_success(self):
+        from django.test import Client
+        client = Client()
+        client.force_login(self.user)
+
+        res = client.get(f"/api/resume/export/{self.opt.id}/cover-letter/docx")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(
+            res["Content-Type"],
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        self.assertIn("cover_letter", res["Content-Disposition"])
+        body = res.getvalue() if hasattr(res, "getvalue") else b"".join(res.streaming_content)
+        self.assertTrue(len(body) > 100)
+
+    def test_export_cover_letter_missing_returns_404(self):
+        from django.test import Client
+        client = Client()
+        client.force_login(self.user)
+
+        self.opt.cover_letter = ""
+        self.opt.save(update_fields=["cover_letter"])
+
+        res_pdf = client.get(f"/api/resume/export/{self.opt.id}/cover-letter/pdf")
+        self.assertEqual(res_pdf.status_code, 404)
+
+        res_docx = client.get(f"/api/resume/export/{self.opt.id}/cover-letter/docx")
+        self.assertEqual(res_docx.status_code, 404)
+

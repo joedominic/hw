@@ -24,7 +24,7 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from django.conf import settings
 from django.utils import timezone
 
-from .job_sources import _parse_date_posted
+from ...job_sources import _parse_date_posted
 
 logger = logging.getLogger(__name__)
 
@@ -684,7 +684,7 @@ def enrich_levels_job_listing_description(job, *, timeout_seconds: float = 15.0)
     If ``job`` is a Levels.fyi listing with a short/empty description, fetch the
     full job-detail text, persist it, and return the enriched description.
     """
-    from .models import JobListing
+    from ...models import JobListing
 
     if not isinstance(job, JobListing):
         return ""

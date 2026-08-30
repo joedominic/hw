@@ -29,7 +29,10 @@ Before editing behavior, read:
 - Apply API: `django_project/resume_app/apply_api.py`
 - Background tasks: `django_project/resume_app/tasks.py`
 - Resume optimizer graph: `django_project/resume_app/agents.py`
-- LLM gateway: `django_project/resume_app/llm_gateway.py`
+- Optimizer context / token budgets: `django_project/resume_app/optimizer_budget.py`
+- Optimizer page detail: `django_project/resume_app/docs/OPTIMIZER_PAGE.md`
+- LLM gateway / policy: `django_project/resume_app/llm_gateway.py`, `django_project/resume_app/llm_policy.py`
+- LLM gateway detail: `django_project/resume_app/docs/LLM_GATEWAY.md`
 - Apply-agent orchestrator: `django_project/resume_app/apply_agent/orchestrator.py`
 
 ## Coding Rules To Preserve
@@ -38,7 +41,7 @@ Before editing behavior, read:
 - Keep user data owner-scoped with `for_user()` and `get_owned_or_404()`.
 - Treat `JobListing` as shared and put user state in owned related models.
 - Keep long-running work in Huey tasks with durable DB state.
-- Route LLM calls through `llm_gateway.py`.
+- Route LLM calls through `llm_gateway.py` (use `llm_policy.wrap_browser_use_llm` for browser-use). Follow `LLM_GATEWAY.md` for quotas, timeouts, and query labels.
 - Route apply automation through the apply-agent state machine.
 - Match existing Django templates, forms, views, Ninja routers, and model patterns before adding new abstractions.
 - Add or update tests when changing auth, tenancy, background work, LLM behavior, pipeline transitions, or apply-agent state.

@@ -1,21 +1,59 @@
 {% if not pipeline_jobs %}
-    <div class="text-sm text-slate-600">
+    <div class="rounded-2xl border border-dashed border-slate-200 bg-white p-8 text-center shadow-sm">
         {% if pipeline_search_query %}
-            <p class="mb-0">No jobs match "{{ pipeline_search_query }}". <a href="{{ empty_clear_url }}" class="font-medium text-concierge-slate underline">Clear search</a>{% if is_power_user %} to see up to {% firstof pipeline_count_before_text_search pipeline_total_count %} job(s) matching your source/pref filters{% endif %}.</p>
+            <div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-500">
+                <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            </div>
+            <h3 class="text-base font-semibold text-concierge-slate">No matching jobs found</h3>
+            <p class="mt-1 text-sm text-slate-500">No jobs in {{ board_stage_display }} match "{{ pipeline_search_query }}".</p>
+            <div class="mt-4">
+                <a href="{{ empty_clear_url }}" class="inline-flex items-center gap-1.5 rounded-concierge border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50">
+                    Clear search filter
+                </a>
+            </div>
         {% else %}
-            <p class="mb-1">{{ empty_message }}</p>
+            <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-soft text-brand">
+                {% if board_stage == "pipeline" %}
+                <svg class="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                {% elif board_stage == "vetting" %}
+                <svg class="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                {% elif board_stage == "applying" %}
+                <svg class="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                {% else %}
+                <svg class="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M5 13l4 4L19 7"/></svg>
+                {% endif %}
+            </div>
+            <h3 class="text-base font-bold text-concierge-slate">{{ board_stage_display }} is empty</h3>
+            <p class="mx-auto mt-1.5 max-w-md text-sm text-slate-600 leading-relaxed">
+                {{ empty_message }}
+            </p>
             {% if empty_help_list %}
-                <ul class="mb-0 list-disc pl-5 text-sm">
+                <ul class="mx-auto mt-3 max-w-md list-disc text-left pl-6 text-xs text-slate-500 space-y-1">
                     {% for item in empty_help_list %}
                         <li>{{ item }}</li>
                     {% endfor %}
                 </ul>
             {% endif %}
-            {% if not is_power_user and board_stage == "pipeline" %}
-                <p class="mt-3 mb-0">
-                    <a href="{% url 'jobs_search' %}" class="inline-flex items-center rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover">Find jobs</a>
-                </p>
-            {% endif %}
+            <div class="mt-6 flex flex-wrap items-center justify-center gap-3">
+                {% if board_stage == "pipeline" %}
+                    <a href="{% url 'jobs_search' %}" class="inline-flex items-center gap-2 rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                        Find jobs to add
+                    </a>
+                {% elif board_stage == "vetting" %}
+                    <a href="{% url 'pipeline' %}" class="inline-flex items-center gap-2 rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
+                        Go to Pipeline backlog
+                    </a>
+                {% elif board_stage == "applying" %}
+                    <a href="{% url 'vetting' %}" class="inline-flex items-center gap-2 rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
+                        Review jobs in Vetting
+                    </a>
+                {% else %}
+                    <a href="{% url 'pipeline' %}" class="inline-flex items-center gap-2 rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
+                        View active jobs
+                    </a>
+                {% endif %}
+            </div>
         {% endif %}
     </div>
 {% else %}
@@ -114,7 +152,11 @@
                                 {% include "resume_app/_pipeline_interview_badge.html" with j=j vetting_jd_min_chars=vetting_jd_min_chars %}
                             {% endif %}
                             {% if j.preference_margin_percent is not None %}
-                                <span class="rounded-full px-2 py-0.5 text-xs font-medium {% if j.preference_margin_percent < -3 %}bg-red-100 text-red-900{% elif j.preference_margin_percent > 3 %}bg-emerald-100 text-emerald-900{% else %}bg-slate-100 text-slate-700{% endif %}">Pref {{ j.preference_margin_percent }}%</span>
+                                <span class="rounded-full px-2 py-0.5 text-xs font-medium {% if j.preference_margin_percent < -3 %}bg-rose-100 text-rose-900 border border-rose-200{% elif j.preference_margin_percent > 3 %}bg-emerald-100 text-emerald-900 border border-emerald-200{% else %}bg-slate-100 text-slate-700 border border-slate-200{% endif %}"
+                                      title="Preference Margin: difference between liked vs disliked job signals (controls auto-promotion to Review).">Pref {% if j.preference_margin_percent > 0 %}+{% endif %}{{ j.preference_margin_percent }}%</span>
+                            {% elif stage_label == "pipeline" %}
+                                <span class="rounded-full bg-slate-50 border border-dashed border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-500"
+                                      title="Preference Margin: Neutral. Like (👍) or Dislike (👎) jobs in this track to train automated promotion to Review.">Pref: Neutral</span>
                             {% endif %}
                             {% if j.source_display or j.source %}
                                 <span class="rounded-full border border-brand/20 bg-brand-mist px-2 py-0.5 text-xs font-medium text-brand-ink" title="{{ j.source }}">{{ j.source_display|default:j.source }}</span>

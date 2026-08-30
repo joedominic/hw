@@ -673,7 +673,7 @@ def enrich_dice_job_listing_description(job, *, timeout_seconds: float = 15.0) -
     If ``job`` is a Dice listing with a short/empty description, fetch the full
     job-detail text, persist it, and return the enriched description.
     """
-    from .models import JobListing
+    from ...models import JobListing
 
     if not isinstance(job, JobListing):
         return ""

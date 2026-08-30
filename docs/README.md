@@ -6,7 +6,7 @@ This directory is the agent-facing knowledge base for the site. Start here befor
 
 ResumeElite is a Django application for managing a job search end to end:
 
-- Optimize resumes against job descriptions with a LangGraph writer/judge loop.
+- Optimize resumes against job descriptions with a LangGraph writer → ATS judge → Recruiter judge pipeline (single pass by default).
 - Search and rank jobs from external sources, then manage them through a pipeline.
 - Generate job prep artifacts such as cover letters and interview preparation.
 - Run scheduled search, vetting, cleanup, and apply-agent work through Huey.
@@ -22,6 +22,8 @@ ResumeElite is a Django application for managing a job search end to end:
 - [Operations](operations.md) - local setup, environment, workers, tests, and gotchas.
 - [Agent Guide](agent-guide.md) - conventions agents should follow when working in this repo.
 - [Docker Deployment](DOCKER.md) - container-specific operations.
+- Optimizer page detail: [`django_project/resume_app/docs/OPTIMIZER_PAGE.md`](../django_project/resume_app/docs/OPTIMIZER_PAGE.md) - context budgets, single-pass graph, hybrid local judges.
+- LLM gateway detail: [`django_project/resume_app/docs/LLM_GATEWAY.md`](../django_project/resume_app/docs/LLM_GATEWAY.md) - invoke path, quotas, rate limits, concurrency/timeouts, usage UI.
 
 ## Fast Orientation
 

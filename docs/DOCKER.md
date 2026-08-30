@@ -57,8 +57,9 @@ Set in `.env` before prod:
 - `DEBUG=False`
 - Strong `SECRET_KEY`
 - `ALLOWED_HOSTS` = your public hostname(s)
+- `MYSQL_DATABASE` / `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_HOST` / `MYSQL_PORT` (recommended; omit only for single-node SQLite demos)
 
-Serve `/media/` via a reverse proxy (nginx/Caddy). Django `urls.py` does not expose media in production.
+Serve `/media/` **through Django** (`serve_media_view` is owner-gated). Do **not** alias `MEDIA_ROOT` as static files in nginx/Caddy — that bypasses ACL. Optional S3 via `AWS_STORAGE_BUCKET_NAME`.
 
 ## Volumes
 
@@ -104,7 +105,7 @@ HUEY_REDIS_HOST=host.docker.internal
 - **web** enqueues tasks (optimize, job search, vetting, etc.) to Redis.
 - **huey** runs `run_huey` with 2 thread workers and the periodic scheduler.
 - Do **not** set `HUEY_IMMEDIATE=1` in Docker — tasks would run in the web process and periodic crons would not schedule.
-- Run **one** `huey` replica while using SQLite; multiple workers need PostgreSQL.
+- With **SQLite**, run **one** `huey` replica. With **MySQL** (`MYSQL_*` in `.env`), multiple web/huey workers are viable; still keep apply-agent browser concurrency low.
 
 Periodic tasks (require huey + Redis):
 
@@ -131,7 +132,7 @@ After `docker compose up --build`:
 |---------|--------|
 | Jobs stuck on “Queued” | `docker compose ps` — is **huey** running? Redis ping? |
 | `Connection refused` to Redis | `HUEY_REDIS_HOST`, firewall, bind address on Redis server |
-| `database is locked` | SQLite contention — reduce parallel Huey work or migrate to PostgreSQL |
+| `database is locked` | SQLite contention — set `MYSQL_*` in `.env` (MySQL/MariaDB) or reduce parallel Huey work |
 | `database disk image is malformed` | WAL files out of sync — stop web/huey, mount all three DB files in compose (see Volumes), recover from backup |
 | First job search slow | Model download — `hf_cache` volume persists `all-MiniLM-L6-v2` after first run |
 | Large image build | ~2–3 GB content (CPU torch + sentence-transformers on slim base) |
@@ -139,12 +140,12 @@ After `docker compose up --build`:
 ## Image notes
 
 - Base: `python:3.12-slim-bookworm`; CPU-only PyTorch from `download.pytorch.org/whl/cpu`
-- `playwright` / `altair` / `GitPython` omitted from `requirements.txt` (unused by the Django app)
+- `playwright` is in `requirements.txt` (apply-agent); install Chromium in the image via `playwright install`
 - Build context: repo root (`JobApp-Main/`)
 - Compose `env_file: .env` injects variables into the container environment (optional file; copy from `.env.example`)
 
 ## Follow-ups (not in v1)
 
-- PostgreSQL instead of SQLite for multi-worker / HA
+- Drop SQLite bind mounts from compose once `MYSQL_*` is standard for all environments
 - Redis AUTH/TLS for untrusted networks
 - Separate slim image without torch if embeddings move to a dedicated worker

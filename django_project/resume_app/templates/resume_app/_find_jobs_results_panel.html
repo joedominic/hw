@@ -17,32 +17,49 @@
             {% endif %}
         </div>
         {% if not show_favourites and not show_excluded and query and search_results %}
-        <div class="flex flex-wrap items-center gap-2 text-sm">
-            <a href="{{ jobs_search_url }}?view=results&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if selected_preset_id %}&preset={{ selected_preset_id }}{% endif %}&sort=focus{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}"
-               class="rounded-lg px-2.5 py-1 font-medium {% if sort_param == 'focus' %}bg-brand-mist text-brand-ink{% else %}text-slate-600 hover:bg-slate-50{% endif %}">Best match</a>
-            <a href="{{ jobs_search_url }}?view=results&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if selected_preset_id %}&preset={{ selected_preset_id }}{% endif %}&refresh=1{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}"
-               class="rounded-lg px-2.5 py-1 font-medium text-slate-600 hover:bg-slate-50">Refresh</a>
+        <div class="flex flex-wrap items-center gap-1.5 rounded-xl border border-slate-200/90 bg-white p-1 text-xs shadow-sm">
+            <span class="px-2 py-1 font-semibold uppercase tracking-wider text-slate-400 text-[10px]">Sort:</span>
+            <a href="{{ jobs_search_url }}?view=results&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if selected_preset_id %}&preset={{ selected_preset_id }}{% endif %}&sort=match{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}"
+               id="find-jobs-sort-match-btn"
+               data-sort-type="match"
+               class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-semibold transition-colors {% if sort_param == 'match' or sort_param == 'focus' %}bg-brand-mist text-brand-ink font-bold{% else %}text-slate-600 hover:bg-slate-50 hover:text-slate-900{% endif %}">
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
+                % Match
+            </a>
+            <a href="{{ jobs_search_url }}?view=results&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if selected_preset_id %}&preset={{ selected_preset_id }}{% endif %}&sort=latest{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}"
+               id="find-jobs-sort-latest-btn"
+               data-sort-type="latest"
+               class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-semibold transition-colors {% if sort_param == 'latest' or sort_param == 'freshness' %}bg-brand-mist text-brand-ink font-bold{% else %}text-slate-600 hover:bg-slate-50 hover:text-slate-900{% endif %}">
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Freshness
+            </a>
+            <a href="{{ jobs_search_url }}?view=results&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if selected_preset_id %}&preset={{ selected_preset_id }}{% endif %}&sort={{ sort_param }}&refresh=1{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}"
+               title="Re-query job sources and refresh results"
+               class="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-800">
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                Refresh
+            </a>
         </div>
         {% endif %}
     </div>
 
     <div class="flex flex-wrap items-center gap-1 rounded-2xl border border-slate-200/90 bg-white p-1 shadow-card">
         <a class="inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-semibold {% if not show_favourites and not show_excluded %}bg-brand-mist text-brand-ink{% else %}text-slate-500 hover:bg-slate-50 hover:text-slate-700{% endif %}"
-           href="{{ jobs_search_url }}?view=results&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if selected_preset_id %}&preset={{ selected_preset_id }}{% endif %}{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}">
+           href="{{ jobs_search_url }}?view=results&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if selected_preset_id %}&preset={{ selected_preset_id }}{% endif %}&sort={{ sort_param }}{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}">
             All results
             {% if search_results and search_results.total and not show_favourites and not show_excluded %}
             <span class="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-brand">{{ search_results.total }}</span>
             {% endif %}
         </a>
         <a class="inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-semibold {% if show_favourites %}bg-brand-mist text-brand-ink{% else %}text-slate-500 hover:bg-slate-50 hover:text-slate-700{% endif %}"
-           href="{{ jobs_search_url }}?view=favourites&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if selected_preset_id %}&preset={{ selected_preset_id }}{% endif %}{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}">
+           href="{{ jobs_search_url }}?view=favourites&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if selected_preset_id %}&preset={{ selected_preset_id }}{% endif %}&sort={{ sort_param }}{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}">
             Favourites
             {% if saved_results and saved_results.total %}
             <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{{ saved_results.total }}</span>
             {% endif %}
         </a>
         <a class="inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-semibold {% if show_excluded %}bg-brand-mist text-brand-ink{% else %}text-slate-500 hover:bg-slate-50 hover:text-slate-700{% endif %}"
-           href="{{ jobs_search_url }}?view=excluded&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if selected_preset_id %}&preset={{ selected_preset_id }}{% endif %}{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}">
+           href="{{ jobs_search_url }}?view=excluded&q={{ query|urlencode }}&location={{ location|urlencode }}&track={{ job_search_track }}&resume_id={{ selected_resume_id }}&min_score={{ min_score }}&results_wanted={{ results_wanted }}&llm_model={{ job_search_llm_model|default:''|urlencode }}{% if selected_preset_id %}&preset={{ selected_preset_id }}{% endif %}&sort={{ sort_param }}{% if preserved_site_query %}&{{ preserved_site_query }}{% endif %}">
             {% if is_power_user %}Excluded{% else %}Hidden{% endif %}
             {% if excluded_results and excluded_results.total %}
             <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">{{ excluded_results.total }}</span>

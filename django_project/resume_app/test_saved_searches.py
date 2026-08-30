@@ -284,7 +284,8 @@ class SavedJobSearchViewTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Working in saved search")
         self.assertContains(resp, "Unsaved changes")
-        self.assertContains(resp, "Save changes to Dallas SWE")
+        self.assertContains(resp, "Save changes")
+        self.assertContains(resp, "Dallas SWE")
         self.assertContains(resp, f'id="save-preset-id" value="{self.saved.id}"', html=False)
         self.assertNotContains(resp, "Save current search")
 

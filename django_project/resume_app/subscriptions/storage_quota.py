@@ -8,7 +8,7 @@ from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser
 
 from .entitlements import QuotaExceeded, get_user_plan, staff_bypasses_quotas
-from .media_access import (
+from ..media_access import (
     _dir_size_storage,
     _listdir,
     _read_json_media,
@@ -22,7 +22,7 @@ METRIC_STORAGE = "storage_bytes"
 
 def resume_storage_bytes(user: AbstractBaseUser) -> int:
     """Sum sizes of UserResume files for ``user``."""
-    from .models import UserResume
+    from ..models import UserResume
 
     total = 0
     for ur in UserResume.objects.for_user(user).only("file"):
@@ -45,7 +45,7 @@ def resume_storage_bytes(user: AbstractBaseUser) -> int:
 
 def apply_agent_storage_bytes(user: AbstractBaseUser) -> int:
     """Sum apply-agent screenshots and exported resumes for ``user``."""
-    from .models import ApplicationAttempt
+    from ..models import ApplicationAttempt
 
     total = 0
     attempt_ids = ApplicationAttempt.objects.filter(
@@ -60,7 +60,7 @@ def apply_agent_storage_bytes(user: AbstractBaseUser) -> int:
 
 def pipeline_extract_storage_bytes(user: AbstractBaseUser) -> int:
     """Sum pipeline_llm_extract run dirs owned by ``user`` (via run_meta.owner_id)."""
-    from .pipeline_llm_skill_extract import RUN_META_NAME
+    from ..pipeline_llm_skill_extract import RUN_META_NAME
 
     total = 0
     tracks, _ = _listdir("pipeline_llm_extract")

@@ -14,10 +14,6 @@
     {% include "resume_app/_concierge_messages.html" %}
 
     <div class="mb-6 flex flex-wrap gap-2 border-b border-slate-200 pb-1">
-        <a href="?tab=general"
-           class="rounded-t-concierge px-4 py-2 text-sm font-semibold {% if settings_tab == 'general' %}bg-white text-brand ring-1 ring-slate-200 ring-b-0{% else %}text-slate-600 hover:text-concierge-slate{% endif %}">
-            General
-        </a>
         <a href="?tab=account"
            class="rounded-t-concierge px-4 py-2 text-sm font-semibold {% if settings_tab == 'account' %}bg-white text-brand ring-1 ring-slate-200 ring-b-0{% else %}text-slate-600 hover:text-concierge-slate{% endif %}">
             Account
@@ -30,10 +26,6 @@
            class="rounded-t-concierge px-4 py-2 text-sm font-semibold {% if settings_tab == 'usage' %}bg-white text-brand ring-1 ring-slate-200 ring-b-0{% else %}text-slate-600 hover:text-concierge-slate{% endif %}">
             Usage
         </a>
-        <a href="?tab=candidate_context"
-           class="rounded-t-concierge px-4 py-2 text-sm font-semibold {% if settings_tab == 'candidate_context' %}bg-white text-brand ring-1 ring-slate-200 ring-b-0{% else %}text-slate-600 hover:text-concierge-slate{% endif %}">
-            Candidate Context
-        </a>
         <a href="?tab=replacements"
            class="rounded-t-concierge px-4 py-2 text-sm font-semibold {% if settings_tab == 'replacements' %}bg-white text-brand ring-1 ring-slate-200 ring-b-0{% else %}text-slate-600 hover:text-concierge-slate{% endif %}">
             Replacements
@@ -44,43 +36,7 @@
         </a>
     </div>
 
-    {% if settings_tab == 'general' %}
-    {% if request.user.is_staff %}
-    <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 class="text-lg font-semibold text-concierge-slate">Experience mode</h2>
-        <p class="mt-1 text-sm text-slate-600">
-            Staff-only. Normal users always see the Simple experience.
-            Advanced mode surfaces workflows, search automation, and denser operator tools.
-        </p>
-        <form method="post" class="mt-6 space-y-4">
-            {% csrf_token %}
-            <input type="hidden" name="action" value="save_experience_mode">
-            <div class="space-y-2">
-                <label class="flex cursor-pointer items-start gap-2 rounded-concierge border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50">
-                    <input type="radio" name="experience_mode" value="normal" class="mt-1"
-                           {% if experience_settings.experience_mode == 'normal' %}checked{% endif %}>
-                    <span><strong>Simple</strong> — job-seeker UI</span>
-                </label>
-                <label class="flex cursor-pointer items-start gap-2 rounded-concierge border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50">
-                    <input type="radio" name="experience_mode" value="power" class="mt-1"
-                           {% if experience_settings.experience_mode == 'power' %}checked{% endif %}>
-                    <span><strong>Advanced</strong> — workflows and automation tools</span>
-                </label>
-            </div>
-            <button type="submit" class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover">
-                Save experience mode
-            </button>
-        </form>
-    </div>
-    {% else %}
-    <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 class="text-lg font-semibold text-concierge-slate">Workspace</h2>
-        <p class="mt-1 text-sm text-slate-600">
-            Your account uses the standard job-search workspace. Use the tabs above for account and app settings.
-        </p>
-    </div>
-    {% endif %}
-    {% elif settings_tab == 'account' %}
+    {% if settings_tab == 'account' %}
     <div class="space-y-6">
         <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
             <h2 class="text-lg font-semibold text-concierge-slate">Email</h2>
@@ -218,50 +174,9 @@
             </form>
         </div>
     </div>
-    {% elif settings_tab == 'candidate_context' %}
-    <div class="space-y-6">
-        <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
-            <h2 class="text-lg font-semibold text-concierge-slate">Default optimizer supporting context</h2>
-            <p class="mt-1 text-sm text-slate-600">
-                Save default notes, skills JSON, and supplemental accomplishments to prefill the optimizer (stored in the database). Values from Step 2 are also saved there when you run or leave that step.
-            </p>
-            <form method="post" class="mt-6 space-y-4">
-                {% csrf_token %}
-                <input type="hidden" name="action" value="save_app_automation">
-                <div class="grid gap-4">
-                    <div>
-                        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="optimizer-notes">Notes</label>
-                        <textarea id="optimizer-notes" name="optimization_notes" rows="4"
-                                  class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
-                                  placeholder="e.g. Emphasize leadership, omit Company X">{{ optimizer_supporting_context.optimization_notes|default:'' }}</textarea>
-                        <p class="mt-2 text-xs text-slate-500">Use this for free-form guidance to the optimizer writer: tone, emphasis, exclusions, or how the resume should be tailored.</p>
-                    </div>
-                    <div>
-                        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="optimizer-skills">Pipeline / skills JSON</label>
-                        <textarea id="optimizer-skills" name="pipeline_skills_json" rows="4"
-                                  class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
-                                  placeholder='{"hard_skills":["python","aws"]}'>{{ optimizer_supporting_context.pipeline_skills_json|default:'' }}</textarea>
-                        <p class="mt-2 text-xs text-slate-500">Enter structured skill or qualification data the optimizer can use to surface relevant capabilities and match the resume to the target job.</p>
-                    </div>
-                    <div>
-                        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="optimizer-highlights">Supplemental accomplishments</label>
-                        <textarea id="optimizer-highlights" name="job_highlights" rows="4"
-                                  class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"
-                                  placeholder="List accomplishments you want the optimizer to weave into the resume">{{ optimizer_supporting_context.job_highlights|default:'' }}</textarea>
-                        <p class="mt-2 text-xs text-slate-500">Use this for your own accomplishments or impact statements the optimizer can introduce into the resume based on the target role.</p>
-                    </div>
-                </div>
-                <button type="submit" class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
-                    Save candidate context
-                </button>
-            </form>
-            <p class="mt-4 text-sm text-slate-500">
-                All fields are optional. Leave blank to skip that context on future runs, or enter values to use by default when the optimizer form fields are empty.
-            </p>
-        </div>
-    </div>
     {% elif settings_tab == 'usage' %}
     <div class="space-y-6">
+        {% if request.user.is_staff %}
         <form method="post" class="rounded-concierge border border-slate-200 bg-slate-50/80 p-4 flex flex-wrap items-center justify-between gap-3">
             {% csrf_token %}
             <input type="hidden" name="action" value="reset_llm_usage_stats">
@@ -273,18 +188,33 @@
                 Reset LLM usage stats
             </button>
         </form>
+        {% endif %}
         {% if app_automation.stop_llm_requests %}
         <div class="rounded-concierge border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
             <strong>Stop LLM requests</strong> is on. No provider calls will be made until you turn it off in LLM settings.
         </div>
         {% endif %}
         <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
-            <h2 class="text-lg font-semibold text-concierge-slate">Today’s plan limits</h2>
-            <p class="mt-1 text-sm text-slate-600">
-                Daily quotas for plan <strong>{{ daily_llm_quota.plan_name }}</strong>.
-                These are enforced before each gateway / apply-agent LLM call.
-                <a href="{% url 'billing' %}" class="font-medium text-brand hover:underline">View billing</a>
-            </p>
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-semibold text-concierge-slate">Today’s plan limits</h2>
+                    <p class="mt-1 text-sm text-slate-600">
+                        Daily quotas for plan <strong>{{ daily_llm_quota.plan_name }}</strong>.
+                        These limits are cumulative across all cloud LLM operations today and automatically reset at midnight.
+                        <a href="{% url 'billing' %}" class="font-medium text-brand hover:underline">View billing</a>
+                    </p>
+                </div>
+                <div class="flex items-center gap-2">
+                    <form method="post" class="inline">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="reset_today_quotas">
+                        <button type="submit" class="rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm"
+                                onclick="return confirm('Reset today\'s usage counters for {{ daily_llm_quota.plan_name }}? This will unblock new LLM calls immediately.');">
+                            Reset today’s quota
+                        </button>
+                    </form>
+                </div>
+            </div>
             <dl class="mt-4 grid gap-3 sm:grid-cols-2 text-sm">
                 <div class="rounded-concierge border border-slate-100 bg-slate-50 px-3 py-3">
                     <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">LLM requests today</dt>
@@ -306,6 +236,155 @@
                 </div>
             </dl>
         </div>
+
+        <!-- Daily usage history (past 30 days) -->
+        <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-semibold text-concierge-slate">Daily usage history (past 30 days)</h2>
+                    <p class="mt-1 text-sm text-slate-600">
+                        Tracks cumulative cloud LLM tokens, requests, job searches, and apply runs per calendar day. Click any day row to expand its breakdown by query, provider, and model.
+                    </p>
+                </div>
+            </div>
+            <div class="mt-4 overflow-x-auto">
+                <table class="min-w-full text-left text-sm border-separate border-spacing-0">
+                    <thead>
+                        <tr class="border-b border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-500 bg-slate-50/70">
+                            <th class="py-2.5 px-3 rounded-l-concierge">Date</th>
+                            <th class="py-2.5 px-3">LLM Tokens</th>
+                            <th class="py-2.5 px-3">LLM Requests</th>
+                            <th class="py-2.5 px-3">Job Searches</th>
+                            <th class="py-2.5 px-3">Apply Runs</th>
+                            <th class="py-2.5 px-3">Budget Status</th>
+                            <th class="py-2.5 px-3 rounded-r-concierge">Last Activity</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 font-mono text-xs">
+                        {% for row in daily_usage_rows %}
+                        <tr class="cursor-pointer hover:bg-slate-50/90 transition-colors {% if row.is_today %}bg-brand-mist/20{% endif %}"
+                            onclick="toggleDailyBreakdown('breakdown-{{ row.date|date:'Ymd' }}', this)"
+                            id="row-{{ row.date|date:'Ymd' }}">
+                            <td class="py-3 px-3 font-sans font-medium text-concierge-slate">
+                                <div class="flex items-center gap-2">
+                                    <svg class="chevron-icon h-3.5 w-3.5 text-slate-400 transition-transform duration-200 {% if row.is_today and row.has_breakdown %}rotate-90{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                                    </svg>
+                                    <span>{{ row.date_display }}</span>
+                                    {% if row.is_today %}<span class="ml-1 inline-flex items-center rounded-full bg-brand/10 px-1.5 py-0.2 text-[10px] font-semibold text-brand">Current</span>{% endif %}
+                                </div>
+                            </td>
+                            <td class="py-3 px-3 font-medium text-slate-800">
+                                <div class="flex flex-col gap-1">
+                                    <span class="tabular-nums font-semibold">{{ row.llm_tokens }} {% if row.token_limit %}<span class="text-slate-400 font-normal">/ {{ row.token_limit }}</span>{% endif %}</span>
+                                    {% if row.token_limit %}
+                                    <div class="w-28 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                                        <div class="h-full rounded-full {% if row.is_exceeded %}bg-red-500{% elif row.is_near_limit %}bg-amber-500{% else %}bg-brand{% endif %}" style="width: min({{ row.token_pct }}%, 100%)"></div>
+                                    </div>
+                                    {% endif %}
+                                </div>
+                            </td>
+                            <td class="py-3 px-3 tabular-nums text-slate-700">
+                                {{ row.llm_requests }} {% if row.request_limit %}<span class="text-slate-400 font-normal">/ {{ row.request_limit }}</span>{% endif %}
+                            </td>
+                            <td class="py-3 px-3 tabular-nums text-slate-700">{{ row.job_searches }}</td>
+                            <td class="py-3 px-3 tabular-nums text-slate-700">{{ row.apply_runs }}</td>
+                            <td class="py-3 px-3 font-sans">
+                                {% if not row.token_limit %}
+                                <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">Unlimited</span>
+                                {% elif row.is_exceeded %}
+                                <span class="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-800">Exceeded ({{ row.token_pct }}%)</span>
+                                {% elif row.is_near_limit %}
+                                <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">Near Limit ({{ row.token_pct }}%)</span>
+                                {% else %}
+                                <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">OK ({{ row.token_pct }}%)</span>
+                                {% endif %}
+                            </td>
+                            <td class="py-3 px-3 font-sans text-xs text-slate-500">
+                                {% if row.updated_at %}{{ row.updated_at|date:"M j, g:i a" }}{% else %}—{% endif %}
+                            </td>
+                        </tr>
+                        <!-- Collapsible Daily Breakdown Sub-row -->
+                        <tr id="breakdown-{{ row.date|date:'Ymd' }}" class="{% if not row.is_today or not row.has_breakdown %}hidden {% endif %}bg-slate-50/80 border-t border-b border-slate-200">
+                            <td colspan="7" class="p-3.5 pl-9">
+                                {% if row.breakdown_rows %}
+                                <div class="rounded-concierge border border-slate-200 bg-white p-3 shadow-xs">
+                                    <div class="flex items-center justify-between mb-2">
+                                        <h4 class="text-xs font-bold uppercase tracking-wider text-slate-600">
+                                            Breakdown for {{ row.date_display }} ({{ row.date|date:"M j, Y" }})
+                                        </h4>
+                                        <span class="text-[11px] text-slate-400">{{ row.breakdown_rows|length }} logical query type(s)</span>
+                                    </div>
+                                    <div class="overflow-x-auto">
+                                        <table class="min-w-full text-left text-xs font-mono">
+                                            <thead>
+                                                <tr class="border-b border-slate-100 font-sans text-[11px] font-semibold uppercase text-slate-400 bg-slate-50/50">
+                                                    <th class="py-1.5 px-2.5">LLM Query / Use-Case</th>
+                                                    <th class="py-1.5 px-2.5">Provider</th>
+                                                    <th class="py-1.5 px-2.5">Model</th>
+                                                    <th class="py-1.5 px-2.5 text-right">Requests</th>
+                                                    <th class="py-1.5 px-2.5 text-right">Tokens In</th>
+                                                    <th class="py-1.5 px-2.5 text-right">Tokens Out</th>
+                                                    <th class="py-1.5 px-2.5 text-right">Cache</th>
+                                                    <th class="py-1.5 px-2.5 text-right">Last Used</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody class="divide-y divide-slate-100">
+                                                {% for b in row.breakdown_rows %}
+                                                <tr class="hover:bg-slate-50/70">
+                                                    <td class="py-2 px-2.5 font-sans font-medium text-slate-800">{{ b.query_label }}</td>
+                                                    <td class="py-2 px-2.5 font-sans text-slate-600">{{ b.provider }}</td>
+                                                    <td class="py-2 px-2.5 text-slate-600 font-mono text-[11px]">{{ b.model_display }}</td>
+                                                    <td class="py-2 px-2.5 tabular-nums text-slate-800 font-semibold text-right">{{ b.request_count }}</td>
+                                                    <td class="py-2 px-2.5 tabular-nums text-slate-700 text-right">{{ b.sum_in }}</td>
+                                                    <td class="py-2 px-2.5 tabular-nums text-slate-700 text-right">{{ b.sum_out }}</td>
+                                                    <td class="py-2 px-2.5 tabular-nums text-slate-500 text-right">{{ b.sum_cached }}</td>
+                                                    <td class="py-2 px-2.5 font-sans text-slate-500 text-right">{{ b.last_used|date:"g:i a"|default:"—" }}</td>
+                                                </tr>
+                                                {% endfor %}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                                {% else %}
+                                <div class="rounded-concierge border border-dashed border-slate-200 bg-white/60 p-3 text-xs text-slate-500">
+                                    <span class="font-medium text-slate-600">Total for this day:</span> {{ row.llm_tokens }} tokens across {{ row.llm_requests }} request(s).
+                                    <span class="block mt-0.5 text-slate-400">Granular per-query tracking started with this update. All subsequent LLM operations will show their exact query type, provider, and model breakdowns here.</span>
+                                </div>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="7" class="py-4 text-center font-sans text-slate-500">No daily usage recorded yet.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <script>
+        function toggleDailyBreakdown(id, tr) {
+            var subRow = document.getElementById(id);
+            if (!subRow) return;
+            var isHidden = subRow.classList.contains("hidden");
+            if (isHidden) {
+                subRow.classList.remove("hidden");
+                if (tr) {
+                    var chevron = tr.querySelector(".chevron-icon");
+                    if (chevron) chevron.classList.add("rotate-90");
+                }
+            } else {
+                subRow.classList.add("hidden");
+                if (tr) {
+                    var chevron = tr.querySelector(".chevron-icon");
+                    if (chevron) chevron.classList.remove("rotate-90");
+                }
+            }
+        }
+        </script>
+
         <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
             <h2 class="text-lg font-semibold text-concierge-slate">Lifetime LLM usage (approximate)</h2>
             <p class="mt-1 text-sm text-slate-600">
@@ -331,86 +410,88 @@
                 </div>
             </dl>
         </div>
+        <details class="group rounded-concierge border border-slate-200 bg-white shadow-sm" id="usage-by-query-details">
+            <summary class="flex cursor-pointer list-none items-center justify-between p-6 [&::-webkit-details-marker]:hidden">
+                <div class="pr-4">
+                    <h2 class="text-lg font-semibold text-concierge-slate">By LLM query, provider, and model (Lifetime)</h2>
+                    <p class="mt-1 text-sm text-slate-600">Lifetime aggregates across all historical calls for each <strong>logical use-case</strong> (e.g. vetting match, optimizer writer) plus provider and model.</p>
+                </div>
+                <svg class="h-5 w-5 shrink-0 text-slate-400 transition group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            </summary>
+            <div class="border-t border-slate-100 p-6 pt-4 overflow-x-auto">
+                <table class="min-w-full text-left text-sm">
+                    <thead>
+                        <tr class="border-b border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            <th class="py-2 pr-4">LLM query</th>
+                            <th class="py-2 pr-4">Provider</th>
+                            <th class="py-2 pr-4">Model</th>
+                            <th class="py-2 pr-4">Requests</th>
+                            <th class="py-2 pr-4">Tokens in / out</th>
+                            <th class="py-2 pr-4">Cache tok</th>
+                            <th class="py-2">Last used</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in usage_by_query_rows %}
+                        <tr class="border-b border-slate-100">
+                            <td class="max-w-[14rem] py-2 pr-4" title="{{ row.query_kind }}">
+                                <span class="font-medium text-concierge-slate">{{ row.query_label }}</span>
+                            </td>
+                            <td class="py-2 pr-4">{{ row.provider }}</td>
+                            <td class="py-2 pr-4 font-mono text-xs">{{ row.model_display }}</td>
+                            <td class="py-2 pr-4">{{ row.request_count }}</td>
+                            <td class="py-2 pr-4">{{ row.sum_in }} / {{ row.sum_out }}</td>
+                            <td class="py-2 pr-4">{{ row.sum_cached }}</td>
+                            <td class="py-2 text-slate-600">{% if row.last_used %}{{ row.last_used }}{% else %}—{% endif %}</td>
+                        </tr>
+                        {% empty %}
+                        <tr><td colspan="7" class="py-4 text-slate-500">No per-query usage yet (metrics appear after gateway calls with a query label).</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </details>
+
+        {% if request.user.is_staff and tenant_usage_rows %}
         <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm overflow-x-auto">
-            <h2 class="text-lg font-semibold text-concierge-slate">By LLM query, provider, and model</h2>
-            <p class="mt-1 text-sm text-slate-600">Each row is one <strong>logical use-case</strong> (e.g. vetting match, optimizer writer) plus which provider and model handled the request. Calls that omit a label appear under <strong>Other / not labeled</strong>. Totals match gateway calls only.</p>
+            <h2 class="text-lg font-semibold text-concierge-slate">Usage by Tenant (Admins Only)</h2>
+            <p class="mt-1 text-sm text-slate-600">Lifetime LLM usage aggregated per tenant, split by local (Ollama Local or preferred local models) and remote (cloud APIs) execution.</p>
             <table class="mt-4 min-w-full text-left text-sm">
                 <thead>
                     <tr class="border-b border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        <th class="py-2 pr-4">LLM query</th>
-                        <th class="py-2 pr-4">Provider</th>
-                        <th class="py-2 pr-4">Model</th>
-                        <th class="py-2 pr-4">Requests</th>
-                        <th class="py-2 pr-4">Tokens in / out</th>
-                        <th class="py-2 pr-4">Cache tok</th>
-                        <th class="py-2">Last used</th>
+                        <th class="py-2 pr-4">Tenant</th>
+                        <th class="py-2 pr-4 text-center" colspan="3">Local Usage</th>
+                        <th class="py-2 pr-4 text-center" colspan="3">Remote Usage</th>
+                    </tr>
+                    <tr class="border-b border-slate-200 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                        <th class="py-1 pr-4">Username / Email</th>
+                        <th class="py-1 pr-2 text-right">Reqs</th>
+                        <th class="py-1 pr-2 text-right">Tokens In</th>
+                        <th class="py-1 pr-4 text-right">Tokens Out</th>
+                        <th class="py-1 pr-2 text-right">Reqs</th>
+                        <th class="py-1 pr-2 text-right">Tokens In</th>
+                        <th class="py-1 text-right">Tokens Out</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {% for row in usage_by_query_rows %}
-                    <tr class="border-b border-slate-100">
-                        <td class="max-w-[14rem] py-2 pr-4" title="{{ row.query_kind }}">
-                            <span class="font-medium text-concierge-slate">{{ row.query_label }}</span>
+                    {% for t_row in tenant_usage_rows %}
+                    <tr class="border-b border-slate-100 hover:bg-slate-50">
+                        <td class="py-2.5 pr-4">
+                            <span class="font-semibold text-concierge-slate">{{ t_row.username }}</span>
+                            {% if t_row.email %}<span class="block text-xs text-slate-500 font-normal">{{ t_row.email }}</span>{% endif %}
                         </td>
-                        <td class="py-2 pr-4">{{ row.provider }}</td>
-                        <td class="py-2 pr-4 font-mono text-xs">{{ row.model_display }}</td>
-                        <td class="py-2 pr-4">{{ row.request_count }}</td>
-                        <td class="py-2 pr-4">{{ row.sum_in }} / {{ row.sum_out }}</td>
-                        <td class="py-2 pr-4">{{ row.sum_cached }}</td>
-                        <td class="py-2 text-slate-600">{% if row.last_used %}{{ row.last_used }}{% else %}—{% endif %}</td>
+                        <td class="py-2.5 pr-2 text-right tabular-nums">{{ t_row.local_requests|default:0 }}</td>
+                        <td class="py-2.5 pr-2 text-right tabular-nums text-slate-600">{{ t_row.local_input_tokens|default:0 }}</td>
+                        <td class="py-2.5 pr-4 text-right tabular-nums text-slate-600">{{ t_row.local_output_tokens|default:0 }}</td>
+                        <td class="py-2.5 pr-2 text-right tabular-nums">{{ t_row.remote_requests|default:0 }}</td>
+                        <td class="py-2.5 pr-2 text-right tabular-nums text-slate-600">{{ t_row.remote_input_tokens|default:0 }}</td>
+                        <td class="py-2.5 text-right tabular-nums text-slate-600">{{ t_row.remote_output_tokens|default:0 }}</td>
                     </tr>
-                    {% empty %}
-                    <tr><td colspan="7" class="py-4 text-slate-500">No per-query usage yet (metrics appear after gateway calls with a query label).</td></tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
-        <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm overflow-x-auto">
-            <h2 class="text-lg font-semibold text-concierge-slate">Per provider / model</h2>
-            {% if usage_cooldown_error %}
-            <p class="mt-2 text-xs text-amber-800">Cooldown status unavailable (Redis not reachable from this process).</p>
-            {% endif %}
-            <table class="mt-4 min-w-full text-left text-sm">
-                <thead>
-                    <tr class="border-b border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        <th class="py-2 pr-4">Provider</th>
-                        <th class="py-2 pr-4">Model</th>
-                        <th class="py-2 pr-4">Priority</th>
-                        <th class="py-2 pr-4">Status</th>
-                        <th class="py-2 pr-4">Requests</th>
-                        <th class="py-2 pr-4">Tokens in / out</th>
-                        <th class="py-2 pr-4">Cache tok</th>
-                        <th class="py-2 pr-4">Avg / req</th>
-                        <th class="py-2">Last used</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for row in usage_rows %}
-                    <tr class="border-b border-slate-100">
-                        <td class="py-2 pr-4">{{ row.provider }}</td>
-                        <td class="py-2 pr-4 font-mono text-xs">{{ row.model_display }}</td>
-                        <td class="py-2 pr-4">{% if row.priority is not None %}{{ row.priority }}{% else %}—{% endif %}</td>
-                        <td class="py-2 pr-4">
-                            {% if row.on_ice %}
-                            <span class="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-900">On ice (~{{ row.cooldown_seconds }}s)</span>
-                            {% elif row.connected %}
-                            <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">Eligible</span>
-                            {% else %}
-                            <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700">Not connected</span>
-                            {% endif %}
-                        </td>
-                        <td class="py-2 pr-4">{{ row.request_count }}</td>
-                        <td class="py-2 pr-4">{{ row.sum_in }} / {{ row.sum_out }}</td>
-                        <td class="py-2 pr-4">{{ row.sum_cached }}</td>
-                        <td class="py-2 pr-4">{{ row.avg_tokens }}</td>
-                        <td class="py-2 text-slate-600">{% if row.last_used %}{{ row.last_used }}{% else %}—{% endif %}</td>
-                    </tr>
-                    {% empty %}
-                    <tr><td colspan="9" class="py-4 text-slate-500">No usage recorded yet.</td></tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
+        {% endif %}
     </div>
     {% elif settings_tab == 'replacements' %}
     <div class="space-y-6">
@@ -502,39 +583,29 @@
                 <div class="rounded-concierge border border-slate-100 bg-slate-50/50 p-4">
                     <h3 class="text-sm font-semibold text-concierge-slate">Cleanup Manager (scheduled daily)</h3>
                     <p class="mt-1 text-sm text-slate-600">
-                        The nightly Huey task removes duplicate rows across Pipeline, Vetting, and Applying, drops rows past the age you set below (per stage, by <strong>added date</strong>), then checks Applying URLs for closed postings. Use <strong>0</strong> to skip age cleanup for a stage.
+                        The nightly task de-dupes jobs across all search profiles (keeping the copy with the highest fit/match % and excluding Applied jobs), then removes jobs older than the retention period configured below (default 14 days / 2 weeks by <strong>added date</strong>). Use <strong>0</strong> to disable age-based removal.
                     </p>
-                    <div class="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <div class="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                         <div>
-                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="cleanup-pipeline-days">Pipeline retention (days)</label>
-                            <input type="number" id="cleanup-pipeline-days" name="cleanup_pipeline_retention_days" min="0" max="365"
-                                   value="{{ app_automation.cleanup_pipeline_retention_days }}"
+                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="cleanup-job-days">Job retention (days)</label>
+                            <input type="number" id="cleanup-job-days" name="cleanup_job_retention_days" min="0" max="365"
+                                   value="{{ app_automation.cleanup_job_retention_days|default:14 }}"
                                    class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                            <p class="mt-1 text-xs text-slate-500">Purges non-applied pipeline jobs older than this (default 14 days / 2 weeks).</p>
                         </div>
                         <div>
-                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="cleanup-vetting-days">Vetting retention (days)</label>
-                            <input type="number" id="cleanup-vetting-days" name="cleanup_vetting_retention_days" min="0" max="365"
-                                   value="{{ app_automation.cleanup_vetting_retention_days }}"
-                                   class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
-                        </div>
-                        <div>
-                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="cleanup-applying-days">Applying retention (days)</label>
-                            <input type="number" id="cleanup-applying-days" name="cleanup_applying_retention_days" min="0" max="365"
-                                   value="{{ app_automation.cleanup_applying_retention_days }}"
-                                   class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
-                        </div>
-                        <div>
-                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="cleanup-done-days">Done retention (days)</label>
+                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="cleanup-done-days">Applied (Done) retention (days)</label>
                             <input type="number" id="cleanup-done-days" name="cleanup_done_retention_days" min="0" max="365"
-                                   value="{{ app_automation.cleanup_done_retention_days }}"
+                                   value="{{ app_automation.cleanup_done_retention_days|default:0 }}"
                                    class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                            <p class="mt-1 text-xs text-slate-500">0 = Never delete jobs you have applied to.</p>
                         </div>
                         <div>
                             <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="cleanup-generated-resume-days">Optimizer resume copies (days)</label>
                             <input type="number" id="cleanup-generated-resume-days" name="cleanup_generated_resume_retention_days" min="0" max="365"
-                                   value="{{ app_automation.cleanup_generated_resume_retention_days }}"
+                                   value="{{ app_automation.cleanup_generated_resume_retention_days|default:7 }}"
                                    class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
-                            <p class="mt-1 text-xs text-slate-500">Ephemeral PDFs created per optimization run (not your library uploads). Purged daily and every 6 hours.</p>
+                            <p class="mt-1 text-xs text-slate-500">Ephemeral PDFs created per optimization run (not your master library).</p>
                         </div>
                     </div>
                 </div>

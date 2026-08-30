@@ -8,7 +8,7 @@ from resume_app import views as resume_views
 from resume_app import apply_views
 from resume_app.auth_views import AppLoginView, AppLogoutView, SignupView, landing_view, privacy_view, terms_view
 from resume_app import account_views
-from resume_app import billing_views
+from resume_app.subscriptions import views as billing_views
 from resume_app import staff_views
 from resume_app import onboarding_views
 from resume_app.api_keys import SessionOrApiKeyAuth

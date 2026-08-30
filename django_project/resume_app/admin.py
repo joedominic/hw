@@ -10,6 +10,7 @@ from .models import (
     LLMAppUsageTotals,
     LLMUsageByModel,
     LLMUsageByQuery,
+    LLMDailyUsageBreakdown,
     LLMProviderPreference,
     LLMProviderConfig,
     JobListing,
@@ -34,7 +35,9 @@ class PlanAdmin(admin.ModelAdmin):
     list_display = (
         "slug",
         "name",
+        "price_display",
         "llm_requests_per_day",
+        "llm_tokens_per_day",
         "job_searches_per_day",
         "apply_runs_per_day",
         "api_access",
@@ -108,6 +111,7 @@ class AppAutomationSettingsAdmin(admin.ModelAdmin):
         "vetting_to_applying_enabled",
         "vetting_interview_probability_min",
         "applying_optimizer_workflow",
+        "cleanup_job_retention_days",
         "cleanup_pipeline_retention_days",
         "cleanup_vetting_retention_days",
         "cleanup_applying_retention_days",
@@ -182,6 +186,21 @@ class LLMUsageByQueryAdmin(admin.ModelAdmin):
         "last_used_at",
     )
     list_filter = ("query_kind", "provider")
+
+
+@admin.register(LLMDailyUsageBreakdown)
+class LLMDailyUsageBreakdownAdmin(admin.ModelAdmin):
+    list_display = (
+        "period_date",
+        "query_kind",
+        "provider",
+        "model",
+        "request_count",
+        "sum_input_tokens",
+        "sum_output_tokens",
+        "last_used_at",
+    )
+    list_filter = ("period_date", "query_kind", "provider")
 
 
 @admin.register(JobListing)

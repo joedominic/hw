@@ -1,0 +1,379 @@
+{% extends "resume_app/base.html" %}
+{% block title %}Plan &amp; Quotas Management — ResumeElite Admin{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-6xl space-y-6">
+    {# Header #}
+    <div class="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 pb-5">
+        <div>
+            <div class="flex items-center gap-2">
+                <span class="rounded-md bg-brand-soft px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-brand-ink">Admin Control Center</span>
+                {% if stripe_enabled %}
+                <span class="inline-flex items-center gap-1.5 rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                    <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span> Stripe Connected
+                </span>
+                {% else %}
+                <span class="inline-flex items-center gap-1.5 rounded-md bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+                    <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span> Stripe Offline (Manual Plans)
+                </span>
+                {% endif %}
+            </div>
+            <h1 class="mt-2 text-2xl font-bold tracking-tight text-concierge-slate">Billing Plans &amp; Quotas</h1>
+            <p class="mt-1 text-sm text-slate-500">Configure commercial subscription tiers, daily quota ceilings, commercial pricing, and feature flags.</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <button type="button"
+                    onclick="document.getElementById('create-plan-modal').classList.remove('hidden')"
+                    class="inline-flex items-center gap-1.5 rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                Create New Plan
+            </button>
+        </div>
+    </div>
+
+    {% include "resume_app/_concierge_messages.html" %}
+
+    {# Stats Overview #}
+    <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div class="rounded-concierge border border-slate-200 bg-white p-4 shadow-sm">
+            <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Total Plans</p>
+            <p class="mt-1 text-2xl font-bold text-slate-800">{{ plans|length }}</p>
+            <p class="mt-1 text-xs text-slate-500">{{ active_plans_count }} active tiers</p>
+        </div>
+        <div class="rounded-concierge border border-slate-200 bg-white p-4 shadow-sm">
+            <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Total Subscribers</p>
+            <p class="mt-1 text-2xl font-bold text-slate-800">{{ total_subscribers }}</p>
+            <p class="mt-1 text-xs text-slate-500">Across all tenant accounts</p>
+        </div>
+        <div class="rounded-concierge border border-slate-200 bg-white p-4 shadow-sm">
+            <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Active Subscriptions</p>
+            <p class="mt-1 text-2xl font-bold text-emerald-600">{{ active_subscribers_count }}</p>
+            <p class="mt-1 text-xs text-slate-500">Paid &amp; trialing</p>
+        </div>
+        <div class="rounded-concierge border border-slate-200 bg-white p-4 shadow-sm">
+            <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Tenant Management</p>
+            <p class="mt-1 text-base font-semibold text-brand">
+                <a href="{% url 'staff_users' %}" class="hover:underline">Staff / Users →</a>
+            </p>
+            <p class="mt-1 text-xs text-slate-500">Inspect &amp; impersonate</p>
+        </div>
+    </div>
+
+    {# Plans List & Configuration #}
+    <div class="space-y-4">
+        <div class="flex items-center justify-between">
+            <h2 class="text-lg font-bold text-concierge-slate">Configured Commercial Plans</h2>
+            <span class="text-xs text-slate-500">Quotas set to <code class="rounded bg-slate-100 px-1 font-semibold text-slate-700">0</code> indicate <strong>Unlimited</strong>.</span>
+        </div>
+
+        {% for plan in plans %}
+        <div class="rounded-2xl border {% if plan.is_default %}border-brand/40 ring-1 ring-brand/20{% else %}border-slate-200{% endif %} bg-white p-6 shadow-card transition-all">
+            <form method="post" action="{% url 'billing' %}" class="space-y-5">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="save_plan">
+                <input type="hidden" name="plan_id" value="{{ plan.pk }}">
+
+                {# Top Row: Meta and Badges #}
+                <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
+                    <div class="flex flex-wrap items-center gap-3">
+                        <span class="flex h-8 w-8 items-center justify-center rounded-lg {% if plan.is_default %}bg-brand text-white{% else %}bg-slate-100 text-slate-700{% endif %} font-bold text-sm">
+                            {{ forloop.counter }}
+                        </span>
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <h3 class="text-base font-bold text-slate-900">{{ plan.name }}</h3>
+                                <code class="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">slug: {{ plan.slug }}</code>
+                                {% if plan.is_default %}
+                                <span class="rounded-full bg-brand-soft px-2.5 py-0.5 text-xs font-semibold text-brand-ink">Default Onboarding Plan</span>
+                                {% endif %}
+                                {% if not plan.is_active %}
+                                <span class="rounded-full bg-rose-50 px-2.5 py-0.5 text-xs font-semibold text-rose-700">Inactive</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2 text-sm text-slate-500">
+                        <span class="font-medium text-slate-700">{{ plan.subscriber_count }}</span> active tenant{{ plan.subscriber_count|pluralize }}
+                    </div>
+                </div>
+
+                {# Configuration Grid #}
+                <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500">Display Name</label>
+                        <input type="text" name="name" value="{{ plan.name }}" required
+                               class="mt-1 w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500">Price Display</label>
+                        <input type="text" name="price_display" value="{{ plan.price_display }}" placeholder="e.g. $29 / month"
+                               class="mt-1 w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500">Stripe Price ID</label>
+                        <input type="text" name="stripe_price_id" value="{{ plan.stripe_price_id }}" placeholder="e.g. price_1O..."
+                               class="mt-1 w-full rounded-concierge border border-slate-200 px-3 py-2 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500">Sort Order</label>
+                        <input type="number" name="sort_order" value="{{ plan.sort_order }}" min="0" max="999"
+                               class="mt-1 w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
+                    </div>
+                </div>
+
+                {# Description #}
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500">Description</label>
+                    <input type="text" name="description" value="{{ plan.description }}" placeholder="Summary of benefits for candidate checkout"
+                           class="mt-1 w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
+                </div>
+
+                {# Daily Quotas Ceilings #}
+                <div class="rounded-xl border border-slate-100 bg-slate-50/70 p-4">
+                    <p class="mb-3 text-xs font-bold uppercase tracking-wider text-slate-600">Daily Quota Ceilings &amp; Storage</p>
+                    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600">LLM Requests / Day</label>
+                            <input type="number" name="llm_requests_per_day" value="{{ plan.llm_requests_per_day }}" min="0"
+                                   class="mt-1 w-full rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm tabular-nums focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
+                            <span class="mt-0.5 block text-[10px] text-slate-400">0 = Unlimited</span>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600">LLM Tokens / Day</label>
+                            <input type="number" name="llm_tokens_per_day" value="{{ plan.llm_tokens_per_day }}" min="0" step="1000"
+                                   class="mt-1 w-full rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm tabular-nums focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
+                            <span class="mt-0.5 block text-[10px] text-slate-400">0 = Unlimited</span>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600">Job Searches / Day</label>
+                            <input type="number" name="job_searches_per_day" value="{{ plan.job_searches_per_day }}" min="0"
+                                   class="mt-1 w-full rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm tabular-nums focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
+                            <span class="mt-0.5 block text-[10px] text-slate-400">0 = Unlimited</span>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600">Apply Runs / Day</label>
+                            <input type="number" name="apply_runs_per_day" value="{{ plan.apply_runs_per_day }}" min="0"
+                                   class="mt-1 w-full rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm tabular-nums focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
+                            <span class="mt-0.5 block text-[10px] text-slate-400">0 = Unlimited</span>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-medium text-slate-600">Storage Limit (MB)</label>
+                            <input type="number" name="storage_mb" value="{{ plan.storage_mb }}" min="0" step="50"
+                                   class="mt-1 w-full rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm tabular-nums focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
+                            <span class="mt-0.5 block text-[10px] text-slate-400">0 = Unlimited</span>
+                        </div>
+                    </div>
+                </div>
+
+                {# Flags & Actions Row #}
+                <div class="flex flex-wrap items-center justify-between gap-4 pt-2">
+                    <div class="flex flex-wrap items-center gap-5 text-sm">
+                        <label class="inline-flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" name="api_access" value="1" {% if plan.api_access %}checked{% endif %}
+                                   class="h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand">
+                            <span class="text-xs font-medium text-slate-700">Developer API Access</span>
+                        </label>
+
+                        <label class="inline-flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" name="is_default" value="1" {% if plan.is_default %}checked{% endif %}
+                                   class="h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand">
+                            <span class="text-xs font-medium text-slate-700">Set as Default Plan</span>
+                        </label>
+
+                        <label class="inline-flex items-center gap-2 cursor-pointer">
+                            <input type="checkbox" name="is_active" value="1" {% if plan.is_active %}checked{% endif %}
+                                   class="h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand">
+                            <span class="text-xs font-medium text-slate-700">Active Tier</span>
+                        </label>
+                    </div>
+
+                    <div class="flex items-center gap-2">
+                        <button type="submit"
+                                class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
+                            Save Changes
+                        </button>
+                    </div>
+                </div>
+            </form>
+        </div>
+        {% empty %}
+        <div class="rounded-2xl border border-slate-200 bg-white p-8 text-center text-slate-500">
+            No commercial plans configured.
+        </div>
+        {% endfor %}
+    </div>
+
+    {# Platform Telemetry & Recent Audit Activity #}
+    <div class="grid gap-6 lg:grid-cols-2">
+        {# Platform Token Telemetry #}
+        <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-card">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+                <h3 class="text-base font-bold text-concierge-slate">Platform Token Consumption</h3>
+                <span class="rounded-md bg-brand-soft px-2 py-0.5 text-xs font-semibold text-brand-ink">All Tenants</span>
+            </div>
+            <div class="mt-4 grid grid-cols-3 gap-3 text-center">
+                <div class="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                    <p class="text-[10px] font-semibold uppercase text-slate-400">Input Tokens</p>
+                    <p class="mt-1 text-lg font-bold tabular-nums text-slate-800">{{ platform_tokens.input|default:0 }}</p>
+                </div>
+                <div class="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                    <p class="text-[10px] font-semibold uppercase text-slate-400">Output Tokens</p>
+                    <p class="mt-1 text-lg font-bold tabular-nums text-slate-800">{{ platform_tokens.output|default:0 }}</p>
+                </div>
+                <div class="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                    <p class="text-[10px] font-semibold uppercase text-slate-400">API Requests</p>
+                    <p class="mt-1 text-lg font-bold tabular-nums text-slate-800">{{ platform_tokens.requests|default:0 }}</p>
+                </div>
+            </div>
+            <p class="mt-4 text-xs text-slate-500">
+                Lifetime token usage across all LLM inference operations (Optimizer tailoring, ATS matching, Vetting analysis).
+            </p>
+        </div>
+
+        {# Recent Tenant Subscriptions & Impersonation Log #}
+        <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-card">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+                <h3 class="text-base font-bold text-concierge-slate">Recent Support &amp; Audit Logs</h3>
+                <a href="{% url 'staff_users' %}" class="text-xs font-semibold text-brand hover:underline">View all users →</a>
+            </div>
+            <div class="mt-3 overflow-x-auto">
+                {% if recent_impersonations %}
+                <ul class="divide-y divide-slate-100 text-xs">
+                    {% for log in recent_impersonations %}
+                    <li class="py-2 flex items-center justify-between gap-2">
+                        <div>
+                            <span class="font-semibold text-slate-800">{{ log.hijacker.username }}</span>
+                            <span class="text-slate-400">impersonated</span>
+                            <span class="font-semibold text-brand">{{ log.target.username }}</span>
+                            {% if log.reason %}<span class="text-slate-500 italic block mt-0.5">"{{ log.reason }}"</span>{% endif %}
+                        </div>
+                        <span class="text-slate-400 shrink-0 whitespace-nowrap">{{ log.started_at|date:"M j, H:i" }}</span>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="py-4 text-center text-xs text-slate-400">No support impersonation sessions recorded yet.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    {# Create Plan Modal / Drawer #}
+    <div id="create-plan-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 hidden">
+        <div class="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-xl">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-4">
+                <h3 class="text-lg font-bold text-slate-900">Create New Commercial Plan</h3>
+                <button type="button"
+                        onclick="document.getElementById('create-plan-modal').classList.add('hidden')"
+                        class="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+
+            <form method="post" action="{% url 'billing' %}" class="mt-4 space-y-4">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="create_plan">
+
+                <div class="grid gap-4 sm:grid-cols-2">
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500">Plan Name *</label>
+                        <input type="text" name="name" required placeholder="e.g. Enterprise Tier"
+                               class="mt-1 w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500">Unique Slug *</label>
+                        <input type="text" name="slug" required placeholder="e.g. enterprise"
+                               class="mt-1 w-full rounded-concierge border border-slate-200 px-3 py-2 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
+                    </div>
+                </div>
+
+                <div class="grid gap-4 sm:grid-cols-2">
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500">Price Display</label>
+                        <input type="text" name="price_display" placeholder="e.g. $199 / month"
+                               class="mt-1 w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500">Stripe Price ID</label>
+                        <input type="text" name="stripe_price_id" placeholder="e.g. price_1O..."
+                               class="mt-1 w-full rounded-concierge border border-slate-200 px-3 py-2 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500">Description</label>
+                    <input type="text" name="description" placeholder="Summary of benefits"
+                           class="mt-1 w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
+                </div>
+
+                <div class="rounded-xl border border-slate-100 bg-slate-50 p-4">
+                    <p class="mb-2 text-xs font-bold uppercase tracking-wider text-slate-600">Daily Quotas (0 = Unlimited)</p>
+                    <div class="grid gap-3 sm:grid-cols-3">
+                        <div>
+                            <label class="block text-xs text-slate-600">LLM Requests / Day</label>
+                            <input type="number" name="llm_requests_per_day" value="100" min="0"
+                                   class="mt-1 w-full rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm tabular-nums">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-slate-600">LLM Tokens / Day</label>
+                            <input type="number" name="llm_tokens_per_day" value="500000" min="0" step="1000"
+                                   class="mt-1 w-full rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm tabular-nums">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-slate-600">Job Searches / Day</label>
+                            <input type="number" name="job_searches_per_day" value="50" min="0"
+                                   class="mt-1 w-full rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm tabular-nums">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-slate-600">Apply Runs / Day</label>
+                            <input type="number" name="apply_runs_per_day" value="20" min="0"
+                                   class="mt-1 w-full rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm tabular-nums">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-slate-600">Storage (MB)</label>
+                            <input type="number" name="storage_mb" value="1000" min="0" step="50"
+                                   class="mt-1 w-full rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm tabular-nums">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-slate-600">Sort Order</label>
+                            <input type="number" name="sort_order" value="50" min="0"
+                                   class="mt-1 w-full rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm tabular-nums">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-4 pt-2">
+                    <label class="inline-flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" name="api_access" value="1"
+                               class="h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand">
+                        <span class="text-xs font-medium text-slate-700">Developer API Access</span>
+                    </label>
+                    <label class="inline-flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" name="is_active" value="1" checked
+                               class="h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand">
+                        <span class="text-xs font-medium text-slate-700">Active Immediately</span>
+                    </label>
+                </div>
+
+                <div class="mt-5 flex justify-end gap-3 border-t border-slate-100 pt-4">
+                    <button type="button"
+                            onclick="document.getElementById('create-plan-modal').classList.add('hidden')"
+                            class="rounded-concierge border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50">
+                        Cancel
+                    </button>
+                    <button type="submit"
+                            class="rounded-concierge bg-brand px-5 py-2 text-sm font-semibold text-white hover:bg-brand-hover">
+                        Create Plan
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

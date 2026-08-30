@@ -5,13 +5,15 @@ from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
 from resume_app.api_keys import authenticate_api_key, generate_api_key, revoke_api_key
-from resume_app.billing import apply_stripe_event
+from resume_app.api_keys import authenticate_api_key, generate_api_key, revoke_api_key
+from resume_app.models import Plan
 from resume_app.crypto import decrypt_api_key, encrypt_api_key
-from resume_app.entitlements import (
+from resume_app.subscriptions import (
     METRIC_JOB_SEARCHES,
     METRIC_LLM_REQUESTS,
     METRIC_LLM_TOKENS,
     QuotaExceeded,
+    apply_stripe_event,
     assign_plan,
     check_quota,
     consume_quota,
@@ -79,7 +81,7 @@ class EntitlementQuotaTests(TestCase):
             consume_quota(self.user, METRIC_JOB_SEARCHES, 1)
 
     def test_past_due_falls_back_to_free_entitlements(self):
-        from resume_app.entitlements import get_or_create_subscription
+        from resume_app.subscriptions import get_or_create_subscription
         from resume_app.models import Subscription
 
         assign_plan(self.user, "pro")
@@ -123,7 +125,7 @@ class StripeWebhookTests(TestCase):
         assign_plan(self.user, "free")
 
     def test_checkout_completed_assigns_plan(self):
-        from resume_app.entitlements import get_or_create_subscription
+        from resume_app.subscriptions import get_or_create_subscription
 
         sub = get_or_create_subscription(self.user)
         sub.stripe_customer_id = "cus_test"
@@ -145,7 +147,7 @@ class StripeWebhookTests(TestCase):
         self.assertEqual(get_user_plan(self.user).slug, "pro")
 
     def test_payment_failed_sets_past_due(self):
-        from resume_app.entitlements import get_or_create_subscription
+        from resume_app.subscriptions import get_or_create_subscription
         from resume_app.models import Subscription
 
         assign_plan(self.user, "pro")
@@ -199,8 +201,7 @@ class StorageQuotaTests(TestCase):
     def test_upload_blocked_when_over_quota(self):
         from django.core.files.uploadedfile import SimpleUploadedFile
 
-        from resume_app.entitlements import QuotaExceeded
-        from resume_app.storage_quota import assert_upload_allowed, check_storage_quota
+        from resume_app.subscriptions import QuotaExceeded, assert_upload_allowed, check_storage_quota
 
         # Fill almost 1MB with a resume
         big = SimpleUploadedFile("big.pdf", b"x" * (900 * 1024), content_type="application/pdf")
@@ -220,7 +221,7 @@ class StorageQuotaTests(TestCase):
     def test_unlimited_plan_allows_large_upload(self):
         from django.core.files.uploadedfile import SimpleUploadedFile
 
-        from resume_app.storage_quota import assert_upload_allowed
+        from resume_app.subscriptions import assert_upload_allowed
 
         assign_plan(self.user, "unlimited")
         huge = SimpleUploadedFile("huge.pdf", b"z" * (2 * 1024 * 1024), content_type="application/pdf")
@@ -246,3 +247,96 @@ class BillingPageTests(TestCase):
         resp = client.get(reverse("billing"))
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Current plan")
+
+    def test_billing_page_loads_admin_console_for_staff(self):
+        ensure_default_plans()
+        admin = create_user("bill_admin")
+        admin.is_staff = True
+        admin.save()
+
+        client = Client()
+        login_client(client, admin)
+        resp = client.get(reverse("billing"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Admin Control Center")
+        self.assertContains(resp, "Billing Plans &amp; Quotas")
+        self.assertContains(resp, "Configured Commercial Plans")
+
+    def test_admin_can_update_plan_limits_and_pricing(self):
+        ensure_default_plans()
+        admin = create_user("bill_admin2")
+        admin.is_staff = True
+        admin.save()
+
+        free_plan = Plan.objects.get(slug="free")
+
+        client = Client()
+        login_client(client, admin)
+        resp = client.post(
+            reverse("billing"),
+            {
+                "action": "save_plan",
+                "plan_id": free_plan.pk,
+                "name": "Free Starter Plus",
+                "price_display": "$0 forever",
+                "description": "Updated starter plan",
+                "stripe_price_id": "price_free_test",
+                "llm_requests_per_day": "75",
+                "llm_tokens_per_day": "150000",
+                "job_searches_per_day": "35",
+                "apply_runs_per_day": "10",
+                "storage_mb": "300",
+                "sort_order": "5",
+                "is_active": "1",
+                "is_default": "1",
+            },
+        )
+        self.assertEqual(resp.status_code, 302)
+        free_plan.refresh_from_db()
+        self.assertEqual(free_plan.name, "Free Starter Plus")
+        self.assertEqual(free_plan.price_display, "$0 forever")
+        self.assertEqual(free_plan.llm_requests_per_day, 75)
+        self.assertEqual(free_plan.llm_tokens_per_day, 150000)
+        self.assertEqual(free_plan.job_searches_per_day, 35)
+        self.assertEqual(free_plan.apply_runs_per_day, 10)
+        self.assertEqual(free_plan.storage_mb, 300)
+
+        # Calling ensure_default_plans must NOT overwrite the admin's changes
+        ensure_default_plans()
+        free_plan.refresh_from_db()
+        self.assertEqual(free_plan.name, "Free Starter Plus")
+        self.assertEqual(free_plan.llm_requests_per_day, 75)
+
+    def test_admin_can_create_new_plan(self):
+        ensure_default_plans()
+        admin = create_user("bill_admin3")
+        admin.is_staff = True
+        admin.save()
+
+        client = Client()
+        login_client(client, admin)
+        resp = client.post(
+            reverse("billing"),
+            {
+                "action": "create_plan",
+                "name": "Enterprise Scale",
+                "slug": "enterprise",
+                "price_display": "$299 / month",
+                "description": "High scale corporate plan",
+                "stripe_price_id": "price_enterprise_live",
+                "llm_requests_per_day": "2000",
+                "llm_tokens_per_day": "5000000",
+                "job_searches_per_day": "1000",
+                "apply_runs_per_day": "200",
+                "storage_mb": "20000",
+                "sort_order": "40",
+                "api_access": "1",
+                "is_active": "1",
+            },
+        )
+        self.assertEqual(resp.status_code, 302)
+        enterprise = Plan.objects.get(slug="enterprise")
+        self.assertEqual(enterprise.name, "Enterprise Scale")
+        self.assertEqual(enterprise.price_display, "$299 / month")
+        self.assertEqual(enterprise.llm_requests_per_day, 2000)
+        self.assertEqual(enterprise.api_access, True)

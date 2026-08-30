@@ -53,6 +53,7 @@ from .jobs_api import (
 )
 from .pipeline_board import applying_view, done_view, pipeline_view, vetting_view
 from .models import (
+    ApplicationAttempt,
     JobListingAction,
     PipelineEntry,
     JobSearchTask,
@@ -76,7 +77,7 @@ from .huey_dashboard import (
     run_now_task_names,
 )
 from .prompt_store import get_effective_prompts, save_prompts_to_profile, clear_all_prompts_in_profile
-from .llm_session import (
+from .llm.session import (
     get_active_llm_provider as _get_active_llm_provider,
     get_provider_preferences as _get_provider_preferences,
     get_provider_preference_rows as _get_provider_preference_rows,
@@ -262,8 +263,8 @@ def optimizer_view(request):
     prefill_resume_id = None
     if job_id:
         from .models import JobListing
-        from .dice_client import enrich_dice_job_listing_description
-        from .levels_client import enrich_levels_job_listing_description
+        from .sourcing.clients.dice_client import enrich_dice_job_listing_description
+        from .sourcing.clients.levels_client import enrich_levels_job_listing_description
 
         try:
             job = JobListing.objects.get(id=int(job_id))
@@ -598,17 +599,16 @@ def settings_view(request):
         LLMUsageByQuery,
         Track,
     )
-    from .llm_gateway import USAGE_QUERY_LABELS
-    from .llm_rate_limit import get_llm_cooldown_ttl
+    from .llm import USAGE_QUERY_LABELS, get_llm, list_models_for_provider
+    from .llm.rate_limit import get_llm_cooldown_ttl
     from .crypto import decrypt_api_key
-    from .llm_factory import get_llm
-    from .llm_services import list_models_for_provider
     from langchain_core.messages import HumanMessage
 
-    active_provider = _get_active_llm_provider(request.user, request)
+    user = get_active_user(request)
+    active_provider = _get_active_llm_provider(user, request)
     provider_infos = []
     for p in sorted(LLM_PROVIDERS):
-        config = LLMProviderConfig.objects.for_user(request.user).filter(provider=p).first()
+        config = LLMProviderConfig.objects.for_user(user).filter(provider=p).first()
         provider_infos.append({
             "name": p,
             "key_stored": bool(config and config.encrypted_api_key),
@@ -628,10 +628,12 @@ def settings_view(request):
         if action == "save_experience_mode":
             from .experience import set_experience_mode
             from .models import UserExperienceSettings
+            from .tenancy import get_real_user
 
-            if not request.user.is_staff:
+            real_user = get_real_user(request)
+            if not getattr(real_user, "is_staff", False):
                 messages.error(request, "Experience mode is managed by admins.")
-                return redirect(reverse("settings") + "?tab=general")
+                return redirect(reverse("settings") + "?tab=account")
             mode = (request.POST.get("experience_mode") or "").strip().lower()
             if mode not in (
                 UserExperienceSettings.ExperienceMode.NORMAL,
@@ -639,13 +641,13 @@ def settings_view(request):
             ):
                 messages.error(request, "Invalid experience mode.")
             else:
-                set_experience_mode(request.user, mode)
+                set_experience_mode(user, mode)
                 label = "Advanced" if mode == UserExperienceSettings.ExperienceMode.POWER else "Simple"
                 messages.success(request, f"Experience mode set to {label}.")
-            return redirect(reverse("settings") + "?tab=general")
+            return redirect(reverse("settings") + "?tab=account")
         if action == "refresh_provider_models":
             cached: dict[str, list] = {}
-            for cfg in _get_provider_preferences(request.user):
+            for cfg in _get_provider_preferences(user):
                 if not cfg.encrypted_api_key:
                     continue
                 try:
@@ -663,29 +665,46 @@ def settings_view(request):
                 "Loaded model lists from providers. If a provider timed out, try again.",
             )
             return redirect(reverse("settings") + "?tab=llm")
+        if action == "reset_today_quotas":
+            from django.utils import timezone
+            from .models import UsageCounter, LLMDailyUsageBreakdown
+            today = timezone.localdate()
+            UsageCounter.objects.for_user(user).filter(period_date=today).delete()
+            LLMDailyUsageBreakdown.objects.for_user(user).filter(period_date=today).delete()
+            messages.success(
+                request,
+                f"Today's daily quota counters ({today.strftime('%b %d, %Y')}) were reset. You can now make new LLM calls.",
+            )
+            return redirect(reverse("settings") + "?tab=usage")
         if action == "reset_llm_usage_stats":
-            solo = LLMAppUsageTotals.get_for_user(request.user)
+            if not request.user.is_staff:
+                messages.error(request, "Permission denied.")
+                return redirect(reverse("settings") + "?tab=usage")
+            from .models import UsageCounter, LLMDailyUsageBreakdown
+            solo = LLMAppUsageTotals.get_for_user(user)
             LLMAppUsageTotals.objects.filter(pk=solo.pk).update(
                 total_input_tokens=0,
                 total_output_tokens=0,
                 total_requests=0,
                 total_estimated_invokes=0,
             )
-            LLMUsageByModel.objects.for_user(request.user).delete()
-            LLMUsageByQuery.objects.for_user(request.user).delete()
+            LLMUsageByModel.objects.for_user(user).delete()
+            LLMUsageByQuery.objects.for_user(user).delete()
+            UsageCounter.objects.for_user(user).delete()
+            LLMDailyUsageBreakdown.objects.for_user(user).delete()
             messages.success(
                 request,
-                "LLM usage totals and per-model / per-query counters were reset.",
+                "LLM usage totals, per-model / per-query counters, and daily quota ledgers were reset.",
             )
             return redirect(reverse("settings") + "?tab=usage")
         if action == "save_stop_llm_requests":
-            automation = AppAutomationSettings.get_for_user(request.user)
+            automation = AppAutomationSettings.get_for_user(user)
             automation.stop_llm_requests = bool(request.POST.get("stop_llm_requests"))
             automation.save(update_fields=["stop_llm_requests", "updated_at"])
             messages.success(request, "LLM safety settings saved.")
             return redirect(reverse("settings") + "?tab=llm")
         if action == "save_app_automation":
-            automation = AppAutomationSettings.get_for_user(request.user)
+            automation = AppAutomationSettings.get_for_user(user)
             automation.pipeline_to_vetting_enabled = bool(
                 request.POST.get("pipeline_to_vetting_enabled")
             )
@@ -714,7 +733,7 @@ def settings_view(request):
             if raw_wf:
                 from .prompt_store import get_optimizer_workflow_by_id
 
-                wf = get_optimizer_workflow_by_id(int(raw_wf), request.user) if raw_wf.isdigit() else None
+                wf = get_optimizer_workflow_by_id(int(raw_wf), user) if raw_wf.isdigit() else None
                 if wf is None:
                     messages.error(request, "Invalid optimizer workflow selection.")
                     return redirect(reverse("settings") + "?tab=app")
@@ -723,7 +742,7 @@ def settings_view(request):
                 automation.applying_optimizer_workflow = None
 
             _save_optimizer_supporting_context(
-                request.user,
+                user,
                 (request.POST.get("optimization_notes") or "").strip(),
                 (request.POST.get("pipeline_skills_json") or "").strip(),
                 (request.POST.get("job_highlights") or "").strip(),
@@ -739,17 +758,21 @@ def settings_view(request):
                     return None
                 return v
 
-            cp = _cleanup_days("cleanup_pipeline_retention_days")
-            cv = _cleanup_days("cleanup_vetting_retention_days")
-            ca = _cleanup_days("cleanup_applying_retention_days")
+            cjob = _cleanup_days("cleanup_job_retention_days")
+            if cjob is None:
+                cjob = 14
+            cp = _cleanup_days("cleanup_pipeline_retention_days") or cjob
+            cv = _cleanup_days("cleanup_vetting_retention_days") or cjob
+            ca = _cleanup_days("cleanup_applying_retention_days") or cjob
             cd = _cleanup_days("cleanup_done_retention_days")
             cg = _cleanup_days("cleanup_generated_resume_retention_days")
-            if cp is None or cv is None or ca is None or cd is None or cg is None:
+            if cd is None or cg is None:
                 messages.error(
                     request,
                     "Cleanup retention days must be whole numbers from 0 (off) through 365.",
                 )
                 return redirect(reverse("settings") + "?tab=app")
+            automation.cleanup_job_retention_days = cjob
             automation.cleanup_pipeline_retention_days = cp
             automation.cleanup_vetting_retention_days = cv
             automation.cleanup_applying_retention_days = ca
@@ -763,6 +786,7 @@ def settings_view(request):
                     "vetting_to_applying_enabled",
                     "vetting_interview_probability_min",
                     "applying_optimizer_workflow",
+                    "cleanup_job_retention_days",
                     "cleanup_pipeline_retention_days",
                     "cleanup_vetting_retention_days",
                     "cleanup_applying_retention_days",
@@ -779,7 +803,7 @@ def settings_view(request):
                 token = (request.POST.get(f"replacement_token_{i}") or "").strip()
                 value = (request.POST.get(f"replacement_value_{i}") or "").strip()
                 replacements.append({"token": token, "value": value})
-            automation = AppAutomationSettings.get_for_user(request.user)
+            automation = AppAutomationSettings.get_for_user(user)
             stored = automation.set_export_replacements(replacements)
             # Keep session mirror for in-flight tabs; DB is the source of truth.
             request.session["export_replacements"] = stored
@@ -794,7 +818,7 @@ def settings_view(request):
             include_done = bool(request.POST.get("dedupe_include_done"))
             try:
                 result = dedupe_pipeline_entries(
-                    user=request.user,
+                    user=user,
                     track_slug=track,
                     stage=stage,
                     include_done=include_done,
@@ -882,7 +906,7 @@ def settings_view(request):
                     messages.error(request, f"Priority for {provider} must be a whole number.")
                     return redirect(reverse("settings") + "?tab=llm")
                 cfg = (
-                    LLMProviderConfig.objects.for_user(request.user)
+                    LLMProviderConfig.objects.for_user(user)
                     .filter(provider=provider)
                     .exclude(encrypted_api_key="")
                     .first()
@@ -896,12 +920,12 @@ def settings_view(request):
                         if rid in remove_ids:
                             LLMProviderPreference.objects.filter(
                                 id=rid,
-                                provider_config__owner=request.user,
+                                provider_config__owner=user,
                             ).delete()
                             continue
                         pref_obj = LLMProviderPreference.objects.filter(
                             id=rid,
-                            provider_config__owner=request.user,
+                            provider_config__owner=user,
                         ).first()
                     except (TypeError, ValueError):
                         pref_obj = None
@@ -928,19 +952,19 @@ def settings_view(request):
             if remove_ids:
                 LLMProviderPreference.objects.filter(
                     id__in=remove_ids,
-                    provider_config__owner=request.user,
+                    provider_config__owner=user,
                 ).delete()
 
-            if AppAutomationSettings.get_for_user(request.user).stop_llm_requests:
+            if AppAutomationSettings.get_for_user(user).stop_llm_requests:
                 messages.info(request, "Skipped connectivity ping while Stop LLM requests is enabled.")
             for row in saved_rows:
                 cfg = row.provider_config
                 model = (row.model or cfg.default_model or "").strip()
-                if cfg.encrypted_api_key and model and not AppAutomationSettings.get_for_user(request.user).stop_llm_requests:
+                if cfg.encrypted_api_key and model and not AppAutomationSettings.get_for_user(user).stop_llm_requests:
                     try:
                         api_key_decrypted = decrypt_api_key(cfg.encrypted_api_key)
                         llm = get_llm(cfg.provider, api_key_decrypted, model=model)
-                        from .llm_gateway import log_llm_invoke
+                        from .llm import log_llm_invoke
 
                         log_llm_invoke(
                             cfg.provider,
@@ -981,17 +1005,17 @@ def settings_view(request):
                     messages.error(request, "Enter an API key before connecting.")
             else:
                 try:
-                    had_active_provider = bool(_get_active_llm_provider(request.user, request))
+                    had_active_provider = bool(_get_active_llm_provider(user, request))
                     api_llm_connect(request, ConnectRequest(provider=provider, api_key=api_key))
                     if not had_active_provider:
-                        _set_active_llm_provider(request.user, provider)
+                        _set_active_llm_provider(user, provider)
                         request.session["active_llm_provider"] = provider
                         request.session.modified = True
                     request.session.pop("settings_provider_models_map", None)
                     messages.success(request, f"API key for {provider} validated and saved.")
                     from .experience import mark_onboarding_step
 
-                    mark_onboarding_step(request.user, "llm")
+                    mark_onboarding_step(user, "llm")
                     return redirect(reverse("settings") + "?tab=llm")
                 except HttpError as e:
                     messages.error(request, str(e))
@@ -1001,18 +1025,18 @@ def settings_view(request):
             if not valid_connected:
                 messages.error(request, "Choose a connected provider.")
             else:
-                _set_active_llm_provider(request.user, provider)
+                _set_active_llm_provider(user, provider)
                 request.session["active_llm_provider"] = provider
                 request.session.modified = True
                 messages.success(request, f"{provider} is now the active provider.")
                 return redirect(reverse("settings") + "?tab=llm")
 
-    tab = (request.GET.get("tab") or "llm").strip().lower()
-    if tab not in ("llm", "app", "usage", "replacements", "candidate_context", "general", "account"):
-        tab = "llm"
-    provider_preference_list = list(_get_provider_preferences(request.user))
+    tab = (request.GET.get("tab") or "account").strip().lower()
+    if tab not in ("account", "llm", "usage", "replacements", "app"):
+        tab = "account"
+    provider_preference_list = list(_get_provider_preferences(user))
     connected_provider_names = [cfg.provider for cfg in provider_preference_list]
-    pref_rows = list(_get_provider_preference_rows(request.user).order_by("priority", "id"))
+    pref_rows = list(_get_provider_preference_rows(user).order_by("priority", "id"))
     if not pref_rows and connected_provider_names:
         for cfg in provider_preference_list:
             LLMProviderPreference.objects.create(
@@ -1020,7 +1044,7 @@ def settings_view(request):
                 model=cfg.default_model or "",
                 priority=cfg.priority,
             )
-        pref_rows = list(_get_provider_preference_rows(request.user).order_by("priority", "id"))
+        pref_rows = list(_get_provider_preference_rows(user).order_by("priority", "id"))
     raw_session_models = request.session.get("settings_provider_models_map")
     if not isinstance(raw_session_models, dict):
         models_cache: dict[str, list] = {}
@@ -1045,9 +1069,9 @@ def settings_view(request):
         if cfg.provider not in provider_models_map:
             provider_models_map[cfg.provider] = _models_for_settings_preferences(cfg.provider, cfg)
 
-    tracks_for_dedupe = list(Track.ensure_baseline(request.user))
-    usage_totals = LLMAppUsageTotals.get_for_user(request.user)
-    stats_map = {(r.provider, r.model): r for r in LLMUsageByModel.objects.for_user(request.user)}
+    tracks_for_dedupe = list(Track.ensure_baseline(user))
+    usage_totals = LLMAppUsageTotals.get_for_user(user)
+    stats_map = {(r.provider, r.model): r for r in LLMUsageByModel.objects.for_user(user)}
     usage_rows = []
     usage_cooldown_error = False
     pref_keys_seen = set()
@@ -1060,7 +1084,7 @@ def settings_view(request):
         pref_keys_seen.add((prov, mkey))
         ttl = None
         try:
-            ttl = get_llm_cooldown_ttl(prov, m_gl, user=request.user)
+            ttl = get_llm_cooldown_ttl(prov, m_gl, user=user)
         except Exception:
             usage_cooldown_error = True
         st = stats_map.get((prov, mkey))
@@ -1084,13 +1108,13 @@ def settings_view(request):
                 "avg_tokens": avg,
             }
         )
-    for st in LLMUsageByModel.objects.for_user(request.user).order_by("-last_used_at", "provider"):
+    for st in LLMUsageByModel.objects.for_user(user).order_by("-last_used_at", "provider"):
         if (st.provider, st.model) in pref_keys_seen:
             continue
         ttl = None
         m_gl = None if st.model == "__default__" else st.model
         try:
-            ttl = get_llm_cooldown_ttl(st.provider, m_gl, user=request.user)
+            ttl = get_llm_cooldown_ttl(st.provider, m_gl, user=user)
         except Exception:
             usage_cooldown_error = True
         rc = int(st.request_count)
@@ -1118,7 +1142,7 @@ def settings_view(request):
         )
 
     usage_by_query_rows = []
-    for r in LLMUsageByQuery.objects.for_user(request.user).order_by("query_kind", "provider", "model"):
+    for r in LLMUsageByQuery.objects.for_user(user).order_by("query_kind", "provider", "model"):
         qk = r.query_kind or ""
         usage_by_query_rows.append(
             {
@@ -1136,17 +1160,149 @@ def settings_view(request):
             }
         )
 
-    from .entitlements import METRIC_LLM_REQUESTS, METRIC_LLM_TOKENS, subscription_summary
+    from .subscriptions import METRIC_LLM_REQUESTS, METRIC_LLM_TOKENS, subscription_summary
+    from datetime import timedelta
+    from django.utils import timezone
+    from .models import UsageCounter
 
-    plan_usage = subscription_summary(request.user)
+    plan_usage = subscription_summary(user)
     daily_llm_quota = {
         "requests": plan_usage["usage"].get(METRIC_LLM_REQUESTS) or {},
         "tokens": plan_usage["usage"].get(METRIC_LLM_TOKENS) or {},
         "plan_name": plan_usage.get("plan_name") or "—",
     }
 
+    today_date = timezone.localdate()
+    start_date = today_date - timedelta(days=30)
+    counters = UsageCounter.objects.for_user(user).filter(period_date__gte=start_date).order_by("-period_date", "metric")
+    daily_map = {}
+    for c in counters:
+        d = c.period_date
+        if d not in daily_map:
+            daily_map[d] = {
+                "date": d,
+                "is_today": d == today_date,
+                "is_yesterday": d == (today_date - timedelta(days=1)),
+                "date_display": "Today" if d == today_date else ("Yesterday" if d == (today_date - timedelta(days=1)) else d.strftime("%b %d, %Y")),
+                "llm_tokens": 0,
+                "llm_requests": 0,
+                "job_searches": 0,
+                "apply_runs": 0,
+                "updated_at": c.updated_at,
+            }
+        if c.metric == METRIC_LLM_TOKENS:
+            daily_map[d]["llm_tokens"] = c.count
+        elif c.metric == METRIC_LLM_REQUESTS:
+            daily_map[d]["llm_requests"] = c.count
+        elif c.metric == "job_searches":
+            daily_map[d]["job_searches"] = c.count
+        elif c.metric == "apply_runs":
+            daily_map[d]["apply_runs"] = c.count
+        if c.updated_at and (not daily_map[d]["updated_at"] or c.updated_at > daily_map[d]["updated_at"]):
+            daily_map[d]["updated_at"] = c.updated_at
+
+    if today_date not in daily_map:
+        daily_map[today_date] = {
+            "date": today_date,
+            "is_today": True,
+            "is_yesterday": False,
+            "date_display": "Today",
+            "llm_tokens": 0,
+            "llm_requests": 0,
+            "job_searches": 0,
+            "apply_runs": 0,
+            "updated_at": None,
+        }
+
+    token_limit = daily_llm_quota["tokens"].get("limit") or 0
+    request_limit = daily_llm_quota["requests"].get("limit") or 0
+
+    from .models import LLMDailyUsageBreakdown
+    from collections import defaultdict
+
+    breakdowns = LLMDailyUsageBreakdown.objects.for_user(user).filter(
+        period_date__gte=start_date
+    ).order_by("-period_date", "query_kind", "provider", "model")
+
+    daily_breakdowns_map = defaultdict(list)
+    for b in breakdowns:
+        qk = b.query_kind or ""
+        daily_breakdowns_map[b.period_date].append({
+            "query_kind": qk,
+            "query_label": USAGE_QUERY_LABELS.get(qk, qk.replace("_", " ").title() if qk else "—"),
+            "provider": b.provider,
+            "model_display": b.model if b.model != "__default__" else "(default)",
+            "request_count": int(b.request_count),
+            "sum_in": int(b.sum_input_tokens),
+            "sum_out": int(b.sum_output_tokens),
+            "sum_cached": int(b.sum_cached_tokens),
+            "last_used": b.last_used_at,
+        })
+
+    daily_usage_rows = []
+    for d, item in sorted(daily_map.items(), key=lambda x: x[0], reverse=True):
+        t_used = item["llm_tokens"]
+        pct = round((t_used / token_limit * 100), 1) if token_limit > 0 else 0
+        item["token_limit"] = token_limit
+        item["token_pct"] = pct
+        item["is_exceeded"] = token_limit > 0 and t_used >= token_limit
+        item["is_near_limit"] = token_limit > 0 and (t_used >= token_limit * 0.8) and not item["is_exceeded"]
+        item["request_limit"] = request_limit
+        item["breakdown_rows"] = daily_breakdowns_map.get(d, [])
+        item["has_breakdown"] = len(item["breakdown_rows"]) > 0
+        daily_usage_rows.append(item)
+
+    tenant_usage_rows = []
+    if request.user.is_staff:
+        from collections import defaultdict
+        tenant_usage = defaultdict(lambda: {
+            "username": "",
+            "email": "",
+            "local_requests": 0,
+            "local_input_tokens": 0,
+            "local_output_tokens": 0,
+            "remote_requests": 0,
+            "remote_input_tokens": 0,
+            "remote_output_tokens": 0,
+        })
+        # Preload local preferences to find is_local status efficiently
+        local_prefs = set(
+            LLMProviderPreference.objects.filter(is_local=True).values_list(
+                "provider_config__owner_id", "provider_config__provider", "model"
+            )
+        )
+        all_stats = LLMUsageByModel.objects.select_related("owner").all()
+        for st in all_stats:
+            o_id = st.owner_id
+            t = tenant_usage[o_id]
+            if not t["username"]:
+                t["username"] = st.owner.username
+                t["email"] = st.owner.email or ""
+
+            # check if local
+            is_local = False
+            if str(st.provider).strip().lower() == "ollama local":
+                is_local = True
+            else:
+                key = (o_id, st.provider, st.model)
+                if key in local_prefs:
+                    is_local = True
+                elif (o_id, st.provider, "__default__") in local_prefs:
+                    is_local = True
+
+            if is_local:
+                t["local_requests"] += st.request_count
+                t["local_input_tokens"] += st.sum_input_tokens
+                t["local_output_tokens"] += st.sum_output_tokens
+            else:
+                t["remote_requests"] += st.request_count
+                t["remote_input_tokens"] += st.sum_input_tokens
+                t["remote_output_tokens"] += st.sum_output_tokens
+
+        tenant_usage_rows = sorted(tenant_usage.values(), key=lambda x: x["username"])
+
     optimizer_supporting_context = _get_optimizer_supporting_context(request)
-    automation_for_replacements = AppAutomationSettings.get_for_user(request.user)
+    automation_for_replacements = AppAutomationSettings.get_for_user(user)
     raw_replacements = automation_for_replacements.export_replacements or []
     # One-time migrate legacy session-only tokens into durable settings.
     if not any(
@@ -1174,10 +1330,10 @@ def settings_view(request):
         "provider_models_map": provider_models_map,
         "active_provider": active_provider,
         "settings_tab": tab,
-        "app_automation": AppAutomationSettings.get_for_user(request.user),
-        "experience_settings": UserExperienceSettings.get_for_user(request.user),
-        "is_power_user": is_power_user(request.user),
-        "optimizer_workflows": list_optimizer_workflows(request.user),
+        "app_automation": AppAutomationSettings.get_for_user(user),
+        "experience_settings": UserExperienceSettings.get_for_user(user),
+        "is_power_user": is_power_user(user),
+        "optimizer_workflows": list_optimizer_workflows(user),
         "optimizer_supporting_context": optimizer_supporting_context,
         "dedupe_tracks": tracks_for_dedupe,
         "usage_totals": usage_totals,
@@ -1186,9 +1342,11 @@ def settings_view(request):
         "usage_cooldown_error": usage_cooldown_error,
         "usage_by_query_rows": usage_by_query_rows,
         "daily_llm_quota": daily_llm_quota,
+        "daily_usage_rows": daily_usage_rows,
         "replacement_entries": replacement_entries,
+        "tenant_usage_rows": tenant_usage_rows,
     }
-    context.update(account_settings_context(request.user))
+    context.update(account_settings_context(user))
     return render(request, "resume_app/settings.html", context)
 
 
@@ -1200,9 +1358,9 @@ def llm_test_view(request):
     """
     from .models import LLMProviderConfig, AppAutomationSettings
     from .crypto import decrypt_api_key
-    from .llm_factory import get_llm
+    from .llm import get_llm
     from langchain_core.messages import HumanMessage
-    from .llm_services import list_models_for_provider, DEFAULT_MODELS
+    from .llm.services import list_models_for_provider, DEFAULT_MODELS
 
     stop_llm = AppAutomationSettings.get_for_user(request.user).stop_llm_requests
 
@@ -1252,7 +1410,7 @@ def llm_test_view(request):
                 api_key_decrypted = decrypt_api_key(config.encrypted_api_key)
                 try:
                     if provider == "Ollama Local":
-                        from .llm_factory import _normalize_ollama_local_host
+                        from .llm.factory import _normalize_ollama_local_host
 
                         try:
                             base = _normalize_ollama_local_host(api_key_decrypted)
@@ -1269,7 +1427,7 @@ def llm_test_view(request):
                                 ex,
                             )
                     llm = get_llm(provider, api_key_decrypted, model=model or None)
-                    from .llm_gateway import log_llm_invoke
+                    from .llm import log_llm_invoke
 
                     log_llm_invoke(
                         provider,
@@ -1555,11 +1713,15 @@ def workflow_list_view(request):
 
 def _workflow_form_context(request, workflow, steps_json: str) -> dict:
     from .prompt_store import list_ats_judge_profiles
+    from .llm import LLM_PROVIDERS, DEFAULT_MODELS
 
     return {
         "workflow": workflow,
         "workflow_steps_json": steps_json,
         "ats_profiles": list_ats_judge_profiles(),
+        "step_llm_config_json": json.dumps(workflow.step_llm_config) if workflow else "{}",
+        "llm_providers": sorted(LLM_PROVIDERS),
+        "llm_default_models_json": json.dumps(DEFAULT_MODELS),
     }
 
 
@@ -1593,6 +1755,11 @@ def workflow_create_view(request):
             score_threshold = max(0, min(100, int(request.POST.get("score_threshold") or 85)))
         except (TypeError, ValueError):
             score_threshold = 85
+        step_llm_raw = request.POST.get("step_llm_config", "")
+        try:
+            step_llm_config = json.loads(step_llm_raw) if step_llm_raw else {}
+        except json.JSONDecodeError:
+            step_llm_config = {}
         ats_prof = None
         raw_ats = (request.POST.get("ats_judge_profile_id") or "").strip()
         if raw_ats.isdigit():
@@ -1601,6 +1768,7 @@ def workflow_create_view(request):
             owner=None,
             name=name,
             steps=steps,
+            step_llm_config=step_llm_config,
             loop_to=loop_to,
             max_iterations=max_iterations,
             score_threshold=score_threshold,
@@ -1653,6 +1821,11 @@ def workflow_edit_view(request, workflow_id):
             score_threshold = max(0, min(100, int(request.POST.get("score_threshold") or 85)))
         except (TypeError, ValueError):
             score_threshold = 85
+        step_llm_raw = request.POST.get("step_llm_config", "")
+        try:
+            step_llm_config = json.loads(step_llm_raw) if step_llm_raw else {}
+        except json.JSONDecodeError:
+            step_llm_config = {}
         raw_ats = (request.POST.get("ats_judge_profile_id") or "").strip()
         if raw_ats.isdigit():
             ats_prof = AtsJudgeProfile.objects.filter(owner__isnull=True, pk=int(raw_ats)).first()
@@ -1660,6 +1833,7 @@ def workflow_edit_view(request, workflow_id):
             ats_prof = None
         workflow.name = name
         workflow.steps = steps
+        workflow.step_llm_config = step_llm_config
         workflow.loop_to = loop_to
         workflow.max_iterations = max_iterations
         workflow.score_threshold = score_threshold
@@ -1744,6 +1918,7 @@ def job_search_view(request):
                     site_names=saved.site_names if isinstance(saved.site_names, list) else None,
                     llm_model=saved.llm_model,
                     preset_id=saved.id,
+                    sort=(request.POST.get("sort") or request.GET.get("sort") or ""),
                     from_save=True,
                 )
                 if wants_json:
@@ -2057,6 +2232,14 @@ def job_search_view(request):
     else:
         preset_is_dirty = False
 
+    raw_sort = (request.GET.get("sort") or request.GET.get("sort_by") or "match").strip().lower()
+    if raw_sort in ("latest", "freshness", "date", "newest"):
+        sort_param = "latest"
+    elif raw_sort == "oldest":
+        sort_param = "oldest"
+    else:
+        sort_param = "match"
+
     try:
         if show_favourites:
             saved_results = api_jobs_saved(request)
@@ -2066,7 +2249,11 @@ def job_search_view(request):
             # After saving a preset, keep current listings — do not re-hit job boards.
             cached_display = request.session.get("job_search_display")
             if isinstance(cached_display, dict) and cached_display.get("jobs") is not None:
-                cached_jobs = rehydrate_job_payloads(cached_display.get("jobs") or [])
+                from .job_search_core import sort_job_payloads
+                cached_jobs = sort_job_payloads(
+                    rehydrate_job_payloads(cached_display.get("jobs") or []),
+                    sort_by=sort_param,
+                )
                 search_results = {
                     "jobs": cached_jobs,
                     "total": cached_display.get("total") or len(cached_jobs),
@@ -2076,9 +2263,6 @@ def job_search_view(request):
         elif query:
             if request.GET.get("refresh"):
                 request.session.pop("job_search_cache", None)
-            sort_param = (request.GET.get("sort") or "focus").strip().lower()
-            if sort_param not in ("focus", "resume"):
-                sort_param = "focus"
             payload = JobSearchRequest(
                 search_term=query,
                 location=location or None,
@@ -2158,10 +2342,6 @@ def job_search_view(request):
         except Exception:
             disqualifier_prompt = None
     current_disqualifiers = [{"id": d.id, "phrase": d.phrase} for d in UserDisqualifier.objects.for_user(request.user).order_by("phrase")]
-
-    sort_param = (request.GET.get("sort") or "focus").strip().lower()
-    if sort_param not in ("focus", "resume"):
-        sort_param = "focus"
     preserved_site_query = urlencode([("site_name", s) for s in selected_site_names])
     single_search_profile = len(tracks_qs) <= 1
     default_track = Track.get_default_slug(request.user)
@@ -2312,10 +2492,19 @@ def huey_dashboard_view(request):
             }
         )
 
-    recent_runs = (
-        JobSearchTaskRun.objects.select_related("task")
-        .order_by("-started_at")[:10]
+    from datetime import timedelta
+    twenty_four_hours_ago = now - timedelta(hours=24)
+    searches_24h = JobSearchTaskRun.objects.filter(started_at__gte=twenty_four_hours_ago).count()
+    applies_24h = ApplicationAttempt.objects.filter(created_at__gte=twenty_four_hours_ago).count()
+    failed_24h = (
+        JobSearchTaskRun.objects.filter(started_at__gte=twenty_four_hours_ago, status="failed").count()
+        + ApplicationAttempt.objects.filter(created_at__gte=twenty_four_hours_ago, status=ApplicationAttempt.Status.FAILED).count()
     )
+    active_running = (
+        JobSearchTaskRun.objects.filter(status="running").count()
+        + ApplicationAttempt.objects.filter(status__in=ApplicationAttempt.ACTIVE_STATUSES).count()
+    )
+
     from .tasks import CLEANUP_STATUS_CACHE_KEY
     cleanup_status = cache.get(CLEANUP_STATUS_CACHE_KEY)
 
@@ -2330,13 +2519,70 @@ def huey_dashboard_view(request):
             }
         )
 
+    # Build unified recent activity items across search scrapes and apply agent attempts
+    recent_searches = list(
+        JobSearchTaskRun.objects.select_related("task", "task__owner")
+        .order_by("-started_at")[:20]
+    )
+    recent_applies = list(
+        ApplicationAttempt.objects.select_related("pipeline_entry", "pipeline_entry__owner", "pipeline_entry__job_listing")
+        .order_by("-created_at")[:20]
+    )
+
+    unified_activity = []
+    for s in recent_searches:
+        user_name = s.task.owner.get_username() if s.task and s.task.owner else "System"
+        title = s.task.name if s.task else "Job Search"
+        subtitle = s.task.search_term if s.task else ""
+        unified_activity.append({
+            "type": "Search Scrape",
+            "type_badge": "bg-sky-50 text-sky-700 border-sky-200",
+            "title": title,
+            "subtitle": subtitle,
+            "user": user_name,
+            "status": s.status,  # completed, failed, running
+            "started_at": s.started_at,
+            "finished_at": s.finished_at,
+            "items_count": getattr(s, "jobs_fetched", 0),
+            "error_message": s.error_message,
+        })
+
+    for a in recent_applies:
+        p_entry = getattr(a, "pipeline_entry", None)
+        user_name = p_entry.owner.get_username() if (p_entry and p_entry.owner) else "System"
+        company = p_entry.job_listing.company_name if (p_entry and p_entry.job_listing) else "Application Attempt"
+        job_title = p_entry.job_listing.title if (p_entry and p_entry.job_listing) else ""
+        status_val = "completed" if a.status == ApplicationAttempt.Status.SUCCEEDED else ("failed" if a.status == ApplicationAttempt.Status.FAILED else ("running" if a.status in ApplicationAttempt.ACTIVE_STATUSES else a.status))
+        started = a.started_at or a.created_at
+        finished = a.submitted_at or (a.updated_at if a.is_terminal else None)
+        unified_activity.append({
+            "type": "Apply Agent",
+            "type_badge": "bg-purple-50 text-purple-700 border-purple-200",
+            "title": company,
+            "subtitle": job_title,
+            "user": user_name,
+            "status": status_val,
+            "started_at": started,
+            "finished_at": finished,
+            "items_count": None,
+            "error_message": a.error_message or (f"Error code: {a.error_code}" if a.error_code else None),
+        })
+
+    unified_activity.sort(key=lambda x: x["started_at"] or now, reverse=True)
+    unified_activity = unified_activity[:25]
+
     context = {
         "immediate": immediate,
         "queue_stats": queue_stats,
         "queue_stats_error": queue_stats_error,
         "periodic_tasks": periodic_rows,
         "adhoc_run_tasks": adhoc_rows,
-        "recent_runs": recent_runs,
+        "recent_runs": recent_searches[:10],
+        "unified_activity": unified_activity,
+        "searches_24h": searches_24h,
+        "applies_24h": applies_24h,
+        "failed_24h": failed_24h,
+        "active_running": active_running,
         "cleanup_status": cleanup_status,
     }
     return render(request, "resume_app/huey_dashboard.html", context)
@@ -2658,13 +2904,29 @@ def _count_unique_library_resumes(user) -> int:
 def _track_list_context(request, user, tracks_qs):
     """Build template context for the Track Management page."""
     from django.db.models import Count
-
     from .models import UserResume
+    from .experience import is_power_user
 
+    power_user = is_power_user(user)
     sort = _track_list_sort_param(request)
-    order_field = "label" if sort == "label" else "slug"
-    tracks = list(tracks_qs.order_by(order_field))
-    default_track_slug = Track.get_default_slug(user)
+    if power_user:
+        order_field = "label" if sort == "label" else "slug"
+        tracks = list(tracks_qs.order_by(order_field))
+        default_track_slug = Track.get_default_slug(user)
+    else:
+        order_field = "name" if sort == "label" else "slug"
+        tracks = []
+        for p in tracks_qs.order_by(order_field):
+            p.label = p.name
+            tracks.append(p)
+        default_track_slug = ""
+        for t in tracks:
+            if t.is_default:
+                default_track_slug = t.slug
+                break
+        if not default_track_slug and tracks:
+            default_track_slug = tracks[0].slug
+
     default_track = next((t for t in tracks if t.is_default), None)
     if default_track is None and tracks:
         default_track = tracks[0]
@@ -2691,9 +2953,54 @@ def _track_list_context(request, user, tracks_qs):
             )
     for slug in slugs:
         resume_counts_by_slug.setdefault(slug, 0)
+
+    from .models import JobListingAction
+    liked_qs = (
+        JobListingAction.objects.for_user(user)
+        .filter(action=JobListingAction.ActionType.LIKED, track__in=slugs)
+        .values("track")
+        .annotate(c=Count("id"))
+    )
+    liked_counts = {row["track"]: row["c"] for row in liked_qs}
+
+    disliked_qs = (
+        JobListingAction.objects.for_user(user)
+        .filter(action=JobListingAction.ActionType.DISLIKED, track__in=slugs)
+        .values("track")
+        .annotate(c=Count("id"))
+    )
+    disliked_counts = {row["track"]: row["c"] for row in disliked_qs}
+
+    from .saved_search_schedule import schedule_from_cron
+
+    # Fetch all user tasks to map scheduling
+    tasks_map = {}
+    for task in JobSearchTask.objects.for_user(user):
+        # Identify the mapping criteria
+        if power_user:
+            tasks_map[task.track] = task
+        elif task.saved_search_id:
+            tasks_map[task.saved_search_id] = task
+
     for track in tracks:
         track.library_resume_count = resume_counts_by_slug.get(track.slug, 0)
         track.library_resume_names = resume_names_by_slug.get(track.slug, [])
+        track.liked_count = liked_counts.get(track.slug, 0)
+        track.disliked_count = disliked_counts.get(track.slug, 0)
+
+        # Map task schedule options to the track/profile
+        task_id_key = track.slug if power_user else track.pk
+        task = tasks_map.get(task_id_key)
+        if task and task.is_active:
+            parsed = schedule_from_cron(task.frequency)
+            if parsed:
+                track.schedule_interval, track.schedule_time = parsed
+            else:
+                track.schedule_interval = "custom"
+                track.schedule_time = "09:00"
+        else:
+            track.schedule_interval = "off"
+            track.schedule_time = "09:00"
 
     resume_rows = []
     for resume in _user_library_resumes(user).order_by("-uploaded_at")[:200]:
@@ -2708,6 +3015,28 @@ def _track_list_context(request, user, tracks_qs):
             }
         )
 
+    execution_runs = []
+    if not power_user:
+        from .models import JobSearchTaskRun
+        runs_qs = (
+            JobSearchTaskRun.objects.filter(task__owner=user)
+            .select_related("task", "task__saved_search")
+            .order_by("-started_at", "-id")[:5]
+        )
+        for r in runs_qs:
+            eliminated = max(0, r.jobs_fetched - r.jobs_after_filter)
+            profile_name = r.task.saved_search.name if r.task.saved_search else (r.task.name or r.task.search_term)
+            execution_runs.append({
+                "run": r,
+                "profile_name": profile_name,
+                "started_at": r.started_at,
+                "status": r.get_status_display(),
+                "jobs_fetched": r.jobs_fetched,
+                "jobs_eliminated": eliminated,
+                "jobs_saved": r.jobs_added_to_pipeline,
+                "error_message": r.error_message,
+            })
+
     return {
         "tracks": tracks,
         "resume_rows": resume_rows,
@@ -2720,6 +3049,7 @@ def _track_list_context(request, user, tracks_qs):
             "resume_rows_count": len(resume_rows),
             "default_track": default_track,
         },
+        "execution_runs": execution_runs,
     }
 
 
@@ -2753,9 +3083,27 @@ def track_list_view(request):
     default track, delete). POST `action` distinguishes create_track, edit_track,
     upload_resume, assign_resume_tracks, delete_resume.
     """
-    tracks_qs = Track.ensure_baseline(request.user)
-    tracks = list(tracks_qs)
-    default_track_slug = Track.get_default_slug(request.user)
+    from .experience import is_power_user
+    from .models import SearchProfile
+
+    power_user = is_power_user(request.user)
+    if power_user:
+        tracks_qs = Track.ensure_baseline(request.user)
+        tracks = list(tracks_qs)
+        default_track_slug = Track.get_default_slug(request.user)
+    else:
+        tracks_qs = SearchProfile.objects.for_user(request.user)
+        tracks = []
+        for p in tracks_qs:
+            p.label = p.name
+            tracks.append(p)
+        default_track_slug = ""
+        for t in tracks:
+            if t.is_default:
+                default_track_slug = t.slug
+                break
+        if not default_track_slug and tracks:
+            default_track_slug = tracks[0].slug
 
     # Keep this bounded: track management should stay snappy even with many resumes.
     from .models import UserResume
@@ -2789,8 +3137,7 @@ def track_list_view(request):
                 return redirect("track_list")
             original_name = (original_name or "resume.pdf")[:255]
 
-            from .entitlements import QuotaExceeded
-            from .storage_quota import assert_upload_allowed
+            from .subscriptions import QuotaExceeded, assert_upload_allowed
 
             try:
                 assert_upload_allowed(request.user, resume_file)
@@ -2863,31 +3210,97 @@ def track_list_view(request):
             label = (request.POST.get("label") or "").strip()
             description = (request.POST.get("description") or "").strip()
             is_default = bool(request.POST.get("is_default"))
+            schedule_interval = (request.POST.get("schedule_interval") or "off").strip().lower()
+            schedule_time = (request.POST.get("schedule_time") or "09:00").strip()
 
-            track = Track.objects.for_user(request.user).filter(slug=original_slug).first()
-            if not track:
-                messages.error(request, "Track not found.")
-                return redirect("track_list")
-            if not new_slug:
-                messages.error(request, "Slug is required.")
-                return redirect("track_list")
-            if not label:
-                messages.error(request, "Label is required.")
-                return redirect("track_list")
-            if new_slug != original_slug and Track.objects.for_user(request.user).filter(slug=new_slug).exists():
-                messages.error(request, f"Track with slug '{new_slug}' already exists.")
-                return redirect("track_list")
+            if power_user:
+                track = Track.objects.for_user(request.user).filter(slug=original_slug).first()
+                if not track:
+                    messages.error(request, "Track not found.")
+                    return redirect("track_list")
+                if not new_slug:
+                    messages.error(request, "Slug is required.")
+                    return redirect("track_list")
+                if not label:
+                    messages.error(request, "Label is required.")
+                    return redirect("track_list")
+                if new_slug != original_slug and Track.objects.for_user(request.user).filter(slug=new_slug).exists():
+                    messages.error(request, f"Track with slug '{new_slug}' already exists.")
+                    return redirect("track_list")
 
-            if is_default:
-                Track.objects.for_user(request.user).update(is_default=False)
-            if new_slug != original_slug:
-                _cascade_track_slug_rename(request.user, original_slug, new_slug)
-                track.slug = new_slug
-            track.label = label
-            track.description = description
-            track.is_default = is_default
-            track.save(update_fields=["slug", "label", "description", "is_default"])
-            messages.success(request, f"Track \"{track.label}\" updated.")
+                if is_default:
+                    Track.objects.for_user(request.user).update(is_default=False)
+                if new_slug != original_slug:
+                    _cascade_track_slug_rename(request.user, original_slug, new_slug)
+                    track.slug = new_slug
+                track.label = label
+                track.description = description
+                track.is_default = is_default
+                track.save(update_fields=["slug", "label", "description", "is_default"])
+
+                # Handle scheduling for Power User Track tasks
+                task = JobSearchTask.objects.for_user(request.user).filter(track=track.slug).first()
+                if schedule_interval == "off":
+                    if task:
+                        task.is_active = False
+                        task.save(update_fields=["is_active", "updated_at"])
+                else:
+                    from .saved_search_schedule import cron_from_schedule, parse_schedule_time
+                    frequency = cron_from_schedule(schedule_interval, schedule_time)
+                    start_time = parse_schedule_time(schedule_time)
+                    if not task:
+                        task = JobSearchTask(
+                            owner=request.user,
+                            name=f"{track.label} Search",
+                            search_term=track.label,
+                            track=track.slug,
+                        )
+                    task.frequency = frequency
+                    task.start_time = start_time
+                    task.is_active = True
+                    task.next_run_at = get_next_run_at(task.frequency)
+                    task.save()
+
+                messages.success(request, f"Track \"{track.label}\" updated.")
+            else:
+                profile = SearchProfile.objects.for_user(request.user).filter(slug=original_slug).first()
+                if not profile:
+                    messages.error(request, "Search profile not found.")
+                    return redirect("track_list")
+                if not new_slug:
+                    messages.error(request, "Slug is required.")
+                    return redirect("track_list")
+                if not label:
+                    messages.error(request, "Label/Name is required.")
+                    return redirect("track_list")
+                if new_slug != original_slug and SearchProfile.objects.for_user(request.user).filter(slug=new_slug).exists():
+                    messages.error(request, f"Search profile with slug '{new_slug}' already exists.")
+                    return redirect("track_list")
+
+                if is_default:
+                    SearchProfile.objects.for_user(request.user).update(is_default=False)
+                if new_slug != original_slug:
+                    _cascade_track_slug_rename(request.user, original_slug, new_slug)
+                    profile.slug = new_slug
+                    profile.profile_slug = new_slug
+                profile.name = label
+                profile.description = description
+                profile.is_default = is_default
+                profile.save(update_fields=["slug", "profile_slug", "name", "description", "is_default"])
+
+                # Handle scheduling for normal User SearchProfile
+                from .saved_search_schedule import set_saved_search_schedule
+                try:
+                    set_saved_search_schedule(
+                        request.user,
+                        profile.id,
+                        interval=schedule_interval,
+                        time_str=schedule_time,
+                    )
+                except ValueError as e:
+                    messages.error(request, f"Error saving schedule: {e}")
+
+                messages.success(request, f"Search profile \"{profile.name}\" updated.")
             return redirect("track_list")
 
         if action == "create_track":
@@ -2895,23 +3308,75 @@ def track_list_view(request):
             label = (request.POST.get("label") or "").strip()
             description = (request.POST.get("description") or "").strip()
             is_default = bool(request.POST.get("is_default"))
+            schedule_interval = (request.POST.get("schedule_interval") or "off").strip().lower()
+            schedule_time = (request.POST.get("schedule_time") or "09:00").strip()
+
             if not slug:
                 messages.error(request, "Slug is required.")
             elif not label:
-                messages.error(request, "Label is required.")
-            elif Track.objects.for_user(request.user).filter(slug=slug).exists():
-                messages.error(request, f"Track with slug '{slug}' already exists.")
+                messages.error(request, "Label/Name is required.")
             else:
-                if is_default:
-                    Track.objects.for_user(request.user).update(is_default=False)
-                track = Track.objects.create(
-                    owner=request.user,
-                    slug=slug,
-                    label=label,
-                    description=description,
-                    is_default=is_default,
-                )
-                messages.success(request, f"Track \"{track.label}\" created.")
+                if power_user:
+                    if Track.objects.for_user(request.user).filter(slug=slug).exists():
+                        messages.error(request, f"Track with slug '{slug}' already exists.")
+                    else:
+                        if is_default:
+                            Track.objects.for_user(request.user).update(is_default=False)
+                        track = Track.objects.create(
+                            owner=request.user,
+                            slug=slug,
+                            label=label,
+                            description=description,
+                            is_default=is_default,
+                        )
+
+                        # Handle scheduling for Power User Track tasks
+                        if schedule_interval != "off":
+                            from .saved_search_schedule import cron_from_schedule, parse_schedule_time
+                            frequency = cron_from_schedule(schedule_interval, schedule_time)
+                            start_time = parse_schedule_time(schedule_time)
+                            JobSearchTask.objects.create(
+                                owner=request.user,
+                                name=f"{track.label} Search",
+                                search_term=track.label,
+                                track=track.slug,
+                                frequency=frequency,
+                                start_time=start_time,
+                                is_active=True,
+                                next_run_at=get_next_run_at(frequency),
+                            )
+
+                        messages.success(request, f"Track \"{track.label}\" created.")
+                else:
+                    if SearchProfile.objects.for_user(request.user).filter(slug=slug).exists():
+                        messages.error(request, f"Search profile with slug '{slug}' already exists.")
+                    else:
+                        if is_default:
+                            SearchProfile.objects.for_user(request.user).update(is_default=False)
+                        profile = SearchProfile.objects.create(
+                            owner=request.user,
+                            slug=slug,
+                            profile_slug=slug,
+                            name=label,
+                            search_term=label,
+                            description=description,
+                            is_default=is_default,
+                        )
+
+                        # Handle scheduling for normal User SearchProfile
+                        if schedule_interval != "off":
+                            from .saved_search_schedule import set_saved_search_schedule
+                            try:
+                                set_saved_search_schedule(
+                                    request.user,
+                                    profile.id,
+                                    interval=schedule_interval,
+                                    time_str=schedule_time,
+                                )
+                            except ValueError as e:
+                                messages.error(request, f"Error saving schedule: {e}")
+
+                        messages.success(request, f"Search profile \"{profile.name}\" created.")
             return redirect("track_list")
 
     context = _track_list_context(request, request.user, tracks_qs)
@@ -2928,16 +3393,38 @@ def track_delete_view(request, slug: str):
     if request.method != "POST":
         return redirect("track_list")
 
-    track = Track.objects.for_user(request.user).filter(slug=slug).first()
-    if not track:
-        messages.error(request, "Track not found.")
-        return redirect("track_list")
+    from .experience import is_power_user
+    from .models import SearchProfile
 
-    if Track.objects.for_user(request.user).count() <= 1:
-        messages.error(request, "Cannot delete the only remaining track.")
-        return redirect("track_list")
+    power_user = is_power_user(request.user)
+    if power_user:
+        track = Track.objects.for_user(request.user).filter(slug=slug).first()
+        if not track:
+            messages.error(request, "Track not found.")
+            return redirect("track_list")
 
-    slug_val = track.slug
+        if Track.objects.for_user(request.user).count() <= 1:
+            messages.error(request, "Cannot delete the only remaining track.")
+            return redirect("track_list")
+
+        slug_val = track.slug
+        was_default = track.is_default
+        label = track.label or track.slug
+        track.delete()
+    else:
+        profile = SearchProfile.objects.for_user(request.user).filter(slug=slug).first()
+        if not profile:
+            messages.error(request, "Search profile not found.")
+            return redirect("track_list")
+
+        if SearchProfile.objects.for_user(request.user).count() <= 1:
+            messages.error(request, "Cannot delete the only remaining search profile.")
+            return redirect("track_list")
+
+        slug_val = profile.slug
+        was_default = profile.is_default
+        label = profile.name or profile.slug
+        profile.delete()
 
     # Disassociate any resumes assigned to this track.
     try:
@@ -2961,15 +3448,17 @@ def track_delete_view(request, slug: str):
         # Best-effort; failure here should not block delete.
         pass
 
-    was_default = track.is_default
-    label = track.label or track.slug
-    track.delete()
-
     if was_default:
         # Ensure we still have a default track.
-        Track.ensure_baseline(request.user)
+        if power_user:
+            Track.ensure_baseline(request.user)
+        else:
+            first_p = SearchProfile.objects.for_user(request.user).first()
+            if first_p:
+                first_p.is_default = True
+                first_p.save(update_fields=["is_default"])
 
-    messages.success(request, f"Track \"{label}\" and its associated tasks/pipeline/actions were deleted.")
+    messages.success(request, f"Track/Profile \"{label}\" and its associated tasks/pipeline/actions were deleted.")
     return redirect("track_list")
 
 

@@ -136,7 +136,7 @@ class Phase0IsolationTests(TestCase):
         self.assertTrue(user_may_access_media(self.bob, path))
 
     def test_rate_limit_preference_lookup_is_owner_scoped(self):
-        from resume_app.llm_rate_limit import get_preference_row_for_provider_model
+        from resume_app.llm.rate_limit import get_preference_row_for_provider_model
 
         cfg_b = LLMProviderConfig.objects.create(
             owner=self.bob,

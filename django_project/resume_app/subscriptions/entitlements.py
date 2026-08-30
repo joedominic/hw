@@ -50,15 +50,17 @@ def staff_bypasses_quotas(user: AbstractBaseUser | None) -> bool:
 
 
 def ensure_default_plans() -> None:
-    """Idempotently create built-in plans (safe to call from AppConfig / migrate)."""
-    from .models import Plan
+    """Idempotently create built-in plans if missing (safe to call from AppConfig / migrate)."""
+    from ..models import Plan
 
     defaults = [
         {
             "slug": "free",
             "name": "Free",
             "description": "Starter limits for individual job seekers.",
+            "price_display": "$0 / mo",
             "llm_requests_per_day": 50,
+            "llm_tokens_per_day": 100000,
             "job_searches_per_day": 20,
             "apply_runs_per_day": 5,
             "storage_mb": 250,
@@ -70,7 +72,9 @@ def ensure_default_plans() -> None:
             "slug": "pro",
             "name": "Pro",
             "description": "Higher limits plus customer API access.",
+            "price_display": "$29 / mo",
             "llm_requests_per_day": 500,
+            "llm_tokens_per_day": 1000000,
             "job_searches_per_day": 200,
             "apply_runs_per_day": 50,
             "storage_mb": 5000,
@@ -82,7 +86,9 @@ def ensure_default_plans() -> None:
             "slug": "unlimited",
             "name": "Unlimited",
             "description": "No daily quotas (0 = unlimited).",
+            "price_display": "$99 / mo",
             "llm_requests_per_day": 0,
+            "llm_tokens_per_day": 0,
             "job_searches_per_day": 0,
             "apply_runs_per_day": 0,
             "storage_mb": 0,
@@ -92,11 +98,11 @@ def ensure_default_plans() -> None:
         },
     ]
     for row in defaults:
-        Plan.objects.update_or_create(slug=row["slug"], defaults=row)
+        Plan.objects.get_or_create(slug=row["slug"], defaults=row)
 
 
 def get_or_create_subscription(user: AbstractBaseUser):
-    from .models import Plan, Subscription
+    from ..models import Plan, Subscription
 
     sub, created = Subscription.objects.select_related("plan").get_or_create(
         owner=user,
@@ -119,7 +125,7 @@ def get_user_plan(user: AbstractBaseUser):
     if user is None or not getattr(user, "is_authenticated", False):
         return None
     sub = get_or_create_subscription(user)
-    from .models import Plan
+    from ..models import Plan
 
     # past_due / unpaid / canceled → free entitlements until payment recovers.
     if sub.status not in ACTIVE_SUB_STATUSES or sub.plan_id is None:
@@ -130,6 +136,8 @@ def get_user_plan(user: AbstractBaseUser):
 def plan_limit(plan, metric: str) -> int:
     """Return daily limit for metric; 0 means unlimited."""
     if metric == METRIC_LLM_TOKENS:
+        if plan and getattr(plan, "llm_tokens_per_day", 0):
+            return int(plan.llm_tokens_per_day)
         by_plan = getattr(settings, "LLM_DAILY_TOKEN_LIMIT_BY_PLAN", None) or {}
         slug = getattr(plan, "slug", None) or "free"
         limit = int(by_plan.get(slug, by_plan.get("free", 0)) or 0)
@@ -157,7 +165,7 @@ def plan_limit(plan, metric: str) -> int:
 
 
 def usage_today(user: AbstractBaseUser, metric: str) -> int:
-    from .models import UsageCounter
+    from ..models import UsageCounter
 
     today = timezone.localdate()
     row = UsageCounter.objects.filter(owner=user, metric=metric, period_date=today).first()
@@ -189,7 +197,7 @@ def consume_quota(user: AbstractBaseUser, metric: str, amount: int = 1) -> int:
     Returns the new count. Raises QuotaExceeded when over limit.
     """
     from django.conf import settings
-    from .models import UsageCounter
+    from ..models import UsageCounter
 
     if amount < 1:
         return usage_today(user, metric)
@@ -225,7 +233,7 @@ def require_api_access(user: AbstractBaseUser) -> None:
 
 
 def assign_plan(user: AbstractBaseUser, plan_slug: str, *, status: str = "active") -> None:
-    from .models import Plan, Subscription
+    from ..models import Plan, Subscription
 
     plan = Plan.objects.get(slug=plan_slug, is_active=True)
     sub = get_or_create_subscription(user)

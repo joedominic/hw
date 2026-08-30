@@ -10,7 +10,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, Base
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.outputs import ChatResult, ChatGeneration
 
-from .llm_services import DEFAULT_MODELS
+from .services import DEFAULT_MODELS
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +210,7 @@ def _normalize_ollama_local_host(host_or_ip: str, default_port: int = 11434) -> 
     return f"http://{raw}:{default_port}"
 
 
-def get_llm(provider: str, api_key: str = None, model: str = None):
+def get_llm(provider: str, api_key: str = None, model: str = None, user=None):
     from django.conf import settings
 
     key = api_key
@@ -263,10 +263,12 @@ def get_llm(provider: str, api_key: str = None, model: str = None):
     else:
         raise ValueError(f"Unsupported provider: {provider}")
 
-    # Attach lightweight metadata for runtime failover logic.
+    # Attach lightweight metadata for runtime failover logic and tenant ownership.
     try:
         setattr(llm, "_resume_provider", provider)
         setattr(llm, "_resume_model", chosen or None)
+        if user is not None:
+            setattr(llm, "_resume_user", user)
     except Exception:
         pass
     return llm

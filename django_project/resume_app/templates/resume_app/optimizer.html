@@ -1050,18 +1050,33 @@
     function buildCoverLetterSectionHtml(data, resumeId) {
         if (data.status !== "completed") return "";
         var letter = data.cover_letter || "";
-        var btnLabel = letter.trim() ? "Regenerate cover letter" : "Generate cover letter";
+        var hasLetter = letter.trim().length > 0;
+        var btnLabel = hasLetter ? "Regenerate cover letter" : "Generate cover letter";
         var html = '<div class="mt-8 border-t border-slate-100 pt-6" id="optimizer-cover-letter-section">';
-        html += '<h4 class="text-lg font-semibold text-concierge-slate">Cover letter</h4>';
-        html += '<p class="mt-1 text-xs text-slate-500">Generate a job-specific cover letter for apply forms. Until generated, the apply agent uses your global template.</p>';
+        html += '<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">';
+        html += '<div><h4 class="text-lg font-semibold text-concierge-slate">Cover letter</h4>';
+        html += '<p class="mt-1 text-xs text-slate-500">Generate a job-specific cover letter tailored to this role and your optimized resume.</p></div>';
+        html += '<div class="flex items-center gap-2">';
+        html += '<label for="cover-letter-length-select" class="text-xs font-medium text-slate-500">Length:</label>';
+        html += '<select id="cover-letter-length-select" class="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 shadow-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand">';
+        html += '<option value="short">Short (~150–200 words)</option>';
+        html += '<option value="standard" selected>Standard (~250–350 words)</option>';
+        html += '<option value="detailed">Detailed (~400–500 words)</option>';
+        html += '</select></div></div>';
         html += '<div class="mt-3 flex flex-wrap items-center gap-2">';
         html += '<button type="button" id="generate-cover-letter-btn" data-resume-id="' + esc(resumeId) + '" class="inline-flex items-center gap-1.5 rounded-concierge bg-brand px-3 py-1.5 text-sm font-semibold text-white hover:bg-brand-hover">';
         html += '<span id="cover-letter-btn-text">' + esc(btnLabel) + '</span>';
         html += '<span id="cover-letter-spinner" class="hidden h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-white/40 border-t-white"></span></button>';
+        html += '<button type="button" id="shorten-cover-letter-btn" data-resume-id="' + esc(resumeId) + '" data-length="shorter" class="' + (hasLetter ? '' : 'hidden ') + 'inline-flex items-center gap-1 rounded-concierge border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm">';
+        html += '<svg class="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 13H5v-2h14v2z"/></svg> Make shorter</button>';
+        html += '<button type="button" id="lengthen-cover-letter-btn" data-resume-id="' + esc(resumeId) + '" data-length="longer" class="' + (hasLetter ? '' : 'hidden ') + 'inline-flex items-center gap-1 rounded-concierge border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm">';
+        html += '<svg class="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v14m-7-7h14"/></svg> Make longer</button>';
         html += '<span id="cover-letter-gen-status" class="text-xs text-slate-500" role="status" aria-live="polite"></span></div>';
         html += '<textarea id="optimizer-cover-letter-editor" rows="12" data-resume-id="' + esc(resumeId) + '" class="mt-3 w-full max-h-[24rem] min-h-[8rem] resize-y rounded-concierge border border-slate-200 bg-white p-4 font-mono text-sm leading-relaxed text-slate-800 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"></textarea>';
         html += '<div class="mt-3 flex flex-wrap items-center gap-3">';
-        html += '<button type="button" id="save-cover-letter-btn" data-resume-id="' + esc(resumeId) + '" class="rounded-concierge border border-brand/20 bg-brand-mist px-4 py-2 text-sm font-semibold text-brand-ink hover:bg-brand-soft">Save cover letter</button>';
+        html += '<button type="button" id="save-cover-letter-btn" data-resume-id="' + esc(resumeId) + '" class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">Save cover letter</button>';
+        html += '<a id="export-cl-pdf-btn" class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50 export-cl-button' + (hasLetter ? '' : ' opacity-50 pointer-events-none') + '" href="/api/resume/export/' + esc(resumeId) + '/cover-letter/pdf" data-base-href="/api/resume/export/' + esc(resumeId) + '/cover-letter/pdf" data-resume-id="' + esc(resumeId) + '">Export PDF</a>';
+        html += '<a id="export-cl-docx-btn" class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50 export-cl-button' + (hasLetter ? '' : ' opacity-50 pointer-events-none') + '" href="/api/resume/export/' + esc(resumeId) + '/cover-letter/docx" data-base-href="/api/resume/export/' + esc(resumeId) + '/cover-letter/docx" data-resume-id="' + esc(resumeId) + '">Export Word</a>';
         html += '<span id="save-cover-letter-status" class="text-xs text-slate-500" aria-live="polite"></span></div>';
         if (data.interview_prep_markdown) {
             html += '<p class="mt-4 text-xs text-slate-500">Interview prep was generated on the <a href="/jobs/done/" class="font-medium underline">Done</a> board for this job.</p>';
@@ -1334,22 +1349,32 @@
     }
 
     statusBody.addEventListener("click", function (e) {
-        var genClBtn = e.target.closest("#generate-cover-letter-btn");
+        var genClBtn = e.target.closest("#generate-cover-letter-btn, #shorten-cover-letter-btn, #lengthen-cover-letter-btn");
         if (genClBtn && !genClBtn.disabled) {
             var rid = genClBtn.getAttribute("data-resume-id");
             var clTa = document.getElementById("optimizer-cover-letter-editor");
             var genSt = document.getElementById("cover-letter-gen-status");
             var clSpinner = document.getElementById("cover-letter-spinner");
             var clBtnText = document.getElementById("cover-letter-btn-text");
+            var shortenBtn = document.getElementById("shorten-cover-letter-btn");
+            var lengthenBtn = document.getElementById("lengthen-cover-letter-btn");
+            var exportPdfBtn = document.getElementById("export-cl-pdf-btn");
+            var exportDocxBtn = document.getElementById("export-cl-docx-btn");
+            var lengthVal = genClBtn.getAttribute("data-length") || (document.getElementById("cover-letter-length-select")?.value || "standard");
+
             if (!rid) return;
             genClBtn.disabled = true;
             if (clSpinner) clSpinner.classList.remove("hidden");
-            if (clBtnText) clBtnText.textContent = "Generating…";
-            if (genSt) genSt.textContent = "Calling LLM…";
+            if (clBtnText && genClBtn.id === "generate-cover-letter-btn") clBtnText.textContent = "Generating…";
+            if (genSt) {
+                if (lengthVal === "shorter") genSt.textContent = "Condensing cover letter…";
+                else if (lengthVal === "longer") genSt.textContent = "Expanding cover letter…";
+                else genSt.textContent = "Calling LLM…";
+            }
             fetch("/api/resume/status/" + rid + "/generate-cover-letter", {
                 method: "POST",
-                headers: { "Content-Type": "application/json", "Accept": "application/json" },
-                body: JSON.stringify({})
+                headers: { "Content-Type": "application/json", "Accept": "application/json", "X-CSRFToken": getCsrfOptimizer() },
+                body: JSON.stringify({ length: lengthVal })
             }).then(function(r) {
                 return r.json().then(function(d) { return { ok: r.ok, data: d }; });
             }).then(function(res) {
@@ -1359,6 +1384,10 @@
                     if (clTa) clTa.value = res.data.content;
                     window.__optimizerCoverLetterDirty = false;
                     if (clBtnText) clBtnText.textContent = "Regenerate cover letter";
+                    if (shortenBtn) shortenBtn.classList.remove("hidden");
+                    if (lengthenBtn) lengthenBtn.classList.remove("hidden");
+                    if (exportPdfBtn) exportPdfBtn.classList.remove("opacity-50", "pointer-events-none");
+                    if (exportDocxBtn) exportDocxBtn.classList.remove("opacity-50", "pointer-events-none");
                     if (genSt) genSt.textContent = "Done.";
                 } else {
                     var err = (res.data && res.data.detail) ? res.data.detail : "Generation failed";
@@ -1378,12 +1407,14 @@
             var rid2 = saveClBtn.getAttribute("data-resume-id");
             var clTa2 = document.getElementById("optimizer-cover-letter-editor");
             var saveClSt = document.getElementById("save-cover-letter-status");
+            var exportPdfBtn2 = document.getElementById("export-cl-pdf-btn");
+            var exportDocxBtn2 = document.getElementById("export-cl-docx-btn");
             if (!rid2 || !clTa2) return;
             saveClBtn.disabled = true;
             if (saveClSt) saveClSt.textContent = "Saving…";
             fetch("/api/resume/status/" + rid2 + "/save-cover-letter", {
                 method: "POST",
-                headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                headers: { "Content-Type": "application/json", "Accept": "application/json", "X-CSRFToken": getCsrfOptimizer() },
                 body: JSON.stringify({ cover_letter: clTa2.value })
             }).then(function(r) {
                 return r.json().then(function(d) { return { ok: r.ok, data: d }; });
@@ -1392,6 +1423,10 @@
                 if (res.ok && res.data && res.data.ok) {
                     window.__optimizerCoverLetterDirty = false;
                     if (saveClSt) { saveClSt.textContent = "Saved"; saveClSt.className = "text-xs text-brand"; }
+                    if (clTa2.value.trim().length > 0) {
+                        if (exportPdfBtn2) exportPdfBtn2.classList.remove("opacity-50", "pointer-events-none");
+                        if (exportDocxBtn2) exportDocxBtn2.classList.remove("opacity-50", "pointer-events-none");
+                    }
                 } else {
                     var err2 = (res.data && res.data.detail) ? res.data.detail : "Save failed";
                     if (saveClSt) { saveClSt.textContent = err2; saveClSt.className = "text-xs text-red-700"; }
@@ -1399,6 +1434,38 @@
             }).catch(function() {
                 saveClBtn.disabled = false;
                 if (saveClSt) { saveClSt.textContent = "Save failed"; saveClSt.className = "text-xs text-red-700"; }
+            });
+            return;
+        }
+
+        var exportClLink = e.target.closest("a.export-cl-button");
+        if (exportClLink) {
+            e.preventDefault();
+            var clRid = exportClLink.getAttribute("data-resume-id")
+                || statusContainer.getAttribute("data-resume-id");
+            var clExportTa = document.getElementById("optimizer-cover-letter-editor");
+            var clExportStatus = document.getElementById("save-cover-letter-status");
+            var clBaseHref = exportClLink.getAttribute("data-base-href") || exportClLink.getAttribute("href");
+            if (!clRid || !clExportTa || !clBaseHref) return;
+            if (clExportStatus) { clExportStatus.textContent = "Saving before export…"; clExportStatus.className = "text-xs text-slate-500"; }
+            fetch("/api/resume/status/" + clRid + "/save-cover-letter", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "Accept": "application/json", "X-CSRFToken": getCsrfOptimizer() },
+                body: JSON.stringify({ cover_letter: clExportTa.value })
+            }).then(function (r) {
+                return r.json().then(function (d) { return { ok: r.ok, data: d }; });
+            }).then(function (res) {
+                if (res.ok && res.data && res.data.ok) {
+                    window.__optimizerCoverLetterDirty = false;
+                    if (clExportStatus) { clExportStatus.textContent = "Saved"; clExportStatus.className = "text-xs text-brand"; }
+                    var sep = clBaseHref.indexOf("?") >= 0 ? "&" : "?";
+                    window.location.href = clBaseHref + sep + "_t=" + Date.now();
+                } else {
+                    var exportErr = (res.data && res.data.detail) ? res.data.detail : "Save failed — export cancelled";
+                    if (clExportStatus) { clExportStatus.textContent = exportErr; clExportStatus.className = "text-xs text-red-700"; }
+                }
+            }).catch(function () {
+                if (clExportStatus) { clExportStatus.textContent = "Save failed — export cancelled"; clExportStatus.className = "text-xs text-red-700"; }
             });
             return;
         }

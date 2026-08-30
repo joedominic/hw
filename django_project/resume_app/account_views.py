@@ -121,7 +121,7 @@ def handle_account_settings_post(request) -> HttpResponse | None:
 
     if action == "create_api_key":
         from .api_keys import generate_api_key
-        from .entitlements import EntitlementDenied
+        from .subscriptions import EntitlementDenied
 
         try:
             _row, raw = generate_api_key(user, name=(request.POST.get("api_key_name") or "").strip())
@@ -215,7 +215,7 @@ def handle_account_settings_post(request) -> HttpResponse | None:
 def account_settings_context(user) -> dict:
     """Template context extras for the Account settings tab."""
     from .models import CustomerApiKey
-    from .entitlements import get_user_plan
+    from .subscriptions import get_user_plan
 
     exp = UserExperienceSettings.get_for_user(user)
     plan = get_user_plan(user)

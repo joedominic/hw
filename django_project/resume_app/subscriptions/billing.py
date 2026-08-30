@@ -9,7 +9,7 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 
 from .entitlements import assign_plan, ensure_default_plans, get_or_create_subscription
-from .models import Plan, StripeWebhookEvent, Subscription
+from ..models import Plan, StripeWebhookEvent, Subscription
 
 logger = logging.getLogger(__name__)
 User = get_user_model()

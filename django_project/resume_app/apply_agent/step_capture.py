@@ -56,8 +56,7 @@ def save_step_screenshot(attempt_id: int, step_key: str, raw: Any) -> str:
     owner = _owner_for_attempt(attempt_id)
     if owner is not None:
         try:
-            from ..entitlements import QuotaExceeded
-            from ..storage_quota import check_storage_quota
+            from ..subscriptions import QuotaExceeded, check_storage_quota
 
             check_storage_quota(owner, additional_bytes=_estimate_raw_size(raw))
         except QuotaExceeded as exc:

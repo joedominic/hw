@@ -24,6 +24,7 @@
         <input type="hidden" name="llm_model" value="{{ job_search_llm_model }}">
         {% endif %}
         <input type="hidden" name="track" id="track-select" value="{{ job_search_track }}">
+        <input type="hidden" name="sort" id="job-search-sort-input" value="{{ sort_param|default:'match' }}">
 
         <div class="flex flex-col gap-3 lg:flex-row lg:items-stretch">
             <div class="relative min-w-0 flex-1">
@@ -98,6 +99,7 @@
                         <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="dice" class="job-site-cb h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand" {% if "dice" in selected_site_names %}checked{% endif %}> Dice</label>
                         <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="adzuna" class="job-site-cb h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand" {% if "adzuna" in selected_site_names %}checked{% endif %}> Adzuna</label>
                         <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="levels" class="job-site-cb h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand" {% if "levels" in selected_site_names %}checked{% endif %}> Levels.fyi</label>
+                        <label class="inline-flex items-center gap-2"><input type="checkbox" name="site_name" value="builtin" class="job-site-cb h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand" {% if "builtin" in selected_site_names %}checked{% endif %}> Built In</label>
                     </div>
                 </div>
                 {% if is_power_user %}

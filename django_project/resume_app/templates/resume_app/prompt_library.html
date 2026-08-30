@@ -170,15 +170,20 @@
                         </div>
                     </div>
                 </div>
-                <div class="flex flex-wrap gap-3">
-                    <button type="submit" class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">Save prompts</button>
-                    <a href="{% url 'resume_optimizer' %}" class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50">Optimizer</a>
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                    <div class="flex flex-wrap items-center gap-3">
+                        <button type="submit" class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">Save prompts</button>
+                        <a href="{% url 'resume_optimizer' %}" class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50">Optimizer</a>
+                    </div>
                 </div>
             </form>
-            <form method="post" class="mt-6 border-t border-slate-100 pt-4">
+            <form method="post" class="mt-6 border-t border-slate-100 pt-4 flex items-center justify-between" onsubmit="return confirm('Reset all prompt templates to built-in code defaults? This will discard all custom prompt edits.');">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="reset_prompts">
-                <button type="submit" class="text-sm font-medium text-slate-500 underline hover:text-concierge-slate">Reset to server defaults</button>
+                <span class="text-xs text-slate-500">Need to restore original prompt instructions?</span>
+                <button type="submit" class="rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-red-700">
+                    Reset to server defaults
+                </button>
             </form>
         </div>
     </div>

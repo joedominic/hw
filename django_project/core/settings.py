@@ -382,6 +382,13 @@ LEVELS_FYI_STANDARD_LEVELS = env("LEVELS_FYI_STANDARD_LEVELS", default="")
 LEVELS_FYI_OFFSET_STEP = env.int("LEVELS_FYI_OFFSET_STEP", default=10)
 LEVELS_FYI_PAGE_DELAY = env.float("LEVELS_FYI_PAGE_DELAY", default=0.35)
 LEVELS_FYI_MAX_SCAN_PAGES = env.int("LEVELS_FYI_MAX_SCAN_PAGES", default=30)
+
+# BuiltIn.com job search.
+BUILTIN_API_KEY = env("BUILTIN_API_KEY", default="")
+BUILTIN_USER_AGENT = env("BUILTIN_USER_AGENT", default="")
+BUILTIN_PAGE_DELAY = env.float("BUILTIN_PAGE_DELAY", default=0.35)
+BUILTIN_PROXIES = env.json("BUILTIN_PROXIES", default=None)
+
 # Disliked-job similarity: penalize results similar to disliked (listing-level embedding).
 JOB_DISLIKED_SIMILARITY_PENALTY_WEIGHT = 0.4  # penalty = weight * disliked_sim (0–1)
 JOB_DISLIKED_SIMILARITY_THRESHOLD = 0.3  # only penalize when similarity above this (0–1)

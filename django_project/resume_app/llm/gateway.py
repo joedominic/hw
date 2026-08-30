@@ -14,9 +14,9 @@ from typing import Any
 from django.db.models import F
 from django.utils import timezone
 
-from .crypto import decrypt_api_key
-from .llm_factory import get_llm
-from .llm_policy import (
+from ..crypto import decrypt_api_key
+from .factory import get_llm
+from .policy import (
     LLMConcurrencyLimitExceeded,
     LLMInvokeTimeout,
     LLMRequestsDisabled,
@@ -26,7 +26,7 @@ from .llm_policy import (
     run_with_invoke_timeout,
     user_llm_concurrency,
 )
-from .llm_rate_limit import (
+from .rate_limit import (
     acquire_llm_slot,
     estimate_tokens_from_messages,
     get_cooldown_seconds_for_provider_model,
@@ -34,7 +34,13 @@ from .llm_rate_limit import (
     set_llm_cooldown,
     try_acquire_llm_slot,
 )
-from .models import LLMProviderPreference, LLMAppUsageTotals, LLMUsageByModel, LLMUsageByQuery
+from ..models import (
+    LLMProviderPreference,
+    LLMAppUsageTotals,
+    LLMUsageByModel,
+    LLMUsageByQuery,
+    LLMDailyUsageBreakdown,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +146,7 @@ def log_llm_invoke(
 
 
 def _redis_client():
-    from .llm_rate_limit import _get_redis
+    from .rate_limit import _get_redis
 
     return _get_redis()
 
@@ -236,6 +242,30 @@ def record_llm_usage(
         )
     except Exception as e:
         logger.warning("record_llm_usage by-query failed: %s", e)
+    try:
+        today_date = timezone.localdate()
+        drow, _ = LLMDailyUsageBreakdown.objects.get_or_create(
+            owner=user,
+            period_date=today_date,
+            query_kind=qk,
+            provider=prov,
+            model=mkey,
+            defaults={
+                "request_count": 0,
+                "sum_input_tokens": 0,
+                "sum_output_tokens": 0,
+                "sum_cached_tokens": 0,
+            },
+        )
+        LLMDailyUsageBreakdown.objects.filter(pk=drow.pk).update(
+            request_count=F("request_count") + 1,
+            sum_input_tokens=F("sum_input_tokens") + max(0, int(input_tokens)),
+            sum_output_tokens=F("sum_output_tokens") + max(0, int(output_tokens)),
+            sum_cached_tokens=F("sum_cached_tokens") + max(0, int(cached_tokens)),
+            last_used_at=timezone.now(),
+        )
+    except Exception as e:
+        logger.warning("record_llm_usage daily breakdown failed: %s", e)
 
 
 def _preference_candidates(user) -> list[dict]:
@@ -288,6 +318,17 @@ def cloud_llm_available(user) -> bool:
     """True when at least one non-local preference candidate is configured and not on cooldown."""
     for c in _preference_candidates(user):
         if c.get("is_local"):
+            continue
+        if is_llm_on_cooldown(c["provider"], c["model_get_llm"], user=user):
+            continue
+        return True
+    return False
+
+
+def local_llm_available(user) -> bool:
+    """True when at least one local preference candidate (e.g. Ollama) is configured and not on cooldown."""
+    for c in _preference_candidates(user):
+        if not c.get("is_local"):
             continue
         if is_llm_on_cooldown(c["provider"], c["model_get_llm"], user=user):
             continue
@@ -498,14 +539,50 @@ def invoke_llm_messages(
     When allow_local=False, local providers (including Ollama Local) are excluded; if none remain,
     raises LLMUnavailableError.
     """
-    from .agents import _normalize_token_usage
-    from .llm_policy import assert_llm_kill_switch
-    from .rate_limits import check_user_llm_rate_limit, record_llm_request
+    from ..agents import _normalize_token_usage
+    from .policy import assert_llm_kill_switch
+    from ..rate_limits import check_user_llm_rate_limit, record_llm_request
 
     check_user_llm_rate_limit(user)
     assert_llm_kill_switch(user)
 
     est = estimate_tokens_from_messages(messages)
+
+    if llm_override is None and job_cache_key and job_cache_key.strip().isdigit() and usage_query_kind:
+        try:
+            from ..models import OptimizedResume, LLMProviderConfig
+            from ..crypto import decrypt_api_key
+            from .factory import get_llm
+
+            opt = OptimizedResume.objects.select_related("optimizer_workflow").get(id=int(job_cache_key))
+            wf = opt.optimizer_workflow
+            if wf and wf.step_llm_config:
+                # Map usage_query_kind to workflow step type keys ('writer', 'jd_cleanse', etc.)
+                step_key_map = {
+                    "jd_cleanse": "jd_cleanse",
+                    "optimizer_writer": "writer",
+                    "optimizer_ats_judge": "ats_judge",
+                    "optimizer_recruiter_judge": "recruiter_judge",
+                }
+                step_key = step_key_map.get(usage_query_kind)
+                if step_key and step_key in wf.step_llm_config:
+                    cfg = wf.step_llm_config[step_key]
+                    prov = (cfg.get("provider") or "").strip()
+                    model_to_use = (cfg.get("model") or "").strip() or None
+                    if prov:
+                        provider_config = LLMProviderConfig.objects.for_user(user).filter(provider=prov).first()
+                        if provider_config:
+                            api_key = decrypt_api_key(provider_config.encrypted_api_key or "")
+                            if api_key:
+                                custom_llm = get_llm(prov, api_key, model_to_use)
+                                if custom_llm is not None:
+                                    logger.info(
+                                        "[llm_gateway] Workflow step LLM override applied: step_key=%s -> provider=%s, model=%s",
+                                        step_key, prov, model_to_use
+                                    )
+                                    llm_override = custom_llm
+        except Exception as e:
+            logger.warning("Failed to apply workflow step LLM override: %s", e)
 
     if llm_override is not None:
         provider_hint = getattr(llm_override, "_resume_provider", None) or ""
@@ -526,6 +603,7 @@ def invoke_llm_messages(
                 via="gateway-override",
             )
 
+    tenant_label = getattr(user, "username", getattr(user, "id", "anonymous")) if user else "anonymous"
     candidates = _ordered_eligible_candidates(
         user,
         job_cache_key,
@@ -535,13 +613,14 @@ def invoke_llm_messages(
     )
     if not candidates:
         if not allow_local:
-            raise LLMUnavailableError(NO_CLOUD_LLM_MESSAGE)
+            raise LLMUnavailableError(f"[tenant={tenant_label}] {NO_CLOUD_LLM_MESSAGE}")
         raise RuntimeError(
-            "No eligible LLM candidates (check provider keys, preferences, and cooldowns)."
+            f"[tenant={tenant_label}] No eligible LLM candidates (check provider keys, preferences, and cooldowns)."
         )
 
     logger.warning(
-        "[llm] candidate order for query=%s prefer_local=%s only_local=%s allow_local=%s: %s",
+        "[llm] tenant=%s candidate order for query=%s prefer_local=%s only_local=%s allow_local=%s: %s",
+        tenant_label,
         usage_query_kind or USAGE_QUERY_UNSPECIFIED,
         prefer_local,
         only_local,

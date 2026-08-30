@@ -6,18 +6,19 @@ Canonical reference for how product LLM traffic is selected, limited, timed out,
 
 | Module | Role |
 |--------|------|
-| [`llm_gateway.py`](../llm_gateway.py) | Central LangChain invoke path: kill switch, preference order, job pin, failover, usage recording, token budget consume |
-| [`llm_policy.py`](../llm_policy.py) | Shared policy: kill switch helper, daily token budgets, per-user concurrency, invoke timeout, browser-use LLM wrapper |
-| [`llm_rate_limit.py`](../llm_rate_limit.py) | Redis RPM/TPM slots and cooldowns (BYOK vs platform scope) |
-| [`llm_factory.py`](../llm_factory.py) | Provider → LangChain client (`_resume_provider` / `_resume_model` metadata) |
-| [`llm_session.py`](../llm_session.py) | Active provider + runtime candidates (UI / apply-agent candidate pick) |
+| [`llm/gateway.py`](../llm/gateway.py) | Central LangChain invoke path: kill switch, preference order, job pin, failover, usage recording, token budget consume |
+| [`llm/policy.py`](../llm/policy.py) | Shared policy: kill switch helper, daily token budgets, per-user concurrency, invoke timeout, browser-use LLM wrapper |
+| [`llm/rate_limit.py`](../llm/rate_limit.py) | Redis RPM/TPM slots and cooldowns (BYOK vs platform scope) |
+| [`llm/factory.py`](../llm/factory.py) | Provider → LangChain client (`_resume_provider` / `_resume_model` metadata) |
+| [`llm/session.py`](../llm/session.py) | Active provider + runtime candidates (UI / apply-agent candidate pick) |
+| [`llm/services.py`](../llm/services.py) | Provider models & connectivity probes |
 | [`rate_limits.py`](../rate_limits.py) | Plan daily **request** quota bridge (`METRIC_LLM_REQUESTS`) |
-| [`entitlements.py`](../entitlements.py) | Plans, `UsageCounter`, including `METRIC_LLM_TOKENS` |
+| [`subscriptions/entitlements.py`](../subscriptions/entitlements.py) | Plans, `UsageCounter`, including `METRIC_LLM_TOKENS` |
 
 **Entry points**
 
-- LangChain product calls: `invoke_llm_messages` / `call_invoke_llm_messages`
-- Non-LangChain (browser-use): `llm_policy.wrap_browser_use_llm`
+- LangChain product calls: `resume_app.llm.invoke_llm_messages` / `resume_app.llm.call_invoke_llm_messages`
+- Non-LangChain (browser-use): `resume_app.llm.wrap_browser_use_llm`
 - Do **not** call `get_llm(...).invoke(...)` for product traffic except connect/validation pings
 
 ## Call flow

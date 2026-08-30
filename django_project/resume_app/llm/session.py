@@ -5,7 +5,7 @@ provider configs, preferences, and the active-provider marker are never
 shared across tenants.
 """
 
-from .models import LLMProviderConfig, LLMProviderPreference
+from ..models import LLMProviderConfig, LLMProviderPreference
 
 
 def _connected_configs_qs(user):
@@ -129,3 +129,6 @@ def get_active_llm_provider(user, request=None):
         request.session["active_llm_provider"] = fallback.provider
         request.session.modified = True
     return fallback.provider
+
+
+set_active_llm_provider = set_active_provider

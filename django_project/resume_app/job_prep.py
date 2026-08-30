@@ -12,7 +12,7 @@ from django.utils import timezone
 from pydantic import BaseModel, Field
 
 from .agents import build_llm_messages_for_prompt, _llm_invoke_with_retry
-from .llm_gateway import USAGE_QUERY_COVER_LETTER, USAGE_QUERY_INTERVIEW_PREP
+from .llm.gateway import USAGE_QUERY_COVER_LETTER, USAGE_QUERY_INTERVIEW_PREP
 from .models import (
     ApplicationAttempt,
     OptimizedResume,
@@ -242,9 +242,11 @@ def generate_cover_letter(
     llm,
     prompts_profile=None,
     job_cache_key: Optional[str] = None,
+    length: Optional[str] = "standard",
 ) -> tuple[str, str]:
     """
     Generate and persist a cover letter for a completed optimization.
+    Supports size/length control ('short', 'standard', 'detailed', 'shorter', 'longer').
 
     Returns (cover_letter_text, prompt_text).
     """
@@ -261,22 +263,73 @@ def generate_cover_letter(
     sys_t, usr_t, leg = resolve_prompt_parts(profile, "cover_letter")
     company, title, _url = _job_meta_from_optimized(optimized)
     jd = (optimized.job_description.content or "").strip()
+
+    length_norm = (length or "standard").strip().lower()
+    length_directives = {
+        "short": (
+            "LENGTH & CONCISENESS REQUIREMENT:\n"
+            "- Keep the cover letter short, concise, and punchy (approx 150–200 words, 2 short paragraphs max).\n"
+            "- Focus immediately on the candidate's top 2 most impactful qualifications for this role without fluff."
+        ),
+        "standard": (
+            "LENGTH & CONCISENESS REQUIREMENT:\n"
+            "- Standard professional cover letter length (approx 250–350 words, 3–4 structured paragraphs).\n"
+            "- Include a compelling opening, core achievement evidence mapped to the job requirements, company/culture fit, and a professional closing."
+        ),
+        "detailed": (
+            "LENGTH & CONCISENESS REQUIREMENT:\n"
+            "- In-depth, comprehensive cover letter (approx 400–500 words, 4–5 detailed paragraphs).\n"
+            "- Thoroughly elaborate on specific technical projects, quantifiable leadership impact metrics, and deep strategic alignment with company initiatives."
+        ),
+        "shorter": (
+            "LENGTH & CONCISENESS REQUIREMENT:\n"
+            "- Condense and shorten the previous cover letter significantly (reduce by ~30–40%, target ~150–200 words).\n"
+            "- Eliminate wordiness while retaining the strongest impact points and technical keywords."
+        ),
+        "longer": (
+            "LENGTH & CONCISENESS REQUIREMENT:\n"
+            "- Expand and elaborate upon the cover letter (target ~400–500 words).\n"
+            "- Add greater depth and specific examples from the candidate's tailored resume illustrating hands-on experience relevant to the job description."
+        ),
+    }
+    length_instruction = length_directives.get(length_norm, length_directives["standard"])
+
+    existing_draft_context = ""
+    if length_norm in ("shorter", "longer") and (optimized.cover_letter or "").strip():
+        existing_draft_context = f"\n\nCurrent Draft Cover Letter to scale:\n{_truncate(optimized.cover_letter, MAX_RESUME_CHARS)}\n"
+
     fmt = {
         "optimized_resume": _truncate(optimized.optimized_content or "", MAX_RESUME_CHARS),
         "job_description": _truncate(jd, MAX_JD_CHARS),
         "company_name": company or "the company",
         "job_title": title or "the role",
+        "length_instruction": length_instruction,
     }
+
+    effective_usr_t = usr_t
+    effective_leg = leg
+    if effective_usr_t and "{length_instruction}" not in effective_usr_t:
+        effective_usr_t = f"{effective_usr_t}\n\n{length_instruction}{existing_draft_context}"
+    elif not effective_usr_t and effective_leg and "{length_instruction}" not in effective_leg:
+        effective_leg = f"{effective_leg}\n\n{length_instruction}{existing_draft_context}"
+    elif not effective_usr_t and not effective_leg:
+        effective_usr_t = (
+            f"Company: {{company_name}}\nRole: {{job_title}}\n\n"
+            f"Tailored resume:\n{{optimized_resume}}\n\n"
+            f"Job description:\n{{job_description}}\n\n"
+            f"{length_instruction}{existing_draft_context}\n\nCover letter:"
+        )
+
     messages = build_llm_messages_for_prompt(
-        legacy_combined=leg or None,
+        legacy_combined=effective_leg or None,
         system_template=sys_t or None,
-        user_template=usr_t or None,
+        user_template=effective_usr_t or None,
         format_kwargs=fmt,
     )
     prompt_text = "\n\n---\n\n".join(
         f"{type(m).__name__}:\n{getattr(m, 'content', '')}" for m in messages
     )
-    cache_key = job_cache_key or f"cover-letter:{optimized.id}"
+    cache_key = job_cache_key or f"cover-letter:{optimized.id}:{length_norm}"
     raw = _llm_invoke_with_retry(
         llm,
         messages,

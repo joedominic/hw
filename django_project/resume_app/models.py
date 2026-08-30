@@ -48,7 +48,7 @@ class Track(models.Model):
         """
         Ensure there is at least one track for this user.
 
-        If no Track rows exist yet for the user, seed a single default search profile.
+        If no Track rows exist yet for the user, seed a single default track.
         """
         qs = cls.objects.for_user(user)
         if not qs.exists():
@@ -566,6 +566,42 @@ class LLMUsageByQuery(models.Model):
         return f"{self.query_kind} / {self.provider} / {self.model}"
 
 
+class LLMDailyUsageBreakdown(models.Model):
+    """Granular daily usage ledger by provider, model, and logical query use-case."""
+
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="llm_daily_usage_breakdowns",
+    )
+    period_date = models.DateField(db_index=True)
+    query_kind = models.CharField(max_length=64, db_index=True)
+    provider = models.CharField(max_length=64, db_index=True)
+    model = models.CharField(
+        max_length=128,
+        db_index=True,
+        help_text="Resolved model name, or __default__ when empty.",
+    )
+    request_count = models.PositiveIntegerField(default=0)
+    sum_input_tokens = models.BigIntegerField(default=0)
+    sum_output_tokens = models.BigIntegerField(default=0)
+    sum_cached_tokens = models.BigIntegerField(default=0)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    objects = OwnedManager()
+
+    class Meta:
+        verbose_name = "LLM daily usage breakdown"
+        verbose_name_plural = "LLM daily usage breakdowns"
+        unique_together = [("owner", "period_date", "query_kind", "provider", "model")]
+        indexes = [
+            models.Index(fields=["owner", "period_date"]),
+        ]
+
+    def __str__(self):
+        return f"{self.period_date} {self.query_kind} / {self.provider} / {self.model}"
+
+
 class AppAutomationSettings(models.Model):
     """
     Per-user pipeline / vetting automation thresholds.
@@ -576,7 +612,7 @@ class AppAutomationSettings(models.Model):
         on_delete=models.CASCADE,
         related_name="automation_settings",
     )
-    pipeline_to_vetting_enabled = models.BooleanField(default=False)
+    pipeline_to_vetting_enabled = models.BooleanField(default=True)
     pipeline_preference_margin_min = models.IntegerField(
         default=0,
         help_text="Promote Pipeline → Vetting when Pref margin (same as pipeline badge) is >= this value.",
@@ -598,16 +634,20 @@ class AppAutomationSettings(models.Model):
         default=False,
         help_text="When set, the app will not send any LLM API requests (kill switch).",
     )
+    cleanup_job_retention_days = models.PositiveSmallIntegerField(
+        default=14,
+        help_text="Cleanup Manager: remove non-applied jobs older than this many days (default 14 days / 2 weeks; 0 = off).",
+    )
     cleanup_pipeline_retention_days = models.PositiveSmallIntegerField(
-        default=2,
+        default=14,
         help_text="Cleanup Manager: remove Pipeline-stage rows older than this many days (0 = off).",
     )
     cleanup_vetting_retention_days = models.PositiveSmallIntegerField(
-        default=6,
+        default=14,
         help_text="Cleanup Manager: remove Vetting-stage rows older than this many days (0 = off).",
     )
     cleanup_applying_retention_days = models.PositiveSmallIntegerField(
-        default=10,
+        default=14,
         help_text="Cleanup Manager: remove Applying-stage rows older than this many days (0 = off).",
     )
     cleanup_done_retention_days = models.PositiveSmallIntegerField(
@@ -704,14 +744,15 @@ class AppAutomationSettings(models.Model):
         obj, _created = cls.objects.get_or_create(
             owner=user,
             defaults={
-                "pipeline_to_vetting_enabled": False,
+                "pipeline_to_vetting_enabled": True,
                 "pipeline_preference_margin_min": 0,
                 "vetting_to_applying_enabled": False,
                 "vetting_interview_probability_min": 70,
                 "stop_llm_requests": False,
-                "cleanup_pipeline_retention_days": 2,
-                "cleanup_vetting_retention_days": 6,
-                "cleanup_applying_retention_days": 10,
+                "cleanup_job_retention_days": 14,
+                "cleanup_pipeline_retention_days": 14,
+                "cleanup_vetting_retention_days": 14,
+                "cleanup_applying_retention_days": 14,
                 "cleanup_done_retention_days": 0,
                 "cleanup_generated_resume_retention_days": 7,
             },
@@ -934,6 +975,11 @@ class OptimizerWorkflow(models.Model):
     steps = models.JSONField(
         help_text="Ordered list of step ids, e.g. ['writer', 'ats_judge', 'recruiter_judge']"
     )
+    step_llm_config = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Step-specific LLM config mapping step ids ('writer', 'jd_cleanse', etc.) to {'provider': '...', 'model': '...'}"
+    )
     loop_to = models.CharField(max_length=64, blank=True)
     max_iterations = models.PositiveSmallIntegerField(default=3)
     score_threshold = models.PositiveSmallIntegerField(default=85)
@@ -1072,6 +1118,52 @@ class SearchProfile(models.Model):
             self.slug = slug
             self.profile_slug = slug
         super().save(*args, **kwargs)
+
+    @classmethod
+    def ensure_baseline(cls, user):
+        """
+        Aggregate root baseline initialization:
+        Ensure there is at least one active SearchProfile for this user.
+        If no SearchProfile exists yet for the user, seed a default 'General' profile.
+        """
+        qs = cls.objects.for_user(user)
+        if not qs.exists():
+            cls.objects.get_or_create(
+                owner=user,
+                slug="general",
+                defaults={"name": "General", "search_term": "Software", "is_default": True},
+            )
+        elif not qs.filter(is_default=True).exists():
+            first = qs.order_by("id").first()
+            if first:
+                qs.update(is_default=False)
+                first.is_default = True
+                first.save(update_fields=["is_default"])
+        return qs.all()
+
+    @classmethod
+    def get_default_slug(cls, user) -> str:
+        """Best-effort default SearchProfile slug for a user."""
+        qs = cls.objects.for_user(user)
+        default = qs.filter(is_default=True).first()
+        if default:
+            return default.slug
+        first = qs.order_by("id").first()
+        if first:
+            return first.slug
+        obj, _created = cls.objects.get_or_create(
+            owner=user,
+            slug="general",
+            defaults={"name": "General", "search_term": "Software", "is_default": True},
+        )
+        return obj.slug
+
+    @classmethod
+    def get_by_slug(cls, user, slug: str | None) -> "SearchProfile | None":
+        """Retrieve a user's SearchProfile by its unique slug."""
+        if not slug or not str(slug).strip():
+            return None
+        return cls.objects.for_user(user).filter(slug=str(slug).strip().lower()).first()
 
     def to_query_params(self) -> dict[str, str]:
         """Build GET query params for jobs_search from this profile."""
@@ -1220,6 +1312,39 @@ class PipelineEntry(models.Model):
     def __str__(self):
         return f"{self.job_listing_id} @ {self.track}"
 
+    # --- Domain State & Predicates ---
+
+    @property
+    def is_in_pipeline_stage(self) -> bool:
+        return self.stage in ("", self.Stage.PIPELINE)
+
+    @property
+    def is_in_vetting_stage(self) -> bool:
+        return self.stage == self.Stage.VETTING
+
+    @property
+    def is_in_applying_stage(self) -> bool:
+        return self.stage == self.Stage.APPLYING
+
+    @property
+    def is_in_done_stage(self) -> bool:
+        return self.stage == self.Stage.DONE
+
+    @property
+    def is_active(self) -> bool:
+        return self.removed_at is None and self.stage != self.Stage.DELETED
+
+    def can_move_to_vetting(self) -> bool:
+        return self.is_in_pipeline_stage and self.is_active
+
+    def can_move_to_applying(self) -> bool:
+        return (self.is_in_pipeline_stage or self.is_in_vetting_stage) and self.is_active
+
+    def can_mark_done(self) -> bool:
+        return self.is_active
+
+    # --- Domain Stage Transitions ---
+
     def move_to_pipeline(self, save: bool = True):
         self.stage = self.Stage.PIPELINE
         if save:
@@ -1227,15 +1352,15 @@ class PipelineEntry(models.Model):
 
     def move_to_vetting(self, save: bool = True):
         # Allow moving into vetting only from blank/default or pipeline stage.
-        if self.stage not in ("", self.Stage.PIPELINE):
+        if not self.can_move_to_vetting():
             return
         self.stage = self.Stage.VETTING
         if save:
             self.save(update_fields=["stage"])
 
     def move_to_applying(self, save: bool = True):
-        # Allow moving into applying only from vetting.
-        if self.stage not in ("", self.Stage.PIPELINE, self.Stage.VETTING):
+        # Allow moving into applying from pipeline or vetting.
+        if not self.can_move_to_applying():
             return
         self.stage = self.Stage.APPLYING
         if save:
@@ -1243,6 +1368,8 @@ class PipelineEntry(models.Model):
 
     def mark_done(self, save: bool = True):
         # Mark as fully applied.
+        if not self.can_mark_done():
+            return
         self.stage = self.Stage.DONE
         if save:
             self.save(update_fields=["stage"])
@@ -1257,6 +1384,78 @@ class PipelineEntry(models.Model):
             update_fields = ["stage"]
         if save:
             self.save(update_fields=update_fields)
+
+    # --- Vetting & Promotion Domain Rules ---
+
+    def has_matching_interview_evaluation(self, resume_id: int | None) -> bool:
+        """True if this entry was already evaluated using the given resume ID."""
+        if resume_id is None:
+            return False
+        return (
+            self.vetting_interview_probability is not None
+            and self.vetting_interview_resume_id == resume_id
+        )
+
+    def record_vetting_interview_result(
+        self,
+        probability: int | None,
+        reasoning: str | None = None,
+        resume_id: int | None = None,
+        scored_at=None,
+        save: bool = True,
+    ) -> None:
+        """Encapsulate recording of interview matching evaluation results."""
+        norm_prob = None
+        if probability is not None:
+            try:
+                norm_prob = max(0, min(100, int(probability)))
+            except (TypeError, ValueError):
+                norm_prob = None
+
+        self.vetting_interview_probability = norm_prob
+        self.vetting_interview_reasoning = (reasoning or "").strip()[:2000] if reasoning else ""
+        if resume_id is not None:
+            self.vetting_interview_resume_id = resume_id
+        self.vetting_interview_scored_at = scored_at or timezone.now()
+        if save:
+            self.save(
+                update_fields=[
+                    "vetting_interview_probability",
+                    "vetting_interview_reasoning",
+                    "vetting_interview_resume_id",
+                    "vetting_interview_scored_at",
+                ]
+            )
+
+    def meets_vetting_promotion_threshold(self, settings=None) -> bool:
+        """Domain rule: check if entry in Vetting satisfies threshold for auto-promotion to Applying."""
+        if not self.is_in_vetting_stage or not self.is_active:
+            return False
+        if self.vetting_interview_probability is None:
+            return False
+        cfg = settings or AppAutomationSettings.get_for_user(self.owner)
+        if not cfg.vetting_to_applying_enabled:
+            return False
+        return self.vetting_interview_probability >= int(cfg.vetting_interview_probability_min)
+
+    def meets_pipeline_auto_promotion_threshold(self, preference_margin: int | None, settings=None) -> bool:
+        """Domain rule: check if entry in Pipeline satisfies threshold for auto-promotion to Vetting."""
+        if not self.is_in_pipeline_stage or not self.is_active:
+            return False
+        if preference_margin is None:
+            return False
+        cfg = settings or AppAutomationSettings.get_for_user(self.owner)
+        if not cfg.pipeline_to_vetting_enabled:
+            return False
+        return preference_margin >= int(cfg.pipeline_preference_margin_min)
+
+    def is_fast_track_eligible(self, preference_margin: int | None, threshold: int = 50) -> bool:
+        """Domain rule: check if high-confidence preference score qualifies for fast-tracking directly to Applying."""
+        if not self.is_in_pipeline_stage or not self.is_active:
+            return False
+        if preference_margin is None:
+            return False
+        return preference_margin > threshold
 
 
 class JobSearchTaskRun(models.Model):
@@ -1518,16 +1717,85 @@ class ApplicationAttempt(models.Model):
     def __str__(self):
         return f"ApplicationAttempt {self.id} ({self.status})"
 
+    # --- Domain State & Predicates ---
+
     @property
     def is_terminal(self) -> bool:
         return self.status in (self.Status.SUCCEEDED, self.Status.FAILED)
 
+    @property
+    def is_active(self) -> bool:
+        return self.status in self.ACTIVE_STATUSES
+
+    @property
+    def is_awaiting_approval(self) -> bool:
+        return self.status == self.Status.AWAITING_APPROVAL
+
+    # --- Domain Lifecycle Transitions ---
+
+    def advance_to(self, target_status: str, save: bool = True) -> None:
+        """Advance attempt to the next active state in the workflow."""
+        if self.is_terminal:
+            raise ValueError(f"Cannot advance terminal attempt {self.id} (status={self.status})")
+        if target_status not in [c[0] for c in self.Status.choices]:
+            raise ValueError(f"Invalid status: {target_status}")
+        self.status = target_status
+        self.last_heartbeat_at = timezone.now()
+        if save:
+            self.save(update_fields=["status", "last_heartbeat_at", "updated_at"])
+
+    def mark_succeeded(self, submitted_at=None, save: bool = True) -> None:
+        """Transition attempt to Succeeded state."""
+        self.status = self.Status.SUCCEEDED
+        self.submitted_at = submitted_at or timezone.now()
+        self.error_code = ""
+        self.error_message = ""
+        if save:
+            self.save(update_fields=["status", "submitted_at", "error_code", "error_message", "updated_at"])
+
     def mark_failed(self, error_code: str, message: str = "", save: bool = True) -> None:
+        """Transition attempt to Failed state with error context."""
         self.status = self.Status.FAILED
         self.error_code = error_code or ""
         self.error_message = (message or "")[:4000]
         if save:
             self.save(update_fields=["status", "error_code", "error_message", "updated_at"])
+
+    def approve_and_submit(self, save: bool = True) -> None:
+        """Transition from Awaiting Approval to Submitting."""
+        if not self.is_awaiting_approval:
+            raise ValueError(f"Attempt {self.id} is not awaiting approval (current status={self.status})")
+        self.status = self.Status.SUBMITTING
+        self.last_heartbeat_at = timezone.now()
+        if save:
+            self.save(update_fields=["status", "last_heartbeat_at", "updated_at"])
+
+    def reject(self, reason: str = "", save: bool = True) -> None:
+        """User rejected the dry-run application."""
+        self.mark_failed(self.ERROR_REJECTED, reason or "Rejected by user.", save=save)
+
+    def record_heartbeat(self, save: bool = True) -> None:
+        """Record worker activity to prevent watchdog timeouts."""
+        self.last_heartbeat_at = timezone.now()
+        if save:
+            self.save(update_fields=["last_heartbeat_at"])
+
+    def record_step(
+        self,
+        step_name: str,
+        message: str = "",
+        screenshot_path: str = "",
+        action_snapshot: dict | None = None,
+        network_log: list | None = None,
+    ) -> "ApplicationAttemptStep":
+        """Append an audit log step to this attempt aggregate."""
+        return self.steps.create(
+            step_name=step_name,
+            message=message or "",
+            screenshot_path=screenshot_path or "",
+            action_snapshot=action_snapshot,
+            network_log=network_log or [],
+        )
 
 
 class ApplicationAttemptStep(models.Model):
@@ -1679,9 +1947,19 @@ class Plan(models.Model):
     slug = models.SlugField(max_length=64, unique=True)
     name = models.CharField(max_length=128)
     description = models.TextField(blank=True, default="")
+    price_display = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        help_text="Commercial price display (e.g. $0, $29/mo, $99/mo).",
+    )
     llm_requests_per_day = models.PositiveIntegerField(
         default=50,
         help_text="Daily LLM invoke cap. 0 = unlimited.",
+    )
+    llm_tokens_per_day = models.PositiveIntegerField(
+        default=0,
+        help_text="Daily LLM token cap. 0 = unlimited or env default.",
     )
     job_searches_per_day = models.PositiveIntegerField(
         default=20,

@@ -74,10 +74,23 @@
             </button>
         </form>
         {% else %}
-        <p class="text-sm text-slate-600">
-            No Applying-stage jobs are waiting. Move jobs into Applying from the
-            <a href="{% url 'applying' %}" class="font-medium underline">Applying board</a> first.
-        </p>
+        <div class="rounded-xl border border-dashed border-slate-200 bg-slate-50/50 p-6 text-center">
+            <div class="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-brand-mist text-brand">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+            </div>
+            <p class="text-sm font-semibold text-concierge-slate">No jobs waiting in Applying</p>
+            <p class="mx-auto mt-1 max-w-md text-xs text-slate-500">
+                Jobs enter the queue when moved to the <strong>Applying</strong> stage. The agent will then fill applications on supported ATS portals.
+            </p>
+            <div class="mt-4 flex justify-center gap-3">
+                <a href="{% url 'applying' %}" class="inline-flex items-center gap-1.5 rounded-concierge bg-brand px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-brand-hover">
+                    Go to Applying board
+                </a>
+                <a href="{% url 'jobs_search' %}" class="inline-flex items-center gap-1.5 rounded-concierge border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                    Find new jobs
+                </a>
+            </div>
+        </div>
         {% endif %}
     </section>
 

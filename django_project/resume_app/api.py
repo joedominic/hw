@@ -39,20 +39,23 @@ from .agents import (
 )
 from django.conf import settings
 
-from .entitlements import EntitlementDenied, require_api_access
-from .llm_gateway import (
+from .subscriptions import EntitlementDenied, require_api_access
+from .llm import (
     call_invoke_llm_messages,
+    is_auth_error,
+    list_models_for_provider,
     LLMConcurrencyLimitExceeded,
     LLMInvokeTimeout,
     LLMRequestsDisabled,
     LLMTokenBudgetExceeded,
+    DEFAULT_MODELS,
+    LLM_PROVIDERS,
     USAGE_QUERY_API_LLM_COMPLETE,
     USAGE_QUERY_API_RESUME_FIT,
 )
 from .rate_limits import LLMUserRateLimitExceeded
 from .services import parse_pdf
 from .crypto import encrypt_api_key, decrypt_api_key
-from .llm_services import list_models_for_provider, is_auth_error, DEFAULT_MODELS, LLM_PROVIDERS
 from typing import Annotated, List, Optional
 
 from pydantic import BeforeValidator
@@ -301,7 +304,7 @@ def run_step(
     if not api_key:
         raise HttpError(400, f"API key required for {payload.llm_provider}. Connect an API key first.")
     model = payload.llm_model or (config.default_model if config else None) or None
-    llm = get_llm(payload.llm_provider, api_key, model)
+    llm = get_llm(payload.llm_provider, api_key, model, user=user)
 
     from .prompt_store import build_optimizer_graph_prompt_state
     from .optimizer_budget import build_optimizer_context_state_raw
@@ -361,6 +364,7 @@ def run_step(
                 "job_cache_key": jkey,
                 "debug": debug,
                 "max_iterations": 3,
+                "user": user,
                 "user_id": user.id,
             }
             out = jd_cleanse_node(state)
@@ -417,6 +421,8 @@ def run_step(
                 "recruiter_judge_prompt_legacy": _graph_prompts["recruiter_judge_prompt_legacy"],
                 "debug": debug,
                 "max_iterations": 3,
+                "user": user,
+                "user_id": user.id,
             }
             out = writer_node(state)
             return RunStepResponse(
@@ -470,6 +476,8 @@ def run_step(
                 "recruiter_judge_prompt_legacy": _graph_prompts["recruiter_judge_prompt_legacy"],
                 "debug": debug,
                 "max_iterations": 3,
+                "user": user,
+                "user_id": user.id,
             }
             if step == "ats_judge":
                 out = ats_judge_node(state)
@@ -659,8 +667,7 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
     if content_type and content_type.lower() not in ALLOWED_CONTENT_TYPES:
         raise HttpError(400, "Resume file must have content type application/pdf")
 
-    from .entitlements import QuotaExceeded
-    from .storage_quota import assert_upload_allowed
+    from .subscriptions import QuotaExceeded, assert_upload_allowed
 
     try:
         assert_upload_allowed(user, file)
@@ -929,6 +936,7 @@ class SaveCoverLetterRequest(Schema):
 class JobPrepGenerateRequest(Schema):
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
+    length: Optional[str] = "standard"  # "short", "standard", "detailed", "shorter", "longer"
 
 
 class JobPrepGenerateResponse(Schema):
@@ -942,7 +950,7 @@ class JobPrepGenerateResponse(Schema):
 
 @router.post("/status/{resume_id}/generate-cover-letter", response=JobPrepGenerateResponse)
 def generate_cover_letter_api(request, resume_id: int, payload: JobPrepGenerateRequest):
-    """On-demand cover letter for a completed optimization."""
+    """On-demand cover letter for a completed optimization with configurable length/size."""
     from .job_prep import JobPrepError, generate_cover_letter
 
     user = api_user(request)
@@ -972,7 +980,7 @@ def generate_cover_letter_api(request, resume_id: int, payload: JobPrepGenerateR
     except Exception as e:
         raise HttpError(400, str(e)) from e
     try:
-        letter, prompt_text = generate_cover_letter(optimized, llm=llm)
+        letter, prompt_text = generate_cover_letter(optimized, llm=llm, length=payload.length or "standard")
     except JobPrepError as e:
         raise HttpError(e.status_code, e.message) from e
     except LLMRequestsDisabled as e:
@@ -1749,5 +1757,69 @@ def export_docx(request, resume_id: int):
     return _export_file_response(
         buf,
         filename="optimized_resume.docx",
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+
+def _format_export_filename(prefix: str, company: str, title: str, ext: str) -> str:
+    import re
+    parts = [prefix]
+    if company:
+        parts.append(company)
+    if title:
+        parts.append(title)
+    base = "_".join(parts)
+    cleaned = re.sub(r"[^\w\s-]", "", base).strip()
+    cleaned = re.sub(r"[-\s]+", "_", cleaned)
+    return f"{cleaned or prefix}.{ext}"
+
+
+def _job_meta_from_optimized_safe(optimized: OptimizedResume) -> tuple[str, str, str]:
+    try:
+        entry = getattr(optimized, "pipeline_entry", None)
+        if entry is not None and getattr(entry, "job_listing", None) is not None:
+            job = entry.job_listing
+            return (
+                (job.company_name or "").strip(),
+                (job.title or "").strip(),
+                (job.url or "").strip(),
+            )
+    except Exception:
+        pass
+    return ("", "", "")
+
+
+@router.get("/export/{resume_id}/cover-letter/pdf")
+def export_cover_letter_pdf(request, resume_id: int):
+    """Export cover letter as PDF. Returns 404 if not found or cover letter is empty."""
+    user = api_user(request)
+    optimized = get_owned_or_404(OptimizedResume, user, id=resume_id)
+    if not (optimized.cover_letter or "").strip():
+        raise HttpError(404, "Cover letter not generated yet")
+    content = _apply_export_replacements(optimized.cover_letter, request)
+    buf = _build_export_pdf(content)
+    if buf is None:
+        raise HttpError(503, "PDF export requires reportlab; install with: pip install reportlab")
+    company, title, _url = _job_meta_from_optimized_safe(optimized)
+    filename = _format_export_filename("cover_letter", company, title, "pdf")
+    return _export_file_response(buf, filename=filename, content_type="application/pdf")
+
+
+@router.get("/export/{resume_id}/cover-letter/docx")
+def export_cover_letter_docx(request, resume_id: int):
+    """Export cover letter as Word (DOCX). Returns 404 if not found or cover letter is empty."""
+    user = api_user(request)
+    optimized = get_owned_or_404(OptimizedResume, user, id=resume_id)
+    if not (optimized.cover_letter or "").strip():
+        raise HttpError(404, "Cover letter not generated yet")
+    content = _apply_export_replacements(optimized.cover_letter, request)
+    buf = _build_export_docx(content)
+    if buf is None:
+        raise HttpError(503, "Word export requires python-docx; install with: pip install python-docx")
+    company, title, _url = _job_meta_from_optimized_safe(optimized)
+    filename = _format_export_filename("cover_letter", company, title, "docx")
+    return _export_file_response(
+        buf,
+        filename=filename,
         content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )

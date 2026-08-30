@@ -390,7 +390,7 @@
     // Safety: if nothing is checked on load (e.g. empty GET), select defaults.
     if (!anySiteChecked()) {
         siteBoxes().forEach(function(cb) {
-            if (cb.value === 'indeed' || cb.value === 'linkedin' || cb.value === 'dice' || cb.value === 'adzuna' || cb.value === 'levels') {
+            if (cb.value === 'indeed' || cb.value === 'linkedin' || cb.value === 'dice' || cb.value === 'adzuna' || cb.value === 'levels' || cb.value === 'builtin') {
                 cb.checked = true;
             }
         });
@@ -858,6 +858,77 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     resumeSelect.addEventListener('change', syncTrackFromResume);
     syncTrackFromResume();
+})();
+</script>
+
+<script>
+(function() {
+    var matchBtn = document.getElementById('find-jobs-sort-match-btn');
+    var latestBtn = document.getElementById('find-jobs-sort-latest-btn');
+    var sortInput = document.getElementById('job-search-sort-input');
+    if (!matchBtn || !latestBtn) return;
+
+    function reorderRows(sortBy) {
+        var firstRow = document.querySelector('.job-result-row');
+        var container = firstRow ? firstRow.parentElement : null;
+        if (!container) return;
+        var rows = Array.prototype.slice.call(container.querySelectorAll('.job-result-row'));
+        if (rows.length < 2) return;
+
+        rows.sort(function(a, b) {
+            if (sortBy === 'latest') {
+                var timeA = parseInt(a.getAttribute('data-job-timestamp') || '0', 10);
+                var timeB = parseInt(b.getAttribute('data-job-timestamp') || '0', 10);
+                if (timeB !== timeA) return timeB - timeA;
+                var scoreA = parseFloat(a.getAttribute('data-match-score') || '-1');
+                var scoreB = parseFloat(b.getAttribute('data-match-score') || '-1');
+                return scoreB - scoreA;
+            } else {
+                var scoreA = parseFloat(a.getAttribute('data-match-score') || '-1');
+                var scoreB = parseFloat(b.getAttribute('data-match-score') || '-1');
+                if (scoreB !== scoreA) return scoreB - scoreA;
+                var timeA = parseInt(a.getAttribute('data-job-timestamp') || '0', 10);
+                var timeB = parseInt(b.getAttribute('data-job-timestamp') || '0', 10);
+                return timeB - timeA;
+            }
+        });
+
+        rows.forEach(function(row) {
+            container.appendChild(row);
+        });
+
+        if (sortInput) sortInput.value = sortBy;
+
+        if (sortBy === 'latest') {
+            latestBtn.className = 'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-semibold transition-colors bg-brand-mist text-brand-ink font-bold';
+            matchBtn.className = 'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-semibold transition-colors text-slate-600 hover:bg-slate-50 hover:text-slate-900';
+        } else {
+            matchBtn.className = 'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-semibold transition-colors bg-brand-mist text-brand-ink font-bold';
+            latestBtn.className = 'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-semibold transition-colors text-slate-600 hover:bg-slate-50 hover:text-slate-900';
+        }
+
+        if (window.history && window.history.replaceState) {
+            var u = new URL(window.location.href);
+            u.searchParams.set('sort', sortBy);
+            window.history.replaceState({}, '', u.toString());
+        }
+    }
+
+    matchBtn.addEventListener('click', function(e) {
+        var rows = document.querySelectorAll('.job-result-row');
+        if (rows.length > 0) {
+            e.preventDefault();
+            reorderRows('match');
+        }
+    });
+
+    latestBtn.addEventListener('click', function(e) {
+        var rows = document.querySelectorAll('.job-result-row');
+        if (rows.length > 0) {
+            e.preventDefault();
+            reorderRows('latest');
+        }
+    });
 })();
 </script>
 {% endblock %}

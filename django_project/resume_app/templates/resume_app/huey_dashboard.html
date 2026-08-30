@@ -1,342 +1,359 @@
 {% extends "resume_app/base.html" %}
-
-{% block title %}Monitor — ResumeElite{% endblock %}
+{% block title %}Worker &amp; Task Monitor — ResumeElite Admin{% endblock %}
 
 {% block content %}
-<div class="mx-auto max-w-6xl">
-    {% include "resume_app/_jobs_workspace_tabs.html" %}
-    <div class="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+<div class="mx-auto max-w-6xl space-y-6">
+    {# Header #}
+    <div class="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 pb-5">
         <div>
-            <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Monitor</h1>
-            <p class="mt-1 text-sm text-slate-600">Queue depth, periodic tasks, and worker maintenance.</p>
-        </div>
-        <div class="inline-flex items-center gap-2 rounded-full border border-brand/20 bg-brand-mist px-3 py-1 text-xs font-semibold text-brand-ink">
-            <span class="h-1.5 w-1.5 rounded-full bg-brand" aria-hidden="true"></span>
-            Huey worker
-        </div>
-    </div>
-
-    {% if immediate %}
-        <div class="mb-6 rounded-concierge border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
-            Huey is in <strong>immediate mode</strong> — no Redis queue to flush.
-        </div>
-    {% endif %}
-
-    <div class="mb-6 space-y-3">
-        <div class="rounded-concierge border border-brand/20 bg-brand-mist px-4 py-3 text-sm text-brand-ink">
-            <strong>Worker:</strong> <code class="rounded bg-white/80 px-1">python manage.py run_huey</code> from <code class="rounded bg-white/80 px-1">django_project/</code>
-        </div>
-        <div class="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-card text-sm text-slate-600">
-            <strong>Queue depth:</strong> Pending, scheduled, and results store sizes (when Redis is used).
-        </div>
-    </div>
-
-    <div class="mb-6 grid gap-6 lg:grid-cols-3">
-        <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-card lg:col-span-1">
-            <h2 class="text-sm font-semibold text-concierge-slate">Queue stats</h2>
-            {% if queue_stats_error %}
-                <p class="mt-3 text-sm text-red-700">Failed to read stats: <code class="text-xs">{{ queue_stats_error }}</code></p>
-            {% elif queue_stats %}
-                <dl class="mt-4 space-y-4">
-                    <div>
-                        <dt class="text-xs font-medium uppercase text-slate-500">Pending</dt>
-                        <dd class="text-2xl font-bold text-concierge-slate">{{ queue_stats.pending }}</dd>
-                    </div>
-                    <div>
-                        <dt class="text-xs font-medium uppercase text-slate-500">Scheduled</dt>
-                        <dd class="text-2xl font-bold text-concierge-slate">{{ queue_stats.scheduled }}</dd>
-                    </div>
-                    <div>
-                        <dt class="text-xs font-medium uppercase text-slate-500">Results</dt>
-                        <dd class="text-2xl font-bold text-concierge-slate">{{ queue_stats.results }}</dd>
-                    </div>
-                </dl>
-            {% else %}
-                <p class="mt-3 text-sm text-slate-500">Stats unavailable.</p>
-            {% endif %}
-        </div>
-        <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-card lg:col-span-2">
-            <h2 class="text-sm font-semibold text-concierge-slate">Maintenance</h2>
-            <div class="mt-4 flex flex-wrap items-center gap-3">
-                <form method="post" action="{% url 'huey_run_cleanup_now' %}" class="inline">
-                    {% csrf_token %}
-                    <button type="submit" class="rounded-concierge border border-brand/20 bg-white px-3 py-1.5 text-xs font-semibold text-brand-ink hover:bg-brand-mist">
-                        Run cleanup now
-                    </button>
-                </form>
-                <span class="text-xs text-slate-500">Cleanup Manager: dedupe active stages, age purge (Settings), then Applying inactive URL check.</span>
-            </div>
-            <div class="mt-4 rounded-concierge border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-700">
-                <div class="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Last cleanup</div>
-                {% if cleanup_status %}
-                    <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
-                        <span>
-                            Status:
-                            {% if cleanup_status.status == 'success' %}
-                                <span class="font-semibold text-brand">Success</span>
-                            {% else %}
-                                <span class="font-semibold text-amber-700">{{ cleanup_status.status }}</span>
-                            {% endif %}
-                        </span>
-                        {% if cleanup_status.finished_at %}
-                            <span>Finished: <strong>{{ cleanup_status.finished_at|date:"M j H:i" }}</strong></span>
-                        {% endif %}
-                        <span>Dedupe removed: <strong>{{ cleanup_status.dedupe_removed|default:0 }}</strong></span>
-                        <span>Retention removed: <strong>{{ cleanup_status.retention_removed|default:0 }}</strong></span>
-                        <span>Checked URLs: <strong>{{ cleanup_status.checked|default:0 }}</strong></span>
-                        <span>Removed inactive: <strong>{{ cleanup_status.removed_inactive|default:0 }}</strong></span>
-                        <span>Unknown: <strong>{{ cleanup_status.unknown|default:0 }}</strong></span>
-                    </div>
-                    {% if cleanup_status.errors %}
-                        <div class="mt-2 text-[11px] text-amber-700">
-                            {{ cleanup_status.errors|join:", "|truncatechars:220 }}
-                        </div>
-                    {% endif %}
+            <div class="flex items-center gap-2">
+                <span class="rounded-md bg-brand-soft px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-brand-ink">Admin Operations</span>
+                {% if immediate %}
+                <span class="inline-flex items-center gap-1.5 rounded-md bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-800 border border-amber-200">
+                    <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span> Immediate Mode (Synchronous)
+                </span>
+                {% elif queue_stats_error %}
+                <span class="inline-flex items-center gap-1.5 rounded-md bg-rose-50 px-2.5 py-0.5 text-xs font-medium text-rose-800 border border-rose-200">
+                    <span class="h-1.5 w-1.5 rounded-full bg-rose-500"></span> Redis Connection Error
+                </span>
                 {% else %}
-                    <span class="text-slate-500">No cleanup run recorded yet.</span>
+                <span class="inline-flex items-center gap-1.5 rounded-md bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 border border-emerald-200">
+                    <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span> Huey Worker Connected
+                </span>
                 {% endif %}
             </div>
-
-            <h2 class="mt-6 text-sm font-semibold text-concierge-slate">Danger zone</h2>
-            <div class="mt-3 flex flex-wrap items-center gap-3">
-                <button type="button" id="flush-queue-open" class="rounded-concierge border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-800 hover:bg-red-50 disabled:opacity-50" {% if immediate %}disabled{% else %}onclick="document.getElementById('flushQueueModal').showModal()"{% endif %}>
-                    Flush pending queue
-                </button>
-                <span class="text-xs text-slate-500">Removes pending tasks from Redis.</span>
+            <h1 class="mt-2 text-2xl font-bold tracking-tight text-concierge-slate">Worker &amp; Task Queue Monitor</h1>
+            <p class="mt-1 text-sm text-slate-500">Real-time queue health, background cron schedulers, database maintenance, and tenant task execution history.</p>
+        </div>
+        <div class="flex items-center gap-3">
+            <div class="inline-flex items-center gap-2 rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm">
+                <span id="auto-refresh-dot" class="h-2 w-2 rounded-full bg-slate-300"></span>
+                <label for="auto-refresh-select" class="text-slate-500">Auto-refresh:</label>
+                <select id="auto-refresh-select" class="rounded border-none bg-transparent p-0 text-xs font-semibold text-slate-800 focus:ring-0">
+                    <option value="0">Off</option>
+                    <option value="10">10s</option>
+                    <option value="30">30s</option>
+                    <option value="60">60s</option>
+                </select>
+                <span id="auto-refresh-timer" class="hidden text-slate-400 tabular-nums"></span>
             </div>
+            <a href="{% url 'huey_dashboard' %}"
+               class="inline-flex items-center gap-1.5 rounded-concierge border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50">
+                <svg class="h-4 w-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                Refresh Status
+            </a>
         </div>
     </div>
 
     {% include "resume_app/_concierge_messages.html" %}
 
-    <div class="mb-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card">
-        <div class="border-b border-slate-100 px-4 py-3 text-sm font-semibold text-concierge-slate">Periodic tasks</div>
+    {# Top Metric Cards (4-Column) #}
+    <div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        {# 1. Queue Backlog #}
+        <div class="rounded-concierge border border-slate-200 bg-white p-4 shadow-sm">
+            <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Queue Backlog</p>
+            {% if queue_stats_error %}
+                <p class="mt-1 text-sm font-semibold text-rose-600">Error reading Redis</p>
+                <p class="mt-1 text-xs text-slate-400">Check HUEY_REDIS_* settings</p>
+            {% elif queue_stats %}
+                <p class="mt-1 text-2xl font-bold {% if queue_stats.pending > 25 %}text-amber-600{% else %}text-slate-800{% endif %}">
+                    {{ queue_stats.pending }}
+                </p>
+                <p class="mt-1 text-xs text-slate-500">{{ queue_stats.scheduled }} scheduled · {{ queue_stats.results }} results</p>
+            {% else %}
+                <p class="mt-1 text-2xl font-bold text-slate-400">0</p>
+                <p class="mt-1 text-xs text-slate-400">Immediate in-process execution</p>
+            {% endif %}
+        </div>
+
+        {# 2. Active Running Tasks #}
+        <div class="rounded-concierge border border-slate-200 bg-white p-4 shadow-sm">
+            <p class="text-xs font-medium uppercase tracking-wider text-slate-400">Currently Running</p>
+            <p class="mt-1 text-2xl font-bold {% if active_running > 0 %}text-brand{% else %}text-slate-800{% endif %}">
+                {{ active_running }}
+            </p>
+            <p class="mt-1 text-xs text-slate-500">Live search &amp; browser runs</p>
+        </div>
+
+        {# 3. 24h Activity Volume #}
+        <div class="rounded-concierge border border-slate-200 bg-white p-4 shadow-sm">
+            <p class="text-xs font-medium uppercase tracking-wider text-slate-400">24-Hour Throughput</p>
+            <p class="mt-1 text-2xl font-bold text-slate-800">{{ searches_24h|add:applies_24h }}</p>
+            <p class="mt-1 text-xs text-slate-500">{{ searches_24h }} searches · {{ applies_24h }} applies</p>
+        </div>
+
+        {# 4. Failed Tasks Alert #}
+        <div class="rounded-concierge border border-slate-200 bg-white p-4 shadow-sm">
+            <p class="text-xs font-medium uppercase tracking-wider text-slate-400">24h Task Failures</p>
+            <p class="mt-1 text-2xl font-bold {% if failed_24h > 0 %}text-rose-600{% else %}text-emerald-600{% endif %}">
+                {{ failed_24h }}
+            </p>
+            <p class="mt-1 text-xs text-slate-500">{% if failed_24h == 0 %}All background runs healthy{% else %}Review error details below{% endif %}</p>
+        </div>
+    </div>
+
+    {# Periodic Background Cron Tasks Table #}
+    <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card">
+        <div class="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+            <div>
+                <h2 class="text-base font-bold text-concierge-slate">Periodic Task Schedulers</h2>
+                <p class="text-xs text-slate-500">Automated cron workers responsible for job discovery, LLM vetting, and database hygiene.</p>
+            </div>
+            <span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">{{ periodic_tasks|length }} Cron Schedulers</span>
+        </div>
+
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-200 text-sm">
-                <thead class="bg-slate-50">
+                <thead class="bg-slate-50 text-xs font-semibold uppercase tracking-wider text-slate-500">
                     <tr>
-                        <th class="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Task</th>
-                        <th class="whitespace-nowrap px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Schedule</th>
-                        <th class="whitespace-nowrap px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Next</th>
-                        <th class="whitespace-nowrap px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">State</th>
-                        <th class="whitespace-nowrap px-4 py-2 text-center text-xs font-semibold uppercase tracking-wide text-slate-500">Run now</th>
-                        <th class="whitespace-nowrap px-4 py-2 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">Pause / restore</th>
+                        <th class="px-6 py-3 text-left">Scheduler Task</th>
+                        <th class="px-4 py-3 text-left">Frequency</th>
+                        <th class="px-4 py-3 text-left">Next Run</th>
+                        <th class="px-4 py-3 text-center">State</th>
+                        <th class="px-6 py-3 text-right">Actions</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
                     {% for t in periodic_tasks %}
-                        <tr class="hover:bg-slate-50/80">
-                            <td class="px-4 py-3">
-                                <div class="flex items-start justify-between gap-3">
-                                    <div class="min-w-0">
-                                        <div class="font-semibold text-concierge-slate">{{ t.display_name }}</div>
-                                        <div class="text-xs text-slate-500">{{ t.schedule_description }}</div>
-                                    </div>
-                                    <button
-                                        type="button"
-                                        class="shrink-0 rounded-concierge border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
-                                        onclick="document.getElementById('taskInfo-{{ forloop.counter0 }}').showModal()"
-                                        aria-label="Task info"
-                                    >
-                                        Info
-                                    </button>
-                                </div>
-                            </td>
-                            <td class="whitespace-nowrap px-4 py-3 font-mono text-xs" title="{{ t.cron_string }}">{{ t.cron_string }}</td>
-                            <td class="whitespace-nowrap px-4 py-3 text-xs text-slate-600">
-                                {% if t.next_run_at %}{{ t.next_run_at|date:"M j H:i" }}{% else %}<span class="text-slate-400">—</span>{% endif %}
-                            </td>
-                            <td class="px-4 py-3">
-                                {% if t.is_revoked %}
-                                    <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase text-slate-600">Paused</span>
-                                {% else %}
-                                    <span class="rounded-full bg-brand-soft px-2 py-0.5 text-[10px] font-bold uppercase text-brand-ink">Active</span>
-                                {% endif %}
-                            </td>
-                            <td class="whitespace-nowrap px-4 py-3 text-center">
-                                <form method="post" action="{% url 'huey_task_run_now' task_name=t.task_fn_name %}" class="inline">
-                                    {% csrf_token %}
-                                    <button type="submit" class="rounded-concierge border border-brand/20 bg-white px-2 py-1 text-xs font-semibold text-brand-ink hover:bg-brand-mist" title="Enqueue this job on the Huey worker (or run in-process if immediate mode)">Run now</button>
-                                </form>
-                            </td>
-                            <td class="whitespace-nowrap px-4 py-3 text-right">
-                                <form method="post" action="{% url 'huey_periodic_revoke' task_name=t.task_fn_name %}" class="inline">
-                                    {% csrf_token %}
-                                    <button type="submit" class="rounded-concierge border border-amber-200 bg-white px-2 py-1 text-xs font-medium text-amber-900 hover:bg-amber-50 disabled:opacity-50" {% if immediate or t.is_revoked %}disabled{% endif %}>Pause</button>
-                                </form>
-                                <form method="post" action="{% url 'huey_periodic_restore' task_name=t.task_fn_name %}" class="ml-1 inline">
-                                    {% csrf_token %}
-                                    <button type="submit" class="rounded-concierge border border-sky-200 bg-white px-2 py-1 text-xs font-medium text-sky-900 hover:bg-sky-50 disabled:opacity-50" {% if immediate or not t.is_revoked %}disabled{% endif %}>Restore</button>
-                                </form>
-                            </td>
-                        </tr>
+                    <tr class="hover:bg-slate-50/70 transition-colors">
+                        <td class="px-6 py-4">
+                            <div class="font-bold text-slate-900">{{ t.display_name }}</div>
+                            <div class="mt-0.5 text-xs text-slate-500 max-w-lg">{{ t.basic }}</div>
+                        </td>
+                        <td class="whitespace-nowrap px-4 py-4">
+                            <span class="inline-flex items-center rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700" title="Cron: {{ t.cron_string }}">
+                                {{ t.schedule_description }}
+                            </span>
+                        </td>
+                        <td class="whitespace-nowrap px-4 py-4 text-xs text-slate-600">
+                            {% if t.next_run_at %}
+                                <span class="font-medium text-slate-800">{{ t.next_run_at|date:"M j, H:i" }}</span>
+                            {% else %}
+                                <span class="text-slate-400">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-4 py-4 text-center">
+                            {% if t.is_revoked %}
+                                <span class="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-600">
+                                    <span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span> Paused
+                                </span>
+                            {% else %}
+                                <span class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700">
+                                    <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span> Active
+                                </span>
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-6 py-4 text-right space-x-2">
+                            <form method="post" action="{% url 'huey_task_run_now' task_name=t.task_fn_name %}" class="inline">
+                                {% csrf_token %}
+                                <button type="submit"
+                                        class="rounded-concierge border border-brand/20 bg-brand-soft px-2.5 py-1 text-xs font-semibold text-brand-ink hover:bg-brand/20"
+                                        title="Trigger immediate execution">
+                                    Run Now
+                                </button>
+                            </form>
 
-                        <dialog id="taskInfo-{{ forloop.counter0 }}" class="concierge-dialog huey-taskinfo" aria-labelledby="taskInfoLabel-{{ forloop.counter0 }}" data-default-tab="basic">
-                            <div class="w-full max-w-lg rounded-concierge border border-slate-200 bg-white shadow-2xl">
-                                <div class="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
-                                    <div class="min-w-0">
-                                        <h2 class="text-base font-semibold text-concierge-slate" id="taskInfoLabel-{{ forloop.counter0 }}">{{ t.display_name }}</h2>
-                                        <p class="mt-0.5 text-xs text-slate-500"><span class="font-mono" title="{{ t.cron_string }}">{{ t.cron_string }}</span> · {{ t.schedule_description }}</p>
-                                    </div>
-                                    <button type="button" class="rounded-concierge p-2 text-slate-500 hover:bg-slate-100" onclick="document.getElementById('taskInfo-{{ forloop.counter0 }}').close()" aria-label="Close">
-                                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                                    </button>
-                                </div>
-                                <div class="border-b border-slate-100 px-4">
-                                    <div class="flex gap-2 pt-3">
-                                        <button type="button" class="tasktab-btn rounded-concierge px-3 py-1.5 text-sm font-semibold" data-tab="basic">
-                                            Basic
-                                        </button>
-                                        <button type="button" class="tasktab-btn rounded-concierge px-3 py-1.5 text-sm font-semibold" data-tab="advanced">
-                                            Advanced
-                                        </button>
-                                    </div>
-                                </div>
-                                <div class="px-4 py-3">
-                                    <div class="tasktab-panel" data-panel="basic">
-                                        <p class="text-sm text-slate-700">{{ t.basic|default:"—" }}</p>
-                                    </div>
-                                    <div class="tasktab-panel hidden" data-panel="advanced">
-                                        {% if t.advanced %}
-                                            <p class="whitespace-pre-wrap text-sm text-slate-700">{{ t.advanced }}</p>
-                                        {% else %}
-                                            <p class="text-sm text-slate-500">No additional details.</p>
-                                        {% endif %}
-                                    </div>
-                                </div>
-                                <div class="flex items-center justify-end gap-2 border-t border-slate-100 px-4 py-3">
-                                    <button type="button" class="rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50" onclick="document.getElementById('taskInfo-{{ forloop.counter0 }}').close()">Close</button>
-                                </div>
-                            </div>
-                        </dialog>
-                    {% empty %}
-                        <tr><td colspan="6" class="px-4 py-6 text-center text-sm text-slate-500">No periodic tasks registered.</td></tr>
+                            {% if t.is_revoked %}
+                            <form method="post" action="{% url 'huey_periodic_restore' task_name=t.task_fn_name %}" class="inline">
+                                {% csrf_token %}
+                                <button type="submit"
+                                        class="rounded-concierge border border-sky-200 bg-white px-2.5 py-1 text-xs font-medium text-sky-800 hover:bg-sky-50"
+                                        {% if immediate %}disabled{% endif %}>
+                                    Resume
+                                </button>
+                            </form>
+                            {% else %}
+                            <form method="post" action="{% url 'huey_periodic_revoke' task_name=t.task_fn_name %}" class="inline">
+                                {% csrf_token %}
+                                <button type="submit"
+                                        class="rounded-concierge border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                                        {% if immediate %}disabled{% endif %}>
+                                    Pause
+                                </button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
     </div>
 
-    {% if adhoc_run_tasks %}
-    <div class="mb-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card">
-        <div class="border-b border-slate-100 px-4 py-3">
-            <div class="text-sm font-semibold text-concierge-slate">Other queueable tasks</div>
-            <p class="mt-1 text-xs text-slate-500">One-off Huey jobs with no extra parameters. Resume optimization, a specific job search, vetting batches, and pipeline LLM extract runs are started from the boards or Searches.</p>
-        </div>
-        <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-slate-200 text-sm">
-                <thead class="bg-slate-50">
-                    <tr>
-                        <th class="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Task</th>
-                        <th class="whitespace-nowrap px-4 py-2 text-center text-xs font-semibold uppercase tracking-wide text-slate-500">Run now</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-100">
-                    {% for t in adhoc_run_tasks %}
-                        <tr class="hover:bg-slate-50/80">
-                            <td class="px-4 py-3">
-                                <div class="flex items-start justify-between gap-3">
-                                    <div class="min-w-0">
-                                        <div class="font-semibold text-concierge-slate">{{ t.display_name }}</div>
-                                        <div class="mt-0.5 text-xs text-slate-600">{{ t.basic }}</div>
-                                    </div>
-                                    {% if t.advanced %}
-                                    <button
-                                        type="button"
-                                        class="shrink-0 rounded-concierge border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
-                                        onclick="document.getElementById('adhocInfo-{{ forloop.counter0 }}').showModal()"
-                                        aria-label="Task info"
-                                    >
-                                        Info
-                                    </button>
-                                    {% endif %}
-                                </div>
-                            </td>
-                            <td class="whitespace-nowrap px-4 py-3 text-center">
-                                <form method="post" action="{% url 'huey_task_run_now' task_name=t.task_fn_name %}" class="inline">
-                                    {% csrf_token %}
-                                    <button type="submit" class="rounded-concierge border border-brand/20 bg-white px-2 py-1 text-xs font-semibold text-brand-ink hover:bg-brand-mist">Run now</button>
-                                </form>
-                            </td>
-                        </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% for t in adhoc_run_tasks %}
-            {% if t.advanced %}
-            <dialog id="adhocInfo-{{ forloop.counter0 }}" class="concierge-dialog huey-taskinfo" aria-labelledby="adhocInfoLabel-{{ forloop.counter0 }}" data-default-tab="basic">
-                <div class="w-full max-w-lg rounded-concierge border border-slate-200 bg-white shadow-2xl">
-                    <div class="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
-                        <div class="min-w-0">
-                            <h2 class="text-base font-semibold text-concierge-slate" id="adhocInfoLabel-{{ forloop.counter0 }}">{{ t.display_name }}</h2>
-                        </div>
-                        <button type="button" class="rounded-concierge p-2 text-slate-500 hover:bg-slate-100" onclick="document.getElementById('adhocInfo-{{ forloop.counter0 }}').close()" aria-label="Close">
-                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+    {# Maintenance & Danger Zone Cards (2 Columns) #}
+    <div class="grid gap-6 lg:grid-cols-2">
+        {# Left: System Cleanup & Data Hygiene #}
+        <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-card flex flex-col justify-between">
+            <div>
+                <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <h2 class="text-base font-bold text-concierge-slate">System Cleanup &amp; Data Hygiene</h2>
+                    <form method="post" action="{% url 'huey_run_cleanup_now' %}">
+                        {% csrf_token %}
+                        <button type="submit" class="rounded-concierge border border-brand/20 bg-brand-soft px-3 py-1.5 text-xs font-semibold text-brand-ink hover:bg-brand/20">
+                            Run Cleanup Now
                         </button>
-                    </div>
-                    <div class="border-b border-slate-100 px-4">
-                        <div class="flex gap-2 pt-3">
-                            <button type="button" class="tasktab-btn rounded-concierge px-3 py-1.5 text-sm font-semibold" data-tab="basic">Basic</button>
-                            <button type="button" class="tasktab-btn rounded-concierge px-3 py-1.5 text-sm font-semibold" data-tab="advanced">Advanced</button>
-                        </div>
-                    </div>
-                    <div class="px-4 py-3">
-                        <div class="tasktab-panel" data-panel="basic">
-                            <p class="text-sm text-slate-700">{{ t.basic|default:"—" }}</p>
-                        </div>
-                        <div class="tasktab-panel hidden" data-panel="advanced">
-                            <p class="whitespace-pre-wrap text-sm text-slate-700">{{ t.advanced }}</p>
-                        </div>
-                    </div>
-                    <div class="flex items-center justify-end gap-2 border-t border-slate-100 px-4 py-3">
-                        <button type="button" class="rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50" onclick="document.getElementById('adhocInfo-{{ forloop.counter0 }}').close()">Close</button>
-                    </div>
+                    </form>
                 </div>
-            </dialog>
-            {% endif %}
-        {% endfor %}
-    </div>
-    {% endif %}
+                <p class="mt-2 text-xs text-slate-500">Runs pipeline deduplication, applies per-stage retention purges, and verifies expired job posting URLs.</p>
 
-    <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card">
-        <div class="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-            <span class="text-sm font-semibold text-concierge-slate">Recent job-search runs</span>
-            <span class="text-xs text-slate-500">Last 10</span>
+                <div class="mt-4 rounded-xl border border-slate-100 bg-slate-50 p-4 text-xs text-slate-700">
+                    <div class="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
+                        <span>Last Cleanup Execution</span>
+                        {% if cleanup_status.finished_at %}
+                        <span class="normal-case text-slate-500">{{ cleanup_status.finished_at|date:"M j, H:i" }}</span>
+                        {% endif %}
+                    </div>
+                    {% if cleanup_status %}
+                    <div class="grid grid-cols-2 gap-2 text-xs">
+                        <div>Status: <strong>{% if cleanup_status.status == 'success' %}<span class="text-emerald-700 font-bold">Success</span>{% else %}{{ cleanup_status.status }}{% endif %}</strong></div>
+                        <div>Deduped: <strong>{{ cleanup_status.dedupe_removed|default:0 }} rows</strong></div>
+                        <div>Retention Purged: <strong>{{ cleanup_status.retention_removed|default:0 }} rows</strong></div>
+                        <div>Checked URLs: <strong>{{ cleanup_status.checked|default:0 }}</strong></div>
+                        <div>Inactive Purged: <strong>{{ cleanup_status.removed_inactive|default:0 }}</strong></div>
+                    </div>
+                    {% if cleanup_status.errors %}
+                    <div class="mt-2 text-rose-700 bg-rose-50 p-2 rounded text-[11px]">
+                        {{ cleanup_status.errors|join:", "|truncatechars:200 }}
+                    </div>
+                    {% endif %}
+                    {% else %}
+                    <p class="text-slate-400 italic">No cleanup run recorded yet.</p>
+                    {% endif %}
+                </div>
+            </div>
+
+            {% if adhoc_run_tasks %}
+            <div class="mt-4 border-t border-slate-100 pt-3 flex items-center justify-between">
+                <span class="text-xs text-slate-500">Standalone Deduplication (All stages)</span>
+                {% for a in adhoc_run_tasks %}
+                <form method="post" action="{% url 'huey_task_run_now' task_name=a.task_fn_name %}" class="inline">
+                    {% csrf_token %}
+                    <button type="submit" class="rounded-concierge border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50">
+                        {{ a.display_name }}
+                    </button>
+                </form>
+                {% endfor %}
+            </div>
+            {% endif %}
         </div>
+
+        {# Right: Queue Emergency Controls (Danger Zone) #}
+        <div class="rounded-2xl border border-rose-200 bg-white p-6 shadow-card flex flex-col justify-between">
+            <div>
+                <div class="flex items-center gap-2 border-b border-rose-100 pb-3 text-rose-800">
+                    <svg class="h-5 w-5 text-rose-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                    <h2 class="text-base font-bold text-rose-900">Queue Operations &amp; Danger Zone</h2>
+                </div>
+                <p class="mt-2 text-xs text-slate-600">Administrative overrides for Redis task storage. Use with care in production.</p>
+
+                <div class="mt-4 rounded-xl border border-rose-100 bg-rose-50/50 p-4">
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-rose-900">Flush Pending Queue</h3>
+                    <p class="mt-1 text-xs text-slate-600">Discards all queued tasks waiting in Redis. Does not abort tasks currently executing inside active workers.</p>
+                </div>
+            </div>
+
+            <div class="mt-5 flex items-center justify-between border-t border-slate-100 pt-4">
+                <span class="text-xs text-slate-400">Irreversible action</span>
+                <button type="button"
+                        {% if immediate %}disabled{% else %}onclick="document.getElementById('flushQueueModal').showModal()"{% endif %}
+                        class="rounded-concierge bg-rose-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-rose-700 disabled:opacity-50">
+                    Flush Pending Tasks
+                </button>
+            </div>
+        </div>
+    </div>
+
+    {# Unified Multi-Tenant Background Task Activity Feed #}
+    <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-card">
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-6 py-4">
+            <div>
+                <h2 class="text-base font-bold text-concierge-slate">Recent Task Executions (Multi-Tenant Stream)</h2>
+                <p class="text-xs text-slate-500">Live feed of scraper runs, browser application attempts, and background tasks.</p>
+            </div>
+            <span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">{{ unified_activity|length }} Recent Events</span>
+        </div>
+
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-200 text-sm">
-                <thead class="bg-slate-50">
+                <thead class="bg-slate-50 text-xs font-semibold uppercase tracking-wider text-slate-500">
                     <tr>
-                        <th class="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Task</th>
-                        <th class="whitespace-nowrap px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
-                        <th class="whitespace-nowrap px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Started</th>
-                        <th class="whitespace-nowrap px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Finished</th>
-                        <th class="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Error</th>
+                        <th class="px-6 py-3 text-left">Task / Operation</th>
+                        <th class="px-4 py-3 text-left">Tenant User</th>
+                        <th class="px-4 py-3 text-center">Status</th>
+                        <th class="px-4 py-3 text-left">Started</th>
+                        <th class="px-4 py-3 text-left">Finished / Items</th>
+                        <th class="px-6 py-3 text-left">Details / Error</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100">
-                    {% for r in recent_runs %}
-                        <tr class="hover:bg-slate-50/80">
-                            <td class="whitespace-nowrap px-4 py-3">
-                                <div class="font-semibold text-concierge-slate">{{ r.task.name|default:"(untitled)" }}</div>
-                                <div class="text-xs text-slate-500">{{ r.task.search_term|truncatechars:40 }}</div>
-                            </td>
-                            <td class="px-4 py-3">
-                                {% if r.status == 'completed' %}
-                                    <span class="rounded-full bg-brand-soft px-2 py-0.5 text-[10px] font-bold uppercase text-brand-ink">Done</span>
-                                {% elif r.status == 'failed' %}
-                                    <span class="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-bold uppercase text-red-800">Failed</span>
-                                {% else %}
-                                    <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase text-slate-600">Running</span>
-                                {% endif %}
-                            </td>
-                            <td class="whitespace-nowrap px-4 py-3 text-xs text-slate-600">{{ r.started_at|date:"M j H:i" }}</td>
-                            <td class="whitespace-nowrap px-4 py-3 text-xs text-slate-600">{% if r.finished_at %}{{ r.finished_at|date:"M j H:i" }}{% else %}<span class="text-slate-400">—</span>{% endif %}</td>
-                            <td class="max-w-xs px-4 py-3 text-xs text-red-700">{% if r.error_message %}{{ r.error_message|truncatechars:120 }}{% else %}<span class="text-slate-400">—</span>{% endif %}</td>
-                        </tr>
+                    {% for a in unified_activity %}
+                    <tr class="hover:bg-slate-50/70 transition-colors">
+                        <td class="px-6 py-3.5">
+                            <div class="flex items-center gap-2">
+                                <span class="rounded-md border px-2 py-0.5 text-[10px] font-semibold {{ a.type_badge }}">
+                                    {{ a.type }}
+                                </span>
+                                <span class="font-semibold text-slate-900 truncate max-w-xs" title="{{ a.title }}">{{ a.title }}</span>
+                            </div>
+                            {% if a.subtitle %}
+                            <p class="mt-0.5 text-xs text-slate-500 truncate max-w-sm" title="{{ a.subtitle }}">{{ a.subtitle }}</p>
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-4 py-3.5 text-xs font-mono text-slate-700">
+                            {{ a.user }}
+                        </td>
+                        <td class="whitespace-nowrap px-4 py-3.5 text-center">
+                            {% if a.status == 'completed' or a.status == 'succeeded' or a.status == 'done' %}
+                                <span class="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700">
+                                    Done
+                                </span>
+                            {% elif a.status == 'failed' or a.status == 'error' %}
+                                <span class="inline-flex items-center rounded-full bg-rose-50 px-2.5 py-0.5 text-[11px] font-bold text-rose-700">
+                                    Failed
+                                </span>
+                            {% elif a.status == 'running' %}
+                                <span class="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-0.5 text-[11px] font-bold text-amber-800 animate-pulse">
+                                    Running
+                                </span>
+                            {% else %}
+                                <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-medium text-slate-600">
+                                    {{ a.status }}
+                                </span>
+                            {% endif %}
+                        </td>
+                        <td class="whitespace-nowrap px-4 py-3.5 text-xs text-slate-600">
+                            {{ a.started_at|date:"M j, H:i:s" }}
+                        </td>
+                        <td class="whitespace-nowrap px-4 py-3.5 text-xs text-slate-600">
+                            {% if a.items_count != None %}
+                                <span class="font-semibold text-slate-800">{{ a.items_count }}</span> items found
+                            {% elif a.finished_at %}
+                                {{ a.finished_at|date:"H:i:s" }}
+                            {% else %}
+                                <span class="text-slate-400">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-3.5 text-xs">
+                            {% if a.error_message %}
+                                <button type="button"
+                                        onclick="showErrorModal('{{ a.title|escapejs }}', '{{ a.user|escapejs }}', '{{ a.started_at|date:"Y-m-d H:i:s"|escapejs }}', '{{ a.error_message|escapejs }}')"
+                                        class="inline-flex items-center gap-1.5 text-rose-700 font-mono text-[11px] max-w-xs truncate text-left hover:underline cursor-pointer group"
+                                        title="Click to view full error details">
+                                    <span class="h-1.5 w-1.5 rounded-full bg-rose-500 shrink-0"></span>
+                                    <span class="truncate">{{ a.error_message|truncatechars:65 }}</span>
+                                    <svg class="h-3 w-3 text-rose-400 opacity-0 group-hover:opacity-100 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                                </button>
+                            {% else %}
+                                <span class="text-slate-400">—</span>
+                            {% endif %}
+                        </td>
+                    </tr>
                     {% empty %}
-                        <tr><td colspan="5" class="px-4 py-6 text-center text-sm text-slate-500">No runs found.</td></tr>
+                    <tr>
+                        <td colspan="6" class="px-6 py-8 text-center text-sm text-slate-500">
+                            No background task runs recorded yet.
+                        </td>
+                    </tr>
                     {% endfor %}
                 </tbody>
             </table>
@@ -344,70 +361,127 @@
     </div>
 </div>
 
+{# Flush Queue Confirmation Modal #}
 <dialog id="flushQueueModal" class="concierge-dialog" aria-labelledby="flushQueueModalLabel">
-    <div class="w-full max-w-md rounded-concierge border border-slate-200 bg-white shadow-2xl">
-        <div class="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-            <h2 class="text-lg font-semibold text-concierge-slate" id="flushQueueModalLabel">Flush pending queue</h2>
-            <button type="button" class="rounded-concierge p-2 text-slate-500 hover:bg-slate-100" onclick="document.getElementById('flushQueueModal').close()" aria-label="Close">
-                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+    <div class="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+            <h2 class="text-base font-bold text-rose-900" id="flushQueueModalLabel">Flush Pending Task Queue?</h2>
+            <button type="button" class="rounded-lg p-1 text-slate-400 hover:bg-slate-100" onclick="document.getElementById('flushQueueModal').close()" aria-label="Close">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
             </button>
         </div>
-        <p class="px-4 py-3 text-sm text-slate-600">
-            This removes pending Huey tasks from Redis. Running tasks are not affected.
+        <p class="mt-3 text-sm text-slate-600">
+            This will immediately remove all pending tasks currently queued in Redis. Any tasks already actively executing inside worker threads will finish normally.
         </p>
-        <div class="flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 px-4 py-3">
-            <button type="button" class="rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50" onclick="document.getElementById('flushQueueModal').close()">Cancel</button>
+        <div class="mt-5 flex items-center justify-end gap-2 border-t border-slate-100 pt-3">
+            <button type="button"
+                    class="rounded-concierge border border-slate-200 bg-white px-3.5 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    onclick="document.getElementById('flushQueueModal').close()">
+                Cancel
+            </button>
             <form method="post" action="{% url 'huey_flush_queue' %}" class="inline">
                 {% csrf_token %}
                 <input type="hidden" name="confirm" value="yes">
-                <button type="submit" class="rounded-concierge bg-red-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-red-700">Flush queue</button>
+                <button type="submit" class="rounded-concierge bg-rose-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-rose-700">
+                    Confirm &amp; Flush Queue
+                </button>
             </form>
         </div>
     </div>
 </dialog>
 
+{# Error Detail Inspection Modal #}
+<dialog id="errorDetailModal" class="concierge-dialog" aria-labelledby="errorDetailModalLabel">
+    <div class="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div>
+                <h2 class="text-base font-bold text-rose-900" id="errorDetailModalLabel">Task Error Traceback</h2>
+                <p id="errorModalSubtitle" class="text-xs text-slate-500 mt-0.5"></p>
+            </div>
+            <button type="button" class="rounded-lg p-1 text-slate-400 hover:bg-slate-100" onclick="document.getElementById('errorDetailModal').close()" aria-label="Close">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </div>
+        <div class="mt-4">
+            <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1.5">Raw Error Trace / Message</label>
+            <pre id="errorModalContent" class="max-h-80 overflow-auto rounded-xl bg-slate-900 p-4 font-mono text-xs leading-relaxed text-rose-300 select-all"></pre>
+        </div>
+        <div class="mt-5 flex items-center justify-between border-t border-slate-100 pt-3">
+            <button type="button" id="copyErrorBtn" onclick="copyErrorContent()" class="inline-flex items-center gap-1.5 rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                <svg class="h-4 w-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"/></svg>
+                <span id="copyErrorBtnText">Copy Error</span>
+            </button>
+            <button type="button"
+                    class="rounded-concierge bg-brand px-4 py-1.5 text-sm font-semibold text-white hover:bg-brand-hover"
+                    onclick="document.getElementById('errorDetailModal').close()">
+                Close
+            </button>
+        </div>
+    </div>
+</dialog>
+
 <script>
-(function () {
-    function applyTabState(dlg, tab) {
-        if (!dlg) return;
-        var t = (tab || dlg.getAttribute("data-default-tab") || "basic").toLowerCase();
-        var btns = dlg.querySelectorAll(".tasktab-btn");
-        var panels = dlg.querySelectorAll(".tasktab-panel");
-        btns.forEach(function (b) {
-            var active = (b.getAttribute("data-tab") || "") === t;
-            b.classList.toggle("bg-white", active);
-            b.classList.toggle("text-concierge-slate", active);
-            b.classList.toggle("ring-1", active);
-            b.classList.toggle("ring-slate-200", active);
-            b.classList.toggle("bg-slate-50", !active);
-            b.classList.toggle("text-slate-600", !active);
-        });
-        panels.forEach(function (p) {
-            var show = (p.getAttribute("data-panel") || "") === t;
-            p.classList.toggle("hidden", !show);
+function showErrorModal(title, user, startedAt, errorMsg) {
+    document.getElementById('errorModalSubtitle').textContent = title + ' · User: ' + user + ' · ' + startedAt;
+    document.getElementById('errorModalContent').textContent = errorMsg || 'No detailed traceback available.';
+    document.getElementById('copyErrorBtnText').textContent = 'Copy Error';
+    document.getElementById('errorDetailModal').showModal();
+}
+
+function copyErrorContent() {
+    var text = document.getElementById('errorModalContent').textContent;
+    navigator.clipboard.writeText(text).then(function() {
+        document.getElementById('copyErrorBtnText').textContent = 'Copied!';
+        setTimeout(function() {
+            document.getElementById('copyErrorBtnText').textContent = 'Copy Error';
+        }, 2000);
+    });
+}
+
+(function() {
+    var select = document.getElementById('auto-refresh-select');
+    var dot = document.getElementById('auto-refresh-dot');
+    var timerSpan = document.getElementById('auto-refresh-timer');
+    var intervalId = null;
+    var countdown = 0;
+
+    var saved = localStorage.getItem('huey_dashboard_autorefresh') || "0";
+    if (select) {
+        select.value = saved;
+    }
+
+    function applyRefresh(sec) {
+        if (intervalId) clearInterval(intervalId);
+        sec = parseInt(sec, 10);
+        if (sec > 0) {
+            if (dot) dot.className = "h-2 w-2 rounded-full bg-emerald-500 animate-pulse";
+            if (timerSpan) {
+                timerSpan.classList.remove('hidden');
+                countdown = sec;
+                timerSpan.textContent = '(' + countdown + 's)';
+            }
+            intervalId = setInterval(function() {
+                countdown--;
+                if (countdown <= 0) {
+                    window.location.reload();
+                } else if (timerSpan) {
+                    timerSpan.textContent = '(' + countdown + 's)';
+                }
+            }, 1000);
+        } else {
+            if (dot) dot.className = "h-2 w-2 rounded-full bg-slate-300";
+            if (timerSpan) timerSpan.classList.add('hidden');
+        }
+    }
+
+    if (select) {
+        select.addEventListener('change', function() {
+            localStorage.setItem('huey_dashboard_autorefresh', select.value);
+            applyRefresh(select.value);
         });
     }
 
-    document.addEventListener("click", function (e) {
-        var btn = e.target.closest(".huey-taskinfo .tasktab-btn");
-        if (!btn) return;
-        var dlg = btn.closest("dialog.huey-taskinfo");
-        if (!dlg) return;
-        applyTabState(dlg, btn.getAttribute("data-tab"));
-    });
-
-    document.addEventListener("close", function (e) {
-        var dlg = e.target;
-        if (!(dlg instanceof HTMLDialogElement)) return;
-        if (!dlg.classList.contains("huey-taskinfo")) return;
-        applyTabState(dlg, null);
-    }, true);
-
-    document.addEventListener("DOMContentLoaded", function () {
-        document.querySelectorAll("dialog.huey-taskinfo").forEach(function (dlg) {
-            applyTabState(dlg, null);
-        });
-    });
+    applyRefresh(saved);
 })();
 </script>
 {% endblock %}

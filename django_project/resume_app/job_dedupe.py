@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from collections import defaultdict
 
 from django.contrib.auth import get_user_model
@@ -20,8 +21,70 @@ from .models import JobListingTrackMetrics, PipelineEntry, Track
 
 logger = logging.getLogger(__name__)
 
-# Hash enough of the description to distinguish roles while staying stable for identical postings.
-_DESCRIPTION_PREFIX_CHARS = 2000
+_STOPWORDS = {
+    "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are",
+    "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but", "by",
+    "can", "did", "do", "does", "doing", "down", "during", "each", "few", "for", "from",
+    "further", "had", "has", "have", "having", "he", "her", "here", "hers", "herself", "him", "himself",
+    "his", "how", "i", "if", "in", "into", "is", "it", "its", "itself", "just", "me", "more",
+    "most", "my", "myself", "no", "nor", "not", "of", "off", "on", "once", "only", "or", "other",
+    "our", "ours", "ourselves", "out", "over", "own", "same", "she", "should", "so", "some", "such",
+    "than", "that", "the", "their", "theirs", "them", "themselves", "then", "there", "these", "they",
+    "this", "those", "through", "to", "too", "under", "until", "up", "very", "was", "we", "were",
+    "what", "when", "where", "which", "while", "who", "whom", "why", "with", "would", "you", "your",
+    "yours", "yourself", "yourselves",
+}
+
+_COMPANY_NOISE_WORDS = {
+    "bank", "na", "n", "a", "national", "association", "inc", "incorporated", "llc", "llp",
+    "ltd", "limited", "corp", "corporation", "co", "c", "o", "company", "group", "holdings",
+    "services", "technologies", "technology", "solutions", "international", "usa",
+    "us", "america", "the", "and",
+}
+
+_HEADER_WORDS = {
+    "job", "description", "position", "role", "about", "us", "the", "summary",
+    "overview", "responsibilities", "duties",
+}
+
+
+def canonical_company(name: str | None) -> str:
+    """Normalize company name across boards (strips corporate suffixes, punctuation, whitespace)."""
+    if not name or not isinstance(name, str):
+        return ""
+    # Strip location suffix if attached e.g. "Capital One ·Plano, TX"
+    text = name.split("·")[0]
+    # Remove dots within acronyms e.g. "N.A." -> "NA", "J.P." -> "JP"
+    text = re.sub(r"\.(?!\s)", "", text)
+    # Replace non-alphanumeric with spaces
+    text = re.sub(r"[^a-zA-Z0-9]+", " ", text).lower()
+    words = [w for w in text.split() if w not in _COMPANY_NOISE_WORDS]
+    if not words:
+        # Fallback if entire name was filtered
+        words = text.split()
+    return "".join(words)
+
+
+def canonical_title(title: str | None) -> str:
+    """Normalize job title (strips punctuation, common brackets, whitespace)."""
+    if not title or not isinstance(title, str):
+        return ""
+    text = re.sub(r"[^a-zA-Z0-9]+", " ", title).lower()
+    return "".join(text.split())
+
+
+def canonical_description_prefix(desc: str | None, max_tokens: int = 30) -> str:
+    """Extract significant keywords from job description prefix, ignoring boilerplate headers."""
+    if not desc or not isinstance(desc, str):
+        return ""
+    text = re.sub(r"[^a-zA-Z0-9]+", " ", desc).lower()
+    words = text.split()
+    # Strip leading header words (e.g. "job description", "about the job")
+    start_idx = 0
+    while start_idx < len(words) and words[start_idx] in _HEADER_WORDS:
+        start_idx += 1
+    significant = [w for w in words[start_idx:] if w not in _STOPWORDS and w not in _HEADER_WORDS and len(w) > 1]
+    return " ".join(significant[:max_tokens])
 
 
 def _normalize_ws(text: str) -> str:
@@ -31,18 +94,21 @@ def _normalize_ws(text: str) -> str:
 
 
 def job_listing_fingerprint(job) -> str:
-    """Stable key: title + company + hashed description prefix (location/url excluded)."""
-    t = _normalize_ws(job.title or "")
-    c = _normalize_ws(job.company_name or "")
-    desc = _normalize_ws((job.description or "")[:_DESCRIPTION_PREFIX_CHARS])
-    raw = f"{t}|{c}|{desc}"
+    """
+    Cross-board stable key: canonical company + canonical title + normalized description tokens.
+    Collapses cross-board postings (LinkedIn, Indeed, Adzuna) into a unified deduplication cluster.
+    """
+    c = canonical_company(getattr(job, "company_name", None))
+    t = canonical_title(getattr(job, "title", None))
+    d = canonical_description_prefix(getattr(job, "description", None))
+    raw = f"{c}|{t}|{d}"
     h = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
     return h
 
 
 def title_company_key(title: str | None, company: str | None) -> tuple[str, str]:
     """Normalized (title, company) key for Find-jobs result de-dupe."""
-    return (_normalize_ws(title or ""), _normalize_ws(company or ""))
+    return (canonical_title(title), canonical_company(company))
 
 
 def dedupe_payloads_by_title_company(payloads: list) -> list:
@@ -105,92 +171,131 @@ def stage_filter_q(stage: str, *, include_done: bool) -> models.Q:
 
 def _winner_sort_key(
     entry: PipelineEntry,
-    metrics_by_job_id: dict[int, JobListingTrackMetrics],
+    metrics_map: dict[tuple[str, int], JobListingTrackMetrics],
 ) -> tuple:
-    m = metrics_by_job_id.get(entry.job_listing_id)
-    fa = m.focus_after_penalty if m and m.focus_after_penalty is not None else -1
-    pm = m.preference_margin if m and m.preference_margin is not None else -1
-    fp = m.focus_percent if m and m.focus_percent is not None else -1
+    """
+    Rank duplicate pipeline entries across search profiles.
+    - Prioritizes active workflow progression (Applying > Vetting > Pipeline)
+    - Prioritizes highest match or fit % (focus_after_penalty, focus_percent, vetting_interview_probability)
+    - Prioritizes preference margin
+    - Tie-breaker: recency and stable entry id.
+    """
+    stage_priority = {
+        PipelineEntry.Stage.APPLYING: 3,
+        PipelineEntry.Stage.VETTING: 2,
+        PipelineEntry.Stage.PIPELINE: 1,
+        "": 1,
+    }
+    st_val = stage_priority.get(entry.stage, 0)
+
+    m = metrics_map.get((entry.track, entry.job_listing_id))
+    fa = m.focus_after_penalty if (m and m.focus_after_penalty is not None) else -1
+    fp = m.focus_percent if (m and m.focus_percent is not None) else -1
+    best_fit = max(fa, fp)
+
+    vetting_prob = entry.vetting_interview_probability if entry.vetting_interview_probability is not None else -1
+    pm = m.preference_margin if (m and m.preference_margin is not None) else -999
     ts = entry.added_at.timestamp() if entry.added_at else 0.0
-    # Prefer lower job_listing_id when scores tie (stable).
-    return (fa, pm, fp, ts, -entry.job_listing_id)
+
+    return (st_val, best_fit, vetting_prob, pm, ts, -entry.id)
 
 
 def dedupe_pipeline_entries(
     *,
     user,
-    track_slug: str | None,
-    stage: str,
-    include_done: bool,
+    track_slug: str | None = "*",
+    stage: str = "all",
+    include_done: bool = False,
 ) -> dict[str, object]:
     """
-    Soft-delete duplicate PipelineEntry rows within each fingerprint group for *user*.
+    De-dupe jobs across search profiles for *user* (excluding Applied / Done stage by default).
 
-    - Clustering is per track (never merges across tracks).
-    - `track_slug`: None or '*' / 'all' → every known track for this user (Track table).
+    When duplicate copies of a job are found across search profiles or within a profile:
+    - Keeps the job in the profile with the highest fit or match %.
+    - Soft-deletes duplicate entries in other profiles for that tenant.
+    - Excludes Applied (Stage.DONE) entries from deletion.
+
+    - `track_slug`: None or '*' / 'all' → merges/dedupes across ALL search profiles for this user.
+                   Specific slug → scopes dedupe to that single track.
     - `stage`: 'all' or '*' for all stages (see include_done for Done).
     Returns summary dict with counts.
     """
     stage_norm = (stage or "all").strip().lower()
     st_q = stage_filter_q(stage_norm, include_done=include_done)
 
-    if track_slug and str(track_slug).strip().lower() not in ("*", "all", ""):
-        tracks = [str(track_slug).strip().lower()]
-    else:
+    is_cross_profile = not track_slug or str(track_slug).strip().lower() in ("*", "all", "")
+
+    if is_cross_profile:
         tracks = list(Track.ensure_baseline(user).values_list("slug", flat=True))
-
-    total_removed = 0
-    total_groups = 0
-    per_track: dict[str, dict[str, int]] = {}
-
-    for tslug in tracks:
+        base = (
+            PipelineEntry.objects.for_user(user)
+            .filter(removed_at__isnull=True)
+            .filter(st_q)
+            .select_related("job_listing")
+        )
+    else:
+        tslug = str(track_slug).strip().lower()
+        tracks = [tslug]
         base = (
             PipelineEntry.objects.for_user(user)
             .filter(track=tslug, removed_at__isnull=True)
             .filter(st_q)
             .select_related("job_listing")
         )
-        entries = list(base)
-        if not entries:
-            per_track[tslug] = {"removed": 0, "duplicate_groups": 0}
+
+    entries = list(base)
+    if not entries:
+        return {
+            "status": "success",
+            "tracks_processed": len(tracks),
+            "duplicate_groups": 0,
+            "entries_removed": 0,
+            "per_track": {t: {"removed": 0, "duplicate_groups": 0} for t in tracks},
+        }
+
+    job_ids = {e.job_listing_id for e in entries}
+    metrics_list = JobListingTrackMetrics.objects.for_user(user).filter(
+        job_listing_id__in=job_ids,
+    )
+    metrics_map = {(m.track, m.job_listing_id): m for m in metrics_list}
+
+    fingerprint_map: dict[str, list[PipelineEntry]] = defaultdict(list)
+    for e in entries:
+        fp = job_listing_fingerprint(e.job_listing)
+        fingerprint_map[fp].append(e)
+
+    total_removed = 0
+    total_groups = 0
+    per_track: dict[str, dict[str, int]] = {t: {"removed": 0, "duplicate_groups": 0} for t in tracks}
+
+    for _fp, group in fingerprint_map.items():
+        if len(group) < 2:
             continue
+        total_groups += 1
+        winner = max(group, key=lambda ent: _winner_sort_key(ent, metrics_map))
 
-        job_ids = {e.job_listing_id for e in entries}
-        metrics_list = JobListingTrackMetrics.objects.for_user(user).filter(
-            track=tslug,
-            job_listing_id__in=job_ids,
-        )
-        metrics_by_job_id = {m.job_listing_id: m for m in metrics_list}
-
-        fingerprint_map: dict[str, list[PipelineEntry]] = defaultdict(list)
-        for e in entries:
-            fp = job_listing_fingerprint(e.job_listing)
-            fingerprint_map[fp].append(e)
-
-        removed_here = 0
-        groups_here = 0
-        for _fp, group in fingerprint_map.items():
-            if len(group) < 2:
+        for ent in group:
+            if ent.id == winner.id:
                 continue
-            groups_here += 1
-            winner = max(group, key=lambda ent: _winner_sort_key(ent, metrics_by_job_id))
-            for ent in group:
-                if ent.id == winner.id:
-                    continue
-                ent.mark_deleted(save=True)
-                removed_here += 1
+            # Never delete an entry if it is in Applied (DONE) stage
+            if ent.stage == PipelineEntry.Stage.DONE:
+                continue
 
-        total_removed += removed_here
-        total_groups += groups_here
-        per_track[tslug] = {"removed": removed_here, "duplicate_groups": groups_here}
-        if removed_here:
-            logger.info(
-                "[dedupe_pipeline_entries] user=%s track=%s removed=%d duplicate_groups=%d",
-                getattr(user, "id", user),
-                tslug,
-                removed_here,
-                groups_here,
-            )
+            ent.mark_deleted(save=True)
+            total_removed += 1
+            if ent.track in per_track:
+                per_track[ent.track]["removed"] += 1
+            else:
+                per_track[ent.track] = {"removed": 1, "duplicate_groups": 0}
+
+    if total_removed:
+        logger.info(
+            "[dedupe_pipeline_entries] user=%s cross_profile=%s removed=%d duplicate_groups=%d",
+            getattr(user, "id", user),
+            is_cross_profile,
+            total_removed,
+            total_groups,
+        )
 
     return {
         "status": "success",
