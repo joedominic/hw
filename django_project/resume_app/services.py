@@ -80,7 +80,7 @@ def run_ollama_guard_on_payloads(payloads: list, track_slug: str, *, user) -> li
     """
     import re
 
-    from .llm_factory import get_llm
+    from .llm import get_llm
     from .models import LLMProviderConfig, Track
 
     provider = "Ollama Local"
@@ -113,7 +113,7 @@ def run_ollama_guard_on_payloads(payloads: list, track_slug: str, *, user) -> li
             prompt = prompt_template.format(
                 target_level=target_level, title=p.title, snippet=p.snippet
             )
-            from .llm_gateway import log_llm_invoke
+            from .llm import log_llm_invoke
 
             log_llm_invoke(
                 provider,

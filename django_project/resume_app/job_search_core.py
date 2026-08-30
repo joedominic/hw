@@ -50,15 +50,15 @@ def effective_vetting_job_description(job: JobListing, *, enrich: bool = False) 
         return current
     src = (job.source or "").strip().lower()
     if src == "dice":
-        from .dice_client import enrich_dice_job_listing_description
+        from .sourcing.clients.dice_client import enrich_dice_job_listing_description
 
         return (enrich_dice_job_listing_description(job) or current).strip()
     if src == "levels":
-        from .levels_client import enrich_levels_job_listing_description
+        from .sourcing.clients.levels_client import enrich_levels_job_listing_description
 
         return (enrich_levels_job_listing_description(job) or current).strip()
     if src == "builtin":
-        from .builtin_client import enrich_builtin_job_listing_description
+        from .sourcing.clients.builtin_client import enrich_builtin_job_listing_description
 
         return (enrich_builtin_job_listing_description(job) or current).strip()
     return current
@@ -180,7 +180,7 @@ def run_job_search_core(
     if not search_term or not search_term.strip():
         raise ValueError("search_term is required")
 
-    from .entitlements import METRIC_JOB_SEARCHES, QuotaExceeded, consume_quota
+    from .subscriptions import METRIC_JOB_SEARCHES, QuotaExceeded, consume_quota
 
     try:
         consume_quota(user, METRIC_JOB_SEARCHES, 1)
@@ -238,7 +238,7 @@ def run_job_search_core(
     jobs_after_filter = len(jobs_with_meta)
     logger.info("[job_search_core] After filter: %d jobs", jobs_after_filter)
 
-    jobs_out = rank_and_filter_jobs(jobs_with_meta, norm_track, user=user)
+    jobs_out = rank_and_filter_jobs(jobs_with_meta, norm_track, user=user, sort=sort)
     annotate_saved_flags(user, norm_track, jobs_out)
     return (jobs_fetched, jobs_after_filter, jobs_out, refs_for_cache)
 
@@ -477,16 +477,79 @@ def _apply_disliked_penalty_and_final_sort(
     return jobs_out
 
 
+def sort_job_payloads(jobs: List[JobPayload], sort_by: str = "match") -> List[JobPayload]:
+    """
+    Sort JobPayload objects by requested criteria:
+    - 'match' / 'focus': Match % / fit score descending, then freshness (date posted) descending
+    - 'latest' / 'freshness' / 'date' / 'newest': Date posted / fetched descending, then match % descending
+    - 'oldest': Date posted / fetched ascending, then match % descending
+    """
+    from datetime import datetime
+    from django.utils import timezone
+
+    def _get_job_date(p: JobPayload):
+        dt = getattr(p, "posted_at", None) or getattr(p, "fetched_at", None)
+        if dt is None:
+            return datetime.min.replace(tzinfo=timezone.utc)
+        if timezone.is_naive(dt):
+            dt = timezone.make_aware(dt, timezone.utc)
+        return dt
+
+    def _get_job_match_score(p: JobPayload) -> float:
+        if getattr(p, "matching_score", None) is not None:
+            return float(p.matching_score)
+        if getattr(p, "focus_percent_after_penalty", None) is not None:
+            return float(p.focus_percent_after_penalty)
+        if getattr(p, "focus_percent", None) is not None:
+            return float(p.focus_percent)
+        if getattr(p, "preference_margin_percent", None) is not None:
+            return float(p.preference_margin_percent)
+        return -999.0
+
+    normalized_sort = (sort_by or "match").strip().lower()
+    if normalized_sort in ("latest", "freshness", "date", "newest"):
+        return sorted(
+            jobs,
+            key=lambda p: (
+                _get_job_date(p),
+                _get_job_match_score(p) > -900.0,
+                _get_job_match_score(p),
+                getattr(p, "id", 0),
+            ),
+            reverse=True,
+        )
+    elif normalized_sort == "oldest":
+        return sorted(
+            jobs,
+            key=lambda p: (
+                _get_job_date(p),
+                -(_get_job_match_score(p) if _get_job_match_score(p) > -900.0 else -999.0),
+                -getattr(p, "id", 0),
+            ),
+        )
+    else:  # "match", "focus", default
+        return sorted(
+            jobs,
+            key=lambda p: (
+                _get_job_match_score(p) > -900.0,
+                _get_job_match_score(p),
+                _get_job_date(p),
+                getattr(p, "id", 0),
+            ),
+            reverse=True,
+        )
+
+
 def rank_and_filter_jobs(
     jobs_with_meta: List[Tuple[JobListing, JobPayload]],
     track: Optional[str],
     *,
     user,
+    sort: str = "match",
 ) -> List[JobPayload]:
     """
     Single entry point for preference ranking: score, auto-dislike margin < -5,
-    apply disliked penalty, and final sort. Used by run_job_search_core and by
-    jobs_search cache path. Preserves preference_margin_percent as primary sort.
+    apply disliked penalty, and final sort according to requested sort option.
     """
     ranked = _rank_jobs_with_meta(jobs_with_meta, track, user=user)
     jobs_out = _apply_auto_dislike(ranked, track, user)
@@ -513,7 +576,7 @@ def rank_and_filter_jobs(
             before,
             len(jobs_out),
         )
-    return jobs_out
+    return sort_job_payloads(jobs_out, sort_by=sort)
 
 
 def recompute_preferences_for_jobs(

@@ -56,13 +56,7 @@ from .agents import (
     _llm_invoke_with_retry,
     build_llm_messages_for_prompt,
 )
-from .llm_gateway import (
-    LLMRequestsDisabled,
-    USAGE_QUERY_JOB_INSIGHTS,
-    USAGE_QUERY_JOBS_AI_MATCH,
-    USAGE_QUERY_JOBS_MATCH_API,
-    USAGE_QUERY_KEYWORD_SEARCH_FIT,
-)
+from .llm import LLMRequestsDisabled
 from . import embeddings as embedding_module
 from .preference import (
     get_preference_vectors,
@@ -103,7 +97,7 @@ from .schemas import (
     InterviewPrepSaveRequest,
 )
 from .job_ranking import get_focus_breakdown, get_focus_sentence_alignment, rank_jobs_by_preference
-from .llm_services import LLM_PROVIDERS
+from .llm import LLM_PROVIDERS
 from .utils import format_job_source_label
 from .disqualifiers import (
     build_disqualifier_pattern,
@@ -487,7 +481,7 @@ def jobs_search(request, payload: JobSearchRequest):
     )
 
     if use_cache:
-        from .entitlements import METRIC_JOB_SEARCHES, QuotaExceeded, consume_quota
+        from .subscriptions import METRIC_JOB_SEARCHES, QuotaExceeded, consume_quota
 
         try:
             consume_quota(user, METRIC_JOB_SEARCHES, 1)
@@ -519,7 +513,7 @@ def jobs_search(request, payload: JobSearchRequest):
                 track=payload.track,
                 results_wanted=payload.results_wanted or 50,
                 site_name=normalize_site_names(payload.site_name),
-                sort=(payload.sort or "focus"),
+                sort=(payload.sort or "match"),
             )
         except ValueError as e:
             raise HttpError(400, str(e)) from e
@@ -538,7 +532,7 @@ def jobs_search(request, payload: JobSearchRequest):
         return JobSearchResponse(jobs=jobs_out, total=len(jobs_out))
 
     # Cache path: single ranking pipeline from job_search_core (preference + auto-dislike + penalty + sort)
-    jobs_out = rank_and_filter_jobs(jobs_with_meta, search_track, user=user)
+    jobs_out = rank_and_filter_jobs(jobs_with_meta, search_track, user=user, sort=(payload.sort or "match"))
 
     # Keep resume_id_for_match for AI Match step later
     resume_id_for_match = payload.resume_id
@@ -1169,13 +1163,13 @@ def jobs_fetch_description(request, payload: FetchJobDescriptionRequest):
     if not url:
         raise HttpError(400, "url is required")
 
-    from .dice_client import extract_dice_guid, fetch_dice_job_detail, enrich_dice_job_listing_description
-    from .levels_client import (
+    from .sourcing.clients.dice_client import extract_dice_guid, fetch_dice_job_detail, enrich_dice_job_listing_description
+    from .sourcing.clients.levels_client import (
         extract_levels_job_id,
         fetch_levels_job_detail,
         enrich_levels_job_listing_description,
     )
-    from .builtin_client import (
+    from .sourcing.clients.builtin_client import (
         extract_builtin_job_id,
         fetch_builtin_job_detail,
         enrich_builtin_job_listing_description,
@@ -1330,9 +1324,9 @@ def jobs_focus_breakdown(request, job_listing_id: int, track: Optional[str] = No
 def jobs_get(request, job_listing_id: int):
     """Get a single job listing (full stored description + metadata; e.g. optimizer pre-fill, Local desc)."""
     job = get_object_or_404(JobListing, id=job_listing_id)
-    from .dice_client import enrich_dice_job_listing_description
-    from .levels_client import enrich_levels_job_listing_description
-    from .builtin_client import enrich_builtin_job_listing_description
+    from .sourcing.clients.dice_client import enrich_dice_job_listing_description
+    from .sourcing.clients.levels_client import enrich_levels_job_listing_description
+    from .sourcing.clients.builtin_client import enrich_builtin_job_listing_description
 
     desc = enrich_dice_job_listing_description(job)
     if not desc:
@@ -1527,7 +1521,7 @@ def jobs_unsave(request, job_listing_id: int, track: Optional[str] = None, profi
 def _enqueue_vetting_match_for_entry(request, user, entry: PipelineEntry) -> None:
     """Best-effort enqueue of vetting interview scoring for a newly Review-stage entry."""
     try:
-        from .llm_session import get_active_llm_provider
+        from .llm import get_active_llm_provider
         from .prompt_store import get_effective_prompts
         from .tasks import evaluate_vetting_matching_task
 

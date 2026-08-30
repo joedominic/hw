@@ -22,7 +22,7 @@ from .jobs_api import (
     jobs_like as api_jobs_like,
     jobs_save as api_jobs_save,
 )
-from .llm_session import get_active_llm_provider
+from .llm import get_active_llm_provider
 from .models import OptimizedResume, PipelineEntry, Track
 from .tasks import _resolve_user_resume_for_track
 from .prompt_store import get_effective_prompts
@@ -129,6 +129,10 @@ def _apply_save_action(entry: PipelineEntry | None, board_stage: str, request) -
         return
     if board_stage == "pipeline":
         entry.move_to_vetting(save=True)
+        from .domain.event_bus import event_bus
+        from .domain.events import JobPromotedToVetting
+
+        event_bus.publish(JobPromotedToVetting(user_id=request.user.id, entry_id=entry.id, track=entry.track))
         try:
             from .tasks import evaluate_vetting_matching_task
 
@@ -151,8 +155,16 @@ def _apply_save_action(entry: PipelineEntry | None, board_stage: str, request) -
             pass
     elif board_stage == "vetting":
         entry.move_to_applying(save=True)
+        from .domain.event_bus import event_bus
+        from .domain.events import JobPromotedToApplying
+
+        event_bus.publish(JobPromotedToApplying(user_id=request.user.id, entry_id=entry.id, track=entry.track))
     elif board_stage == "applying":
         entry.mark_done(save=True)
+        from .domain.event_bus import event_bus
+        from .domain.events import JobMarkedApplied
+
+        event_bus.publish(JobMarkedApplied(user_id=request.user.id, entry_id=entry.id, track=entry.track))
     # done: favourites only; stage unchanged
 
 
@@ -199,6 +211,13 @@ def pipeline_board_view(request, board_stage: str):
             },
         )
 
+    if not power_user and board_stage in ("vetting", "applying", "done"):
+        show_advanced_board_filters = False
+        show_pipeline_track_tabs = False
+    else:
+        show_advanced_board_filters = True
+        show_pipeline_track_tabs = True
+
     tracks_qs = Track.ensure_baseline(user)
     pipeline_track_tabs = pipeline_track_tabs_for_board(user, power_user=power_user)
     board_track_slugs = {t["slug"] for t in pipeline_track_tabs}
@@ -234,18 +253,6 @@ def pipeline_board_view(request, board_stage: str):
             if board_stage != "applying":
                 messages.info(request, "The apply agent can only be started from the Applying board.")
                 return redirect(next_url)
-            if not selected_ids:
-                messages.info(request, "Select at least one job before starting the apply agent.")
-                return redirect(next_url)
-            from .models import ApplicantProfile
-
-            profile = ApplicantProfile.get_for_user(user)
-            if not (profile.full_name and profile.email):
-                messages.error(
-                    request,
-                    "Set your name and email on the Apply Agent profile page before starting.",
-                )
-                return redirect(next_url)
             entry_ids: list[int] = []
             for jid in selected_ids:
                 try:
@@ -260,20 +267,20 @@ def pipeline_board_view(request, board_stage: str):
                 ).first()
                 if entry:
                     entry_ids.append(entry.id)
-            if entry_ids:
-                from .apply_agent import orchestrator
-                from .tasks import run_apply_agent_step
 
-                attempts = orchestrator.start_attempts_for_entries(entry_ids, user_id=user.id)
-                for attempt in attempts:
-                    run_apply_agent_step(user.id, attempt.id)
-                if attempts:
+            from .application.apply_services import ApplyApplicationService
+
+            result = ApplyApplicationService.start_attempts_for_jobs(user, entry_ids)
+            if result.success:
+                if result.started_attempts:
                     messages.success(
                         request,
-                        f"Started the apply agent for {len(attempts)} job(s). Track progress on the Apply Agent page.",
+                        f"Started the apply agent for {len(result.started_attempts)} job(s). Track progress on the Apply Agent page.",
                     )
                 else:
-                    messages.info(request, "Those jobs already have an apply attempt in progress.")
+                    messages.info(request, result.message)
+            else:
+                messages.error(request, result.message)
             return redirect(next_url)
 
         if action in {"bulk_delete", "bulk_like", "bulk_dislike", "bulk_promote"}:
@@ -646,7 +653,7 @@ def pipeline_board_view(request, board_stage: str):
     pipeline_resume_llm_provider: str | None = None
     pipeline_resume_llm_configured = False
     if show_pipeline_resume_summary:
-        from .llm_services import LLM_PROVIDERS
+        from .llm import LLM_PROVIDERS
         from .models import LLMProviderConfig
         from .pipeline_llm_skill_extract import resolve_provider_api_key
 

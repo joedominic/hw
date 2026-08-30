@@ -22,7 +22,7 @@ from .tasks import (
 )
 from .api import _normalize_export_content
 from .services import parse_pdf, PDFParseError
-from .llm_services import LLM_PROVIDERS
+from .llm import LLM_PROVIDERS
 from .job_sources import (
     _dedupe_fetch_rows,
     _per_site_results_cap,
@@ -31,8 +31,8 @@ from .job_sources import (
     normalize_site_names,
     upsert_job_listing_from_fetch,
 )
-from .adzuna_client import _adzuna_result_to_dict, fetch_adzuna_jobs
-from .dice_client import _parse_jobs_from_html
+from .sourcing.clients.adzuna_client import _adzuna_result_to_dict, fetch_adzuna_jobs
+from .sourcing.clients.dice_client import _parse_jobs_from_html
 from .utils import format_job_source_label
 from .views import MAX_TRACK_RESUME_UPLOAD_BYTES, _count_unique_library_resumes
 from .test_utils import TenantTestCase, create_user, login_client, TEST_PASSWORD
@@ -159,16 +159,16 @@ class AdzunaClientTestCase(TestCase):
         self.assertEqual(row["company_name"], "Acme")
         self.assertEqual(row["job_url"], "https://example.com/job/42")
 
-    @patch("resume_app.adzuna_client.requests.get")
-    @patch("resume_app.adzuna_client._adzuna_credentials", return_value=(None, None))
+    @patch("resume_app.sourcing.clients.adzuna_client.requests.get")
+    @patch("resume_app.sourcing.clients.adzuna_client._adzuna_credentials", return_value=(None, None))
     def test_fetch_adzuna_jobs_requires_keys(self, _creds, mock_get):
         with self.assertRaises(RuntimeError) as ctx:
             fetch_adzuna_jobs("engineer", location="Boston", results_wanted=5)
         self.assertIn("not configured", str(ctx.exception))
         mock_get.assert_not_called()
 
-    @patch("resume_app.adzuna_client.requests.get")
-    @patch("resume_app.adzuna_client._adzuna_credentials", return_value=("id", "key"))
+    @patch("resume_app.sourcing.clients.adzuna_client.requests.get")
+    @patch("resume_app.sourcing.clients.adzuna_client._adzuna_credentials", return_value=("id", "key"))
     @override_settings(ADZUNA_MAX_PAGES=1)
     def test_fetch_adzuna_jobs_parses_response(self, _creds, mock_get):
         mock_resp = MagicMock()
@@ -230,7 +230,7 @@ class DiceClientTestCase(TestCase):
         self.assertEqual(rows[1]["title"], "Financial Crimes - Senior Data Scientist")
 
     def test_normalize_dice_api_query_strips_quotes(self):
-        from resume_app.dice_client import _normalize_dice_api_query
+        from resume_app.sourcing.clients.dice_client import _normalize_dice_api_query
 
         self.assertEqual(
             _normalize_dice_api_query('"financial crimes" technology'),
@@ -238,7 +238,7 @@ class DiceClientTestCase(TestCase):
         )
 
     def test_parse_jobposting_from_html(self):
-        from resume_app.dice_client import _parse_jobposting_from_html
+        from resume_app.sourcing.clients.dice_client import _parse_jobposting_from_html
 
         html = """
         <html><head>
@@ -272,7 +272,7 @@ class DiceClientTestCase(TestCase):
         self.assertNotIn("<b>", parsed["description"])
 
     def test_extract_dice_guid(self):
-        from resume_app.dice_client import extract_dice_guid
+        from resume_app.sourcing.clients.dice_client import extract_dice_guid
 
         self.assertEqual(
             extract_dice_guid("https://www.dice.com/job-detail/aeba63c5-d102-4999-b7f4-5e5040e8da20"),
@@ -290,7 +290,7 @@ class DiceClientTestCase(TestCase):
         self.assertEqual(format_job_source_label("builtin"), "Built In")
 
     def test_api_item_to_dict_normalizes_fields(self):
-        from resume_app.dice_client import _api_item_to_dict
+        from resume_app.sourcing.clients.dice_client import _api_item_to_dict
 
         row = _api_item_to_dict(
             {
@@ -314,9 +314,9 @@ class DiceClientTestCase(TestCase):
         self.assertEqual(row["job_url"], "https://www.dice.com/job-detail/guid-1")
         self.assertIn("date_posted", row)
 
-    @patch("resume_app.dice_client.requests.Session")
+    @patch("resume_app.sourcing.clients.dice_client.requests.Session")
     def test_fetch_dice_jobs_uses_api(self, mock_session_cls):
-        from resume_app.dice_client import fetch_dice_jobs
+        from resume_app.sourcing.clients.dice_client import fetch_dice_jobs
 
         session = mock_session_cls.return_value.__enter__.return_value
         response = session.get.return_value
@@ -343,10 +343,10 @@ class DiceClientTestCase(TestCase):
         called_url = session.get.call_args[0][0]
         self.assertIn("job-search-api.svc.dhigroupinc.com", called_url)
 
-    @patch("resume_app.dice_client._fetch_dice_jobs_api", side_effect=RuntimeError("api down"))
-    @patch("resume_app.dice_client._fetch_dice_jobs_html")
+    @patch("resume_app.sourcing.clients.dice_client._fetch_dice_jobs_api", side_effect=RuntimeError("api down"))
+    @patch("resume_app.sourcing.clients.dice_client._fetch_dice_jobs_html")
     def test_fetch_dice_jobs_falls_back_to_html(self, mock_html, mock_api):
-        from resume_app.dice_client import fetch_dice_jobs
+        from resume_app.sourcing.clients.dice_client import fetch_dice_jobs
 
         mock_html.return_value = [
             {
@@ -367,7 +367,7 @@ class DiceClientTestCase(TestCase):
 
 class LevelsClientTestCase(TestCase):
     def test_slugify_search_term(self):
-        from resume_app.levels_client import _slugify
+        from resume_app.sourcing.clients.levels_client import _slugify
 
         self.assertEqual(
             _slugify("Software Engineering Manager"),
@@ -375,7 +375,7 @@ class LevelsClientTestCase(TestCase):
         )
 
     def test_levels_location_slug_us_aliases(self):
-        from resume_app.levels_client import _levels_location_slug
+        from resume_app.sourcing.clients.levels_client import _levels_location_slug
 
         self.assertEqual(_levels_location_slug("US"), "united-states")
         self.assertEqual(_levels_location_slug("USA"), "united-states")
@@ -384,7 +384,7 @@ class LevelsClientTestCase(TestCase):
         self.assertEqual(_levels_location_slug("San Francisco"), "san-francisco-bay-area")
 
     def test_locations_match_country_slug(self):
-        from resume_app.levels_client import _locations_match_country_slug
+        from resume_app.sourcing.clients.levels_client import _locations_match_country_slug
 
         self.assertTrue(
             _locations_match_country_slug(
@@ -403,7 +403,7 @@ class LevelsClientTestCase(TestCase):
         )
 
     def test_resolve_levels_search_params_staff_engineer(self):
-        from resume_app.levels_client import _resolve_levels_search_params
+        from resume_app.sourcing.clients.levels_client import _resolve_levels_search_params
 
         params = _resolve_levels_search_params("Staff Software Development Engineer")
         self.assertEqual(params["job_family_slug"], "software-engineer")
@@ -411,7 +411,7 @@ class LevelsClientTestCase(TestCase):
         self.assertTrue(params["filter_title_client_side"])
 
     def test_title_matches_search(self):
-        from resume_app.levels_client import _title_matches_search
+        from resume_app.sourcing.clients.levels_client import _title_matches_search
 
         self.assertTrue(
             _title_matches_search(
@@ -424,7 +424,7 @@ class LevelsClientTestCase(TestCase):
         )
 
     def test_extract_levels_job_id(self):
-        from resume_app.levels_client import extract_levels_job_id
+        from resume_app.sourcing.clients.levels_client import extract_levels_job_id
 
         self.assertEqual(
             extract_levels_job_id("levels:103969804544549574"),
@@ -438,7 +438,7 @@ class LevelsClientTestCase(TestCase):
         )
 
     def test_flatten_search_results(self):
-        from resume_app.levels_client import _flatten_search_results
+        from resume_app.sourcing.clients.levels_client import _flatten_search_results
 
         rows = _flatten_search_results(
             {
@@ -474,7 +474,7 @@ class LevelsClientTestCase(TestCase):
         import zlib
 
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-        from resume_app.levels_client import _decrypt_payload
+        from resume_app.sourcing.clients.levels_client import _decrypt_payload
 
         original = {"results": [], "total": 0, "totalMatchingJobs": 0}
         compressed = zlib.compress(json.dumps(original).encode("utf-8"))
@@ -491,9 +491,9 @@ class LevelsClientTestCase(TestCase):
     def test_format_job_source_label_levels(self):
         self.assertEqual(format_job_source_label("levels"), "Levels.fyi")
 
-    @patch("resume_app.levels_client._levels_request")
+    @patch("resume_app.sourcing.clients.levels_client._levels_request")
     def test_fetch_levels_jobs_paginates(self, mock_request):
-        from resume_app.levels_client import fetch_levels_jobs
+        from resume_app.sourcing.clients.levels_client import fetch_levels_jobs
 
         mock_request.side_effect = [
             {
@@ -538,7 +538,7 @@ class LevelsClientTestCase(TestCase):
 
 class BuiltInClientTestCase(TestCase):
     def test_resolve_builtin_base_url(self):
-        from resume_app.builtin_client import _resolve_builtin_base_url
+        from resume_app.sourcing.clients.builtin_client import _resolve_builtin_base_url
 
         self.assertEqual(_resolve_builtin_base_url("Chicago, IL"), "https://www.builtinchicago.org")
         self.assertEqual(_resolve_builtin_base_url("NYC"), "https://www.builtinnyc.com")
@@ -552,7 +552,7 @@ class BuiltInClientTestCase(TestCase):
         self.assertEqual(_resolve_builtin_base_url(""), "https://builtin.com")
 
     def test_parse_builtin_relative_date(self):
-        from resume_app.builtin_client import _parse_builtin_relative_date
+        from resume_app.sourcing.clients.builtin_client import _parse_builtin_relative_date
 
         self.assertIsNotNone(_parse_builtin_relative_date("Reposted 15 Minutes Ago"))
         self.assertIsNotNone(_parse_builtin_relative_date("6 Hours Ago"))
@@ -562,15 +562,15 @@ class BuiltInClientTestCase(TestCase):
         self.assertIsNotNone(_parse_builtin_relative_date("Today"))
 
     def test_extract_builtin_job_id(self):
-        from resume_app.builtin_client import extract_builtin_job_id
+        from resume_app.sourcing.clients.builtin_client import extract_builtin_job_id
 
         self.assertEqual(extract_builtin_job_id("10492500"), "10492500")
         self.assertEqual(extract_builtin_job_id("builtin:10492500"), "10492500")
         self.assertEqual(extract_builtin_job_id("https://builtin.com/job/senior-data-science-engineer/10201876"), "10201876")
 
-    @patch("resume_app.builtin_client.requests.get")
+    @patch("resume_app.sourcing.clients.builtin_client.requests.get")
     def test_fetch_builtin_jobs_parses_html_and_ld(self, mock_get):
-        from resume_app.builtin_client import fetch_builtin_jobs
+        from resume_app.sourcing.clients.builtin_client import fetch_builtin_jobs
 
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
@@ -623,9 +623,9 @@ class BuiltInClientTestCase(TestCase):
         self.assertEqual(jobs[0]["source"], "builtin")
         self.assertEqual(jobs[0]["external_id"], "builtin:10201876")
 
-    @patch("resume_app.builtin_client.requests.get")
+    @patch("resume_app.sourcing.clients.builtin_client.requests.get")
     def test_fetch_builtin_job_detail_parses_jobposting(self, mock_get):
-        from resume_app.builtin_client import fetch_builtin_job_detail
+        from resume_app.sourcing.clients.builtin_client import fetch_builtin_job_detail
 
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
@@ -669,10 +669,10 @@ class BuiltInClientTestCase(TestCase):
         self.assertEqual(detail["location"], "Boston, MA, USA")
         self.assertEqual(detail["description"], "Build great APIs in Python.\n\n- Use AWS")
 
-    @patch("resume_app.builtin_client.fetch_builtin_job_detail")
+    @patch("resume_app.sourcing.clients.builtin_client.fetch_builtin_job_detail")
     def test_enrich_builtin_job_listing_description(self, mock_detail):
         from datetime import datetime
-        from resume_app.builtin_client import enrich_builtin_job_listing_description
+        from resume_app.sourcing.clients.builtin_client import enrich_builtin_job_listing_description
         from resume_app.models import JobListing
 
         mock_detail.return_value = {
@@ -703,9 +703,9 @@ class BuiltInClientTestCase(TestCase):
 
 class FetchJobsOrchestratorTestCase(TestCase):
     @patch("resume_app.job_sources._fetch_jobs_jobspy")
-    @patch("resume_app.levels_client.fetch_levels_jobs")
-    @patch("resume_app.dice_client.fetch_dice_jobs")
-    @patch("resume_app.adzuna_client.fetch_adzuna_jobs")
+    @patch("resume_app.sourcing.clients.levels_client.fetch_levels_jobs")
+    @patch("resume_app.sourcing.clients.dice_client.fetch_dice_jobs")
+    @patch("resume_app.sourcing.clients.adzuna_client.fetch_adzuna_jobs")
     def test_fetch_jobs_merges_providers(self, mock_adzuna, mock_dice, mock_levels, mock_jobspy):
         mock_jobspy.return_value = [
             {"source": "jobspy_indeed", "external_id": "j1", "title": "A"}
@@ -755,7 +755,11 @@ class APITestCase(TenantTestCase):
         super().setUp()
         from resume_app.onboarding import seed_user_defaults
 
-        seed_user_defaults(self.user)
+    def test_settings_view_get_all_tabs(self):
+        for tab in ["", "llm", "automation", "account", "prompts", "import_export"]:
+            url = "/settings/" if not tab else f"/settings/?tab={tab}"
+            response = self.client.get(url)
+            self.assertEqual(response.status_code, 200, f"Failed on tab: {tab}")
 
     def test_save_optimizer_supporting_context_in_settings_db(self):
         from .models import AppAutomationSettings
@@ -909,7 +913,7 @@ class APITestCase(TenantTestCase):
 
 class TaskTestCase(TestCase):
     @override_settings(HUEY_IMMEDIATE=True)
-    @patch("resume_app.llm_gateway.cloud_llm_available", return_value=True)
+    @patch("resume_app.tasks.cloud_llm_available", return_value=True)
     @patch("resume_app.tasks.build_optimizer_graph_prompt_state")
     @patch("resume_app.tasks.build_optimizer_context_state")
     @patch("resume_app.tasks.parse_pdf")
@@ -2506,10 +2510,10 @@ class PromptStoreResolveTestCase(TestCase):
 
 class LlmRateLimitTestCase(TestCase):
     def test_acquire_when_disabled_returns_noop(self):
-        from resume_app.llm_rate_limit import acquire_llm_slot
+        from resume_app.llm.rate_limit import acquire_llm_slot
 
         user = create_user("rluser")
-        with patch("resume_app.llm_rate_limit._get_limits", return_value=None):
+        with patch("resume_app.llm.rate_limit._get_limits", return_value=None):
             rec, rel = acquire_llm_slot("Groq", "llama", 42, user=user)
         rec(10)
         rel()
@@ -3168,11 +3172,11 @@ class WorkflowStepLLMOverrideTestCase(TestCase):
         )
 
     @patch("resume_app.rate_limits.check_user_llm_rate_limit")
-    @patch("resume_app.llm_policy.assert_llm_kill_switch")
-    @patch("resume_app.llm_gateway._invoke_single_llm")
+    @patch("resume_app.llm.policy.assert_llm_kill_switch")
+    @patch("resume_app.llm.gateway._invoke_single_llm")
     def test_invoke_llm_messages_resolves_workflow_overrides(self, mock_invoke, _kill, _rate):
         from resume_app.models import OptimizedResume, JobDescription, UserResume
-        from resume_app.llm_gateway import invoke_llm_messages
+        from resume_app.llm.gateway import invoke_llm_messages
 
         resume = UserResume.objects.create(owner=self.user, file="test.pdf")
         jd = JobDescription.objects.create(content="JD")
@@ -3654,3 +3658,79 @@ class PipelineFiltersAndActionsTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
         self.entry4.refresh_from_db()
         self.assertEqual(self.entry4.stage, PipelineEntry.Stage.APPLYING)
+
+
+class FindJobsSortingTestCase(TenantTestCase):
+    def setUp(self):
+        super().setUp()
+        from datetime import timedelta
+        from django.utils import timezone
+        from resume_app.schemas import JobPayload
+
+        now = timezone.now()
+        self.p1 = JobPayload(
+            id=1,
+            title="Senior Python Engineer",
+            company_name="Alpha Corp",
+            location="Remote",
+            snippet="Build scalable web apps",
+            url="https://example.com/1",
+            source="dice",
+            matching_score=75,
+            focus_percent=75,
+            posted_at=now - timedelta(days=5),
+        )
+        self.p2 = JobPayload(
+            id=2,
+            title="Lead Backend Architect",
+            company_name="Beta Inc",
+            location="New York, NY",
+            snippet="Django microservices",
+            url="https://example.com/2",
+            source="linkedin",
+            matching_score=95,
+            focus_percent=95,
+            posted_at=now - timedelta(days=10),
+        )
+        self.p3 = JobPayload(
+            id=3,
+            title="Full Stack Developer",
+            company_name="Gamma LLC",
+            location="Austin, TX",
+            snippet="React and Python",
+            url="https://example.com/3",
+            source="indeed",
+            matching_score=60,
+            focus_percent=60,
+            posted_at=now - timedelta(hours=2),
+        )
+
+    def test_sort_job_payloads_by_match(self):
+        from resume_app.job_search_core import sort_job_payloads
+
+        sorted_match = sort_job_payloads([self.p1, self.p2, self.p3], sort_by="match")
+        self.assertEqual([p.id for p in sorted_match], [2, 1, 3])  # 95%, 75%, 60%
+
+    def test_sort_job_payloads_by_freshness(self):
+        from resume_app.job_search_core import sort_job_payloads
+
+        sorted_fresh = sort_job_payloads([self.p1, self.p2, self.p3], sort_by="latest")
+        self.assertEqual([p.id for p in sorted_fresh], [3, 1, 2])  # 2 hours ago, 5 days ago, 10 days ago
+
+    def test_find_jobs_view_renders_sort_controls_and_preserves_sort(self):
+        from django.test import Client
+        client = Client()
+        client.force_login(self.user)
+
+        # GET with sort=latest
+        res_latest = client.get("/jobs/search/?q=engineer&sort=latest")
+        self.assertEqual(res_latest.status_code, 200)
+        self.assertEqual(res_latest.context["sort_param"], "latest")
+        self.assertContains(res_latest, "Freshness")
+        self.assertContains(res_latest, "% Match")
+
+        # GET with sort=match
+        res_match = client.get("/jobs/search/?q=engineer&sort=match")
+        self.assertEqual(res_match.status_code, 200)
+        self.assertEqual(res_match.context["sort_param"], "match")
+

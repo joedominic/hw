@@ -1,0 +1,83 @@
+"""
+SaaS Billing, Subscriptions, and Entitlements Bounded Context:
+Encapsulates subscription plans, daily quotas, usage counters, storage quotas, and Stripe billing.
+"""
+from .billing import (
+    apply_stripe_event,
+    create_billing_portal_session,
+    create_checkout_session,
+    stripe_enabled,
+)
+from .entitlements import (
+    ACTIVE_SUB_STATUSES,
+    DEGRADED_SUB_STATUSES,
+    EntitlementDenied,
+    METRIC_APPLY_RUNS,
+    METRIC_JOB_SEARCHES,
+    METRIC_LLM_REQUESTS,
+    METRIC_LLM_TOKENS,
+    QuotaExceeded,
+    assign_plan,
+    check_quota,
+    consume_quota,
+    ensure_default_plans,
+    get_or_create_subscription,
+    get_user_plan,
+    plan_limit,
+    require_api_access,
+    staff_bypasses_quotas,
+    subscription_summary,
+    usage_today,
+)
+from .storage_quota import (
+    METRIC_STORAGE,
+    apply_agent_storage_bytes,
+    assert_upload_allowed,
+    check_storage_quota,
+    pipeline_extract_storage_bytes,
+    plan_storage_limit_bytes,
+    resume_storage_bytes,
+    storage_summary,
+    user_storage_bytes,
+)
+from .views import (
+    billing_view,
+    stripe_webhook,
+)
+
+__all__ = [
+    "ACTIVE_SUB_STATUSES",
+    "DEGRADED_SUB_STATUSES",
+    "EntitlementDenied",
+    "METRIC_APPLY_RUNS",
+    "METRIC_JOB_SEARCHES",
+    "METRIC_LLM_REQUESTS",
+    "METRIC_LLM_TOKENS",
+    "QuotaExceeded",
+    "assign_plan",
+    "check_quota",
+    "consume_quota",
+    "ensure_default_plans",
+    "get_or_create_subscription",
+    "get_user_plan",
+    "plan_limit",
+    "require_api_access",
+    "staff_bypasses_quotas",
+    "subscription_summary",
+    "usage_today",
+    "METRIC_STORAGE",
+    "resume_storage_bytes",
+    "apply_agent_storage_bytes",
+    "pipeline_extract_storage_bytes",
+    "user_storage_bytes",
+    "plan_storage_limit_bytes",
+    "storage_summary",
+    "check_storage_quota",
+    "assert_upload_allowed",
+    "stripe_enabled",
+    "create_checkout_session",
+    "create_billing_portal_session",
+    "apply_stripe_event",
+    "billing_view",
+    "stripe_webhook",
+]

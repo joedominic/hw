@@ -5,14 +5,15 @@ from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
 from resume_app.api_keys import authenticate_api_key, generate_api_key, revoke_api_key
-from resume_app.billing import apply_stripe_event
+from resume_app.api_keys import authenticate_api_key, generate_api_key, revoke_api_key
 from resume_app.models import Plan
 from resume_app.crypto import decrypt_api_key, encrypt_api_key
-from resume_app.entitlements import (
+from resume_app.subscriptions import (
     METRIC_JOB_SEARCHES,
     METRIC_LLM_REQUESTS,
     METRIC_LLM_TOKENS,
     QuotaExceeded,
+    apply_stripe_event,
     assign_plan,
     check_quota,
     consume_quota,
@@ -80,7 +81,7 @@ class EntitlementQuotaTests(TestCase):
             consume_quota(self.user, METRIC_JOB_SEARCHES, 1)
 
     def test_past_due_falls_back_to_free_entitlements(self):
-        from resume_app.entitlements import get_or_create_subscription
+        from resume_app.subscriptions import get_or_create_subscription
         from resume_app.models import Subscription
 
         assign_plan(self.user, "pro")
@@ -124,7 +125,7 @@ class StripeWebhookTests(TestCase):
         assign_plan(self.user, "free")
 
     def test_checkout_completed_assigns_plan(self):
-        from resume_app.entitlements import get_or_create_subscription
+        from resume_app.subscriptions import get_or_create_subscription
 
         sub = get_or_create_subscription(self.user)
         sub.stripe_customer_id = "cus_test"
@@ -146,7 +147,7 @@ class StripeWebhookTests(TestCase):
         self.assertEqual(get_user_plan(self.user).slug, "pro")
 
     def test_payment_failed_sets_past_due(self):
-        from resume_app.entitlements import get_or_create_subscription
+        from resume_app.subscriptions import get_or_create_subscription
         from resume_app.models import Subscription
 
         assign_plan(self.user, "pro")
@@ -200,8 +201,7 @@ class StorageQuotaTests(TestCase):
     def test_upload_blocked_when_over_quota(self):
         from django.core.files.uploadedfile import SimpleUploadedFile
 
-        from resume_app.entitlements import QuotaExceeded
-        from resume_app.storage_quota import assert_upload_allowed, check_storage_quota
+        from resume_app.subscriptions import QuotaExceeded, assert_upload_allowed, check_storage_quota
 
         # Fill almost 1MB with a resume
         big = SimpleUploadedFile("big.pdf", b"x" * (900 * 1024), content_type="application/pdf")
@@ -221,7 +221,7 @@ class StorageQuotaTests(TestCase):
     def test_unlimited_plan_allows_large_upload(self):
         from django.core.files.uploadedfile import SimpleUploadedFile
 
-        from resume_app.storage_quota import assert_upload_allowed
+        from resume_app.subscriptions import assert_upload_allowed
 
         assign_plan(self.user, "unlimited")
         huge = SimpleUploadedFile("huge.pdf", b"z" * (2 * 1024 * 1024), content_type="application/pdf")

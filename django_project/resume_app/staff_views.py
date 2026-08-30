@@ -9,7 +9,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_http_methods
 
 from .account import is_email_verified
-from .entitlements import assign_plan, ensure_default_plans, get_or_create_subscription, subscription_summary
+from .subscriptions import assign_plan, ensure_default_plans, get_or_create_subscription, subscription_summary
 from .models import LLMAppUsageTotals, Plan
 
 import csv

@@ -195,12 +195,26 @@
         </div>
         {% endif %}
         <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
-            <h2 class="text-lg font-semibold text-concierge-slate">Today’s plan limits</h2>
-            <p class="mt-1 text-sm text-slate-600">
-                Daily quotas for plan <strong>{{ daily_llm_quota.plan_name }}</strong>.
-                These are enforced before each gateway / apply-agent LLM call.
-                <a href="{% url 'billing' %}" class="font-medium text-brand hover:underline">View billing</a>
-            </p>
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-semibold text-concierge-slate">Today’s plan limits</h2>
+                    <p class="mt-1 text-sm text-slate-600">
+                        Daily quotas for plan <strong>{{ daily_llm_quota.plan_name }}</strong>.
+                        These limits are cumulative across all cloud LLM operations today and automatically reset at midnight.
+                        <a href="{% url 'billing' %}" class="font-medium text-brand hover:underline">View billing</a>
+                    </p>
+                </div>
+                <div class="flex items-center gap-2">
+                    <form method="post" class="inline">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="reset_today_quotas">
+                        <button type="submit" class="rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 shadow-sm"
+                                onclick="return confirm('Reset today\'s usage counters for {{ daily_llm_quota.plan_name }}? This will unblock new LLM calls immediately.');">
+                            Reset today’s quota
+                        </button>
+                    </form>
+                </div>
+            </div>
             <dl class="mt-4 grid gap-3 sm:grid-cols-2 text-sm">
                 <div class="rounded-concierge border border-slate-100 bg-slate-50 px-3 py-3">
                     <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">LLM requests today</dt>
@@ -222,6 +236,155 @@
                 </div>
             </dl>
         </div>
+
+        <!-- Daily usage history (past 30 days) -->
+        <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                    <h2 class="text-lg font-semibold text-concierge-slate">Daily usage history (past 30 days)</h2>
+                    <p class="mt-1 text-sm text-slate-600">
+                        Tracks cumulative cloud LLM tokens, requests, job searches, and apply runs per calendar day. Click any day row to expand its breakdown by query, provider, and model.
+                    </p>
+                </div>
+            </div>
+            <div class="mt-4 overflow-x-auto">
+                <table class="min-w-full text-left text-sm border-separate border-spacing-0">
+                    <thead>
+                        <tr class="border-b border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-500 bg-slate-50/70">
+                            <th class="py-2.5 px-3 rounded-l-concierge">Date</th>
+                            <th class="py-2.5 px-3">LLM Tokens</th>
+                            <th class="py-2.5 px-3">LLM Requests</th>
+                            <th class="py-2.5 px-3">Job Searches</th>
+                            <th class="py-2.5 px-3">Apply Runs</th>
+                            <th class="py-2.5 px-3">Budget Status</th>
+                            <th class="py-2.5 px-3 rounded-r-concierge">Last Activity</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 font-mono text-xs">
+                        {% for row in daily_usage_rows %}
+                        <tr class="cursor-pointer hover:bg-slate-50/90 transition-colors {% if row.is_today %}bg-brand-mist/20{% endif %}"
+                            onclick="toggleDailyBreakdown('breakdown-{{ row.date|date:'Ymd' }}', this)"
+                            id="row-{{ row.date|date:'Ymd' }}">
+                            <td class="py-3 px-3 font-sans font-medium text-concierge-slate">
+                                <div class="flex items-center gap-2">
+                                    <svg class="chevron-icon h-3.5 w-3.5 text-slate-400 transition-transform duration-200 {% if row.is_today and row.has_breakdown %}rotate-90{% endif %}" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                                    </svg>
+                                    <span>{{ row.date_display }}</span>
+                                    {% if row.is_today %}<span class="ml-1 inline-flex items-center rounded-full bg-brand/10 px-1.5 py-0.2 text-[10px] font-semibold text-brand">Current</span>{% endif %}
+                                </div>
+                            </td>
+                            <td class="py-3 px-3 font-medium text-slate-800">
+                                <div class="flex flex-col gap-1">
+                                    <span class="tabular-nums font-semibold">{{ row.llm_tokens }} {% if row.token_limit %}<span class="text-slate-400 font-normal">/ {{ row.token_limit }}</span>{% endif %}</span>
+                                    {% if row.token_limit %}
+                                    <div class="w-28 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                                        <div class="h-full rounded-full {% if row.is_exceeded %}bg-red-500{% elif row.is_near_limit %}bg-amber-500{% else %}bg-brand{% endif %}" style="width: min({{ row.token_pct }}%, 100%)"></div>
+                                    </div>
+                                    {% endif %}
+                                </div>
+                            </td>
+                            <td class="py-3 px-3 tabular-nums text-slate-700">
+                                {{ row.llm_requests }} {% if row.request_limit %}<span class="text-slate-400 font-normal">/ {{ row.request_limit }}</span>{% endif %}
+                            </td>
+                            <td class="py-3 px-3 tabular-nums text-slate-700">{{ row.job_searches }}</td>
+                            <td class="py-3 px-3 tabular-nums text-slate-700">{{ row.apply_runs }}</td>
+                            <td class="py-3 px-3 font-sans">
+                                {% if not row.token_limit %}
+                                <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">Unlimited</span>
+                                {% elif row.is_exceeded %}
+                                <span class="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-800">Exceeded ({{ row.token_pct }}%)</span>
+                                {% elif row.is_near_limit %}
+                                <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">Near Limit ({{ row.token_pct }}%)</span>
+                                {% else %}
+                                <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">OK ({{ row.token_pct }}%)</span>
+                                {% endif %}
+                            </td>
+                            <td class="py-3 px-3 font-sans text-xs text-slate-500">
+                                {% if row.updated_at %}{{ row.updated_at|date:"M j, g:i a" }}{% else %}—{% endif %}
+                            </td>
+                        </tr>
+                        <!-- Collapsible Daily Breakdown Sub-row -->
+                        <tr id="breakdown-{{ row.date|date:'Ymd' }}" class="{% if not row.is_today or not row.has_breakdown %}hidden {% endif %}bg-slate-50/80 border-t border-b border-slate-200">
+                            <td colspan="7" class="p-3.5 pl-9">
+                                {% if row.breakdown_rows %}
+                                <div class="rounded-concierge border border-slate-200 bg-white p-3 shadow-xs">
+                                    <div class="flex items-center justify-between mb-2">
+                                        <h4 class="text-xs font-bold uppercase tracking-wider text-slate-600">
+                                            Breakdown for {{ row.date_display }} ({{ row.date|date:"M j, Y" }})
+                                        </h4>
+                                        <span class="text-[11px] text-slate-400">{{ row.breakdown_rows|length }} logical query type(s)</span>
+                                    </div>
+                                    <div class="overflow-x-auto">
+                                        <table class="min-w-full text-left text-xs font-mono">
+                                            <thead>
+                                                <tr class="border-b border-slate-100 font-sans text-[11px] font-semibold uppercase text-slate-400 bg-slate-50/50">
+                                                    <th class="py-1.5 px-2.5">LLM Query / Use-Case</th>
+                                                    <th class="py-1.5 px-2.5">Provider</th>
+                                                    <th class="py-1.5 px-2.5">Model</th>
+                                                    <th class="py-1.5 px-2.5 text-right">Requests</th>
+                                                    <th class="py-1.5 px-2.5 text-right">Tokens In</th>
+                                                    <th class="py-1.5 px-2.5 text-right">Tokens Out</th>
+                                                    <th class="py-1.5 px-2.5 text-right">Cache</th>
+                                                    <th class="py-1.5 px-2.5 text-right">Last Used</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody class="divide-y divide-slate-100">
+                                                {% for b in row.breakdown_rows %}
+                                                <tr class="hover:bg-slate-50/70">
+                                                    <td class="py-2 px-2.5 font-sans font-medium text-slate-800">{{ b.query_label }}</td>
+                                                    <td class="py-2 px-2.5 font-sans text-slate-600">{{ b.provider }}</td>
+                                                    <td class="py-2 px-2.5 text-slate-600 font-mono text-[11px]">{{ b.model_display }}</td>
+                                                    <td class="py-2 px-2.5 tabular-nums text-slate-800 font-semibold text-right">{{ b.request_count }}</td>
+                                                    <td class="py-2 px-2.5 tabular-nums text-slate-700 text-right">{{ b.sum_in }}</td>
+                                                    <td class="py-2 px-2.5 tabular-nums text-slate-700 text-right">{{ b.sum_out }}</td>
+                                                    <td class="py-2 px-2.5 tabular-nums text-slate-500 text-right">{{ b.sum_cached }}</td>
+                                                    <td class="py-2 px-2.5 font-sans text-slate-500 text-right">{{ b.last_used|date:"g:i a"|default:"—" }}</td>
+                                                </tr>
+                                                {% endfor %}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                                {% else %}
+                                <div class="rounded-concierge border border-dashed border-slate-200 bg-white/60 p-3 text-xs text-slate-500">
+                                    <span class="font-medium text-slate-600">Total for this day:</span> {{ row.llm_tokens }} tokens across {{ row.llm_requests }} request(s).
+                                    <span class="block mt-0.5 text-slate-400">Granular per-query tracking started with this update. All subsequent LLM operations will show their exact query type, provider, and model breakdowns here.</span>
+                                </div>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="7" class="py-4 text-center font-sans text-slate-500">No daily usage recorded yet.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <script>
+        function toggleDailyBreakdown(id, tr) {
+            var subRow = document.getElementById(id);
+            if (!subRow) return;
+            var isHidden = subRow.classList.contains("hidden");
+            if (isHidden) {
+                subRow.classList.remove("hidden");
+                if (tr) {
+                    var chevron = tr.querySelector(".chevron-icon");
+                    if (chevron) chevron.classList.add("rotate-90");
+                }
+            } else {
+                subRow.classList.add("hidden");
+                if (tr) {
+                    var chevron = tr.querySelector(".chevron-icon");
+                    if (chevron) chevron.classList.remove("rotate-90");
+                }
+            }
+        }
+        </script>
+
         <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
             <h2 class="text-lg font-semibold text-concierge-slate">Lifetime LLM usage (approximate)</h2>
             <p class="mt-1 text-sm text-slate-600">
@@ -250,8 +413,8 @@
         <details class="group rounded-concierge border border-slate-200 bg-white shadow-sm" id="usage-by-query-details">
             <summary class="flex cursor-pointer list-none items-center justify-between p-6 [&::-webkit-details-marker]:hidden">
                 <div class="pr-4">
-                    <h2 class="text-lg font-semibold text-concierge-slate">By LLM query, provider, and model</h2>
-                    <p class="mt-1 text-sm text-slate-600">Each row is one <strong>logical use-case</strong> (e.g. vetting match, optimizer writer) plus which provider and model handled the request. Calls that omit a label appear under <strong>Other / not labeled</strong>. Totals match gateway calls only.</p>
+                    <h2 class="text-lg font-semibold text-concierge-slate">By LLM query, provider, and model (Lifetime)</h2>
+                    <p class="mt-1 text-sm text-slate-600">Lifetime aggregates across all historical calls for each <strong>logical use-case</strong> (e.g. vetting match, optimizer writer) plus provider and model.</p>
                 </div>
                 <svg class="h-5 w-5 shrink-0 text-slate-400 transition group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
             </summary>
@@ -283,59 +446,6 @@
                         </tr>
                         {% empty %}
                         <tr><td colspan="7" class="py-4 text-slate-500">No per-query usage yet (metrics appear after gateway calls with a query label).</td></tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </details>
-        <details class="group rounded-concierge border border-slate-200 bg-white shadow-sm" id="usage-by-provider-model-details">
-            <summary class="flex cursor-pointer list-none items-center justify-between p-6 [&::-webkit-details-marker]:hidden">
-                <div class="pr-4">
-                    <h2 class="text-lg font-semibold text-concierge-slate">By Provider, model</h2>
-                    {% if usage_cooldown_error %}
-                    <p class="mt-1 text-xs text-amber-800">Cooldown status unavailable (Redis not reachable from this process).</p>
-                    {% endif %}
-                </div>
-                <svg class="h-5 w-5 shrink-0 text-slate-400 transition group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-            </summary>
-            <div class="border-t border-slate-100 p-6 pt-4 overflow-x-auto">
-                <table class="min-w-full text-left text-sm">
-                    <thead>
-                        <tr class="border-b border-slate-200 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            <th class="py-2 pr-4">Provider</th>
-                            <th class="py-2 pr-4">Model</th>
-                            <th class="py-2 pr-4">Priority</th>
-                            <th class="py-2 pr-4">Status</th>
-                            <th class="py-2 pr-4">Requests</th>
-                            <th class="py-2 pr-4">Tokens in / out</th>
-                            <th class="py-2 pr-4">Cache tok</th>
-                            <th class="py-2 pr-4">Avg / req</th>
-                            <th class="py-2">Last used</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for row in usage_rows %}
-                        <tr class="border-b border-slate-100">
-                            <td class="py-2 pr-4">{{ row.provider }}</td>
-                            <td class="py-2 pr-4 font-mono text-xs">{{ row.model_display }}</td>
-                            <td class="py-2 pr-4">{% if row.priority is not None %}{{ row.priority }}{% else %}—{% endif %}</td>
-                            <td class="py-2 pr-4">
-                                {% if row.on_ice %}
-                                <span class="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-900">On ice (~{{ row.cooldown_seconds }}s)</span>
-                                {% elif row.connected %}
-                                <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-900">Eligible</span>
-                                {% else %}
-                                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700">Not connected</span>
-                                {% endif %}
-                            </td>
-                            <td class="py-2 pr-4">{{ row.request_count }}</td>
-                            <td class="py-2 pr-4">{{ row.sum_in }} / {{ row.sum_out }}</td>
-                            <td class="py-2 pr-4">{{ row.sum_cached }}</td>
-                            <td class="py-2 pr-4">{{ row.avg_tokens }}</td>
-                            <td class="py-2 text-slate-600">{% if row.last_used %}{{ row.last_used }}{% else %}—{% endif %}</td>
-                        </tr>
-                        {% empty %}
-                        <tr><td colspan="9" class="py-4 text-slate-500">No usage recorded yet.</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>

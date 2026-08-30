@@ -381,7 +381,7 @@ def enrich_builtin_job_listing_description(job, *, timeout_seconds: float = 15.0
     """
     Fetch full detail job text for a BuiltIn job, persist it, and return.
     """
-    from .models import JobListing
+    from ...models import JobListing
 
     if not isinstance(job, JobListing):
         return ""

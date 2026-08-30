@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-from .entitlements import METRIC_LLM_TOKENS
+from ..subscriptions import METRIC_LLM_TOKENS
 
 PLATFORM_TOKEN_REDIS_PREFIX = "llm:platform:tok:v1:"
 CONCURRENCY_REDIS_PREFIX = "llm:conc:v1:"
@@ -54,7 +54,7 @@ def daily_token_limit_for_user(user: AbstractBaseUser | None) -> int:
     Uses ``LLM_DAILY_TOKEN_LIMIT_BY_PLAN[plan_slug]``, then optional
     ``LLM_USER_DAILY_TOKEN_LIMIT`` as a hard ceiling (same pattern as request quotas).
     """
-    from .entitlements import get_user_plan, plan_limit, staff_bypasses_quotas
+    from ..subscriptions import get_user_plan, plan_limit, staff_bypasses_quotas
 
     if user is None or not getattr(user, "is_authenticated", False):
         return int(getattr(settings, "LLM_USER_DAILY_TOKEN_LIMIT", 0) or 0)
@@ -76,14 +76,14 @@ def _platform_token_redis_key() -> str:
 
 
 def _get_redis():
-    from .llm_rate_limit import _get_redis as _rl_redis
+    from .rate_limit import _get_redis as _rl_redis
 
     return _rl_redis()
 
 
 def uses_platform_keys(user: AbstractBaseUser | None, provider: str) -> bool:
     """True when the call would bill the shared platform/env key namespace."""
-    from .llm_rate_limit import _rate_limit_scope_key
+    from .rate_limit import _rate_limit_scope_key
 
     return _rate_limit_scope_key(user, provider) == "platform"
 
@@ -106,7 +106,7 @@ def check_token_budget(
     """Raise LLMTokenBudgetExceeded when the user or platform budget cannot cover ``estimated_tokens``."""
     if not getattr(settings, "SAAS_ENFORCE_QUOTAS", True):
         return
-    from .entitlements import staff_bypasses_quotas, usage_today
+    from ..subscriptions import get_user_plan, staff_bypasses_quotas, usage_today
 
     est = max(0, int(estimated_tokens))
     if user is not None and getattr(user, "is_authenticated", False) and not staff_bypasses_quotas(user):
@@ -114,15 +114,23 @@ def check_token_budget(
         if limit > 0:
             used = usage_today(user, METRIC_LLM_TOKENS)
             if used + est > limit:
+                plan = get_user_plan(user)
+                plan_name = plan.name if plan and hasattr(plan, "name") else (getattr(plan, "slug", "") or "Free").title()
                 raise LLMTokenBudgetExceeded(
-                    f"Daily LLM token budget exceeded (limit {limit}).",
+                    f"Daily LLM token budget exceeded for plan '{plan_name}' "
+                    f"({used:,} / {limit:,} tokens used today, +~{est:,} est. required for this call). "
+                    f"This is a cumulative daily limit across all cloud LLM operations today (resets at midnight). "
+                    f"To continue, you can upgrade your plan in Billing, use local Ollama LLMs for free, or reset today's quota in Settings → Usage.",
                     limit=limit,
                 )
     if provider and uses_platform_keys(user, provider):
         plat_lim = platform_daily_token_limit()
-        if plat_lim > 0 and platform_tokens_used_today() + est > plat_lim:
+        plat_used = platform_tokens_used_today()
+        if plat_lim > 0 and plat_used + est > plat_lim:
             raise LLMTokenBudgetExceeded(
-                f"Platform LLM token budget exceeded (limit {plat_lim}).",
+                f"Platform shared LLM token budget exceeded "
+                f"({plat_used:,} / {plat_lim:,} tokens used today across platform keys). "
+                f"Configure your own provider API keys in Settings → LLM or use local Ollama LLMs for free.",
                 limit=plat_lim,
             )
 
@@ -139,7 +147,7 @@ def consume_token_budget(
         return
     if not getattr(settings, "SAAS_ENFORCE_QUOTAS", True):
         return
-    from .entitlements import QuotaExceeded, consume_quota, staff_bypasses_quotas
+    from ..subscriptions import QuotaExceeded, consume_quota, staff_bypasses_quotas
 
     if user is not None and getattr(user, "is_authenticated", False) and not staff_bypasses_quotas(user):
         try:
@@ -168,7 +176,7 @@ def consume_token_budget(
 
 
 def assert_llm_kill_switch(user: AbstractBaseUser | None) -> None:
-    from .models import AppAutomationSettings
+    from ..models import AppAutomationSettings
 
     if user is None or not getattr(user, "is_authenticated", False):
         return
@@ -244,7 +252,7 @@ def run_with_invoke_timeout(fn: Callable[[], T], *, timeout_seconds: float | Non
 
 
 def estimate_messages_tokens(messages) -> int:
-    from .llm_rate_limit import estimate_tokens_from_messages
+    from .rate_limit import estimate_tokens_from_messages
 
     return estimate_tokens_from_messages(messages)
 
@@ -254,9 +262,9 @@ def wrap_browser_use_llm(inner: Any, *, user, provider: str, model: str) -> Any:
     Proxy a browser-use chat model so each completion honors kill switch, token budget,
     concurrency, timeout, usage recording, and token consumption.
     """
-    from .llm_gateway import USAGE_QUERY_APPLY_AGENT, log_llm_invoke, record_llm_usage
-    from .llm_rate_limit import estimate_tokens_from_messages
-    from .rate_limits import check_user_llm_rate_limit
+    from .gateway import USAGE_QUERY_APPLY_AGENT, log_llm_invoke, record_llm_usage
+    from .rate_limit import estimate_tokens_from_messages
+    from ..rate_limits import check_user_llm_rate_limit
 
     class _PolicyBrowserLLM:
         def __init__(self) -> None:
@@ -278,7 +286,7 @@ def wrap_browser_use_llm(inner: Any, *, user, provider: str, model: str) -> Any:
         def _finalize(self, response, est: int) -> None:
             in_tok, out_tok = est, 0
             try:
-                from .agents import _normalize_token_usage
+                from ..agents import _normalize_token_usage
 
                 u = _normalize_token_usage(response, None, None)
                 in_tok = int(u.get("input_tokens") or 0) or est

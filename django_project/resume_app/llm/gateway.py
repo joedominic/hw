@@ -14,9 +14,9 @@ from typing import Any
 from django.db.models import F
 from django.utils import timezone
 
-from .crypto import decrypt_api_key
-from .llm_factory import get_llm
-from .llm_policy import (
+from ..crypto import decrypt_api_key
+from .factory import get_llm
+from .policy import (
     LLMConcurrencyLimitExceeded,
     LLMInvokeTimeout,
     LLMRequestsDisabled,
@@ -26,7 +26,7 @@ from .llm_policy import (
     run_with_invoke_timeout,
     user_llm_concurrency,
 )
-from .llm_rate_limit import (
+from .rate_limit import (
     acquire_llm_slot,
     estimate_tokens_from_messages,
     get_cooldown_seconds_for_provider_model,
@@ -34,7 +34,13 @@ from .llm_rate_limit import (
     set_llm_cooldown,
     try_acquire_llm_slot,
 )
-from .models import LLMProviderPreference, LLMAppUsageTotals, LLMUsageByModel, LLMUsageByQuery
+from ..models import (
+    LLMProviderPreference,
+    LLMAppUsageTotals,
+    LLMUsageByModel,
+    LLMUsageByQuery,
+    LLMDailyUsageBreakdown,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +146,7 @@ def log_llm_invoke(
 
 
 def _redis_client():
-    from .llm_rate_limit import _get_redis
+    from .rate_limit import _get_redis
 
     return _get_redis()
 
@@ -236,6 +242,30 @@ def record_llm_usage(
         )
     except Exception as e:
         logger.warning("record_llm_usage by-query failed: %s", e)
+    try:
+        today_date = timezone.localdate()
+        drow, _ = LLMDailyUsageBreakdown.objects.get_or_create(
+            owner=user,
+            period_date=today_date,
+            query_kind=qk,
+            provider=prov,
+            model=mkey,
+            defaults={
+                "request_count": 0,
+                "sum_input_tokens": 0,
+                "sum_output_tokens": 0,
+                "sum_cached_tokens": 0,
+            },
+        )
+        LLMDailyUsageBreakdown.objects.filter(pk=drow.pk).update(
+            request_count=F("request_count") + 1,
+            sum_input_tokens=F("sum_input_tokens") + max(0, int(input_tokens)),
+            sum_output_tokens=F("sum_output_tokens") + max(0, int(output_tokens)),
+            sum_cached_tokens=F("sum_cached_tokens") + max(0, int(cached_tokens)),
+            last_used_at=timezone.now(),
+        )
+    except Exception as e:
+        logger.warning("record_llm_usage daily breakdown failed: %s", e)
 
 
 def _preference_candidates(user) -> list[dict]:
@@ -509,9 +539,9 @@ def invoke_llm_messages(
     When allow_local=False, local providers (including Ollama Local) are excluded; if none remain,
     raises LLMUnavailableError.
     """
-    from .agents import _normalize_token_usage
-    from .llm_policy import assert_llm_kill_switch
-    from .rate_limits import check_user_llm_rate_limit, record_llm_request
+    from ..agents import _normalize_token_usage
+    from .policy import assert_llm_kill_switch
+    from ..rate_limits import check_user_llm_rate_limit, record_llm_request
 
     check_user_llm_rate_limit(user)
     assert_llm_kill_switch(user)
@@ -520,9 +550,9 @@ def invoke_llm_messages(
 
     if llm_override is None and job_cache_key and job_cache_key.strip().isdigit() and usage_query_kind:
         try:
-            from .models import OptimizedResume, LLMProviderConfig
-            from .crypto import decrypt_api_key
-            from .llm_factory import get_llm
+            from ..models import OptimizedResume, LLMProviderConfig
+            from ..crypto import decrypt_api_key
+            from .factory import get_llm
 
             opt = OptimizedResume.objects.select_related("optimizer_workflow").get(id=int(job_cache_key))
             wf = opt.optimizer_workflow

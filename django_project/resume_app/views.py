@@ -77,7 +77,7 @@ from .huey_dashboard import (
     run_now_task_names,
 )
 from .prompt_store import get_effective_prompts, save_prompts_to_profile, clear_all_prompts_in_profile
-from .llm_session import (
+from .llm.session import (
     get_active_llm_provider as _get_active_llm_provider,
     get_provider_preferences as _get_provider_preferences,
     get_provider_preference_rows as _get_provider_preference_rows,
@@ -263,8 +263,8 @@ def optimizer_view(request):
     prefill_resume_id = None
     if job_id:
         from .models import JobListing
-        from .dice_client import enrich_dice_job_listing_description
-        from .levels_client import enrich_levels_job_listing_description
+        from .sourcing.clients.dice_client import enrich_dice_job_listing_description
+        from .sourcing.clients.levels_client import enrich_levels_job_listing_description
 
         try:
             job = JobListing.objects.get(id=int(job_id))
@@ -599,11 +599,9 @@ def settings_view(request):
         LLMUsageByQuery,
         Track,
     )
-    from .llm_gateway import USAGE_QUERY_LABELS
-    from .llm_rate_limit import get_llm_cooldown_ttl
+    from .llm import USAGE_QUERY_LABELS, get_llm, list_models_for_provider
+    from .llm.rate_limit import get_llm_cooldown_ttl
     from .crypto import decrypt_api_key
-    from .llm_factory import get_llm
-    from .llm_services import list_models_for_provider
     from langchain_core.messages import HumanMessage
 
     user = get_active_user(request)
@@ -667,10 +665,22 @@ def settings_view(request):
                 "Loaded model lists from providers. If a provider timed out, try again.",
             )
             return redirect(reverse("settings") + "?tab=llm")
+        if action == "reset_today_quotas":
+            from django.utils import timezone
+            from .models import UsageCounter, LLMDailyUsageBreakdown
+            today = timezone.localdate()
+            UsageCounter.objects.for_user(user).filter(period_date=today).delete()
+            LLMDailyUsageBreakdown.objects.for_user(user).filter(period_date=today).delete()
+            messages.success(
+                request,
+                f"Today's daily quota counters ({today.strftime('%b %d, %Y')}) were reset. You can now make new LLM calls.",
+            )
+            return redirect(reverse("settings") + "?tab=usage")
         if action == "reset_llm_usage_stats":
             if not request.user.is_staff:
                 messages.error(request, "Permission denied.")
                 return redirect(reverse("settings") + "?tab=usage")
+            from .models import UsageCounter, LLMDailyUsageBreakdown
             solo = LLMAppUsageTotals.get_for_user(user)
             LLMAppUsageTotals.objects.filter(pk=solo.pk).update(
                 total_input_tokens=0,
@@ -680,9 +690,11 @@ def settings_view(request):
             )
             LLMUsageByModel.objects.for_user(user).delete()
             LLMUsageByQuery.objects.for_user(user).delete()
+            UsageCounter.objects.for_user(user).delete()
+            LLMDailyUsageBreakdown.objects.for_user(user).delete()
             messages.success(
                 request,
-                "LLM usage totals and per-model / per-query counters were reset.",
+                "LLM usage totals, per-model / per-query counters, and daily quota ledgers were reset.",
             )
             return redirect(reverse("settings") + "?tab=usage")
         if action == "save_stop_llm_requests":
@@ -952,7 +964,7 @@ def settings_view(request):
                     try:
                         api_key_decrypted = decrypt_api_key(cfg.encrypted_api_key)
                         llm = get_llm(cfg.provider, api_key_decrypted, model=model)
-                        from .llm_gateway import log_llm_invoke
+                        from .llm import log_llm_invoke
 
                         log_llm_invoke(
                             cfg.provider,
@@ -1148,7 +1160,10 @@ def settings_view(request):
             }
         )
 
-    from .entitlements import METRIC_LLM_REQUESTS, METRIC_LLM_TOKENS, subscription_summary
+    from .subscriptions import METRIC_LLM_REQUESTS, METRIC_LLM_TOKENS, subscription_summary
+    from datetime import timedelta
+    from django.utils import timezone
+    from .models import UsageCounter
 
     plan_usage = subscription_summary(user)
     daily_llm_quota = {
@@ -1156,6 +1171,86 @@ def settings_view(request):
         "tokens": plan_usage["usage"].get(METRIC_LLM_TOKENS) or {},
         "plan_name": plan_usage.get("plan_name") or "—",
     }
+
+    today_date = timezone.localdate()
+    start_date = today_date - timedelta(days=30)
+    counters = UsageCounter.objects.for_user(user).filter(period_date__gte=start_date).order_by("-period_date", "metric")
+    daily_map = {}
+    for c in counters:
+        d = c.period_date
+        if d not in daily_map:
+            daily_map[d] = {
+                "date": d,
+                "is_today": d == today_date,
+                "is_yesterday": d == (today_date - timedelta(days=1)),
+                "date_display": "Today" if d == today_date else ("Yesterday" if d == (today_date - timedelta(days=1)) else d.strftime("%b %d, %Y")),
+                "llm_tokens": 0,
+                "llm_requests": 0,
+                "job_searches": 0,
+                "apply_runs": 0,
+                "updated_at": c.updated_at,
+            }
+        if c.metric == METRIC_LLM_TOKENS:
+            daily_map[d]["llm_tokens"] = c.count
+        elif c.metric == METRIC_LLM_REQUESTS:
+            daily_map[d]["llm_requests"] = c.count
+        elif c.metric == "job_searches":
+            daily_map[d]["job_searches"] = c.count
+        elif c.metric == "apply_runs":
+            daily_map[d]["apply_runs"] = c.count
+        if c.updated_at and (not daily_map[d]["updated_at"] or c.updated_at > daily_map[d]["updated_at"]):
+            daily_map[d]["updated_at"] = c.updated_at
+
+    if today_date not in daily_map:
+        daily_map[today_date] = {
+            "date": today_date,
+            "is_today": True,
+            "is_yesterday": False,
+            "date_display": "Today",
+            "llm_tokens": 0,
+            "llm_requests": 0,
+            "job_searches": 0,
+            "apply_runs": 0,
+            "updated_at": None,
+        }
+
+    token_limit = daily_llm_quota["tokens"].get("limit") or 0
+    request_limit = daily_llm_quota["requests"].get("limit") or 0
+
+    from .models import LLMDailyUsageBreakdown
+    from collections import defaultdict
+
+    breakdowns = LLMDailyUsageBreakdown.objects.for_user(user).filter(
+        period_date__gte=start_date
+    ).order_by("-period_date", "query_kind", "provider", "model")
+
+    daily_breakdowns_map = defaultdict(list)
+    for b in breakdowns:
+        qk = b.query_kind or ""
+        daily_breakdowns_map[b.period_date].append({
+            "query_kind": qk,
+            "query_label": USAGE_QUERY_LABELS.get(qk, qk.replace("_", " ").title() if qk else "—"),
+            "provider": b.provider,
+            "model_display": b.model if b.model != "__default__" else "(default)",
+            "request_count": int(b.request_count),
+            "sum_in": int(b.sum_input_tokens),
+            "sum_out": int(b.sum_output_tokens),
+            "sum_cached": int(b.sum_cached_tokens),
+            "last_used": b.last_used_at,
+        })
+
+    daily_usage_rows = []
+    for d, item in sorted(daily_map.items(), key=lambda x: x[0], reverse=True):
+        t_used = item["llm_tokens"]
+        pct = round((t_used / token_limit * 100), 1) if token_limit > 0 else 0
+        item["token_limit"] = token_limit
+        item["token_pct"] = pct
+        item["is_exceeded"] = token_limit > 0 and t_used >= token_limit
+        item["is_near_limit"] = token_limit > 0 and (t_used >= token_limit * 0.8) and not item["is_exceeded"]
+        item["request_limit"] = request_limit
+        item["breakdown_rows"] = daily_breakdowns_map.get(d, [])
+        item["has_breakdown"] = len(item["breakdown_rows"]) > 0
+        daily_usage_rows.append(item)
 
     tenant_usage_rows = []
     if request.user.is_staff:
@@ -1247,6 +1342,7 @@ def settings_view(request):
         "usage_cooldown_error": usage_cooldown_error,
         "usage_by_query_rows": usage_by_query_rows,
         "daily_llm_quota": daily_llm_quota,
+        "daily_usage_rows": daily_usage_rows,
         "replacement_entries": replacement_entries,
         "tenant_usage_rows": tenant_usage_rows,
     }
@@ -1262,9 +1358,9 @@ def llm_test_view(request):
     """
     from .models import LLMProviderConfig, AppAutomationSettings
     from .crypto import decrypt_api_key
-    from .llm_factory import get_llm
+    from .llm import get_llm
     from langchain_core.messages import HumanMessage
-    from .llm_services import list_models_for_provider, DEFAULT_MODELS
+    from .llm.services import list_models_for_provider, DEFAULT_MODELS
 
     stop_llm = AppAutomationSettings.get_for_user(request.user).stop_llm_requests
 
@@ -1314,7 +1410,7 @@ def llm_test_view(request):
                 api_key_decrypted = decrypt_api_key(config.encrypted_api_key)
                 try:
                     if provider == "Ollama Local":
-                        from .llm_factory import _normalize_ollama_local_host
+                        from .llm.factory import _normalize_ollama_local_host
 
                         try:
                             base = _normalize_ollama_local_host(api_key_decrypted)
@@ -1331,7 +1427,7 @@ def llm_test_view(request):
                                 ex,
                             )
                     llm = get_llm(provider, api_key_decrypted, model=model or None)
-                    from .llm_gateway import log_llm_invoke
+                    from .llm import log_llm_invoke
 
                     log_llm_invoke(
                         provider,
@@ -1617,7 +1713,7 @@ def workflow_list_view(request):
 
 def _workflow_form_context(request, workflow, steps_json: str) -> dict:
     from .prompt_store import list_ats_judge_profiles
-    from .llm_services import LLM_PROVIDERS, DEFAULT_MODELS
+    from .llm import LLM_PROVIDERS, DEFAULT_MODELS
 
     return {
         "workflow": workflow,
@@ -1822,6 +1918,7 @@ def job_search_view(request):
                     site_names=saved.site_names if isinstance(saved.site_names, list) else None,
                     llm_model=saved.llm_model,
                     preset_id=saved.id,
+                    sort=(request.POST.get("sort") or request.GET.get("sort") or ""),
                     from_save=True,
                 )
                 if wants_json:
@@ -2135,6 +2232,14 @@ def job_search_view(request):
     else:
         preset_is_dirty = False
 
+    raw_sort = (request.GET.get("sort") or request.GET.get("sort_by") or "match").strip().lower()
+    if raw_sort in ("latest", "freshness", "date", "newest"):
+        sort_param = "latest"
+    elif raw_sort == "oldest":
+        sort_param = "oldest"
+    else:
+        sort_param = "match"
+
     try:
         if show_favourites:
             saved_results = api_jobs_saved(request)
@@ -2144,7 +2249,11 @@ def job_search_view(request):
             # After saving a preset, keep current listings — do not re-hit job boards.
             cached_display = request.session.get("job_search_display")
             if isinstance(cached_display, dict) and cached_display.get("jobs") is not None:
-                cached_jobs = rehydrate_job_payloads(cached_display.get("jobs") or [])
+                from .job_search_core import sort_job_payloads
+                cached_jobs = sort_job_payloads(
+                    rehydrate_job_payloads(cached_display.get("jobs") or []),
+                    sort_by=sort_param,
+                )
                 search_results = {
                     "jobs": cached_jobs,
                     "total": cached_display.get("total") or len(cached_jobs),
@@ -2154,9 +2263,6 @@ def job_search_view(request):
         elif query:
             if request.GET.get("refresh"):
                 request.session.pop("job_search_cache", None)
-            sort_param = (request.GET.get("sort") or "focus").strip().lower()
-            if sort_param not in ("focus", "resume"):
-                sort_param = "focus"
             payload = JobSearchRequest(
                 search_term=query,
                 location=location or None,
@@ -2236,10 +2342,6 @@ def job_search_view(request):
         except Exception:
             disqualifier_prompt = None
     current_disqualifiers = [{"id": d.id, "phrase": d.phrase} for d in UserDisqualifier.objects.for_user(request.user).order_by("phrase")]
-
-    sort_param = (request.GET.get("sort") or "focus").strip().lower()
-    if sort_param not in ("focus", "resume"):
-        sort_param = "focus"
     preserved_site_query = urlencode([("site_name", s) for s in selected_site_names])
     single_search_profile = len(tracks_qs) <= 1
     default_track = Track.get_default_slug(request.user)
@@ -3035,8 +3137,7 @@ def track_list_view(request):
                 return redirect("track_list")
             original_name = (original_name or "resume.pdf")[:255]
 
-            from .entitlements import QuotaExceeded
-            from .storage_quota import assert_upload_allowed
+            from .subscriptions import QuotaExceeded, assert_upload_allowed
 
             try:
                 assert_upload_allowed(request.user, resume_file)

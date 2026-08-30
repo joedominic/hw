@@ -10,7 +10,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, Base
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.outputs import ChatResult, ChatGeneration
 
-from .llm_services import DEFAULT_MODELS
+from .services import DEFAULT_MODELS
 
 logger = logging.getLogger(__name__)
 

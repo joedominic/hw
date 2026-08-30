@@ -466,7 +466,7 @@ class MemoryLeakFixTests(TenantTestCase):
         self.assertEqual(attempt.error_code, ApplicationAttempt.ERROR_AUTOMATION_TIMEOUT)
 
     def test_get_redis_singleton(self):
-        import resume_app.llm_rate_limit as rl
+        import resume_app.llm.rate_limit as rl
 
         rl._redis_client = None
         mock_client = MagicMock()

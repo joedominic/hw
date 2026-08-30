@@ -9,7 +9,7 @@ from langchain_core.messages import HumanMessage, SystemMessage, BaseMessage
 from langgraph.graph import StateGraph, END
 
 from .callbacks import TokenUsageCallback
-from .llm_factory import get_llm
+from .llm import get_llm
 from .parsers import (
     AtsJudgeResult,
     ScoreFeedback,
@@ -238,7 +238,7 @@ def _llm_invoke_with_retry(
     Defaults favor Ollama Local for non-optimizer product work. Resume-optimizer
     nodes pass prefer_local=False and allow_local=False for cloud-only routing.
     """
-    from .llm_gateway import call_invoke_llm_messages
+    from .llm import call_invoke_llm_messages
 
     if user is None:
         user = getattr(llm, "_resume_user", None)
@@ -443,7 +443,7 @@ def run_fit_check(
                 user_template=ut or None,
                 format_kwargs=fmt,
             )
-    from .llm_gateway import USAGE_QUERY_FIT_CHECK
+    from .llm import USAGE_QUERY_FIT_CHECK
 
     _qk = usage_query_kind or USAGE_QUERY_FIT_CHECK
     dbg = "\n\n---\n\n".join(f"{type(m).__name__}:{getattr(m, 'content', '')}" for m in messages)
@@ -518,7 +518,7 @@ def run_matching(
                 user_template=ut or None,
                 format_kwargs=fmt,
             )
-    from .llm_gateway import USAGE_QUERY_MATCHING
+    from .llm import USAGE_QUERY_MATCHING
 
     _qk = usage_query_kind or USAGE_QUERY_MATCHING
     dbg = "\n\n---\n\n".join(f"{type(m).__name__}:{getattr(m, 'content', '')}" for m in messages)
@@ -734,7 +734,7 @@ def writer_node(state: AgentState):
         "debug_messages": dm,
         "debug_format_summary": _format_field_summary(fmt),
     }
-    from .llm_gateway import USAGE_QUERY_OPTIMIZER_WRITER
+    from .llm import USAGE_QUERY_OPTIMIZER_WRITER
 
     response = _llm_invoke_with_retry(
         llm,
@@ -882,7 +882,7 @@ def _judge_node(
         "debug_messages": dm,
         "debug_format_summary": _format_field_summary(fmt),
     }
-    from .llm_gateway import (
+    from .llm import (
         USAGE_QUERY_OPTIMIZER_ATS_JUDGE,
         USAGE_QUERY_OPTIMIZER_RECRUITER_JUDGE,
     )
@@ -1224,7 +1224,7 @@ def jd_cleanse_node(state: AgentState):
     every later workflow step consumes the cleansed text.
     """
     from .jd_cleanser import JDCleanserService
-    from .llm_gateway import USAGE_QUERY_JD_CLEANSE
+    from .llm import USAGE_QUERY_JD_CLEANSE
     from .prompt_store import build_jd_cleanse_llm_messages
 
     full_jd = (_state_get(state, "job_description") or "").strip()

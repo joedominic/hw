@@ -10,7 +10,7 @@ from typing import Any, List, Optional
 import requests
 from django.conf import settings
 
-from .job_sources import _parse_date_posted
+from ...job_sources import _parse_date_posted
 
 logger = logging.getLogger(__name__)
 

@@ -18,7 +18,7 @@ from .billing import (
     stripe_enabled,
 )
 from .entitlements import ensure_default_plans, subscription_summary
-from .models import ImpersonationAuditLog, LLMAppUsageTotals, Plan, Subscription
+from ..models import ImpersonationAuditLog, LLMAppUsageTotals, Plan, Subscription
 
 logger = logging.getLogger(__name__)
 

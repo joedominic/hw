@@ -10,7 +10,7 @@ from django.http import HttpRequest
 from django.utils import timezone
 from ninja.security import HttpBearer
 
-from .entitlements import require_api_access, EntitlementDenied
+from .subscriptions import require_api_access, EntitlementDenied
 from .models import CustomerApiKey
 
 

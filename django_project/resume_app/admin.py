@@ -10,6 +10,7 @@ from .models import (
     LLMAppUsageTotals,
     LLMUsageByModel,
     LLMUsageByQuery,
+    LLMDailyUsageBreakdown,
     LLMProviderPreference,
     LLMProviderConfig,
     JobListing,
@@ -185,6 +186,21 @@ class LLMUsageByQueryAdmin(admin.ModelAdmin):
         "last_used_at",
     )
     list_filter = ("query_kind", "provider")
+
+
+@admin.register(LLMDailyUsageBreakdown)
+class LLMDailyUsageBreakdownAdmin(admin.ModelAdmin):
+    list_display = (
+        "period_date",
+        "query_kind",
+        "provider",
+        "model",
+        "request_count",
+        "sum_input_tokens",
+        "sum_output_tokens",
+        "last_used_at",
+    )
+    list_filter = ("period_date", "query_kind", "provider")
 
 
 @admin.register(JobListing)

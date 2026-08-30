@@ -43,11 +43,19 @@ except ImportError:
 from .crypto import decrypt_api_key
 from .services import parse_pdf
 from .callbacks import TokenUsageCallback
-from .llm_gateway import USAGE_QUERY_PIPELINE_VETTING
+from .llm import (
+    NO_CLOUD_LLM_MESSAGE,
+    USAGE_QUERY_PIPELINE_VETTING,
+    cloud_llm_available,
+    get_active_llm_provider,
+    get_llm,
+    get_runtime_provider_candidates,
+    is_auth_error,
+    list_models_for_provider,
+    local_llm_available,
+    preference_candidates_available,
+)
 from .pipeline_llm_skill_extract import resolve_provider_api_key
-from .llm_services import is_auth_error, list_models_for_provider
-from .llm_factory import get_llm
-from .llm_session import get_runtime_provider_candidates, get_active_llm_provider
 from .prompt_store import (
     build_optimizer_graph_prompt_state,
     profile_for_llm,
@@ -97,19 +105,18 @@ def apply_vetting_to_applying_promotions(user, entry_ids: list[int] | None = Non
     cfg = AppAutomationSettings.get_for_user(user)
     if not cfg.vetting_to_applying_enabled:
         return 0
-    y = int(cfg.vetting_interview_probability_min)
     qs = PipelineEntry.objects.for_user(user).filter(
         stage=PipelineEntry.Stage.VETTING,
         removed_at__isnull=True,
         vetting_interview_probability__isnull=False,
-        vetting_interview_probability__gte=y,
     )
     if entry_ids is not None:
         qs = qs.filter(id__in=entry_ids)
     n = 0
     for entry in qs:
-        entry.move_to_applying(save=True)
-        n += 1
+        if entry.meets_vetting_promotion_threshold(cfg):
+            entry.move_to_applying(save=True)
+            n += 1
     return n
 
 
@@ -258,7 +265,6 @@ def optimize_resume_task(
 
     try:
         from .agents import clear_node_llm_debug
-        from .llm_gateway import NO_CLOUD_LLM_MESSAGE, cloud_llm_available
 
         if not cloud_llm_available(user):
             raise RuntimeError(NO_CLOUD_LLM_MESSAGE)
@@ -419,6 +425,19 @@ def optimize_resume_task(
         if isinstance(snap, dict):
             optimized_resume.optimizer_context_snapshot = snap
         optimized_resume.save()
+
+        from .domain.event_bus import event_bus
+        from .domain.events import ResumeOptimizationCompleted
+
+        event_bus.publish(
+            ResumeOptimizationCompleted(
+                user_id=user.id,
+                optimized_resume_id=optimized_resume.id,
+                pipeline_entry_id=optimized_resume.pipeline_entry_id,
+                ats_score=optimized_resume.ats_score,
+                recruiter_score=optimized_resume.recruiter_score,
+            )
+        )
 
         # Resume apply-agent attempts that were waiting on this optimization.
         if optimized_resume.pipeline_entry_id:
@@ -852,7 +871,7 @@ def evaluate_vetting_matching_task(
         if not entries:
             return {"status": "skipped", "message": "No entries in VETTING stage"}
 
-        from .llm_gateway import local_llm_available, preference_candidates_available
+        from .llm import local_llm_available, preference_candidates_available
 
         llm_override = None
         if llm_provider:
@@ -975,24 +994,12 @@ def evaluate_vetting_matching_task(
 
                 ip = (result or {}).get("interview_probability")
                 reasoning = ((result or {}).get("reasoning") or "").strip()
-                try:
-                    ip_int = int(ip) if ip is not None else None
-                    if ip_int is not None:
-                        ip_int = max(0, min(100, ip_int))
-                except (TypeError, ValueError):
-                    ip_int = None
-
-                entry.vetting_interview_probability = ip_int
-                entry.vetting_interview_reasoning = reasoning[:2000] if reasoning else ""
-                entry.vetting_interview_resume_id = resume_obj.id
-                entry.vetting_interview_scored_at = now
-                entry.save(
-                    update_fields=[
-                        "vetting_interview_probability",
-                        "vetting_interview_reasoning",
-                        "vetting_interview_resume_id",
-                        "vetting_interview_scored_at",
-                    ]
+                entry.record_vetting_interview_result(
+                    probability=ip,
+                    reasoning=reasoning,
+                    resume_id=resume_obj.id,
+                    scored_at=now,
+                    save=True,
                 )
                 updated += 1
                 apply_vetting_to_applying_promotions(user, [entry.id])
@@ -1077,8 +1084,7 @@ def try_vetting_match_debug(
         
         # Validate and resolve model if needed
         try:
-            from .llm_services import list_models_for_provider
-            from .llm_factory import get_llm
+            from .llm import get_llm
             
             available_models = list_models_for_provider(llm_provider, api_key)
             if not available_models:
@@ -1181,7 +1187,6 @@ def apply_pipeline_auto_promotions(user) -> int:
     cfg = AppAutomationSettings.get_for_user(user)
     if not cfg.pipeline_to_vetting_enabled:
         return 0
-    min_margin = cfg.pipeline_preference_margin_min
     entries = (
         PipelineEntry.objects.for_user(user).filter(removed_at__isnull=True)
         .filter(models.Q(stage="") | models.Q(stage=PipelineEntry.Stage.PIPELINE))
@@ -1197,9 +1202,8 @@ def apply_pipeline_auto_promotions(user) -> int:
             .only("preference_margin")
             .first()
         )
-        if not m or m.preference_margin is None:
-            continue
-        if m.preference_margin < min_margin:
+        margin = m.preference_margin if m else None
+        if not entry.meets_pipeline_auto_promotion_threshold(margin, cfg):
             continue
         entry.move_to_vetting(save=True)
         promoted.append(entry.id)
@@ -1209,13 +1213,12 @@ def apply_pipeline_auto_promotions(user) -> int:
 
     for entry_id in promoted:
         entry = PipelineEntry.objects.for_user(user).get(id=entry_id)
-        # Heuristic: If margin is very high (e.g. > 50), skip Vetting and go to Applying
-        # In a real scenario, we might also check the Ollama Guard status here if persisted
         m = JobListingTrackMetrics.objects.for_user(user).filter(
             job_listing_id=entry.job_listing_id, track=entry.track
         ).first()
+        margin = m.preference_margin if m else None
 
-        if m and m.preference_margin is not None and m.preference_margin > 50:
+        if entry.is_fast_track_eligible(margin):
             entry.move_to_applying(save=True)
             fast_tracked.append(entry_id)
         else:

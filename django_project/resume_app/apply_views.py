@@ -29,7 +29,7 @@ _IN_PROGRESS = ApplicationAttempt.ACTIVE_STATUSES + (ApplicationAttempt.Status.A
 
 def _apply_agent_llm_form_context(settings_solo: AppAutomationSettings) -> dict:
     """Provider/model dropdown data for the dedicated Apply Agent LLM picker."""
-    from .llm_services import DEFAULT_MODELS, LLM_PROVIDERS
+    from .llm import DEFAULT_MODELS, LLM_PROVIDERS
     from .pipeline_llm_skill_extract import resolve_provider_api_key
 
     user = settings_solo.owner
@@ -66,7 +66,7 @@ def _apply_agent_llm_form_context(settings_solo: AppAutomationSettings) -> dict:
     effective_provider = selected_provider
     effective_model = selected_model
     if not effective_provider and providers:
-        from .llm_session import get_runtime_provider_candidates
+        from .llm import get_runtime_provider_candidates
 
         runtime = get_runtime_provider_candidates(user)
         if runtime:
@@ -91,26 +91,24 @@ def apply_agent_dashboard_view(request):
     if request.method == "POST":
         action = request.POST.get("action")
         if action == "start":
-            profile = ApplicantProfile.get_for_user(request.user)
-            if not (profile.full_name and profile.email):
-                messages.error(
-                    request,
-                    "Set your name and email on the Apply Agent profile page before starting.",
-                )
-                return redirect(reverse("apply_agent"))
-            entry_ids = [e for e in request.POST.getlist("entry_ids") if e]
-            if not entry_ids:
-                messages.info(request, "Select at least one job to start the apply agent.")
-                return redirect(reverse("apply_agent"))
-            from .tasks import run_apply_agent_step
+            entry_ids = []
+            for e in request.POST.getlist("entry_ids"):
+                try:
+                    if e:
+                        entry_ids.append(int(e))
+                except (ValueError, TypeError):
+                    continue
 
-            attempts = orchestrator.start_attempts_for_entries([int(e) for e in entry_ids], user_id=request.user.id)
-            for attempt in attempts:
-                run_apply_agent_step(request.user.id, attempt.id)
-            if attempts:
-                messages.success(request, f"Started the apply agent for {len(attempts)} job(s).")
+            from .application.apply_services import ApplyApplicationService
+
+            res = ApplyApplicationService.start_attempts_for_jobs(request.user, entry_ids)
+            if res.success:
+                if res.started_attempts:
+                    messages.success(request, res.message)
+                else:
+                    messages.info(request, res.message)
             else:
-                messages.info(request, "Those jobs already have an apply attempt in progress.")
+                messages.error(request, res.message)
             return redirect(reverse("apply_agent"))
         return redirect(reverse("apply_agent"))
 
@@ -168,19 +166,18 @@ def apply_agent_review_view(request, attempt_id: int):
         action = request.POST.get("action")
         if action == "approve":
             corrected = bool(request.POST.get("corrected"))
-            updated = orchestrator.approve_attempt(attempt_id, corrected=corrected)
-            if updated and updated.status == ApplicationAttempt.Status.SUBMITTING:
-                from .tasks import run_apply_agent_step
+            from .application.apply_services import ApplyApplicationService
 
-                run_apply_agent_step(request.user.id, attempt_id)
-                messages.success(request, "Approved. Submitting the application now.")
-            elif updated and updated.status == ApplicationAttempt.Status.SUCCEEDED:
-                messages.success(request, "Marked as applied. Job moved to Done.")
+            ok, msg = ApplyApplicationService.approve_attempt(request.user, attempt_id, corrected=corrected)
+            if ok:
+                messages.success(request, msg)
             else:
-                messages.info(request, "Attempt is not awaiting approval.")
+                messages.info(request, msg)
         elif action == "reject":
-            orchestrator.reject_attempt(attempt_id)
-            messages.success(request, "Attempt rejected.")
+            from .application.apply_services import ApplyApplicationService
+
+            ok, msg = ApplyApplicationService.reject_attempt(request.user, attempt_id)
+            messages.success(request, msg)
         elif action == "override_url":
             url = (request.POST.get("apply_url") or "").strip()
             if not url:
@@ -294,7 +291,7 @@ def apply_agent_profile_view(request):
             llm_provider = (request.POST.get("apply_agent_llm_provider") or "").strip()
             llm_model = (request.POST.get("apply_agent_llm_model") or "").strip()
             if llm_provider:
-                from .llm_services import LLM_PROVIDERS
+                from .llm import LLM_PROVIDERS
                 from .pipeline_llm_skill_extract import resolve_provider_api_key
 
                 if llm_provider not in LLM_PROVIDERS:

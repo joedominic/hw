@@ -10,7 +10,7 @@ class JobSearchRequest(Schema):
     site_name: Optional[List[str]] = None
     results_wanted: Optional[int] = 50
     resume_id: Optional[int] = None
-    sort: Optional[str] = "focus"  # "focus" = by fit to liked jobs
+    sort: Optional[str] = "match"  # "match"/"focus" (% match), "latest"/"freshness" (date posted)
     llm_provider: Optional[str] = None  # for Matching step; uses configured provider if omitted
     llm_model: Optional[str] = None  # for Matching step; uses provider default if omitted
     track: Optional[str] = None  # "ic" or "mgmt" preference track

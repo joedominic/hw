@@ -35,7 +35,7 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 - Loads the `OptimizedResume` by `resume_id`.
 - Parses the resume PDF text via `parse_pdf(...)`.
 - Builds optimizer context via `optimizer_budget.build_optimizer_context_state()` (role-focused JD excerpt, truncated resume fields, char budgets).
-- Runs LLM calls through **`resume_app.llm_gateway.invoke_llm_messages`**: preference order, job pinning (`job_cache_key=str(optimized_resume.id)`), rate-limit cooldowns, and **`AppAutomationSettings.stop_llm_requests`** (kill switch). Writer and judges are remote-first by default (`prefer_local=False`); set `OPTIMIZER_JUDGES_PREFER_LOCAL=True` to prefer local Ollama for ATS/Recruiter only.
+- Runs LLM calls through **`resume_app.llm.invoke_llm_messages`**: preference order, job pinning (`job_cache_key=str(optimized_resume.id)`), rate-limit cooldowns, and **`AppAutomationSettings.stop_llm_requests`** (kill switch). Writer and judges are remote-first by default (`prefer_local=False`); set `OPTIMIZER_JUDGES_PREFER_LOCAL=True` to prefer local Ollama for ATS/Recruiter only.
 - Builds a LangGraph workflow:
   - default is `writer` → `ats_judge` → `recruiter_judge` (single pass, then END)
   - or uses `workflow_steps` if provided (each listed step runs once in order)
@@ -142,7 +142,7 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 **What it does:**
 - Uses a **per-tenant lock** (`vetting_matching_task_running:u{user_id}`) so multiple users can evaluate vetting matches concurrently.
 - Loads existing, active pipeline entries in VETTING stage for that user.
-- Calls `run_matching(...)` through `resume_app.llm_gateway` and records interview probabilities.
+- Calls `run_matching(...)` through `resume_app.llm` and records interview probabilities.
 
 ---
 
@@ -390,7 +390,7 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 
 ### Redis-backed RPM / TPM limits
 
-- Implementation: `resume_app/llm_rate_limit.py`, enforced via `resume_app.llm_gateway.invoke_llm_messages` (optimizer, matching, insights, pipeline extract, etc.). Full gateway reference: [`LLM_GATEWAY.md`](LLM_GATEWAY.md).
+- Implementation: `resume_app/llm/rate_limit.py`, enforced via `resume_app.llm.invoke_llm_messages` (optimizer, matching, insights, pipeline extract, etc.). Full gateway reference: [`LLM_GATEWAY.md`](LLM_GATEWAY.md).
 - **Configuration (env / `core/settings.py`):**
   - `LLM_RATE_LIMIT_ENABLED` (default: `True`)
   - `LLM_RATE_LIMIT_FAIL_OPEN` (default: follows `DEBUG` — fail-closed in production; when true, Redis down / wait exceeded still allows the call)

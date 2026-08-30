@@ -374,7 +374,7 @@ def fetch_jobs(
         )
 
     if use_dice:
-        from .dice_client import fetch_dice_jobs
+        from .sourcing.clients.dice_client import fetch_dice_jobs
 
         merged.extend(
             fetch_dice_jobs(
@@ -387,7 +387,7 @@ def fetch_jobs(
         )
 
     if use_adzuna:
-        from .adzuna_client import fetch_adzuna_jobs
+        from .sourcing.clients.adzuna_client import fetch_adzuna_jobs
 
         merged.extend(
             fetch_adzuna_jobs(
@@ -399,7 +399,7 @@ def fetch_jobs(
         )
 
     if use_levels:
-        from .levels_client import fetch_levels_jobs
+        from .sourcing.clients.levels_client import fetch_levels_jobs
 
         merged.extend(
             fetch_levels_jobs(
@@ -412,7 +412,7 @@ def fetch_jobs(
         )
 
     if use_builtin:
-        from .builtin_client import fetch_builtin_jobs
+        from .sourcing.clients.builtin_client import fetch_builtin_jobs
 
         merged.extend(
             fetch_builtin_jobs(

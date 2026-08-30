@@ -39,8 +39,7 @@ def _upload_library_resume(user, resume_file, track_slug: str = "") -> tuple[boo
         return False, "Resume file must be 10MB or smaller."
     original_name = (original_name or "resume.pdf")[:255]
 
-    from .entitlements import QuotaExceeded
-    from .storage_quota import assert_upload_allowed
+    from .subscriptions import QuotaExceeded, assert_upload_allowed
 
     try:
         assert_upload_allowed(user, resume_file)

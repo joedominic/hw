@@ -89,7 +89,7 @@ class MultiTenantIsolationTests(TestCase):
 
     def test_llm_session_active_provider_scoped(self):
         """get_active_llm_provider(user) must return per-user active config only."""
-        from resume_app.llm_session import get_active_llm_provider
+        from resume_app.llm.session import get_active_llm_provider
 
         LLMProviderConfig.objects.create(
             owner=self.user_b,

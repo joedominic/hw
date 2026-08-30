@@ -1,6 +1,9 @@
 {# Single job result card — CareerFlow-inspired layout. #}
-{% with match_pct=j.focus_percent_after_penalty|default:j.focus_percent %}
-<div class="job-result-row group rounded-2xl border border-slate-200/90 bg-white p-5 shadow-card transition hover:border-brand/20 hover:shadow-md" data-job-id="{{ j.id }}">
+{% with match_pct=j.matching_score|default:j.focus_percent_after_penalty|default:j.focus_percent %}
+<div class="job-result-row group rounded-2xl border border-slate-200/90 bg-white p-5 shadow-card transition hover:border-brand/20 hover:shadow-md"
+     data-job-id="{{ j.id }}"
+     data-match-score="{{ match_pct|default:'-1' }}"
+     data-job-timestamp="{% if j.posted_at %}{{ j.posted_at|date:'U' }}{% elif j.fetched_at %}{{ j.fetched_at|date:'U' }}{% else %}0{% endif %}">
     <div class="flex gap-4">
         <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-brand-mist text-sm font-bold uppercase text-brand" aria-hidden="true">
             {{ j.company_name|default:"?"|slice:":1" }}

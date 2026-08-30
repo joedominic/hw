@@ -81,8 +81,7 @@ def resolve_apply_agent_llm_candidate(user) -> dict:
 
     ``user`` is required to scope LLM provider lookups to the owning tenant.
     """
-    from ..llm_services import DEFAULT_MODELS
-    from ..llm_session import get_runtime_provider_candidates
+    from ..llm import DEFAULT_MODELS, get_runtime_provider_candidates
     from ..models import AppAutomationSettings, LLMProviderConfig
 
     solo = AppAutomationSettings.get_for_user(user)
@@ -121,7 +120,7 @@ def resolve_apply_agent_llm_candidate(user) -> dict:
 def _build_browser_use_llm(user) -> Any:
     """Build a browser-use ``BaseChatModel`` for generic form fill."""
     from ..crypto import decrypt_api_key
-    from ..llm_factory import _normalize_ollama_local_host
+    from ..llm.factory import _normalize_ollama_local_host
 
     cand = resolve_apply_agent_llm_candidate(user)
     provider = cand["provider"]
@@ -181,7 +180,7 @@ def _build_browser_use_llm(user) -> Any:
 
 def _policy_wrap_browser_llm(llm: Any, user, provider: str, model: str) -> Any:
     """Attach shared LLM policy (kill switch, tokens, concurrency, timeout, usage)."""
-    from ..llm_policy import wrap_browser_use_llm
+    from ..llm import wrap_browser_use_llm
 
     return wrap_browser_use_llm(llm, user=user, provider=provider, model=model)
 
@@ -216,7 +215,7 @@ def run_generic_fill(ctx: ApplyContext) -> FillResult:
     except ValueError as e:
         return FillResult(ok=False, payload=payload, error_code="no_adapter", message=str(e))
     except Exception as e:  # noqa: BLE001 - any agent failure is non-fatal
-        from ..llm_policy import (
+        from ..llm import (
             LLMConcurrencyLimitExceeded,
             LLMInvokeTimeout,
             LLMRequestsDisabled,
@@ -351,7 +350,7 @@ def _drive_browser_use(ctx: ApplyContext) -> bool:
     """Run a bounded browser-use agent. Returns True if it completed without error."""
     from browser_use import Agent
 
-    from ..llm_policy import assert_llm_kill_switch
+    from ..llm import assert_llm_kill_switch
     from ..rate_limits import check_user_llm_rate_limit, record_llm_request
 
     assert_llm_kill_switch(ctx.user)

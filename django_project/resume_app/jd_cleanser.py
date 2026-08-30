@@ -41,7 +41,7 @@ class JDCleanserService:
         Use Ollama Local to extract core job information (pipeline / vetting path).
         """
         try:
-            from .llm_gateway import USAGE_QUERY_JD_CLEANSE, invoke_llm_messages
+            from .llm import USAGE_QUERY_JD_CLEANSE, invoke_llm_messages
             from langchain_core.messages import HumanMessage
 
             prompt = (

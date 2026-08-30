@@ -39,7 +39,7 @@ def seed_user_defaults(user, *, experience_mode: str | None = None) -> None:
     )
 
     try:
-        from .entitlements import ensure_default_plans, get_or_create_subscription
+        from .subscriptions import ensure_default_plans, get_or_create_subscription
 
         ensure_default_plans()
         get_or_create_subscription(user)

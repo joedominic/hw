@@ -115,7 +115,7 @@ def _rate_limit_scope_key(user, provider: str) -> str:
     if user is None or not getattr(user, "is_authenticated", False):
         return "platform"
     try:
-        from .models import LLMProviderConfig
+        from ..models import LLMProviderConfig
 
         has_byok = (
             LLMProviderConfig.objects.for_user(user)
@@ -135,7 +135,7 @@ def _get_limits_from_preferences(
 ) -> Optional[tuple[int, int]]:
     """Match LLMProviderPreference row: exact model first, then blank model as provider wildcard."""
     try:
-        from .models import LLMProviderPreference
+        from ..models import LLMProviderPreference
     except Exception:
         return None
     if user is None:
@@ -163,7 +163,7 @@ def _get_limits_from_preferences(
 def get_preference_row_for_provider_model(provider: str, model: str | None, *, user):
     """Return matching LLMProviderPreference or None (exact model, then blank model)."""
     try:
-        from .models import LLMProviderPreference
+        from ..models import LLMProviderPreference
     except Exception:
         return None
     if user is None:
