@@ -1,6 +1,6 @@
 {% extends "resume_app/base.html" %}
 
-{% block title %}{{ board_page_title }} — ResumeElite{% endblock %}
+{% block title %}{{ board_page_title }} — HireEdge{% endblock %}
 
 {% block extra_head %}
 {% if not my_jobs_profile_gate %}
@@ -30,7 +30,6 @@
 #interview-prep-content.interview-prep-md-fallback { white-space: pre-wrap; line-height: 1.55; }
 </style>
 {% if show_pipeline_resume_summary %}
-<meta name="csrf-token" content="{{ csrf_token }}">
 <style>
 /* Inner panel is opaque; dialog.concierge-dialog in base.html forces transparent on <dialog>. */
 #pipelineResumeSummaryDialog .pipeline-summary-panel {

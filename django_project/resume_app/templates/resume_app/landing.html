@@ -3,15 +3,15 @@
 <html lang="en" class="h-full scroll-smooth">
 <head>
     <meta charset="utf-8">
-    <title>ResumeElite — Your job search, automated</title>
+    <title>HireEdge — Your job search, smarter from day one</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="ResumeElite uses intelligent automation to tailor your resume and handle applications—so you can focus on the interview.">
+    <meta name="description" content="HireEdge uses AI to tailor your resume for every role, surface the best job matches, and keep your pipeline organized—so you can focus on the interview.">
     {% include "resume_app/_tailwind_theme.html" %}
 </head>
 <body class="brand-public min-h-full bg-white font-sans text-concierge-slate antialiased">
     <header class="sticky top-0 z-40 border-b border-slate-100/80 bg-white/90 backdrop-blur-md">
         <div class="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
-            <a href="{% url 'landing' %}" class="text-xl font-bold tracking-tight text-brand">ResumeElite</a>
+            <a href="{% url 'landing' %}" class="text-xl font-bold tracking-tight text-brand">HireEdge</a>
             <nav class="hidden items-center gap-8 text-sm font-medium text-slate-600 md:flex" aria-label="Marketing">
                 <a href="#product" class="transition hover:text-concierge-slate">Product</a>
                 <a href="#features" class="transition hover:text-concierge-slate">Features</a>
@@ -35,7 +35,7 @@
         <section class="relative min-h-[88vh] overflow-hidden">
             <img
                 src="{% static 'resume_app/landing-hero-product.png' %}?v=3"
-                alt="ResumeElite job search workspace with pipeline board and tailored resume tools"
+                alt="HireEdge job search workspace with pipeline board and tailored resume tools"
                 class="absolute inset-0 h-full w-full object-cover object-center"
                 width="1920"
                 height="1080"
@@ -44,12 +44,12 @@
             <div class="absolute inset-0 bg-gradient-to-b from-white/95 via-white/55 to-white/25" aria-hidden="true"></div>
             <div class="absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-white via-white/80 to-transparent" aria-hidden="true"></div>
             <div class="relative mx-auto flex min-h-[88vh] max-w-3xl flex-col items-center justify-start px-4 pb-28 pt-24 text-center sm:px-6 sm:pt-28">
-                <p class="brand-animate text-sm font-bold tracking-tight text-brand sm:text-base">ResumeElite</p>
+                <p class="brand-animate text-sm font-bold tracking-tight text-brand sm:text-base">HireEdge</p>
                 <h1 class="brand-animate brand-animate-delay-1 mt-5 text-4xl font-extrabold tracking-tight text-concierge-slate sm:text-5xl lg:text-[3.25rem] lg:leading-[1.15]">
-                    Your job search, automated from end to end.
+                    Your job search, smarter from day one.
                 </h1>
                 <p class="mx-auto mt-5 max-w-2xl text-base leading-relaxed text-slate-700 sm:text-lg">
-                    Tailor resumes, track applications, and apply with intelligent automation—so you can focus on the interview.
+                    AI tailors your resume for every role, surfaces the right opportunities, and keeps your pipeline organized—so you can focus on the interview.
                 </p>
                 <div class="mt-8 flex flex-wrap items-center justify-center gap-3">
                     {% if signup_enabled %}
@@ -101,11 +101,11 @@
                     </article>
                     <article class="group rounded-2xl border border-slate-200 bg-white p-6 shadow-card transition duration-300 hover:-translate-y-0.5 hover:border-brand/20 hover:shadow-md">
                         <div class="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-soft text-brand">
-                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-3 3-3-3z"/></svg>
                         </div>
-                        <h3 class="mt-5 text-lg font-bold text-concierge-slate">Automated Applications</h3>
+                        <h3 class="mt-5 text-lg font-bold text-concierge-slate">Interview-Ready, Faster</h3>
                         <p class="mt-2 text-sm leading-relaxed text-slate-600">
-                            Let the apply agent handle repetitive form filling while you stay in control of every submission.
+                            Generate tailored cover letters and AI-powered interview coaching for every role—customized to the exact job description.
                         </p>
                         <a href="{% if signup_enabled %}{% url 'signup' %}{% else %}{% url 'login' %}{% endif %}" class="mt-4 inline-flex items-center gap-1 text-sm font-semibold text-brand transition group-hover:gap-1.5">
                             Learn more <span aria-hidden="true">›</span>
@@ -125,23 +125,23 @@
                 <ol class="mt-12 grid gap-10 sm:grid-cols-3 sm:gap-8">
                     <li class="relative text-center sm:text-left">
                         <span class="inline-flex h-8 w-8 items-center justify-center rounded-full bg-teal-500 text-sm font-bold text-white">1</span>
-                        <h3 class="mt-4 text-lg font-bold text-white">Sync</h3>
+                        <h3 class="mt-4 text-lg font-bold text-white">Upload</h3>
                         <p class="mt-2 text-sm leading-relaxed text-slate-300">
-                            Securely upload your resume and set your search targets. We parse your experience in seconds.
+                            Securely upload your resume and set your job targets. We parse your experience and preferences in seconds.
                         </p>
                     </li>
                     <li class="relative text-center sm:text-left">
                         <span class="inline-flex h-8 w-8 items-center justify-center rounded-full bg-teal-500 text-sm font-bold text-white">2</span>
-                        <h3 class="mt-4 text-lg font-bold text-white">Perfect</h3>
+                        <h3 class="mt-4 text-lg font-bold text-white">Match</h3>
                         <p class="mt-2 text-sm leading-relaxed text-slate-300">
-                            Our system iterates on your resume for each role—ensuring you always put your best foot forward.
+                            AI scores every job against your profile and preferences, surfacing the best-fit opportunities automatically.
                         </p>
                     </li>
                     <li class="relative text-center sm:text-left">
                         <span class="inline-flex h-8 w-8 items-center justify-center rounded-full bg-teal-500 text-sm font-bold text-white">3</span>
-                        <h3 class="mt-4 text-lg font-bold text-white">Apply</h3>
+                        <h3 class="mt-4 text-lg font-bold text-white">Prepare</h3>
                         <p class="mt-2 text-sm leading-relaxed text-slate-300">
-                            Review auto-filled forms and submit with confidence. Then track your progress in real time.
+                            Optimize your resume, generate a tailored cover letter, and get AI interview coaching—all customized to each role.
                         </p>
                     </li>
                 </ol>
@@ -153,7 +153,7 @@
             <div class="mx-auto max-w-4xl rounded-3xl bg-concierge-soft px-6 py-14 text-center sm:px-12">
                 <h2 class="text-3xl font-bold tracking-tight text-concierge-slate sm:text-4xl">Ready to land your next role?</h2>
                 <p class="mx-auto mt-4 max-w-xl text-base text-slate-600">
-                    Join professionals using ResumeElite to secure better roles in half the time.
+                    Join professionals using HireEdge to secure better roles in half the time.
                 </p>
                 {% if signup_enabled %}
                 <a href="{% url 'signup' %}" class="mt-8 inline-flex items-center gap-2 rounded-concierge bg-brand px-6 py-3.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-hover">
@@ -173,7 +173,7 @@
         <div class="mx-auto max-w-6xl px-4 py-12 sm:px-6">
             <div class="grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
                 <div class="sm:col-span-2 lg:col-span-1">
-                    <a href="{% url 'landing' %}" class="text-lg font-bold text-brand">ResumeElite</a>
+                    <a href="{% url 'landing' %}" class="text-lg font-bold text-brand">HireEdge</a>
                     <p class="mt-3 max-w-xs text-sm leading-relaxed text-slate-600">
                         The simple, effective navigator for your career growth.
                     </p>
@@ -202,7 +202,7 @@
                 </div>
             </div>
             <div class="mt-10 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-6 text-xs text-slate-500">
-                <p>&copy; {% now "Y" %} ResumeElite</p>
+                <p>&copy; {% now "Y" %} HireEdge</p>
                 <p>Digital Concierge for your job search</p>
             </div>
         </div>

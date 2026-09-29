@@ -31,7 +31,6 @@ from .job_sources import (
     normalize_site_names,
     upsert_job_listing_from_fetch,
 )
-from .sourcing.clients.adzuna_client import _adzuna_result_to_dict, fetch_adzuna_jobs
 from .sourcing.clients.dice_client import _parse_jobs_from_html
 from .utils import format_job_source_label
 from .views import MAX_TRACK_RESUME_UPLOAD_BYTES, _count_unique_library_resumes
@@ -106,10 +105,16 @@ class NormalizeSiteNamesTestCase(TestCase):
             ["linkedin", "indeed"],
         )
 
-    def test_preserves_dice_and_adzuna(self):
+    def test_preserves_dice(self):
+        self.assertEqual(
+            normalize_site_names(["dice", "indeed"]),
+            ["dice", "indeed"],
+        )
+
+    def test_drops_adzuna(self):
         self.assertEqual(
             normalize_site_names(["dice", "adzuna", "indeed"]),
-            ["dice", "adzuna", "indeed"],
+            ["dice", "indeed"],
         )
 
     def test_preserves_levels(self):
@@ -133,76 +138,27 @@ class JobFetchHelpersTestCase(TestCase):
 
     def test_dedupe_fetch_rows(self):
         rows = [
-            {"source": "adzuna", "external_id": "a1"},
-            {"source": "adzuna", "external_id": "a1"},
+            {"source": "levels", "external_id": "l1"},
+            {"source": "levels", "external_id": "l1"},
             {"source": "dice", "external_id": "d1"},
         ]
         self.assertEqual(len(_dedupe_fetch_rows(rows)), 2)
 
 
-class AdzunaClientTestCase(TestCase):
-    def test_adzuna_result_to_dict(self):
-        row = _adzuna_result_to_dict(
-            {
-                "id": 42,
-                "title": "Python Dev",
-                "company": {"display_name": "Acme"},
-                "location": {"display_name": "Boston, MA"},
-                "description": "Build APIs",
-                "redirect_url": "https://example.com/job/42",
-                "created": "2026-01-15T12:00:00Z",
-            },
-            "us",
-        )
-        self.assertEqual(row["source"], "adzuna")
-        self.assertEqual(row["external_id"], "adzuna:us:42")
-        self.assertEqual(row["company_name"], "Acme")
-        self.assertEqual(row["job_url"], "https://example.com/job/42")
-
-    @patch("resume_app.sourcing.clients.adzuna_client.requests.get")
-    @patch("resume_app.sourcing.clients.adzuna_client._adzuna_credentials", return_value=(None, None))
-    def test_fetch_adzuna_jobs_requires_keys(self, _creds, mock_get):
-        with self.assertRaises(RuntimeError) as ctx:
-            fetch_adzuna_jobs("engineer", location="Boston", results_wanted=5)
-        self.assertIn("not configured", str(ctx.exception))
-        mock_get.assert_not_called()
-
-    @patch("resume_app.sourcing.clients.adzuna_client.requests.get")
-    @patch("resume_app.sourcing.clients.adzuna_client._adzuna_credentials", return_value=("id", "key"))
-    @override_settings(ADZUNA_MAX_PAGES=1)
-    def test_fetch_adzuna_jobs_parses_response(self, _creds, mock_get):
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status = MagicMock()
-        mock_resp.json.return_value = {
-            "results": [
-                {
-                    "id": 1,
-                    "title": "Dev",
-                    "company": {"display_name": "Co"},
-                    "location": {"display_name": "NYC"},
-                    "description": "Desc",
-                    "redirect_url": "https://adzuna.com/1",
-                }
-            ]
-        }
-        mock_get.return_value = mock_resp
-        rows = fetch_adzuna_jobs("dev", results_wanted=5)
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["source"], "adzuna")
-
-    def test_upsert_adzuna_listing(self):
+class JobUpsertTestCase(TestCase):
+    def test_upsert_listing(self):
         row = {
             "title": "Dev",
             "company_name": "Co",
             "location": "NYC",
             "description": "Desc",
-            "job_url": "https://adzuna.com/1",
-            "source": "adzuna",
-            "external_id": "adzuna:us:1",
+            "job_url": "https://example.com/1",
+            "source": "dice",
+            "external_id": "dice:us:1",
         }
         job, created = upsert_job_listing_from_fetch(row)
         self.assertTrue(created)
-        self.assertEqual(job.source, "adzuna")
+        self.assertEqual(job.source, "dice")
 
 
 class DiceClientTestCase(TestCase):
@@ -705,23 +661,20 @@ class FetchJobsOrchestratorTestCase(TestCase):
     @patch("resume_app.job_sources._fetch_jobs_jobspy")
     @patch("resume_app.sourcing.clients.levels_client.fetch_levels_jobs")
     @patch("resume_app.sourcing.clients.dice_client.fetch_dice_jobs")
-    @patch("resume_app.sourcing.clients.adzuna_client.fetch_adzuna_jobs")
-    def test_fetch_jobs_merges_providers(self, mock_adzuna, mock_dice, mock_levels, mock_jobspy):
+    def test_fetch_jobs_merges_providers(self, mock_dice, mock_levels, mock_jobspy):
         mock_jobspy.return_value = [
             {"source": "jobspy_indeed", "external_id": "j1", "title": "A"}
         ]
         mock_dice.return_value = [{"source": "dice", "external_id": "d1", "title": "B"}]
-        mock_adzuna.return_value = [{"source": "adzuna", "external_id": "a1", "title": "C"}]
         mock_levels.return_value = [{"source": "levels", "external_id": "l1", "title": "D"}]
         rows = fetch_jobs(
             "engineer",
-            site_name=["indeed", "dice", "adzuna", "levels"],
-            results_wanted=40,
+            site_name=["indeed", "dice", "levels"],
+            results_wanted=30,
         )
-        self.assertEqual(len(rows), 4)
+        self.assertEqual(len(rows), 3)
         mock_jobspy.assert_called_once()
         mock_dice.assert_called_once()
-        mock_adzuna.assert_called_once()
         mock_levels.assert_called_once()
         self.assertEqual(mock_jobspy.call_args[0][3], 10)
 
@@ -2163,7 +2116,14 @@ class FitPrefScoringTestCase(TestCase):
         payload = self._job_payload(job, focus_percent=80, preference_margin_percent=20)
 
         with patch(
-            "resume_app.tasks.run_job_search_core", return_value=(1, 1, [payload], [])
+            "resume_app.tasks.run_job_search_core",
+            return_value=(
+                1,
+                1,
+                [payload],
+                [],
+                [{"job_id": job.id, "title": job.title, "company": job.company_name, "disposition": "pending"}],
+            ),
         ), patch(
             "resume_app.job_dedupe.dedupe_pipeline_entries",
             return_value={"entries_removed": 0, "duplicate_groups": 0},
@@ -2179,6 +2139,155 @@ class FitPrefScoringTestCase(TestCase):
         self.assertEqual(metrics.focus_percent, 80)
         self.assertEqual(metrics.preference_margin, 20)
         mock_promo.assert_called_once_with(self.user)
+
+    def test_run_job_search_task_repost_after_cooldown_with_newer_timestamp_is_readmitted(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from resume_app.models import JobSearchTask
+        from resume_app.tasks import _run_job_search_task_impl
+
+        task = JobSearchTask.objects.create(
+            owner=self.user,
+            search_term="developer",
+            track="ic",
+            frequency="0 9 * * *",
+        )
+        now = timezone.now()
+        removed_time = now - timedelta(days=16)
+        repost_time = now - timedelta(days=2)
+
+        job = JobListing.objects.create(
+            source="test",
+            external_id="repost-1",
+            title="Backend Dev",
+            company_name="ACME",
+            posted_at=repost_time,
+        )
+        pe = PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=job,
+            track="ic",
+            stage=PipelineEntry.Stage.DELETED,
+            removed_at=removed_time,
+        )
+        payload = self._job_payload(job)
+        payload.posted_at = repost_time
+        audit_items = [{"job_id": job.id, "title": job.title, "company": job.company_name, "disposition": "pending"}]
+
+        with patch(
+            "resume_app.tasks.run_job_search_core", return_value=(1, 1, [payload], [], audit_items)
+        ), patch(
+            "resume_app.job_dedupe.dedupe_pipeline_entries",
+            return_value={"entries_removed": 0, "duplicate_groups": 0},
+        ), patch(
+            "resume_app.tasks.apply_pipeline_auto_promotions"
+        ):
+            result = _run_job_search_task_impl(self.user.id, task.id)
+
+        self.assertEqual(result["status"], "success")
+        pe.refresh_from_db()
+        self.assertIsNone(pe.removed_at)
+        self.assertEqual(pe.stage, PipelineEntry.Stage.PIPELINE)
+        self.assertEqual(audit_items[0]["disposition"], "reposted_to_pipeline")
+        self.assertIn("Re-admitted to Pipeline: Reposted", audit_items[0]["reason"])
+
+    def test_run_job_search_task_repost_before_cooldown_remains_skipped(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from resume_app.models import JobSearchTask
+        from resume_app.tasks import _run_job_search_task_impl
+
+        task = JobSearchTask.objects.create(
+            owner=self.user,
+            search_term="developer",
+            track="ic",
+            frequency="0 9 * * *",
+        )
+        now = timezone.now()
+        removed_time = now - timedelta(days=5)
+        repost_time = now - timedelta(days=1)
+
+        job = JobListing.objects.create(
+            source="test",
+            external_id="repost-2",
+            title="Backend Dev",
+            company_name="ACME",
+            posted_at=repost_time,
+        )
+        pe = PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=job,
+            track="ic",
+            stage=PipelineEntry.Stage.DELETED,
+            removed_at=removed_time,
+        )
+        payload = self._job_payload(job)
+        payload.posted_at = repost_time
+        audit_items = [{"job_id": job.id, "title": job.title, "company": job.company_name, "disposition": "pending"}]
+
+        with patch(
+            "resume_app.tasks.run_job_search_core", return_value=(1, 1, [payload], [], audit_items)
+        ), patch(
+            "resume_app.job_dedupe.dedupe_pipeline_entries",
+            return_value={"entries_removed": 0, "duplicate_groups": 0},
+        ), patch(
+            "resume_app.tasks.apply_pipeline_auto_promotions"
+        ):
+            result = _run_job_search_task_impl(self.user.id, task.id)
+
+        self.assertEqual(result["status"], "success")
+        pe.refresh_from_db()
+        self.assertIsNotNone(pe.removed_at)
+        self.assertEqual(audit_items[0]["disposition"], "previously_removed")
+
+    def test_run_job_search_task_stale_job_after_cooldown_without_newer_timestamp_remains_skipped(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from resume_app.models import JobSearchTask
+        from resume_app.tasks import _run_job_search_task_impl
+
+        task = JobSearchTask.objects.create(
+            owner=self.user,
+            search_term="developer",
+            track="ic",
+            frequency="0 9 * * *",
+        )
+        now = timezone.now()
+        removed_time = now - timedelta(days=20)
+        old_posted_time = now - timedelta(days=25)
+
+        job = JobListing.objects.create(
+            source="test",
+            external_id="repost-3",
+            title="Backend Dev",
+            company_name="ACME",
+            posted_at=old_posted_time,
+        )
+        pe = PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=job,
+            track="ic",
+            stage=PipelineEntry.Stage.DELETED,
+            removed_at=removed_time,
+        )
+        payload = self._job_payload(job)
+        payload.posted_at = old_posted_time
+        audit_items = [{"job_id": job.id, "title": job.title, "company": job.company_name, "disposition": "pending"}]
+
+        with patch(
+            "resume_app.tasks.run_job_search_core", return_value=(1, 1, [payload], [], audit_items)
+        ), patch(
+            "resume_app.job_dedupe.dedupe_pipeline_entries",
+            return_value={"entries_removed": 0, "duplicate_groups": 0},
+        ), patch(
+            "resume_app.tasks.apply_pipeline_auto_promotions"
+        ):
+            result = _run_job_search_task_impl(self.user.id, task.id)
+
+        self.assertEqual(result["status"], "success")
+        pe.refresh_from_db()
+        self.assertIsNotNone(pe.removed_at)
+        self.assertEqual(audit_items[0]["disposition"], "previously_removed")
 
     def test_pipeline_payloads_include_interview_on_applying_stage(self):
         from resume_app.job_search_core import pipeline_jobs_to_payloads
@@ -3444,6 +3553,167 @@ class ScheduledSearchLogsTestCase(TestCase):
         task_power.refresh_from_db()
         self.assertTrue(task_power.is_active)
         self.assertEqual(task_power.frequency, "0 10 * * 1-5")
+
+    def test_pruning_clears_details_for_runs_beyond_last_2(self):
+        from resume_app.models import JobSearchTaskRun
+        from resume_app.tasks import _prune_old_runs
+        import datetime
+        from django.utils import timezone
+
+        # Create 4 runs for this task, each with detailed audit items
+        runs = []
+        for i in range(4):
+            run = JobSearchTaskRun.objects.create(
+                task=self.task,
+                status=JobSearchTaskRun.STATUS_COMPLETED,
+                details=[{"title": f"Job {i}", "company": f"Company {i}", "disposition": "saved_to_pipeline"}],
+            )
+            # manually stagger started_at so run 3 is newest, run 0 is oldest
+            run.started_at = timezone.now() - datetime.timedelta(hours=4 - i)
+            run.save()
+            runs.append(run)
+
+        # Before pruning, all 4 runs have details
+        for r in runs:
+            r.refresh_from_db()
+            self.assertEqual(len(r.details), 1)
+
+        # Prune runs
+        _prune_old_runs(self.task)
+
+        # All 4 runs still exist (since <= 5 runs total are retained)
+        self.assertEqual(JobSearchTaskRun.objects.filter(task=self.task).count(), 4)
+
+        # But only the last 2 runs (run 3 and run 2) retain their details
+        runs[3].refresh_from_db()
+        runs[2].refresh_from_db()
+        runs[1].refresh_from_db()
+        runs[0].refresh_from_db()
+
+        self.assertEqual(len(runs[3].details), 1)
+        self.assertEqual(len(runs[2].details), 1)
+        self.assertEqual(runs[1].details, [])
+        self.assertEqual(runs[0].details, [])
+
+    def test_download_scheduled_run_csv_view(self):
+        import csv
+        import io
+        from django.urls import reverse
+        from django.test import Client
+        from resume_app.models import JobSearchTaskRun
+
+        sample_details = [
+            {
+                "title": "Senior Python Engineer",
+                "company": "Tech Corp",
+                "location": "Plano, TX",
+                "source": "indeed",
+                "disposition": "saved_to_pipeline",
+                "reason": "Passed filters and added to pipeline as new job",
+                "date_posted": "2026-09-27",
+                "url": "https://example.com/job1",
+            },
+            {
+                "title": "Lead Software Architect",
+                "company": "Old Corp",
+                "location": "Dallas, TX",
+                "source": "linkedin",
+                "disposition": "eliminated_disqualifier",
+                "reason": "Matched disqualifier keyword 'lead'",
+                "date_posted": "2026-09-26",
+                "url": "https://example.com/job2",
+            },
+        ]
+
+        run = JobSearchTaskRun.objects.create(
+            task=self.task,
+            status=JobSearchTaskRun.STATUS_COMPLETED,
+            jobs_fetched=2,
+            jobs_after_filter=1,
+            jobs_added_to_pipeline=1,
+            details=sample_details,
+        )
+
+        client = Client()
+        client.force_login(self.user)
+
+        url = reverse("download_scheduled_run_csv", kwargs={"run_id": run.id})
+        response = client.get(url)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "text/csv; charset=utf-8")
+        self.assertIn("attachment; filename=", response["Content-Disposition"])
+        self.assertIn("job_audit.csv", response["Content-Disposition"])
+
+        content = response.content.decode("utf-8")
+        reader = list(csv.reader(io.StringIO(content)))
+
+        # Verify header
+        self.assertEqual(
+            reader[0],
+            ["Job Title", "Company", "Location", "Source", "Status", "Reason / Matched Rule", "Date Posted", "Job URL"],
+        )
+        self.assertEqual(len(reader), 3)  # header + 2 jobs
+        self.assertEqual(reader[1][0], "Senior Python Engineer")
+        self.assertEqual(reader[1][4], "Saved to Pipeline")
+        self.assertEqual(reader[2][0], "Lead Software Architect")
+        self.assertEqual(reader[2][4], "Eliminated: Disqualifier")
+        self.assertIn("Matched disqualifier keyword 'lead'", reader[2][5])
+
+        # Test empty details returns 404
+        run.details = []
+        run.save()
+        resp_404 = client.get(url)
+        self.assertEqual(resp_404.status_code, 404)
+
+        # Test unauthorized user returns 404
+        from django.contrib.auth import get_user_model
+        other_user = get_user_model().objects.create_user(username="other_user", password="pass")
+        client.force_login(other_user)
+        run.details = sample_details
+        run.save()
+        resp_unauth = client.get(url)
+        self.assertEqual(resp_unauth.status_code, 404)
+
+    def test_scheduled_run_details_json_view(self):
+        from django.urls import reverse
+        from django.test import Client
+        from resume_app.models import JobSearchTaskRun
+
+        sample_details = [
+            {
+                "title": "Senior Python Engineer",
+                "company": "Tech Corp",
+                "location": "Plano, TX",
+                "source": "indeed",
+                "disposition": "saved_to_pipeline",
+                "reason": "New job",
+                "date_posted": "2026-09-27",
+                "url": "https://example.com/job1",
+            }
+        ]
+
+        run = JobSearchTaskRun.objects.create(
+            task=self.task,
+            status=JobSearchTaskRun.STATUS_COMPLETED,
+            jobs_fetched=1,
+            jobs_after_filter=1,
+            jobs_added_to_pipeline=1,
+            details=sample_details,
+        )
+
+        client = Client()
+        client.force_login(self.user)
+
+        url = reverse("scheduled_run_details_json", kwargs={"run_id": run.id})
+        response = client.get(url)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["run_id"], run.id)
+        self.assertEqual(data["profile_name"], "Log Test Profile")
+        self.assertEqual(len(data["details"]), 1)
+        self.assertEqual(data["details"][0]["title"], "Senior Python Engineer")
 
 
 class PipelineFiltersAndActionsTestCase(TestCase):

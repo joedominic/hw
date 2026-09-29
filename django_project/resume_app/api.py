@@ -19,7 +19,6 @@ from .models import (
     PipelineEntry,
 )
 from .jobs_api import router as jobs_router
-from .apply_api import router as apply_router
 from .tasks import optimize_resume_task
 from .prompts import DEFAULT_MATCHING_PROMPT
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -44,7 +43,9 @@ from .llm import (
     call_invoke_llm_messages,
     is_auth_error,
     list_models_for_provider,
+    assert_email_verified,
     LLMConcurrencyLimitExceeded,
+    LLMEmailVerificationRequired,
     LLMInvokeTimeout,
     LLMRequestsDisabled,
     LLMTokenBudgetExceeded,
@@ -71,7 +72,6 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 router.add_router("/jobs", jobs_router)
-router.add_router("/apply", apply_router)
 
 MAX_JOB_DESCRIPTION_LENGTH = 50_000
 MAX_RESUME_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
@@ -257,6 +257,8 @@ def llm_complete(request, payload: LlmCompleteRequest):
         )
     except LLMRequestsDisabled as e:
         raise HttpError(503, str(e)) from e
+    except LLMEmailVerificationRequired as e:
+        raise HttpError(403, str(e)) from e
     except LLMUserRateLimitExceeded as e:
         raise HttpError(429, str(e)) from e
     except LLMTokenBudgetExceeded as e:
@@ -593,6 +595,8 @@ def fit_check(request, payload: FitCheckRequest = Form(...), file: UploadedFile 
         )
     except LLMRequestsDisabled as e:
         raise HttpError(503, str(e)) from e
+    except LLMEmailVerificationRequired as e:
+        raise HttpError(403, str(e)) from e
     return result
 
 @router.get("/prompts", response=PromptsResponse)
@@ -668,6 +672,11 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
         raise HttpError(400, "Resume file must have content type application/pdf")
 
     from .subscriptions import QuotaExceeded, assert_upload_allowed
+
+    try:
+        assert_email_verified(user)
+    except LLMEmailVerificationRequired as exc:
+        raise HttpError(403, str(exc)) from exc
 
     try:
         assert_upload_allowed(user, file)

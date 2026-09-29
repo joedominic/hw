@@ -1,6 +1,6 @@
 # AI Resume Optimizer: Job Pipeline Documentation
 
-This document describes how job listings are discovered, filtered, vetted, tailored, and applied to across the four lifecycle pipeline stages in ResumeElite.
+This document describes how job listings are discovered, filtered, vetted, tailored, and applied to across the four lifecycle pipeline stages in HireEdge.
 
 ```mermaid
 flowchart LR

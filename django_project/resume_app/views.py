@@ -11,11 +11,13 @@ from datetime import timedelta
 from urllib.parse import urlencode
 
 from django.contrib import messages
+from django.contrib.auth.decorators import login_required
 from django.core.cache import cache
 from django.http import JsonResponse, HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404, render, redirect
 from django.urls import reverse
 from django.db import models
+from django.db.models import Q
 
 from .tenancy import get_active_user, get_owned_or_404
 from ninja.errors import HttpError
@@ -53,7 +55,6 @@ from .jobs_api import (
 )
 from .pipeline_board import applying_view, done_view, pipeline_view, vetting_view
 from .models import (
-    ApplicationAttempt,
     JobListingAction,
     PipelineEntry,
     JobSearchTask,
@@ -1030,6 +1031,38 @@ def settings_view(request):
                 request.session.modified = True
                 messages.success(request, f"{provider} is now the active provider.")
                 return redirect(reverse("settings") + "?tab=llm")
+        elif action == "save_prompt_model_preferences":
+            from .models import TenantPromptModelPreference
+
+            # 1. Global Tenant Default
+            global_choice = (request.POST.get("global_default_provider_model") or "").strip()
+            if global_choice and "::" in global_choice:
+                g_prov, g_mod = global_choice.split("::", 1)
+                TenantPromptModelPreference.objects.update_or_create(
+                    owner=user,
+                    query_kind="__default__",
+                    defaults={"provider": g_prov, "model": g_mod, "is_active": True},
+                )
+            else:
+                TenantPromptModelPreference.objects.for_user(user).filter(query_kind="__default__").delete()
+
+            # 2. Per-Prompt Overrides
+            for key, val in request.POST.items():
+                if key.startswith("prompt_pref_"):
+                    qk = key[len("prompt_pref_") :].strip()
+                    val = (val or "").strip()
+                    if val and "::" in val:
+                        p_prov, p_mod = val.split("::", 1)
+                        TenantPromptModelPreference.objects.update_or_create(
+                            owner=user,
+                            query_kind=qk,
+                            defaults={"provider": p_prov, "model": p_mod, "is_active": True},
+                        )
+                    else:
+                        TenantPromptModelPreference.objects.for_user(user).filter(query_kind=qk).delete()
+
+            messages.success(request, "Prompt & Workflow model preferences saved successfully.")
+            return redirect(reverse("settings") + "?tab=llm")
 
     tab = (request.GET.get("tab") or "account").strip().lower()
     if tab not in ("account", "llm", "usage", "replacements", "app"):
@@ -1242,12 +1275,45 @@ def settings_view(request):
     daily_usage_rows = []
     for d, item in sorted(daily_map.items(), key=lambda x: x[0], reverse=True):
         t_used = item["llm_tokens"]
-        pct = round((t_used / token_limit * 100), 1) if token_limit > 0 else 0
+        r_used = item["llm_requests"]
+        t_pct = round((t_used / token_limit * 100), 1) if token_limit > 0 else 0
+        r_pct = round((r_used / request_limit * 100), 1) if request_limit > 0 else 0
+
+        is_tok_exceeded = token_limit > 0 and t_used >= token_limit
+        is_req_exceeded = request_limit > 0 and r_used >= request_limit
+        is_tok_near = token_limit > 0 and (t_used >= token_limit * 0.8) and not is_tok_exceeded
+        is_req_near = request_limit > 0 and (r_used >= request_limit * 0.8) and not is_req_exceeded
+
         item["token_limit"] = token_limit
-        item["token_pct"] = pct
-        item["is_exceeded"] = token_limit > 0 and t_used >= token_limit
-        item["is_near_limit"] = token_limit > 0 and (t_used >= token_limit * 0.8) and not item["is_exceeded"]
+        item["token_pct"] = t_pct
         item["request_limit"] = request_limit
+        item["request_pct"] = r_pct
+        item["is_exceeded"] = is_tok_exceeded or is_req_exceeded
+        item["is_near_limit"] = (is_tok_near or is_req_near) and not item["is_exceeded"]
+
+        if not token_limit and not request_limit:
+            status_label = "Unlimited"
+            status_badge = "bg-slate-100 text-slate-600"
+        elif is_tok_exceeded and is_req_exceeded:
+            status_label = f"Exceeded (Req {r_pct}%, Tok {t_pct}%)"
+            status_badge = "bg-red-100 text-red-800 font-semibold"
+        elif is_tok_exceeded:
+            status_label = f"Tokens Exceeded ({t_pct}%)"
+            status_badge = "bg-red-100 text-red-800 font-semibold"
+        elif is_req_exceeded:
+            status_label = f"Requests Exceeded ({r_pct}%)"
+            status_badge = "bg-red-100 text-red-800 font-semibold"
+        elif is_tok_near or is_req_near:
+            max_p = max(t_pct, r_pct)
+            status_label = f"Near Limit ({max_p}%)"
+            status_badge = "bg-amber-100 text-amber-800 font-medium"
+        else:
+            max_p = max(t_pct, r_pct)
+            status_label = f"OK ({max_p}%)"
+            status_badge = "bg-emerald-50 text-emerald-700 font-medium"
+
+        item["status_label"] = status_label
+        item["status_badge"] = status_badge
         item["breakdown_rows"] = daily_breakdowns_map.get(d, [])
         item["has_breakdown"] = len(item["breakdown_rows"]) > 0
         daily_usage_rows.append(item)
@@ -1322,6 +1388,139 @@ def settings_view(request):
     from .account_views import account_settings_context
     from .prompt_store import list_optimizer_workflows
 
+    from .models import TenantPromptModelPreference
+    from .llm.gateway import (
+        USAGE_QUERY_OPTIMIZER_WRITER,
+        USAGE_QUERY_OPTIMIZER_ATS_JUDGE,
+        USAGE_QUERY_OPTIMIZER_RECRUITER_JUDGE,
+        USAGE_QUERY_JD_CLEANSE,
+        USAGE_QUERY_MATCHING,
+        USAGE_QUERY_FIT_CHECK,
+        USAGE_QUERY_PIPELINE_VETTING,
+        USAGE_QUERY_PIPELINE_SKILL_EXTRACT,
+        USAGE_QUERY_COVER_LETTER,
+        USAGE_QUERY_INTERVIEW_PREP,
+    )
+
+    available_model_options = []
+    seen_opt_keys = set()
+    for item in provider_preference_rows:
+        cfg = item["cfg"]
+        pref = item["pref"]
+        prov = cfg.provider
+        m = (pref.model or cfg.default_model or "").strip()
+        k = (prov, m)
+        if k not in seen_opt_keys:
+            seen_opt_keys.add(k)
+            label = f"{prov} — {m}" if m else f"{prov} (default model)"
+            available_model_options.append({
+                "value": f"{prov}::{m}",
+                "label": label,
+                "provider": prov,
+                "model": m,
+                "is_local": pref.is_local or (prov.lower() == "ollama local"),
+            })
+
+    for prov, mlist in provider_models_map.items():
+        for m in (mlist or [])[:20]:
+            k = (prov, m)
+            if k not in seen_opt_keys:
+                seen_opt_keys.add(k)
+                available_model_options.append({
+                    "value": f"{prov}::{m}",
+                    "label": f"{prov} — {m}",
+                    "provider": prov,
+                    "model": m,
+                    "is_local": prov.lower() == "ollama local",
+                })
+
+    stored_prompt_prefs = {
+        p.query_kind: f"{p.provider}::{p.model}"
+        for p in TenantPromptModelPreference.objects.for_user(user).filter(is_active=True)
+    }
+    global_default_val = stored_prompt_prefs.get("__default__", "")
+
+    prompt_routing_sections = [
+        {
+            "category": "Resume Optimizer",
+            "description": "Generation, refinement, and scoring models used during resume optimization workflows.",
+            "items": [
+                {
+                    "query_kind": USAGE_QUERY_OPTIMIZER_WRITER,
+                    "label": "Resume Writer",
+                    "hint": "Rewrites experience bullets, summary, and achievements against targeted job description.",
+                    "selected": stored_prompt_prefs.get(USAGE_QUERY_OPTIMIZER_WRITER, ""),
+                },
+                {
+                    "query_kind": USAGE_QUERY_OPTIMIZER_ATS_JUDGE,
+                    "label": "ATS Rubric Judge",
+                    "hint": "Scoring judge for keyword overlap, formatting heuristics, and parseability.",
+                    "selected": stored_prompt_prefs.get(USAGE_QUERY_OPTIMIZER_ATS_JUDGE, ""),
+                },
+                {
+                    "query_kind": USAGE_QUERY_OPTIMIZER_RECRUITER_JUDGE,
+                    "label": "Recruiter Rubric Judge",
+                    "hint": "Scoring judge for impact, relevance, and executive clarity.",
+                    "selected": stored_prompt_prefs.get(USAGE_QUERY_OPTIMIZER_RECRUITER_JUDGE, ""),
+                },
+                {
+                    "query_kind": USAGE_QUERY_JD_CLEANSE,
+                    "label": "Job Description Cleanser",
+                    "hint": "Cleans raw job postings into concise requirements, removing company boilerplate.",
+                    "selected": stored_prompt_prefs.get(USAGE_QUERY_JD_CLEANSE, ""),
+                },
+            ],
+        },
+        {
+            "category": "Job Matching & Sourcing",
+            "description": "High-volume evaluation prompts for search results and automated candidate pipelines.",
+            "items": [
+                {
+                    "query_kind": USAGE_QUERY_MATCHING,
+                    "label": "Job Search Matcher",
+                    "hint": "Calculates semantic fit and qualification match percentage on job listings.",
+                    "selected": stored_prompt_prefs.get(USAGE_QUERY_MATCHING, ""),
+                },
+                {
+                    "query_kind": USAGE_QUERY_FIT_CHECK,
+                    "label": "Quick Fit Check",
+                    "hint": "Fast sanity check for seniority, track alignment, and disqualifiers.",
+                    "selected": stored_prompt_prefs.get(USAGE_QUERY_FIT_CHECK, ""),
+                },
+                {
+                    "query_kind": USAGE_QUERY_PIPELINE_VETTING,
+                    "label": "Pipeline Vetting & Screening",
+                    "hint": "Background worker evaluating new jobs discovered by scheduled searches.",
+                    "selected": stored_prompt_prefs.get(USAGE_QUERY_PIPELINE_VETTING, ""),
+                },
+                {
+                    "query_kind": USAGE_QUERY_PIPELINE_SKILL_EXTRACT,
+                    "label": "Resume Skill Extraction",
+                    "hint": "Extracts normalized hard/soft skills and technologies from uploaded resumes.",
+                    "selected": stored_prompt_prefs.get(USAGE_QUERY_PIPELINE_SKILL_EXTRACT, ""),
+                },
+            ],
+        },
+        {
+            "category": "Career Assets & Prep",
+            "description": "Tailored career asset generation and interview preparation prompts.",
+            "items": [
+                {
+                    "query_kind": USAGE_QUERY_COVER_LETTER,
+                    "label": "Cover Letter Generator",
+                    "hint": "Drafts customized, professional cover letters tailored to optimized resumes.",
+                    "selected": stored_prompt_prefs.get(USAGE_QUERY_COVER_LETTER, ""),
+                },
+                {
+                    "query_kind": USAGE_QUERY_INTERVIEW_PREP,
+                    "label": "Interview Question Prep",
+                    "hint": "Generates likely behavioral and technical interview questions for targeted roles.",
+                    "selected": stored_prompt_prefs.get(USAGE_QUERY_INTERVIEW_PREP, ""),
+                },
+            ],
+        },
+    ]
+
     context = {
         "provider_infos": provider_infos,
         "provider_preference_list": provider_preference_list,
@@ -1345,6 +1544,9 @@ def settings_view(request):
         "daily_usage_rows": daily_usage_rows,
         "replacement_entries": replacement_entries,
         "tenant_usage_rows": tenant_usage_rows,
+        "available_model_options": available_model_options,
+        "global_default_val": global_default_val,
+        "prompt_routing_sections": prompt_routing_sections,
     }
     context.update(account_settings_context(user))
     return render(request, "resume_app/settings.html", context)
@@ -2495,15 +2697,8 @@ def huey_dashboard_view(request):
     from datetime import timedelta
     twenty_four_hours_ago = now - timedelta(hours=24)
     searches_24h = JobSearchTaskRun.objects.filter(started_at__gte=twenty_four_hours_ago).count()
-    applies_24h = ApplicationAttempt.objects.filter(created_at__gte=twenty_four_hours_ago).count()
-    failed_24h = (
-        JobSearchTaskRun.objects.filter(started_at__gte=twenty_four_hours_ago, status="failed").count()
-        + ApplicationAttempt.objects.filter(created_at__gte=twenty_four_hours_ago, status=ApplicationAttempt.Status.FAILED).count()
-    )
-    active_running = (
-        JobSearchTaskRun.objects.filter(status="running").count()
-        + ApplicationAttempt.objects.filter(status__in=ApplicationAttempt.ACTIVE_STATUSES).count()
-    )
+    failed_24h = JobSearchTaskRun.objects.filter(started_at__gte=twenty_four_hours_ago, status="failed").count()
+    active_running = JobSearchTaskRun.objects.filter(status="running").count()
 
     from .tasks import CLEANUP_STATUS_CACHE_KEY
     cleanup_status = cache.get(CLEANUP_STATUS_CACHE_KEY)
@@ -2519,14 +2714,10 @@ def huey_dashboard_view(request):
             }
         )
 
-    # Build unified recent activity items across search scrapes and apply agent attempts
+    # Build recent activity items from search scrapes
     recent_searches = list(
         JobSearchTaskRun.objects.select_related("task", "task__owner")
         .order_by("-started_at")[:20]
-    )
-    recent_applies = list(
-        ApplicationAttempt.objects.select_related("pipeline_entry", "pipeline_entry__owner", "pipeline_entry__job_listing")
-        .order_by("-created_at")[:20]
     )
 
     unified_activity = []
@@ -2547,27 +2738,6 @@ def huey_dashboard_view(request):
             "error_message": s.error_message,
         })
 
-    for a in recent_applies:
-        p_entry = getattr(a, "pipeline_entry", None)
-        user_name = p_entry.owner.get_username() if (p_entry and p_entry.owner) else "System"
-        company = p_entry.job_listing.company_name if (p_entry and p_entry.job_listing) else "Application Attempt"
-        job_title = p_entry.job_listing.title if (p_entry and p_entry.job_listing) else ""
-        status_val = "completed" if a.status == ApplicationAttempt.Status.SUCCEEDED else ("failed" if a.status == ApplicationAttempt.Status.FAILED else ("running" if a.status in ApplicationAttempt.ACTIVE_STATUSES else a.status))
-        started = a.started_at or a.created_at
-        finished = a.submitted_at or (a.updated_at if a.is_terminal else None)
-        unified_activity.append({
-            "type": "Apply Agent",
-            "type_badge": "bg-purple-50 text-purple-700 border-purple-200",
-            "title": company,
-            "subtitle": job_title,
-            "user": user_name,
-            "status": status_val,
-            "started_at": started,
-            "finished_at": finished,
-            "items_count": None,
-            "error_message": a.error_message or (f"Error code: {a.error_code}" if a.error_code else None),
-        })
-
     unified_activity.sort(key=lambda x: x["started_at"] or now, reverse=True)
     unified_activity = unified_activity[:25]
 
@@ -2580,7 +2750,7 @@ def huey_dashboard_view(request):
         "recent_runs": recent_searches[:10],
         "unified_activity": unified_activity,
         "searches_24h": searches_24h,
-        "applies_24h": applies_24h,
+        "applies_24h": 0,
         "failed_24h": failed_24h,
         "active_running": active_running,
         "cleanup_status": cleanup_status,
@@ -3026,6 +3196,7 @@ def _track_list_context(request, user, tracks_qs):
         for r in runs_qs:
             eliminated = max(0, r.jobs_fetched - r.jobs_after_filter)
             profile_name = r.task.saved_search.name if r.task.saved_search else (r.task.name or r.task.search_term)
+            has_details = bool(r.details and isinstance(r.details, list) and len(r.details) > 0)
             execution_runs.append({
                 "run": r,
                 "profile_name": profile_name,
@@ -3035,6 +3206,8 @@ def _track_list_context(request, user, tracks_qs):
                 "jobs_eliminated": eliminated,
                 "jobs_saved": r.jobs_added_to_pipeline,
                 "error_message": r.error_message,
+                "has_details": has_details,
+                "details_count": len(r.details) if has_details else 0,
             })
 
     return {
@@ -3438,12 +3611,12 @@ def track_delete_view(request, slug: str):
     # Delete pipeline rows for this track
     PipelineEntry.objects.for_user(request.user).filter(track=slug_val).delete()
     # Delete job actions/embeddings for this track
-    JobListingAction.objects.for_user(request.user).filter(track=slug_val).delete()
-    JobListingEmbedding.objects.for_user(request.user).filter(track=slug_val).delete()
+    JobListingAction.objects.for_user(request.user).filter(Q(track__iexact=slug_val) | Q(track=slug_val)).delete()
+    JobListingEmbedding.objects.for_user(request.user).filter(Q(track__iexact=slug_val) | Q(track=slug_val)).delete()
     # Invalidate preference caches so embeddings/centroids are recomputed
     try:
-        invalidate_preference_cache(request.user)
-        invalidate_disliked_embeddings_cache(request.user)
+        invalidate_preference_cache(request.user, track=slug_val)
+        invalidate_disliked_embeddings_cache(request.user, track=slug_val)
     except Exception:
         # Best-effort; failure here should not block delete.
         pass
@@ -3462,7 +3635,108 @@ def track_delete_view(request, slug: str):
     return redirect("track_list")
 
 
+@login_required
+def download_scheduled_run_csv_view(request, run_id: int):
+    """Download CSV audit log of all fetched jobs for a scheduled task run."""
+    import csv
+    from django.http import HttpResponse, Http404
+    from django.shortcuts import get_object_or_404
+    from django.utils.text import slugify
+    from .models import JobSearchTaskRun
+
+    user = get_active_user(request)
+    run = get_object_or_404(
+        JobSearchTaskRun.objects.select_related("task", "task__saved_search"),
+        id=run_id,
+        task__owner=user,
+    )
+    if not run.details:
+        raise Http404("Details for this run are no longer available (only kept for the last 2 runs).")
+
+    profile_name = (
+        run.task.saved_search.name
+        if run.task.saved_search
+        else (run.task.name or run.task.search_term or f"task_{run.task_id}")
+    )
+    safe_profile = slugify(profile_name) or "scheduled_run"
+    date_str = run.started_at.strftime("%Y%m%d_%H%M") if run.started_at else "run"
+    filename = f"{safe_profile}_{date_str}_job_audit.csv"
+
+    response = HttpResponse(content_type="text/csv; charset=utf-8")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+
+    writer = csv.writer(response)
+    writer.writerow([
+        "Job Title",
+        "Company",
+        "Location",
+        "Source",
+        "Status",
+        "Reason / Matched Rule",
+        "Date Posted",
+        "Job URL",
+    ])
+
+    status_labels = {
+        "saved_to_pipeline": "Saved to Pipeline",
+        "reposted_to_pipeline": "Saved to Pipeline (Reposted)",
+        "already_in_pipeline": "Already in Pipeline",
+        "previously_removed": "Previously Removed",
+        "eliminated_disqualifier": "Eliminated: Disqualifier",
+        "eliminated_disliked": "Eliminated: Disliked",
+        "eliminated_duplicate": "Eliminated: Duplicate",
+    }
+
+    for item in run.details:
+        disp_raw = item.get("disposition", "")
+        status_human = status_labels.get(disp_raw, disp_raw.replace("_", " ").title())
+        writer.writerow([
+            item.get("title", ""),
+            item.get("company", ""),
+            item.get("location", ""),
+            item.get("source", ""),
+            status_human,
+            item.get("reason", ""),
+            item.get("date_posted", ""),
+            item.get("url", ""),
+        ])
+
+    return response
+
+
+@login_required
+def scheduled_run_details_json_view(request, run_id: int):
+    """Return JSON audit log for in-browser inspector modal."""
+    from django.http import JsonResponse
+    from django.shortcuts import get_object_or_404
+    from .models import JobSearchTaskRun
+
+    user = get_active_user(request)
+    run = get_object_or_404(
+        JobSearchTaskRun.objects.select_related("task", "task__saved_search"),
+        id=run_id,
+        task__owner=user,
+    )
+    profile_name = (
+        run.task.saved_search.name
+        if run.task.saved_search
+        else (run.task.name or run.task.search_term or f"task_{run.task_id}")
+    )
+    return JsonResponse({
+        "run_id": run.id,
+        "profile_name": profile_name,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "status": run.get_status_display(),
+        "jobs_fetched": run.jobs_fetched,
+        "jobs_eliminated": max(0, run.jobs_fetched - run.jobs_after_filter),
+        "jobs_saved": run.jobs_added_to_pipeline,
+        "details": run.details or [],
+        "jobs": run.details or [],
+    })
+
+
 def vetting_match_debug_view(request, job_listing_id: int):
+
     """
     One-shot vetting LLM match with full raw response for troubleshooting.
     Same prompt path as automation; does not update PipelineEntry fields.
@@ -3703,3 +3977,274 @@ def serve_media_view(request, path: str):
         media_open(safe),
         content_type=content_type or "application/octet-stream",
     )
+
+
+@login_required
+def fit_inspector_view(request):
+    """
+    Job Fit Inspector & Simulator:
+    - Test any job description against track preference models.
+    - Reveal positive & negative driver jobs with similarity breakdown.
+    - One-click pruning of training jobs (likes/dislikes).
+    """
+    from .tenancy import get_active_user
+    from .models import JobListing, JobListingAction, JobListingEmbedding, Track, SearchProfile
+    from .jobs_api import _resolve_track_from_request
+
+    user = get_active_user(request)
+
+    # 1. Fetch user's actual search profiles
+    profiles_qs = SearchProfile.objects.for_user(user).order_by("name")
+    search_profiles = []
+    for p in profiles_qs:
+        search_profiles.append({
+            "slug": p.slug,
+            "label": p.name or p.slug,
+            "is_default": getattr(p, "is_default", False),
+        })
+    if not search_profiles:
+        tracks_qs = Track.ensure_baseline(user)
+        for t in tracks_qs:
+            search_profiles.append({
+                "slug": t.slug,
+                "label": t.label or t.slug,
+                "is_default": getattr(t, "is_default", False),
+            })
+
+    profile_slugs = [p["slug"] for p in search_profiles]
+    param_track = (request.POST.get("track") or request.GET.get("track") or "").strip()
+
+    if param_track:
+        raw_track = param_track
+    else:
+        raw_track = _resolve_track_from_request(user, request, track=None)
+        if raw_track not in profile_slugs and profile_slugs:
+            raw_track = profile_slugs[0]
+
+    request.session["job_search_track"] = raw_track
+    request.session["job_search_profile_slug"] = raw_track
+    request.session.modified = True
+
+    from .track_actions import (
+        normalize_track_slug,
+        q_preference_embedding_track,
+        q_clear_on_sentiment_change,
+    )
+    from .preference import (
+        get_preference_vectors,
+        get_disliked_embeddings,
+        invalidate_preference_cache,
+        invalidate_disliked_embeddings_cache,
+    )
+    from . import embeddings as embedding_module
+
+    norm_track = normalize_track_slug(raw_track, user)
+
+    # Handle removal actions (POST)
+    if request.method == "POST":
+        action = request.POST.get("action")
+        if action == "remove_like":
+            try:
+                job_id = int(request.POST.get("job_id"))
+                JobListingAction.objects.for_user(user).filter(
+                    job_listing_id=job_id, action=JobListingAction.ActionType.LIKED
+                ).filter(Q(track__iexact=norm_track) | Q(track="")).delete()
+                JobListingEmbedding.objects.for_user(user).filter(
+                    job_listing_id=job_id,
+                    embedding_type=JobListingEmbedding.EmbeddingType.LIKED,
+                ).filter(Q(track__iexact=norm_track) | Q(track="")).delete()
+                invalidate_preference_cache(user, track=norm_track)
+                invalidate_disliked_embeddings_cache(user, track=norm_track)
+                messages.success(request, f"Removed job #{job_id} from Liked training set.")
+            except Exception as e:
+                messages.error(request, f"Failed to remove like: {e}")
+        elif action == "remove_dislike":
+            try:
+                job_id = int(request.POST.get("job_id"))
+                JobListingAction.objects.for_user(user).filter(
+                    job_listing_id=job_id, action=JobListingAction.ActionType.DISLIKED
+                ).filter(Q(track__iexact=norm_track) | Q(track="")).delete()
+                JobListingEmbedding.objects.for_user(user).filter(
+                    job_listing_id=job_id,
+                    embedding_type=JobListingEmbedding.EmbeddingType.DISLIKED,
+                ).filter(Q(track__iexact=norm_track) | Q(track="")).delete()
+                invalidate_preference_cache(user, track=norm_track)
+                invalidate_disliked_embeddings_cache(user, track=norm_track)
+                messages.success(request, f"Removed job #{job_id} from Disliked training set.")
+            except Exception as e:
+                messages.error(request, f"Failed to remove dislike: {e}")
+
+    # Form inputs for simulation
+    sim_title = (request.POST.get("title") or request.GET.get("title") or "").strip()
+    sim_company = (request.POST.get("company") or request.GET.get("company") or "").strip()
+    sim_description = (request.POST.get("description") or request.GET.get("description") or "").strip()
+
+    analysis = None
+    if sim_title or sim_description:
+        try:
+            if sim_description:
+                input_vec = embedding_module.embed_full(sim_title, sim_description)
+            else:
+                input_vec = embedding_module.embed_title_only(sim_title, sim_company)
+        except Exception as e:
+            input_vec = None
+            logger.warning("[fit_inspector] Embedding failed: %s", e)
+
+        if not input_vec:
+            messages.warning(
+                request, "Unable to compute text embedding for the provided title/description."
+            )
+        else:
+            prefs = get_preference_vectors(user=user, track=norm_track)
+            disliked_embeddings = get_disliked_embeddings(user=user, track=norm_track)
+
+            if not prefs or not prefs[0]:
+                analysis = {
+                    "has_baseline": False,
+                    "message": "No liked jobs in this search profile yet. Like at least one job to establish a preference baseline.",
+                }
+            else:
+                liked_centroid, disliked_centroid, liked_jobs = prefs
+                sim_liked = embedding_module.cosine_similarity(input_vec, liked_centroid)
+                like_pct = int(round(max(0.0, min(1.0, (sim_liked + 1.0) / 2.0)) * 100))
+
+                dislike_pct = None
+                margin_pct = None
+                if disliked_centroid:
+                    sim_disliked = embedding_module.cosine_similarity(input_vec, disliked_centroid)
+                    dislike_pct = int(round(max(0.0, min(1.0, (sim_disliked + 1.0) / 2.0)) * 100))
+                    margin_pct = like_pct - dislike_pct
+
+                # Determine verdict
+                if margin_pct is not None and margin_pct < -5:
+                    verdict_label = "Auto-Dislike Alert (Low Fit)"
+                    verdict_desc = f"Preference margin is {margin_pct}% (below the -5% threshold). Scheduled runs would automatically drop this job."
+                    verdict_style = "bg-rose-50 text-rose-800 border-rose-200"
+                elif margin_pct is not None and margin_pct >= 10:
+                    verdict_label = "Strong Fit"
+                    verdict_desc = f"Preference margin is +{margin_pct}%. Highly aligned with your liked jobs profile."
+                    verdict_style = "bg-emerald-50 text-emerald-800 border-emerald-200"
+                elif margin_pct is not None:
+                    verdict_label = "Moderate / Neutral Fit"
+                    verdict_desc = f"Preference margin is {margin_pct:+d}%. Within acceptable thresholds."
+                    verdict_style = "bg-sky-50 text-sky-800 border-sky-200"
+                else:
+                    verdict_label = "Liked Baseline Only"
+                    verdict_desc = f"Similarity to liked jobs is {like_pct}%. No disliked centroid to compute margin."
+                    verdict_style = "bg-slate-50 text-slate-800 border-slate-200"
+
+                # Rank top 5 liked job drivers
+                liked_drivers = []
+                for ljid, ljtitle, ljcomp, ljemb, _ in liked_jobs or []:
+                    if ljemb:
+                        s = embedding_module.cosine_similarity(input_vec, ljemb)
+                        p = int(round(max(0.0, min(1.0, (s + 1.0) / 2.0)) * 100))
+                        liked_drivers.append(
+                            {
+                                "job_id": ljid,
+                                "title": ljtitle or "Untitled",
+                                "company": ljcomp or "Unknown",
+                                "similarity_percent": p,
+                            }
+                        )
+                liked_drivers.sort(key=lambda x: -x["similarity_percent"])
+                liked_drivers = liked_drivers[:5]
+
+                # Rank top 5 disliked job drivers
+                disliked_drivers = []
+                if disliked_embeddings:
+                    disliked_job_ids = [djid for djid, _ in disliked_embeddings]
+                    dj_map = {j.id: j for j in JobListing.objects.filter(id__in=disliked_job_ids)}
+                    for djid, demb in disliked_embeddings:
+                        if demb:
+                            s = embedding_module.cosine_similarity(input_vec, demb)
+                            p = int(round(max(0.0, min(1.0, (s + 1.0) / 2.0)) * 100))
+                            j_obj = dj_map.get(djid)
+                            disliked_drivers.append(
+                                {
+                                    "job_id": djid,
+                                    "title": j_obj.title if j_obj else f"Job #{djid}",
+                                    "company": j_obj.company_name if j_obj else "—",
+                                    "similarity_percent": p,
+                                }
+                            )
+                    disliked_drivers.sort(key=lambda x: -x["similarity_percent"])
+                    disliked_drivers = disliked_drivers[:5]
+
+                analysis = {
+                    "has_baseline": True,
+                    "like_percent": like_pct,
+                    "dislike_percent": dislike_pct,
+                    "margin_percent": margin_pct,
+                    "verdict_label": verdict_label,
+                    "verdict_desc": verdict_desc,
+                    "verdict_style": verdict_style,
+                    "liked_drivers": liked_drivers,
+                    "disliked_drivers": disliked_drivers,
+                }
+
+    # Fetch training sets for display
+    liked_qs = (
+        JobListingAction.objects.for_user(user)
+        .filter(action=JobListingAction.ActionType.LIKED)
+        .filter(q_preference_embedding_track(norm_track, user))
+    )
+    disliked_qs = (
+        JobListingAction.objects.for_user(user)
+        .filter(action=JobListingAction.ActionType.DISLIKED)
+        .filter(q_preference_embedding_track(norm_track, user))
+    )
+
+    liked_count = liked_qs.count()
+    disliked_count = disliked_qs.count()
+    total_count = liked_count + disliked_count
+
+    liked_actions = list(liked_qs.select_related("job_listing").order_by("-created_at")[:200])
+    disliked_actions = list(disliked_qs.select_related("job_listing").order_by("-created_at")[:500])
+
+    training_items = []
+    for a in liked_actions:
+        training_items.append({
+            "id": a.id,
+            "job_id": a.job_listing_id,
+            "title": a.job_listing.title if a.job_listing else "Untitled",
+            "company": a.job_listing.company_name if a.job_listing else "—",
+            "url": a.job_listing.url if a.job_listing else "",
+            "action": "liked",
+            "action_label": "Liked",
+            "badge_class": "bg-emerald-50 text-emerald-700 border-emerald-200",
+            "icon": "👍",
+            "created_at": a.created_at,
+        })
+    for a in disliked_actions:
+        training_items.append({
+            "id": a.id,
+            "job_id": a.job_listing_id,
+            "title": a.job_listing.title if a.job_listing else "Untitled",
+            "company": a.job_listing.company_name if a.job_listing else "—",
+            "url": a.job_listing.url if a.job_listing else "",
+            "action": "disliked",
+            "action_label": "Disliked",
+            "badge_class": "bg-rose-50 text-rose-700 border-rose-200",
+            "icon": "👎",
+            "created_at": a.created_at,
+        })
+    training_items.sort(key=lambda x: x["created_at"] or timezone.now(), reverse=True)
+
+    default_filter = "liked" if liked_count > 0 else ("disliked" if disliked_count > 0 else "all")
+
+    context = {
+        "search_profiles": search_profiles,
+        "selected_track": norm_track,
+        "sim_title": sim_title,
+        "sim_company": sim_company,
+        "sim_description": sim_description,
+        "analysis": analysis,
+        "training_items": training_items,
+        "liked_count": liked_count,
+        "disliked_count": disliked_count,
+        "total_count": total_count,
+        "default_filter": default_filter,
+    }
+    return render(request, "resume_app/fit_inspector.html", context)
+

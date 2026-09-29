@@ -137,7 +137,103 @@ Job description:
 
 Cover letter:"""
 
-DEFAULT_INTERVIEW_PREP_SYSTEM = """You are an expert interview coach. Based on the job description and the candidate's resume, predict likely interview questions and concise prep guidance.
+INTERVIEW_TYPES = {
+    "recruiter": {
+        "label": "Recruiter Screen",
+        "description": "Initial screening with HR or talent acquisition. Focuses on salary expectations, career history, motivation, and cultural fit.",
+    },
+    "hiring_manager": {
+        "label": "Hiring Manager",
+        "description": "Strategic fit and team impact. Focuses on day-to-day role execution, problem-solving, and cross-functional leadership.",
+    },
+    "behavioral": {
+        "label": "Behavioral (STAR)",
+        "description": "Situational questions structured in STAR format. Focuses on conflict resolution, failure/learning, and ownership.",
+    },
+    "technical": {
+        "label": "Technical / Architecture",
+        "description": "Deep dive into technical skills, architecture choices, stack knowledge, trade-offs, and practical execution.",
+    },
+}
+
+INTERVIEW_TYPE_INSTRUCTIONS = {
+    "recruiter": """INTERVIEW ROUND: Recruiter Screen (Initial Screening / Talent Acquisition)
+FOCUS AND RUBRIC:
+- 15-30 minute phone or video screen with HR / talent recruiter.
+- Prioritize: Concise career narrative, salary & notice period positioning, motivation for {company_name}, cultural alignment, and baseline qualification check.
+- Suggested answers should emphasize brevity, enthusiasm, articulate communication, and career narrative.
+- Include thoughtful questions the candidate should ask the recruiter about the hiring process, culture, and team.
+
+MANDATORY QUESTIONS TO COVER (MUST be included in BOTH likely_questions AND suggested_answers):
+1. "Why {company_name}?" / "What makes you interested in joining {company_name}?"
+   -> Provide compelling talking points linking the candidate's background/passions to {company_name}'s domain, industry standing, mission, or technical challenges evident in the JD.
+2. "Tell me about yourself / Walk me through your resume."
+   -> Provide a crisp 60-90 second elevator pitch highlighting the candidate's trajectory and achievements leading up to this role.
+3. "Why are you interested in this {job_title} role?"
+   -> Map 2-3 specific requirements from the JD to the candidate's proven accomplishments.
+4. "Why are you looking to leave your current role / make a transition?"
+   -> Provide a positive, forward-looking narrative focused on growth and seeking new challenges.
+5. "What are your salary expectations and target start date?"
+   -> Professional framing with market-aligned positioning.
+6. PLUS 3-5 role-specific screening questions probing baseline hard requirements and qualifications from the JD.""",
+
+    "hiring_manager": """INTERVIEW ROUND: Hiring Manager (Direct Manager / Team Lead)
+FOCUS AND RUBRIC:
+- 45-60 minute deep-dive on role fit, problem-solving, and team execution.
+- Prioritize: Day-to-day responsibilities, cross-functional collaboration (product, stakeholders, engineering), handling ambiguity, proactive leadership, and strategic impact.
+- Suggested answers should emphasize tangible outcomes, metrics, and business value.
+- Include tactical questions the candidate should ask the hiring manager about team priorities, challenges, and success metrics.
+
+MANDATORY QUESTIONS TO COVER (MUST be included in BOTH likely_questions AND suggested_answers):
+1. "Why do you want to work at {company_name} specifically on this team?"
+   -> Concrete reasons connecting candidate's past technical/domain work with {company_name}'s product and team goals.
+2. "Walk me through your most relevant or impactful project for this {job_title} position."
+   -> Highlight candidate's ownership, technical leadership, and business results.
+3. "How do you handle ambiguous requirements or conflicting priorities with product/stakeholders?"
+   -> Demonstration of pragmatism, trade-off communication, and alignment.
+4. "What would your approach and priorities be during your first 90 days at {company_name}?"
+   -> Thoughtful 30-60-90 day plan (listen & learn, build & deliver, optimize & elevate).
+5. "What type of management style and team culture helps you do your best work?"
+   -> Autonomous, collaborative, transparent communication.
+6. PLUS 3-5 deep-dive questions probing technical leadership, delivery bottlenecks, and role execution from the JD.""",
+
+    "behavioral": """INTERVIEW ROUND: Behavioral (STAR Method)
+FOCUS AND RUBRIC:
+- Deep evaluation of soft skills, emotional intelligence, leadership principles, and cultural values.
+- Strict requirement: Every suggested answer MUST follow the STAR format:
+  * Situation: Context and problem.
+  * Task: Candidate's specific responsibility.
+  * Action: Concrete actions taken (highlighting candidate's individual contribution).
+  * Result: Measurable outcome, impact, and key learning.
+- Prioritize: Conflict resolution, overcoming failures or missed deadlines, prioritization under pressure, giving/receiving feedback, and mentoring.
+- Include insightful questions the candidate should ask about engineering culture and team dynamics.
+
+MANDATORY QUESTIONS TO COVER (MUST be included in BOTH likely_questions AND suggested_answers):
+1. "Tell me about a time you had a significant disagreement with a coworker or manager. How did you resolve it?" (STAR)
+2. "Describe a project that failed or did not meet expectations. What happened and what did you learn?" (STAR)
+3. "Give an example of a difficult decision you made with incomplete data or under tight deadlines." (STAR)
+4. "Tell me about a time you took ownership of a critical problem outside your direct responsibility." (STAR)
+5. "Describe a situation where you had to influence a team or stakeholder without formal authority." (STAR)
+6. PLUS 2-4 behavioral scenarios directly relevant to working at {company_name} in this {job_title} role.""",
+
+    "technical": """INTERVIEW ROUND: Technical / Architecture / Deep Dive
+FOCUS AND RUBRIC:
+- In-depth assessment of engineering craft, architecture trade-offs, system design, and technologies listed in the JD.
+- Prioritize: Core technologies, frameworks, system design decisions, scalability, data modeling, reliability, debugging complex production issues, and code maintainability.
+- Anticipate questions probing technical trade-offs (e.g. why tool A over tool B), edge cases, and performance bottlenecks.
+- Suggested answers should reference specific engineering experiences and projects directly from the candidate's resume.
+- Include technical questions the candidate should ask about the architecture, tech debt, and tech roadmap.
+
+MANDATORY QUESTIONS TO COVER (MUST be included in BOTH likely_questions AND suggested_answers):
+1. "Why is your technical background and experience a strong fit for {company_name}'s tech stack?"
+2. System design question tailored to {company_name}'s scale and the technologies listed in the JD.
+3. Deep architectural trade-offs: Question probing why certain architectures, frameworks, or databases are chosen over alternatives for this role.
+4. "Walk me through the most challenging production bug or scalability issue you diagnosed and resolved."
+5. Code quality & testing strategy: Question probing how the candidate ensures test coverage, CI/CD, and maintainability.
+6. PLUS 3-5 technical questions explicitly targeting the key tools, frameworks, and programming languages required in the JD."""
+}
+
+DEFAULT_INTERVIEW_PREP_SYSTEM = """You are an expert interview coach. Based on the job description, the candidate's resume, and the specified interview round/type, predict likely interview questions, themes, suggested answers, and questions to ask the interviewer tailored specifically to that round.
 
 Return ONLY a single JSON object (no markdown fences) with this exact schema:
 {
@@ -147,20 +243,29 @@ Return ONLY a single JSON object (no markdown fences) with this exact schema:
     {
       "question": "...",
       "talking_points": ["..."],
-      "resume_evidence": ["..."]
+      "resume_evidence": ["..."],
+      "sample_answer": "..."
     }
-  ]
+  ],
+  "questions_to_ask": ["..."]
 }
 
 Rules:
-- 8–12 likely_questions grounded in the JD.
-- 3–5 themes_to_emphasize.
-- suggested_answers: one entry per high-value question; talking_points and resume_evidence must cite only facts from the resume text provided.
-- Do not hallucinate credentials or projects."""
+- likely_questions: 8–12 questions tailored specifically to the interview round. Must include all mandatory round questions listed in the prompt instructions.
+- themes_to_emphasize: 3–5 high-impact themes for this specific round.
+- suggested_answers: 6–8 comprehensive answers covering all mandatory round questions (including 'Why {company_name}?', 'Tell me about yourself', etc.) and key role-specific questions. Every mandatory round question MUST have a corresponding entry in suggested_answers.
+  * talking_points: 3–5 bullet points guiding what the candidate should say.
+  * resume_evidence: 2–3 specific achievements, metrics, or experiences from the candidate's resume that validate their answer. For company-specific questions like 'Why {company_name}?', connect the candidate's past work and values to the company's product, industry, and JD requirements.
+  * sample_answer: a concise, natural, first-person spoken response (2–4 sentences) demonstrating how to articulate the answer convincingly.
+- questions_to_ask: 3–5 high-signal questions the candidate can ask the interviewer for this specific round.
+- Do not hallucinate credentials or projects not grounded in the resume or JD."""
 
 DEFAULT_INTERVIEW_PREP_USER = """Company: {company_name}
 Role: {job_title}
 Job URL: {job_url}
+Interview Round: {interview_type}
+
+{interview_instructions}
 
 Resume (as submitted or best available):
 {resume_text}

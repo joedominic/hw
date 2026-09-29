@@ -8,14 +8,12 @@ from django.utils import timezone
 
 from resume_app.models import (
     AppAutomationSettings,
-    ApplicationAttempt,
     JobListing,
     JobSearchTask,
     PipelineEntry,
     UserResume,
 )
 from resume_app.tasks import (
-    apply_agent_heartbeat,
     cleanup_manager,
     enqueue_due_job_search_tasks,
     enqueue_due_vetting_matching_tasks,
@@ -29,6 +27,10 @@ from resume_app.tasks import (
     process_user_vetting_matching_task,
     purge_generated_resumes_periodic,
     run_job_search_task,
+)
+from resume_app.job_search_core import (
+    get_interactive_job_search_lock_key,
+    run_job_search_core,
 )
 
 User = get_user_model()
@@ -103,6 +105,29 @@ class TaskConcurrencyLockingTests(TestCase):
         # Returns skipped because entry list is empty, not because of a lock conflict
         self.assertEqual(res_b["status"], "skipped")
         self.assertEqual(res_b["message"], "No pipeline_entry_ids provided")
+
+    def test_interactive_job_search_lock_is_per_user(self):
+        """Interactive job search locks must be isolated per tenant."""
+        lock_a = get_interactive_job_search_lock_key(self.user_a.id)
+        lock_b = get_interactive_job_search_lock_key(self.user_b.id)
+
+        self.assertNotEqual(lock_a, lock_b)
+        self.assertEqual(lock_a, f"job_search_interactive:u{self.user_a.id}")
+        self.assertEqual(lock_b, f"job_search_interactive:u{self.user_b.id}")
+
+        # Simulate User A having an in-flight search
+        cache.set(lock_a, 1, 60)
+
+        # User A's concurrent search should raise RuntimeError
+        with self.assertRaises(RuntimeError) as ctx:
+            run_job_search_core(user=self.user_a, search_term="Python")
+        self.assertIn("already in progress", str(ctx.exception))
+
+        # User B's search must NOT be blocked by User A's lock
+        with patch("resume_app.job_search_core.fetch_jobs", return_value=[]):
+            fetched, after_filter, jobs_out, refs = run_job_search_core(user=self.user_b, search_term="Python")
+            self.assertEqual(fetched, 0)
+            self.assertEqual(len(jobs_out), 0)
 
 
 class WorkerScalabilityFanOutTests(TestCase):
@@ -182,31 +207,3 @@ class WorkerScalabilityFanOutTests(TestCase):
         enqueued_task_ids = {call.args[1] for call in mock_search.call_args_list}
         self.assertIn(task_1.id, enqueued_task_ids)
         self.assertIn(task_2.id, enqueued_task_ids)
-
-    @patch("resume_app.tasks.run_apply_agent_step")
-    def test_apply_agent_heartbeat_enqueues_active_attempts(self, mock_step):
-        cfg_1 = AppAutomationSettings.get_for_user(self.user_1)
-        cfg_1.apply_agent_enabled = True
-        cfg_1.save()
-
-        listing = JobListing.objects.create(
-            title="Engineer",
-            company_name="Acme",
-            description="Build systems.",
-            source="test",
-            external_id="scale-attempt-1",
-        )
-        entry = PipelineEntry.objects.create(
-            owner=self.user_1,
-            job_listing=listing,
-            stage=PipelineEntry.Stage.APPLYING,
-        )
-        attempt = ApplicationAttempt.objects.create(
-            pipeline_entry=entry,
-            status=ApplicationAttempt.Status.QUEUED,
-        )
-
-        res = apply_agent_heartbeat.call_local()
-        self.assertEqual(res["status"], "ok")
-        self.assertEqual(res["enqueued"], 1)
-        mock_step.assert_called_once_with(self.user_1.id, attempt.id)

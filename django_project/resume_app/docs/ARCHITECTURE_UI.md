@@ -1,6 +1,6 @@
 # UI Architecture: Server Views vs Django Ninja APIs
 
-ResumeElite utilizes two complementary presentation and API layers:
+HireEdge utilizes two complementary presentation and API layers:
 
 ## 1. Server-Rendered HTML Views
 

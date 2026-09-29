@@ -1,4 +1,4 @@
-# ResumeElite — web + Huey worker image (CPU torch + sentence-transformers).
+# HireEdge — web + Huey worker image (CPU torch + sentence-transformers).
 FROM python:3.12-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -16,7 +16,6 @@ RUN apt-get update \
     && pip install torch --index-url https://download.pytorch.org/whl/cpu \
     && pip install -r requirements.txt \
     && pip install --no-deps -r requirements-jobspy.txt \
-    && playwright install --with-deps chromium \
     && apt-get purge -y --auto-remove gcc g++ \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*

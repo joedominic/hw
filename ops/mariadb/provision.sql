@@ -1,4 +1,4 @@
--- ResumeElite — MariaDB/MySQL provisioning (run as an ADMIN / root account).
+-- HireEdge — MariaDB/MySQL provisioning (run as an ADMIN / root account).
 --
 -- Purpose:
 --   1. Create a dedicated, least-privilege application user scoped to ONE database.

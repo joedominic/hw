@@ -1,7 +1,6 @@
 """Domain package containing Value Objects, Entities, and Events."""
 from .event_bus import DomainEventBus, event_bus
 from .events import (
-    ApplicationAttemptSubmitted,
     DomainEvent,
     JobMarkedApplied,
     JobPromotedToApplying,
@@ -21,7 +20,6 @@ __all__ = [
     "JobPromotedToApplying",
     "JobMarkedApplied",
     "ResumeOptimizationCompleted",
-    "ApplicationAttemptSubmitted",
     "DomainEventBus",
     "event_bus",
 ]

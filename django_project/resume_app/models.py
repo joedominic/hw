@@ -473,6 +473,38 @@ class LLMProviderPreference(models.Model):
         return f"{self.provider_config.provider} / {self.model or '(default)'} @ {self.priority}"
 
 
+class TenantPromptModelPreference(models.Model):
+    """
+    Per-prompt / query-kind model preference for a tenant, plus tenant global default.
+    query_kind can be '__default__' (for tenant global default) or any USAGE_QUERY_* key.
+    """
+
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="prompt_model_preferences",
+    )
+    query_kind = models.CharField(
+        max_length=64,
+        help_text="Query kind e.g. 'optimizer_writer', 'matching', or '__default__' for tenant global default.",
+    )
+    provider = models.CharField(max_length=64)
+    model = models.CharField(max_length=128, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = OwnedManager()
+
+    class Meta:
+        unique_together = [("owner", "query_kind")]
+        verbose_name = "Tenant Prompt Model Preference"
+        verbose_name_plural = "Tenant Prompt Model Preferences"
+
+    def __str__(self):
+        return f"{self.owner}: {self.query_kind} -> {self.provider}/{self.model or '(default)'}"
+
+
 class LLMAppUsageTotals(models.Model):
     """Per-user aggregate LLM token usage."""
 
@@ -674,56 +706,6 @@ class AppAutomationSettings(models.Model):
         help_text="Default supplemental accomplishments for the Resume Optimizer.",
     )
 
-    # --- Autonomous Apply Agent ---
-    apply_agent_enabled = models.BooleanField(
-        default=False,
-        help_text="Master switch for the Autonomous Apply Agent (browser automation).",
-    )
-    apply_automation_mode = models.CharField(
-        max_length=16,
-        choices=[("semi_auto", "Semi-auto (review before submit)"), ("full_auto", "Full-auto (submit without review)")],
-        default="semi_auto",
-        help_text="Semi-auto pauses for human approval before submitting; full-auto submits autonomously for graduated ATS adapters only.",
-    )
-    apply_min_optimizer_score = models.PositiveSmallIntegerField(
-        default=0,
-        help_text="Require optimized resume avg (ATS+recruiter) >= this before applying (0 = no gate).",
-    )
-    apply_allowed_ats = models.JSONField(
-        default=list,
-        blank=True,
-        help_text="ATS slugs the agent is allowed to apply to (e.g. ['greenhouse', 'lever']). Empty = greenhouse + lever defaults.",
-    )
-    apply_generic_fallback_enabled = models.BooleanField(
-        default=True,
-        help_text="Use the browser-use generic agent for unknown ATS (always requires review; never auto-submits).",
-    )
-    apply_resume_upload_format = models.CharField(
-        max_length=8,
-        choices=[("pdf", "PDF"), ("docx", "Word (DOCX)")],
-        default="pdf",
-        help_text="File format used when the agent uploads the optimized resume. PDF is the stable default for v1.",
-    )
-    apply_full_auto_min_clean_submits = models.PositiveSmallIntegerField(
-        default=10,
-        help_text="An ATS may graduate to full-auto only after this many approved submissions with zero human corrections.",
-    )
-    apply_agent_llm_provider = models.CharField(
-        max_length=32,
-        blank=True,
-        default="",
-        help_text="Dedicated LLM provider for browser-use generic form fill. Blank = global active provider.",
-    )
-    apply_agent_llm_model = models.CharField(
-        max_length=128,
-        blank=True,
-        default="",
-        help_text="Model for the apply-agent LLM. Blank = provider default from Settings.",
-    )
-    apply_browser_show_window = models.BooleanField(
-        default=False,
-        help_text="When True, show a visible Chromium window during apply-agent browser steps (dev; requires Huey on this machine).",
-    )
     export_replacements = models.JSONField(
         default=list,
         blank=True,
@@ -1183,11 +1165,27 @@ class SearchProfile(models.Model):
             params["results_wanted"] = str(self.results_wanted)
         if self.llm_model:
             params["llm_model"] = self.llm_model
-        for site in self.site_names or []:
+        from .job_sources import normalize_site_names
+
+        for site in normalize_site_names(self.site_names):
             params.setdefault("site_name", [])
             if isinstance(params["site_name"], list):
                 params["site_name"].append(site)
         return params
+
+    def clean(self):
+        super().clean()
+        if self.site_names is not None:
+            from .job_sources import normalize_site_names
+
+            self.site_names = normalize_site_names(self.site_names)
+
+    def save(self, *args, **kwargs):
+        if self.site_names is not None:
+            from .job_sources import normalize_site_names
+
+            self.site_names = normalize_site_names(self.site_names)
+        super().save(*args, **kwargs)
 
 
 # Backward-compatible alias during consolidation.
@@ -1240,6 +1238,10 @@ class JobSearchTask(models.Model):
 
     def clean(self):
         super().clean()
+        if self.site_name is not None:
+            from .job_sources import normalize_site_names
+
+            self.site_name = normalize_site_names(self.site_name)
         if self.frequency:
             try:
                 import croniter
@@ -1247,6 +1249,13 @@ class JobSearchTask(models.Model):
             except Exception as e:
                 from django.core.exceptions import ValidationError
                 raise ValidationError({"frequency": f"Invalid cron expression: expected 5 fields (minute hour day month weekday). {e}"})
+
+    def save(self, *args, **kwargs):
+        if self.site_name is not None:
+            from .job_sources import normalize_site_names
+
+            self.site_name = normalize_site_names(self.site_name)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.name or f"{self.search_term} ({self.track})"
@@ -1477,6 +1486,12 @@ class JobSearchTaskRun(models.Model):
     jobs_after_filter = models.PositiveIntegerField(default=0)
     jobs_added_to_pipeline = models.PositiveIntegerField(default=0)
     error_message = models.TextField(blank=True)
+    details = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Itemized audit log of fetched jobs and their elimination/saved status for recent runs.",
+    )
+
 
     class Meta:
         ordering = ["-started_at"]
@@ -1539,327 +1554,6 @@ class ApplicantProfile(models.Model):
     def get_for_user(cls, user):
         obj, _created = cls.objects.get_or_create(owner=user)
         return obj
-
-
-class SiteCredential(models.Model):
-    """
-    Encrypted login credentials and/or saved session cookies for a career-site
-    domain or ATS. Reused across application attempts so the agent does not have
-    to create accounts repeatedly. Secrets are encrypted at rest (Fernet).
-    """
-
-    owner = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="site_credentials",
-    )
-    domain = models.CharField(
-        max_length=255,
-        help_text="Host the credential applies to, e.g. 'boards.greenhouse.io' or 'acme.com'.",
-    )
-    label = models.CharField(max_length=255, blank=True, default="")
-    username = models.CharField(max_length=255, blank=True, default="")
-    encrypted_password = models.TextField(blank=True, default="")
-    encrypted_session_cookies = models.TextField(
-        blank=True,
-        default="",
-        help_text="Encrypted JSON blob of cookies for explicit injection into a fresh browser context.",
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    objects = OwnedManager()
-
-    class Meta:
-        ordering = ["domain"]
-        unique_together = [("owner", "domain")]
-
-    def __str__(self):
-        return self.label or self.domain
-
-    def set_password(self, plain: str) -> None:
-        from .crypto import encrypt_api_key
-
-        self.encrypted_password = encrypt_api_key(plain or "")
-
-    def get_password(self) -> str:
-        from .crypto import decrypt_api_key
-
-        return decrypt_api_key(self.encrypted_password or "")
-
-    def set_session_cookies(self, cookies: list | dict) -> None:
-        import json
-
-        from .crypto import encrypt_api_key
-
-        self.encrypted_session_cookies = encrypt_api_key(json.dumps(cookies or []))
-
-    def get_session_cookies(self) -> list:
-        import json
-
-        from .crypto import decrypt_api_key
-
-        raw = decrypt_api_key(self.encrypted_session_cookies or "")
-        if not raw:
-            return []
-        try:
-            data = json.loads(raw)
-        except (ValueError, TypeError):
-            return []
-        return data if isinstance(data, list) else []
-
-
-class ApplicationAttempt(models.Model):
-    """
-    One run of the Autonomous Apply Agent for a single Applying-stage pipeline entry.
-
-    The agent advances this row through a state machine (see Status). Every step
-    persists resumable context to the DB so stateless Huey workers can resume after
-    a restart; the browser session itself is never kept alive between tasks.
-    """
-
-    class Status(models.TextChoices):
-        QUEUED = "queued", "Queued"
-        OPTIMIZING = "optimizing", "Optimizing resume"
-        WAITING_OPTIMIZER = "waiting_optimizer", "Waiting for optimizer"
-        RESOLVE_AND_DETECT = "resolve_and_detect", "Resolving URL"
-        DRY_RUN_FILL = "dry_run_fill", "Dry-run fill"
-        AWAITING_APPROVAL = "awaiting_approval", "Awaiting approval"
-        SUBMITTING = "submitting", "Submitting"
-        SUCCEEDED = "succeeded", "Succeeded"
-        FAILED = "failed", "Failed"
-
-    # Non-terminal statuses the heartbeat sweeper should keep nudging forward.
-    ACTIVE_STATUSES = (
-        Status.QUEUED,
-        Status.OPTIMIZING,
-        Status.WAITING_OPTIMIZER,
-        Status.RESOLVE_AND_DETECT,
-        Status.DRY_RUN_FILL,
-        Status.SUBMITTING,
-    )
-
-    class Mode(models.TextChoices):
-        SEMI_AUTO = "semi_auto", "Semi-auto"
-        FULL_AUTO = "full_auto", "Full-auto"
-
-    # Error codes for failed attempts (drives UI messaging).
-    ERROR_AUTOMATION_TIMEOUT = "automation_timeout"
-    ERROR_SUBMIT_AMBIGUOUS = "submit_ambiguous"
-    ERROR_UNRESOLVED_URL = "unresolved_url"
-    ERROR_CAPTCHA = "captcha"
-    ERROR_NO_RESUME = "no_resume"
-    ERROR_NO_ADAPTER = "no_adapter"
-    ERROR_FILL_FAILED = "fill_failed"
-    ERROR_REJECTED = "rejected"
-    ERROR_OPTIMIZER_FAILED = "optimizer_failed"
-
-    pipeline_entry = models.ForeignKey(
-        "PipelineEntry",
-        on_delete=models.CASCADE,
-        related_name="application_attempts",
-    )
-    optimized_resume = models.ForeignKey(
-        "OptimizedResume",
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="application_attempts",
-    )
-    status = models.CharField(max_length=24, choices=Status.choices, default=Status.QUEUED)
-    automation_mode = models.CharField(max_length=16, choices=Mode.choices, default=Mode.SEMI_AUTO)
-    apply_url = models.URLField(max_length=2048, blank=True, default="")
-    ats_type = models.CharField(
-        max_length=32,
-        blank=True,
-        default="",
-        help_text="Detected ATS slug, e.g. greenhouse, lever, workday, unknown.",
-    )
-    confidence = models.FloatField(
-        null=True,
-        blank=True,
-        help_text="Adapter/agent confidence (0.0–1.0) that the form was filled correctly.",
-    )
-    fill_payload_json = models.JSONField(
-        null=True,
-        blank=True,
-        help_text="Semantic answer key captured in the dry run (field label -> value). Never stores CSRF/hidden tokens.",
-    )
-    session_state_json = models.JSONField(
-        null=True,
-        blank=True,
-        help_text="Optional login cookies/storage for explicit injection into a fresh context (not form anti-fraud tokens).",
-    )
-    resume_file_path = models.CharField(
-        max_length=1024,
-        blank=True,
-        default="",
-        help_text="Path to the exported optimized resume (PDF/DOCX) used for upload.",
-    )
-    error_code = models.CharField(max_length=32, blank=True, default="")
-    error_message = models.TextField(blank=True, default="")
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    started_at = models.DateTimeField(null=True, blank=True)
-    submitted_at = models.DateTimeField(null=True, blank=True)
-    last_heartbeat_at = models.DateTimeField(
-        null=True,
-        blank=True,
-        help_text="Set when a worker begins processing a step; used to detect stuck attempts.",
-    )
-
-    class Meta:
-        ordering = ["-created_at"]
-        indexes = [
-            models.Index(fields=["status", "-created_at"]),
-        ]
-
-    def __str__(self):
-        return f"ApplicationAttempt {self.id} ({self.status})"
-
-    # --- Domain State & Predicates ---
-
-    @property
-    def is_terminal(self) -> bool:
-        return self.status in (self.Status.SUCCEEDED, self.Status.FAILED)
-
-    @property
-    def is_active(self) -> bool:
-        return self.status in self.ACTIVE_STATUSES
-
-    @property
-    def is_awaiting_approval(self) -> bool:
-        return self.status == self.Status.AWAITING_APPROVAL
-
-    # --- Domain Lifecycle Transitions ---
-
-    def advance_to(self, target_status: str, save: bool = True) -> None:
-        """Advance attempt to the next active state in the workflow."""
-        if self.is_terminal:
-            raise ValueError(f"Cannot advance terminal attempt {self.id} (status={self.status})")
-        if target_status not in [c[0] for c in self.Status.choices]:
-            raise ValueError(f"Invalid status: {target_status}")
-        self.status = target_status
-        self.last_heartbeat_at = timezone.now()
-        if save:
-            self.save(update_fields=["status", "last_heartbeat_at", "updated_at"])
-
-    def mark_succeeded(self, submitted_at=None, save: bool = True) -> None:
-        """Transition attempt to Succeeded state."""
-        self.status = self.Status.SUCCEEDED
-        self.submitted_at = submitted_at or timezone.now()
-        self.error_code = ""
-        self.error_message = ""
-        if save:
-            self.save(update_fields=["status", "submitted_at", "error_code", "error_message", "updated_at"])
-
-    def mark_failed(self, error_code: str, message: str = "", save: bool = True) -> None:
-        """Transition attempt to Failed state with error context."""
-        self.status = self.Status.FAILED
-        self.error_code = error_code or ""
-        self.error_message = (message or "")[:4000]
-        if save:
-            self.save(update_fields=["status", "error_code", "error_message", "updated_at"])
-
-    def approve_and_submit(self, save: bool = True) -> None:
-        """Transition from Awaiting Approval to Submitting."""
-        if not self.is_awaiting_approval:
-            raise ValueError(f"Attempt {self.id} is not awaiting approval (current status={self.status})")
-        self.status = self.Status.SUBMITTING
-        self.last_heartbeat_at = timezone.now()
-        if save:
-            self.save(update_fields=["status", "last_heartbeat_at", "updated_at"])
-
-    def reject(self, reason: str = "", save: bool = True) -> None:
-        """User rejected the dry-run application."""
-        self.mark_failed(self.ERROR_REJECTED, reason or "Rejected by user.", save=save)
-
-    def record_heartbeat(self, save: bool = True) -> None:
-        """Record worker activity to prevent watchdog timeouts."""
-        self.last_heartbeat_at = timezone.now()
-        if save:
-            self.save(update_fields=["last_heartbeat_at"])
-
-    def record_step(
-        self,
-        step_name: str,
-        message: str = "",
-        screenshot_path: str = "",
-        action_snapshot: dict | None = None,
-        network_log: list | None = None,
-    ) -> "ApplicationAttemptStep":
-        """Append an audit log step to this attempt aggregate."""
-        return self.steps.create(
-            step_name=step_name,
-            message=message or "",
-            screenshot_path=screenshot_path or "",
-            action_snapshot=action_snapshot,
-            network_log=network_log or [],
-        )
-
-
-class ApplicationAttemptStep(models.Model):
-    """Audit log row for one step of an ApplicationAttempt (screenshots, actions, network)."""
-
-    attempt = models.ForeignKey(
-        ApplicationAttempt,
-        on_delete=models.CASCADE,
-        related_name="steps",
-    )
-    step_name = models.CharField(max_length=64)
-    message = models.TextField(blank=True, default="")
-    screenshot_path = models.CharField(max_length=1024, blank=True, default="")
-    action_snapshot = models.JSONField(
-        null=True,
-        blank=True,
-        help_text="Structured snapshot of actions taken / fields filled in this step.",
-    )
-    network_log = models.JSONField(
-        default=list,
-        blank=True,
-        help_text="XHR/fetch responses observed during this step (catches silent ATS validation errors).",
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        ordering = ["created_at", "id"]
-
-    def __str__(self):
-        return f"{self.attempt_id}: {self.step_name}"
-
-
-class AtsAutoSubmitStats(models.Model):
-    """
-    Per-user per-ATS counters that gate graduation from semi-auto to full-auto.
-    """
-
-    owner = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="ats_auto_submit_stats",
-    )
-    ats_type = models.CharField(max_length=32)
-    clean_submit_streak = models.PositiveIntegerField(
-        default=0,
-        help_text="Consecutive approved submissions with no human corrections. Resets to 0 on any correction.",
-    )
-    total_submits = models.PositiveIntegerField(default=0)
-    total_corrections = models.PositiveIntegerField(default=0)
-    full_auto_enabled = models.BooleanField(
-        default=False,
-        help_text="When true (and global mode allows), this ATS may submit without review.",
-    )
-    updated_at = models.DateTimeField(auto_now=True)
-
-    objects = OwnedManager()
-
-    class Meta:
-        verbose_name = "ATS auto-submit stats"
-        verbose_name_plural = "ATS auto-submit stats"
-        unique_together = [("owner", "ats_type")]
-
-    def __str__(self):
-        return f"{self.ats_type}: streak={self.clean_submit_streak} full_auto={self.full_auto_enabled}"
 
 
 class UserExperienceSettings(models.Model):

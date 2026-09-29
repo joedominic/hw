@@ -493,6 +493,7 @@ def run_matching(
     job_cache_key: str | None = None,
     usage_query_kind: str | None = None,
     return_debug: bool = False,
+    only_local: bool = False,
 ) -> dict:
     """Returns { score: int, reasoning: str, interview_probability: int|None }. Score 0-100.
     Used after job search for independent LLM match score.
@@ -530,7 +531,7 @@ def run_matching(
         job_cache_key=job_cache_key,
         usage_query_kind=_qk,
         prefer_local=True,
-        only_local=True,
+        only_local=only_local,
         allow_local=True,
     )
     content = getattr(raw, "content", None)

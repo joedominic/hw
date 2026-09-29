@@ -132,8 +132,10 @@ class _OllamaLocalChatModel(BaseChatModel):
         import time
 
         from ollama import Client
+        from .policy import invoke_timeout_seconds
 
-        client = Client(host=self.host)
+        req_timeout = invoke_timeout_seconds()
+        client = Client(host=self.host, timeout=req_timeout if req_timeout > 0 else None)
         ollama_messages = self._convert_messages(messages)
         total_chars = sum(len(str(m.get("content") or "")) for m in ollama_messages)
         logger.info(
@@ -251,7 +253,7 @@ def get_llm(provider: str, api_key: str = None, model: str = None, user=None):
         llm = _OllamaLocalChatModel(model=chosen, host=host)
     elif provider == "OpenRouter":
         ref = (getattr(settings, "OPENROUTER_HTTP_REFERER", None) or "").strip()
-        headers = {"X-Title": "ResumeElite"}
+        headers = {"X-Title": "HireEdge"}
         if ref:
             headers["HTTP-Referer"] = ref
         llm = ChatOpenAI(

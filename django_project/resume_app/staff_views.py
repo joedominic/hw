@@ -66,7 +66,7 @@ def staff_users_view(request):
 
     if export_csv:
         response = HttpResponse(content_type="text/csv")
-        response["Content-Disposition"] = 'attachment; filename="resumeelite-users-export.csv"'
+        response["Content-Disposition"] = 'attachment; filename="hireedge-users-export.csv"'
         writer = csv.writer(response)
         writer.writerow([
             "User ID",

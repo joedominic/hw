@@ -1,12 +1,12 @@
-# Executive Summary — ResumeElite (JobApp-Main)
+# Executive Summary — HireEdge (JobApp-Main)
 
 ## Purpose
 
-ResumeElite is an AI-powered job application acceleration and optimization platform. It combines:
+HireEdge is an AI-powered job application acceleration and optimization platform. It combines:
 1. **Multi-Agent Resume Optimization (LangGraph):** Tailors uploaded resumes to target job descriptions through a multi-agent loop (Writer → ATS Judge → Recruiter Judge) with dense/lexical local RAG over resume chunks.
-2. **Multi-Source Job Discovery & Ranking:** Aggregates listings from Indeed, LinkedIn (JobSpy), Dice, Levels.fyi, BuiltIn, and Adzuna, ranking results via sentence-transformer embeddings (`all-MiniLM-L6-v2`), BM25 keyword matching, preference centroids (likes/dislikes), and Ollama seniority checks.
-3. **Four-Stage Kanban Pipeline:** Coordinates the job search lifecycle across **Pipeline → Vetting → Applying → Done** with automated rule- and LLM-based promotions.
-4. **Autonomous Apply Agent:** Submits job applications through browser automation (Playwright) using specialized ATS adapters (Greenhouse, Lever, Ashby, iCIMS) and a vision-capable `browser-use` generic fallback, supporting Semi-Auto (human review) and Full-Auto (graduated submission) modes.
+2. **Multi-Source Job Discovery & Ranking:** Aggregates listings from Indeed, LinkedIn (JobSpy), Dice, Levels.fyi, and BuiltIn, ranking results via sentence-transformer embeddings (`all-MiniLM-L6-v2`), BM25 keyword matching, preference centroids (likes/dislikes), and Ollama seniority checks.
+3. **Four-Stage Kanban Pipeline:** Coordinates the job search lifecycle across **Discovered → Applying → Interview → Offer** with automated rule- and LLM-based promotions.
+4. **Interview Prep & Cover Letter Engine:** AI-powered interview question coaching and role-specific cover letter generation tailored to the target job description.
 5. **SaaS Monetization & Control:** Commercial billing via Stripe (Free, Pro, Unlimited), daily request/token quotas, hashed customer API keys, and staff impersonation (`django-hijack`).
 
 ---
@@ -22,7 +22,7 @@ ResumeElite is an AI-powered job application acceleration and optimization platf
 | **Task Queue & Scheduler** | Huey 2.6+ backed by Redis (supports in-process `HUEY_IMMEDIATE=1` for dev) |
 | **AI Orchestration** | LangGraph 1.0+, LangChain (OpenAI, Anthropic, Groq, Google GenAI, Ollama) |
 | **NLP & Vectors** | `sentence-transformers` (`all-MiniLM-L6-v2`), `rank-bm25`, `pdfplumber`, `python-docx` |
-| **Job Aggregation** | `python-jobspy`, custom JSON/REST clients (`dice_client`, `levels_client`, `builtin_client`, `adzuna_client`) |
+| **Job Aggregation** | `python-jobspy`, custom JSON/REST clients (`dice_client`, `levels_client`, `builtin_client`) |
 | **Browser Automation** | Playwright 1.49+, `browser-use` 0.11+ |
 | **Frontend Surface** | Server-rendered Django Templates + Tailwind CSS CDN + vanilla JavaScript `fetch()` |
 | **Security & Auth** | Django session auth, `LoginRequiredMiddleware`, `CustomerApiKey` auth, Fernet encryption (`crypto.py`), `django-hijack` |

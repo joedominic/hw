@@ -8,7 +8,7 @@ from typing import List, Optional, Tuple
 
 from django.core.cache import cache
 
-from .models import JobListingEmbedding, JobListing, Track
+from .models import JobListingEmbedding, JobListing, Track, JobListingAction, SearchProfile
 from .track_actions import normalize_track_slug, q_preference_embedding_track
 
 logger = logging.getLogger(__name__)
@@ -49,13 +49,27 @@ def get_preference_vectors(
 
     from . import embeddings as embedding_module
 
+    # Only consider embeddings whose feedback action is currently active (not removed/unliked)
+    valid_liked_ids = set(
+        JobListingAction.objects.for_user(user)
+        .filter(action=JobListingAction.ActionType.LIKED)
+        .values_list("job_listing_id", flat=True)
+    )
+    valid_disliked_ids = set(
+        JobListingAction.objects.for_user(user)
+        .filter(action=JobListingAction.ActionType.DISLIKED)
+        .values_list("job_listing_id", flat=True)
+    )
+
     liked_qs = JobListingEmbedding.objects.filter(
         owner=user,
         embedding_type=JobListingEmbedding.EmbeddingType.LIKED,
+        job_listing_id__in=valid_liked_ids,
     ).select_related("job_listing")
     disliked_qs = JobListingEmbedding.objects.filter(
         owner=user,
         embedding_type=JobListingEmbedding.EmbeddingType.DISLIKED,
+        job_listing_id__in=valid_disliked_ids,
     ).select_related("job_listing")
     if track:
         slug = normalize_track_slug(track, user)
@@ -68,6 +82,8 @@ def get_preference_vectors(
 
     for row in liked_qs:
         job = row.job_listing
+        if not job:
+            continue
         emb = list(row.embedding) if getattr(row, "embedding", None) else None
         if not emb:
             continue
@@ -76,6 +92,8 @@ def get_preference_vectors(
 
     for row in disliked_qs:
         job = row.job_listing
+        if not job:
+            continue
         emb = list(row.embedding) if getattr(row, "embedding", None) else None
         if not emb:
             continue
@@ -126,10 +144,25 @@ def get_liked_jobs_for_focus_reason(*, user, track: Optional[str] = None):
     return pv[2]
 
 
-def invalidate_preference_cache(user) -> None:
-    """Call when user likes or dislikes a job."""
+def invalidate_preference_cache(user, track: Optional[str] = None) -> None:
+    """Call when user likes or dislikes a job, or deletes/removes training data."""
     cache.delete(get_preference_vector_cache_key(user))
-    for slug in Track.objects.for_user(user).values_list("slug", flat=True):
+    slugs = set()
+    if track:
+        slugs.add(str(track).strip().lower())
+    try:
+        slugs.update(s.lower() for s in Track.objects.for_user(user).values_list("slug", flat=True) if s)
+    except Exception:
+        pass
+    try:
+        slugs.update(s.lower() for s in SearchProfile.objects.for_user(user).values_list("slug", flat=True) if s)
+    except Exception:
+        pass
+    try:
+        slugs.update(s.lower() for s in JobListingEmbedding.objects.filter(owner=user).values_list("track", flat=True).distinct() if s)
+    except Exception:
+        pass
+    for slug in slugs:
         cache.delete(get_preference_vector_cache_key(user, slug))
 
 
@@ -151,9 +184,18 @@ def get_disliked_embeddings(*, user, track: Optional[str] = None) -> List[Tuple[
     cached = cache.get(key)
     if cached is not None and isinstance(cached, list):
         return cached
+
+    # Only consider embeddings whose feedback action is currently active (not removed/un-disliked)
+    valid_disliked_ids = set(
+        JobListingAction.objects.for_user(user)
+        .filter(action=JobListingAction.ActionType.DISLIKED)
+        .values_list("job_listing_id", flat=True)
+    )
+
     qs = JobListingEmbedding.objects.filter(
         owner=user,
         embedding_type=JobListingEmbedding.EmbeddingType.DISLIKED,
+        job_listing_id__in=valid_disliked_ids,
     ).select_related("job_listing")
     if track:
         slug = normalize_track_slug(track, user)
@@ -161,6 +203,8 @@ def get_disliked_embeddings(*, user, track: Optional[str] = None) -> List[Tuple[
     out: List[Tuple[int, List[float]]] = []
     for row in qs:
         job = row.job_listing
+        if not job:
+            continue
         emb = list(row.embedding) if getattr(row, "embedding", None) else None
         if not emb:
             continue
@@ -169,10 +213,25 @@ def get_disliked_embeddings(*, user, track: Optional[str] = None) -> List[Tuple[
     return out
 
 
-def invalidate_disliked_embeddings_cache(user) -> None:
-    """Call when user likes or dislikes a job."""
+def invalidate_disliked_embeddings_cache(user, track: Optional[str] = None) -> None:
+    """Call when user likes or dislikes a job, or deletes/removes training data."""
     cache.delete(get_disliked_embeddings_cache_key(user))
-    for slug in Track.objects.for_user(user).values_list("slug", flat=True):
+    slugs = set()
+    if track:
+        slugs.add(str(track).strip().lower())
+    try:
+        slugs.update(s.lower() for s in Track.objects.for_user(user).values_list("slug", flat=True) if s)
+    except Exception:
+        pass
+    try:
+        slugs.update(s.lower() for s in SearchProfile.objects.for_user(user).values_list("slug", flat=True) if s)
+    except Exception:
+        pass
+    try:
+        slugs.update(s.lower() for s in JobListingEmbedding.objects.filter(owner=user).values_list("track", flat=True).distinct() if s)
+    except Exception:
+        pass
+    for slug in slugs:
         cache.delete(get_disliked_embeddings_cache_key(user, slug))
 
 

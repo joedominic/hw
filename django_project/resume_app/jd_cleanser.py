@@ -8,7 +8,8 @@ class JDCleanserService:
     """
     Service to cleanse job descriptions by stripping boilerplate and fluff sections
     to focus on core responsibilities and requirements.
-    Pipeline/vetting LLM cleanses use Ollama Local; falls back to heuristics.
+    Pipeline/vetting LLM cleanses strictly use Ollama Local (only_local=True);
+    falls back to regex heuristics if local LLM is unavailable, never burning cloud tokens.
     (Resume-optimizer JD cleanse goes through the optimizer graph and stays cloud-only.)
     """
 
@@ -20,6 +21,7 @@ class JDCleanserService:
         use_llm: bool = False,
         *,
         user=None,
+        only_local: bool = True,
     ) -> str:
         """
         Main entry point for cleansing a job description.
@@ -29,16 +31,25 @@ class JDCleanserService:
 
         # If explicitly requested, try the LLM-based extraction first.
         if use_llm and user is not None:
-            llm_result = JDCleanserService.cleanse_with_llm(description, title, user=user)
+            llm_result = JDCleanserService.cleanse_with_llm(
+                description, title, user=user, only_local=only_local
+            )
             if llm_result:
                 return llm_result[:max_chars].strip()
 
         return JDCleanserService.cleanse_heuristically(description, title, max_chars)
 
     @staticmethod
-    def cleanse_with_llm(description: str, title: str = "", *, user) -> Optional[str]:
+    def cleanse_with_llm(
+        description: str,
+        title: str = "",
+        *,
+        user,
+        only_local: bool = True,
+    ) -> Optional[str]:
         """
-        Use Ollama Local to extract core job information (pipeline / vetting path).
+        Use local Ollama to extract core job information (pipeline / vetting path).
+        Falls back to None (triggering heuristic cleansing) if local LLM is unavailable.
         """
         try:
             from .llm import USAGE_QUERY_JD_CLEANSE, invoke_llm_messages
@@ -56,7 +67,7 @@ class JDCleanserService:
                 [HumanMessage(content=prompt)],
                 user=user,
                 prefer_local=True,
-                only_local=True,
+                only_local=only_local,
                 allow_local=True,
                 usage_query_kind=USAGE_QUERY_JD_CLEANSE,
             )
@@ -68,7 +79,7 @@ class JDCleanserService:
             return None
         except Exception as e:
             tenant_label = getattr(user, "username", getattr(user, "id", "unknown")) if user else "unknown"
-            logger.warning("[JDCleanser] tenant=%s LLM cleansing failed: %s", tenant_label, e)
+            logger.warning("[JDCleanser] tenant=%s LLM cleansing failed, falling back to heuristics: %s", tenant_label, e)
             return None
 
     @staticmethod

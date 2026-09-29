@@ -24,7 +24,6 @@ from resume_app.crypto import encrypt_api_key
 from resume_app.job_prep import _library_resume_text, resolve_interview_prep_inputs
 from resume_app.media_access import user_may_access_media
 from resume_app.models import (
-    ApplicationAttempt,
     JobListing,
     LLMProviderConfig,
     LLMProviderPreference,
@@ -116,24 +115,6 @@ class Phase0IsolationTests(TestCase):
         login_client(client, self.bob)
         resp_ok = client.get(f"/media/resumes/{self.bob.pk}/secret.pdf")
         self.assertEqual(resp_ok.status_code, 200)
-
-    def test_apply_agent_media_requires_attempt_owner(self):
-        job = JobListing.objects.create(
-            source="test",
-            external_id="apply-media-1",
-            title="Role",
-            company_name="Co",
-        )
-        entry = PipelineEntry.objects.create(
-            owner=self.bob,
-            job_listing=job,
-            track="ic",
-            stage="applying",
-        )
-        attempt = ApplicationAttempt.objects.create(pipeline_entry=entry)
-        path = f"apply_agent/attempt_{attempt.id}/step.png"
-        self.assertFalse(user_may_access_media(self.alice, path))
-        self.assertTrue(user_may_access_media(self.bob, path))
 
     def test_rate_limit_preference_lookup_is_owner_scoped(self):
         from resume_app.llm.rate_limit import get_preference_row_for_provider_model

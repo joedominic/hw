@@ -1,6 +1,6 @@
 # Codebase Onboarding & Architecture Guide
 
-**ResumeElite** — AI-powered resume optimizer, multi-source job aggregation search engine, Kanban application pipeline, and autonomous job application agent built as a modular Django application (`resume_app`) inside `django_project/`.
+**HireEdge** — AI-powered resume optimizer, multi-source job aggregation search engine, Kanban application pipeline, and career tools built as a modular Django application (`resume_app`) inside `django_project/`.
 
 | Key Attribute | Specification |
 |---|---|

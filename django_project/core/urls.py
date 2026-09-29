@@ -5,7 +5,6 @@ from ninja.security import django_auth
 
 from resume_app.api import router as resume_router
 from resume_app import views as resume_views
-from resume_app import apply_views
 from resume_app.auth_views import AppLoginView, AppLogoutView, SignupView, landing_view, privacy_view, terms_view
 from resume_app import account_views
 from resume_app.subscriptions import views as billing_views
@@ -69,6 +68,7 @@ urlpatterns = [
         name="optimizer_context_debug",
     ),
     path("settings/", resume_views.settings_view, name="settings"),
+    path("system/fit-inspector/", resume_views.fit_inspector_view, name="fit_inspector"),
     path("resume/prompts/", resume_views.prompt_library_view, name="prompt_library"),
     path("resume/llm-test/", resume_views.llm_test_view, name="llm_test"),
     path("workspace/workflows/", resume_views.workflow_list_view, name="workflow_list"),
@@ -85,11 +85,18 @@ urlpatterns = [
     ),
     path("jobs/applying/", resume_views.applying_view, name="applying"),
     path("jobs/done/", resume_views.done_view, name="done"),
-    path("jobs/apply-agent/", apply_views.apply_agent_dashboard_view, name="apply_agent"),
-    path("jobs/apply-agent/profile/", apply_views.apply_agent_profile_view, name="apply_agent_profile"),
-    path("jobs/apply-agent/<int:attempt_id>/", apply_views.apply_agent_review_view, name="apply_agent_review"),
     path("jobs/tracks/", resume_views.track_list_view, name="track_list"),
     path("jobs/tracks/<slug:slug>/delete/", resume_views.track_delete_view, name="track_delete"),
+    path(
+        "jobs/tracks/scheduled-runs/<int:run_id>/download-csv/",
+        resume_views.download_scheduled_run_csv_view,
+        name="download_scheduled_run_csv",
+    ),
+    path(
+        "jobs/tracks/scheduled-runs/<int:run_id>/details-json/",
+        resume_views.scheduled_run_details_json_view,
+        name="scheduled_run_details_json",
+    ),
     path("jobs/automation/", resume_views.job_tasks_view, name="job_automation"),
     path("jobs/huey/", resume_views.huey_dashboard_view, name="huey_dashboard"),
     path(

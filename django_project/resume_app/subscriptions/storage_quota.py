@@ -43,21 +43,6 @@ def resume_storage_bytes(user: AbstractBaseUser) -> int:
     return total
 
 
-def apply_agent_storage_bytes(user: AbstractBaseUser) -> int:
-    """Sum apply-agent screenshots and exported resumes for ``user``."""
-    from ..models import ApplicationAttempt
-
-    total = 0
-    attempt_ids = ApplicationAttempt.objects.filter(
-        pipeline_entry__owner_id=user.pk
-    ).values_list("id", flat=True)
-    for attempt_id in attempt_ids:
-        total += _dir_size_storage(f"apply_agent/attempt_{attempt_id}")
-        for ext in ("pdf", "docx"):
-            total += media_size(f"apply_agent/attempt_{attempt_id}_resume.{ext}")
-    return total
-
-
 def pipeline_extract_storage_bytes(user: AbstractBaseUser) -> int:
     """Sum pipeline_llm_extract run dirs owned by ``user`` (via run_meta.owner_id)."""
     from ..pipeline_llm_skill_extract import RUN_META_NAME
@@ -85,7 +70,6 @@ def user_storage_bytes(user: AbstractBaseUser) -> int:
         return 0
     return (
         resume_storage_bytes(user)
-        + apply_agent_storage_bytes(user)
         + pipeline_extract_storage_bytes(user)
     )
 

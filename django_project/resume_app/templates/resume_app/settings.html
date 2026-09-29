@@ -1,6 +1,6 @@
 {% extends "resume_app/base.html" %}
 
-{% block title %}Settings — ResumeElite{% endblock %}
+{% block title %}Settings — HireEdge{% endblock %}
 
 {% block content %}
 <div class="mx-auto max-w-4xl">
@@ -279,26 +279,27 @@
                                     <span class="tabular-nums font-semibold">{{ row.llm_tokens }} {% if row.token_limit %}<span class="text-slate-400 font-normal">/ {{ row.token_limit }}</span>{% endif %}</span>
                                     {% if row.token_limit %}
                                     <div class="w-28 h-1.5 rounded-full bg-slate-100 overflow-hidden">
-                                        <div class="h-full rounded-full {% if row.is_exceeded %}bg-red-500{% elif row.is_near_limit %}bg-amber-500{% else %}bg-brand{% endif %}" style="width: min({{ row.token_pct }}%, 100%)"></div>
+                                        <div class="h-full rounded-full {% if row.token_pct >= 100 %}bg-red-500{% elif row.token_pct >= 80 %}bg-amber-500{% else %}bg-brand{% endif %}" style="width: min({{ row.token_pct }}%, 100%)"></div>
                                     </div>
                                     {% endif %}
                                 </div>
                             </td>
                             <td class="py-3 px-3 tabular-nums text-slate-700">
-                                {{ row.llm_requests }} {% if row.request_limit %}<span class="text-slate-400 font-normal">/ {{ row.request_limit }}</span>{% endif %}
+                                <div class="flex flex-col gap-1">
+                                    <span>{{ row.llm_requests }} {% if row.request_limit %}<span class="text-slate-400 font-normal">/ {{ row.request_limit }}</span>{% endif %}</span>
+                                    {% if row.request_limit %}
+                                    <div class="w-24 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                                        <div class="h-full rounded-full {% if row.request_pct >= 100 %}bg-red-500{% elif row.request_pct >= 80 %}bg-amber-500{% else %}bg-slate-400{% endif %}" style="width: min({{ row.request_pct }}%, 100%)"></div>
+                                    </div>
+                                    {% endif %}
+                                </div>
                             </td>
                             <td class="py-3 px-3 tabular-nums text-slate-700">{{ row.job_searches }}</td>
                             <td class="py-3 px-3 tabular-nums text-slate-700">{{ row.apply_runs }}</td>
                             <td class="py-3 px-3 font-sans">
-                                {% if not row.token_limit %}
-                                <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">Unlimited</span>
-                                {% elif row.is_exceeded %}
-                                <span class="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-800">Exceeded ({{ row.token_pct }}%)</span>
-                                {% elif row.is_near_limit %}
-                                <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">Near Limit ({{ row.token_pct }}%)</span>
-                                {% else %}
-                                <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">OK ({{ row.token_pct }}%)</span>
-                                {% endif %}
+                                <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs {{ row.status_badge }}">
+                                    {{ row.status_label }}
+                                </span>
                             </td>
                             <td class="py-3 px-3 font-sans text-xs text-slate-500">
                                 {% if row.updated_at %}{{ row.updated_at|date:"M j, g:i a" }}{% else %}—{% endif %}
@@ -388,7 +389,7 @@
         <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
             <h2 class="text-lg font-semibold text-concierge-slate">Lifetime LLM usage (approximate)</h2>
             <p class="mt-1 text-sm text-slate-600">
-                All-time totals for calls through the central gateway (including pipeline extract and apply-agent LLM turns).
+                All-time totals for calls through the central gateway (including pipeline extract LLM turns).
                 Separate from today’s plan limits above. Token counts may be estimated when a provider does not report usage.
             </p>
             <dl class="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
@@ -1031,6 +1032,95 @@
                     });
                 })();
             </script>
+        </div>
+
+        <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-100 pb-4">
+                <div>
+                    <h2 class="text-lg font-semibold text-concierge-slate">Prompt & Workflow Model Routing</h2>
+                    <p class="mt-1 text-sm text-slate-600">
+                        Choose preferred models for specific prompt workflows. If a specific prompt is not overridden, it uses your <strong>Global Default</strong>. If you do not configure keys, HireEdge uses high-performance platform defaults.
+                    </p>
+                </div>
+                <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
+                    <span class="h-1.5 w-1.5 rounded-full bg-brand"></span>
+                    Tenant Cascade Active
+                </span>
+            </div>
+
+            <form method="post" class="mt-6 space-y-6">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="save_prompt_model_preferences">
+
+                <!-- Tenant Global Default Selector -->
+                <div class="rounded-concierge border border-brand/20 bg-brand/[0.02] p-4 sm:p-5">
+                    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                        <div>
+                            <div class="flex items-center gap-2">
+                                <span class="rounded bg-brand/10 px-2 py-0.5 text-xs font-bold uppercase tracking-wide text-brand">Global Default</span>
+                                <h3 class="text-sm font-bold text-concierge-slate">Tenant Fallback Model</h3>
+                            </div>
+                            <p class="mt-1 text-xs text-slate-600 max-w-xl">
+                                Default model for all prompts and tasks when no specific prompt override is assigned.
+                            </p>
+                        </div>
+                        <div class="sm:w-72 shrink-0">
+                            <select name="global_default_provider_model" class="w-full rounded-concierge border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-concierge-slate shadow-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand">
+                                <option value="" {% if not global_default_val %}selected{% endif %}>⚡ System Platform Default</option>
+                                {% for opt in available_model_options %}
+                                <option value="{{ opt.value }}" {% if global_default_val == opt.value %}selected{% endif %}>
+                                    {{ opt.label }}{% if opt.is_local %} [Local]{% endif %}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Per-Prompt Routing Sections -->
+                <div class="space-y-6">
+                    {% for section in prompt_routing_sections %}
+                    <div class="rounded-concierge border border-slate-100 bg-slate-50/50 p-4 sm:p-5">
+                        <div class="mb-3">
+                            <h3 class="text-sm font-bold text-concierge-slate">{{ section.category }}</h3>
+                            <p class="text-xs text-slate-500">{{ section.description }}</p>
+                        </div>
+                        <div class="divide-y divide-slate-200/70 border-t border-slate-200/70">
+                            {% for item in section.items %}
+                            <div class="grid grid-cols-1 gap-3 py-3.5 sm:grid-cols-[1fr_260px] sm:items-center">
+                                <div>
+                                    <div class="flex items-center gap-2">
+                                        <span class="text-sm font-semibold text-concierge-slate">{{ item.label }}</span>
+                                        <span class="rounded bg-slate-200/70 px-1.5 py-0.5 font-mono text-[10px] text-slate-600">{{ item.query_kind }}</span>
+                                    </div>
+                                    <p class="mt-0.5 text-xs text-slate-500">{{ item.hint }}</p>
+                                </div>
+                                <div>
+                                    <select name="prompt_pref_{{ item.query_kind }}" class="w-full rounded-concierge border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-concierge-slate shadow-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand">
+                                        <option value="" {% if not item.selected %}selected{% endif %}>— Inherit Global Default —</option>
+                                        {% for opt in available_model_options %}
+                                        <option value="{{ opt.value }}" {% if item.selected == opt.value %}selected{% endif %}>
+                                            {{ opt.label }}{% if opt.is_local %} [Local]{% endif %}
+                                        </option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <div class="flex flex-wrap items-center justify-between gap-4 border-t border-slate-100 pt-4">
+                    <p class="text-xs text-slate-500">
+                        Preferences take effect immediately for all subsequent interactive and background tasks.
+                    </p>
+                    <button type="submit" class="rounded-concierge bg-brand px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
+                        Save Prompt Model Preferences
+                    </button>
+                </div>
+            </form>
         </div>
     </div>
     {% endif %}

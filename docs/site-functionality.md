@@ -1,12 +1,12 @@
 # Site Functionality
 
-ResumeElite is a multi-user job-search workspace. It combines resume optimization, job discovery, pipeline management, LLM-assisted preparation, and semi-automated application submission.
+HireEdge is a multi-user job-search workspace. It combines resume optimization, job discovery, pipeline management, and LLM-assisted interview preparation and cover letter generation.
 
 ## Landing Page
 
 Entry point: `/`
 
-Public marketing page with sign-up and sign-in links. Uses the shared ResumeElite brand theme (forest green primary, navy headings, mint accents, Plus Jakarta Sans). Hero uses a full-bleed product workspace image with brand, headline, supporting line, and CTAs. Further sections: feature cards, how-it-works process strip, and final CTA. Authenticated users are redirected to Getting Started (normal users with incomplete onboarding) or the pipeline board.
+Public marketing page with sign-up and sign-in links. Uses the shared HireEdge brand theme (forest green primary, navy headings, mint accents, Plus Jakarta Sans). Hero uses a full-bleed product workspace image with brand, headline, supporting line, and CTAs. Further sections: feature cards, how-it-works process strip, and final CTA. Authenticated users are redirected to Getting Started (normal users with incomplete onboarding) or the pipeline board.
 
 ### Job Search (Find jobs)
 

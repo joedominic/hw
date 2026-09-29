@@ -20,7 +20,7 @@ This document describes the Resume Optimizer page: layout, actions, and backend 
 
 - **Provider** dropdown (GET submit) and **Model** select (from the main form). Key status message: “Using connected key for X” or “No API key configured” with a **Go to Settings** link. API keys are managed on the **Settings** (Integrations) page, not on the optimizer.
 - **Cloud-only routing (optimizer graph):** Writer, ATS, Recruiter, and the in-graph `jd_cleanse` step require a remote/cloud LLM (`allow_local=False`). **Ollama Local is never used inside resume optimization.**
-- **Local for everything else:** Pipeline JD cleanse (`JDCleanserService`) and vetting match use **Ollama Local**; other non-optimizer product LLM calls prefer local.
+- **Local for everything else:** Pipeline JD cleanse (`JDCleanserService`) and vetting match prefer **Ollama Local** (with cloud fallback); other non-optimizer product LLM calls prefer local.
 
 ### Prompts
 

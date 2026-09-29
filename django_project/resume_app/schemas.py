@@ -219,15 +219,26 @@ class DisqualifierPayload(Schema):
     phrase: str
 
 
+class InterviewPrepTypeInfo(Schema):
+    interview_type: str
+    content: str = ""
+    markdown: str = ""
+    generated_at: Optional[str] = None
+
+
 class InterviewPrepGenerateRequest(Schema):
+    interview_type: str = "recruiter"
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
 
 
 class InterviewPrepResponse(Schema):
+    interview_type: str = "recruiter"
     content: str = ""
     markdown: str = ""
     generated_at: Optional[str] = None
+    available_types: List[str] = []
+    types_data: dict[str, Any] = {}
     provider: str = ""
     model: str = ""
     prompt: Optional[str] = None
@@ -235,4 +246,6 @@ class InterviewPrepResponse(Schema):
 
 class InterviewPrepSaveRequest(Schema):
     interview_prep: str
+    interview_type: Optional[str] = None
+
 

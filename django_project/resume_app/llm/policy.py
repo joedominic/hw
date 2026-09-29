@@ -31,6 +31,10 @@ class LLMRequestsDisabled(Exception):
     """Raised when AppAutomationSettings.stop_llm_requests is True."""
 
 
+class LLMEmailVerificationRequired(Exception):
+    """Raised when email verification is required before making LLM calls."""
+
+
 class LLMTokenBudgetExceeded(Exception):
     """User or platform daily token budget exhausted."""
 
@@ -97,14 +101,23 @@ def platform_tokens_used_today() -> int:
         return 0
 
 
+def is_local_provider(provider: str | None) -> bool:
+    """True for inherently local providers such as Ollama Local."""
+    name = (provider or "").strip().lower()
+    return name == "ollama local"
+
+
 def check_token_budget(
     user: AbstractBaseUser | None,
     *,
     estimated_tokens: int = 0,
     provider: str = "",
+    is_local: bool = False,
 ) -> None:
     """Raise LLMTokenBudgetExceeded when the user or platform budget cannot cover ``estimated_tokens``."""
     if not getattr(settings, "SAAS_ENFORCE_QUOTAS", True):
+        return
+    if is_local or is_local_provider(provider):
         return
     from ..subscriptions import get_user_plan, staff_bypasses_quotas, usage_today
 
@@ -140,8 +153,11 @@ def consume_token_budget(
     tokens: int,
     *,
     provider: str = "",
+    is_local: bool = False,
 ) -> None:
     """Record consumed tokens against user and (when applicable) platform daily budgets."""
+    if is_local or is_local_provider(provider):
+        return
     amount = max(0, int(tokens))
     if amount < 1:
         return
@@ -183,6 +199,31 @@ def assert_llm_kill_switch(user: AbstractBaseUser | None) -> None:
     if AppAutomationSettings.get_for_user(user).stop_llm_requests:
         raise LLMRequestsDisabled(
             "LLM requests are disabled. Turn off 'Stop LLM requests' in Settings → LLM."
+        )
+
+
+def assert_email_verified(user: AbstractBaseUser | None) -> None:
+    """
+    Ensure user's email address is verified before allowing LLM requests when verification is enforced.
+    Staff and superusers are exempt.
+    """
+    if user is None or not getattr(user, "is_authenticated", False):
+        return
+    if getattr(user, "is_staff", False) or getattr(user, "is_superuser", False):
+        return
+    require_verification = getattr(
+        settings,
+        "REQUIRE_EMAIL_VERIFICATION",
+        False,
+    ) or getattr(settings, "SAAS_REQUIRE_VERIFIED_EMAIL_FOR_LLM", False)
+    if not require_verification:
+        return
+    from ..account import is_email_verified
+
+    if not is_email_verified(user):
+        raise LLMEmailVerificationRequired(
+            "Email verification is required before using AI features. "
+            "Please verify your email address or visit Settings → Account to resend the verification email."
         )
 
 
@@ -257,101 +298,3 @@ def estimate_messages_tokens(messages) -> int:
     return estimate_tokens_from_messages(messages)
 
 
-def wrap_browser_use_llm(inner: Any, *, user, provider: str, model: str) -> Any:
-    """
-    Proxy a browser-use chat model so each completion honors kill switch, token budget,
-    concurrency, timeout, usage recording, and token consumption.
-    """
-    from .gateway import USAGE_QUERY_APPLY_AGENT, log_llm_invoke, record_llm_usage
-    from .rate_limit import estimate_tokens_from_messages
-    from ..rate_limits import check_user_llm_rate_limit
-
-    class _PolicyBrowserLLM:
-        def __init__(self) -> None:
-            self._inner = inner
-            self._user = user
-            self._provider = provider
-            self._model = model
-
-        def __getattr__(self, name: str) -> Any:
-            return getattr(self._inner, name)
-
-        def _preflight(self, messages) -> int:
-            assert_llm_kill_switch(self._user)
-            check_user_llm_rate_limit(self._user)
-            est = estimate_tokens_from_messages(messages or [])
-            check_token_budget(self._user, estimated_tokens=est, provider=self._provider)
-            return est
-
-        def _finalize(self, response, est: int) -> None:
-            in_tok, out_tok = est, 0
-            try:
-                from ..agents import _normalize_token_usage
-
-                u = _normalize_token_usage(response, None, None)
-                in_tok = int(u.get("input_tokens") or 0) or est
-                out_tok = int(u.get("output_tokens") or 0)
-            except Exception:
-                pass
-            try:
-                record_llm_usage(
-                    self._provider,
-                    self._model,
-                    in_tok,
-                    out_tok,
-                    0,
-                    True,
-                    user=self._user,
-                    query_kind=USAGE_QUERY_APPLY_AGENT,
-                )
-            except Exception as e:
-                logger.debug("apply-agent usage record skipped: %s", e)
-            consume_token_budget(
-                self._user, in_tok + out_tok, provider=self._provider
-            )
-
-        def invoke(self, messages, *args, **kwargs):
-            est = self._preflight(messages)
-            log_llm_invoke(
-                self._provider,
-                self._model,
-                query=USAGE_QUERY_APPLY_AGENT,
-                via="browser-use",
-            )
-
-            def _call():
-                return self._inner.invoke(messages, *args, **kwargs)
-
-            with user_llm_concurrency(self._user):
-                raw = run_with_invoke_timeout(_call)
-                self._finalize(raw, est)
-                return raw
-
-        async def ainvoke(self, messages, *args, **kwargs):
-            import asyncio
-
-            est = self._preflight(messages)
-            log_llm_invoke(
-                self._provider,
-                self._model,
-                query=USAGE_QUERY_APPLY_AGENT,
-                via="browser-use-async",
-            )
-            with user_llm_concurrency(self._user):
-                try:
-                    timeout = invoke_timeout_seconds()
-                    if timeout > 0:
-                        raw = await asyncio.wait_for(
-                            self._inner.ainvoke(messages, *args, **kwargs),
-                            timeout=timeout,
-                        )
-                    else:
-                        raw = await self._inner.ainvoke(messages, *args, **kwargs)
-                except asyncio.TimeoutError as e:
-                    raise LLMInvokeTimeout(
-                        f"LLM invoke exceeded {int(invoke_timeout_seconds())}s wall-clock deadline."
-                    ) from e
-                self._finalize(raw, est)
-                return raw
-
-    return _PolicyBrowserLLM()

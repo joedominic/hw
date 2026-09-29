@@ -31,7 +31,6 @@ from .entitlements import (
 )
 from .storage_quota import (
     METRIC_STORAGE,
-    apply_agent_storage_bytes,
     assert_upload_allowed,
     check_storage_quota,
     pipeline_extract_storage_bytes,
@@ -67,7 +66,6 @@ __all__ = [
     "usage_today",
     "METRIC_STORAGE",
     "resume_storage_bytes",
-    "apply_agent_storage_bytes",
     "pipeline_extract_storage_bytes",
     "user_storage_bytes",
     "plan_storage_limit_bytes",

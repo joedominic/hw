@@ -47,11 +47,3 @@ class ResumeOptimizationCompleted(DomainEvent):
     pipeline_entry_id: Optional[int] = None
     ats_score: Optional[int] = None
     recruiter_score: Optional[int] = None
-
-
-@dataclass(frozen=True)
-class ApplicationAttemptSubmitted(DomainEvent):
-    """Fired when the Autonomous Apply Agent submits an application."""
-    attempt_id: int = 0
-    pipeline_entry_id: int = 0
-    ats_type: str = ""

@@ -187,73 +187,6 @@ class PipelineApplicationServiceTestCase(TestCase):
         self.assertEqual(self.entry.stage, PipelineEntry.Stage.DONE)
 
 
-class ApplyAndOptimizerServicesTestCase(TestCase):
-    def setUp(self):
-        from .models import ApplicantProfile, ApplicationAttempt
-        self.user = User.objects.create_user(username="apply_opt_user", password="password")
-        Track.ensure_baseline(self.user)
-        self.profile = ApplicantProfile.get_for_user(self.user)
-        self.profile.full_name = "Jane Doe"
-        self.profile.email = "jane@example.com"
-        self.profile.save()
-
-        self.job = JobListing.objects.create(
-            source="test_src",
-            external_id="ext-100",
-            title="Senior Architect",
-            company_name="MegaCorp",
-        )
-        self.entry = PipelineEntry.objects.create(
-            owner=self.user,
-            job_listing=self.job,
-            track="general",
-            stage=PipelineEntry.Stage.APPLYING,
-        )
-
-    def test_apply_application_service_start_and_approve(self):
-        from .application.apply_services import ApplyApplicationService
-        from .models import ApplicationAttempt
-
-        # 1. Start attempt
-        result = ApplyApplicationService.start_attempts_for_jobs(self.user, [self.entry.id])
-        self.assertTrue(result.success)
-        self.assertEqual(len(result.started_attempts), 1)
-        attempt = result.started_attempts[0]
-
-        # 2. Advance to Awaiting Approval with automated ATS adapter
-        attempt.status = ApplicationAttempt.Status.AWAITING_APPROVAL
-        attempt.ats_type = "greenhouse"
-        attempt.save()
-
-        # 3. Approve attempt
-        ok, msg = ApplyApplicationService.approve_attempt(self.user, attempt.id)
-        self.assertTrue(ok)
-        attempt.refresh_from_db()
-        self.assertEqual(attempt.status, ApplicationAttempt.Status.SUBMITTING)
-
-    def test_domain_event_application_submitted_marks_pipeline_done(self):
-        from .application.event_handlers import on_application_attempt_submitted
-        from .domain.events import ApplicationAttemptSubmitted
-        from .models import ApplicationAttempt
-
-        attempt = ApplicationAttempt.objects.create(
-            pipeline_entry=self.entry,
-            status=ApplicationAttempt.Status.SUBMITTING,
-            ats_type="greenhouse",
-        )
-
-        event = ApplicationAttemptSubmitted(
-            user_id=self.user.id,
-            attempt_id=attempt.id,
-            pipeline_entry_id=self.entry.id,
-            ats_type="greenhouse",
-        )
-        on_application_attempt_submitted(event)
-
-        self.entry.refresh_from_db()
-        self.assertEqual(self.entry.stage, PipelineEntry.Stage.DONE)
-
-
 class BoundedContextPackageImportTestCase(TestCase):
     def test_all_bounded_contexts_importable(self):
         # Verify domain context
@@ -301,7 +234,7 @@ class BoundedContextPackageImportTestCase(TestCase):
         self.assertIsNotNone(get_user_plan)
 
         # Verify application context
-        from resume_app.application import ApplyApplicationService, PipelineApplicationService, SearchApplicationService
+        from resume_app.application import PipelineApplicationService, SearchApplicationService
         self.assertIsNotNone(PipelineApplicationService)
-        self.assertIsNotNone(ApplyApplicationService)
         self.assertIsNotNone(SearchApplicationService)
+

@@ -1,6 +1,6 @@
 {% extends "resume_app/base.html" %}
 
-{% block title %}Search profiles — ResumeElite{% endblock %}
+{% block title %}Search profiles — HireEdge{% endblock %}
 
 {% block extra_head %}
 <style>
@@ -179,6 +179,10 @@
                                         <span class="block text-brand">Saved</span>
                                         <span class="block text-[10px] font-normal lowercase tracking-normal text-brand-soft">to pipeline</span>
                                     </th>
+                                    <th class="px-5 py-3 text-right">
+                                        <span class="block">Audit & Export</span>
+                                        <span class="block text-[10px] font-normal lowercase tracking-normal text-slate-400">last 2 runs</span>
+                                    </th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-slate-100 text-sm">
@@ -211,6 +215,38 @@
                                         <td class="px-5 py-3.5 text-right tabular-nums font-medium text-slate-700">{{ run.jobs_fetched }}</td>
                                         <td class="px-5 py-3.5 text-right tabular-nums text-slate-400">{{ run.jobs_eliminated }}</td>
                                         <td class="px-5 py-3.5 text-right tabular-nums font-semibold text-brand">{{ run.jobs_saved }}</td>
+                                        <td class="px-5 py-3.5 text-right whitespace-nowrap">
+                                            {% if run.has_details %}
+                                                <div class="inline-flex items-center justify-end gap-1.5">
+                                                    <button type="button"
+                                                            class="inspect-run-btn inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 transition"
+                                                            data-run-id="{{ run.run.id }}"
+                                                            data-profile="{{ run.profile_name }}"
+                                                            data-date="{{ run.started_at|date:'M d, Y · h:i A' }}"
+                                                            data-json-url="{% url 'scheduled_run_details_json' run.run.id %}"
+                                                            data-csv-url="{% url 'download_scheduled_run_csv' run.run.id %}"
+                                                            data-fetched="{{ run.jobs_fetched }}"
+                                                            data-eliminated="{{ run.jobs_eliminated }}"
+                                                            data-saved="{{ run.jobs_saved }}">
+                                                        <svg class="w-3.5 h-3.5 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                                        </svg>
+                                                        Inspect
+                                                    </button>
+                                                    <a href="{% url 'download_scheduled_run_csv' run.run.id %}"
+                                                       class="inline-flex items-center gap-1 rounded border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-brand shadow-sm hover:bg-brand-mist/20 transition"
+                                                       title="Download CSV audit log ({{ run.details_count }} jobs)">
+                                                        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                                                        </svg>
+                                                        CSV
+                                                    </a>
+                                                </div>
+                                            {% else %}
+                                                <span class="text-xs text-slate-400 italic" title="Full job audit kept only for the last 2 runs to conserve storage">Summary only</span>
+                                            {% endif %}
+                                        </td>
                                     </tr>
                                 {% endfor %}
                             </tbody>
@@ -435,6 +471,95 @@
         </div>
     </form>
 </dialog>
+
+<dialog id="scheduledRunInspectDialog" class="concierge-dialog w-[min(100vw-2rem,64rem)] max-h-[90vh] overflow-hidden p-0" aria-labelledby="scheduledRunInspectTitle">
+    <div class="flex max-h-[90vh] flex-col rounded-concierge border border-slate-200 bg-white shadow-2xl">
+        <header class="flex shrink-0 items-center justify-between border-b border-slate-200 bg-white px-5 py-3.5">
+            <div>
+                <h2 id="scheduledRunInspectTitle" class="m-0 text-base font-semibold text-concierge-slate">
+                    Run Breakdown: <span id="inspectProfileName" class="text-brand"></span>
+                </h2>
+                <p id="inspectRunMeta" class="mt-0.5 mb-0 text-xs text-slate-500"></p>
+            </div>
+            <div class="flex items-center gap-2">
+                <a id="inspectDownloadCsvBtn" href="#" class="inline-flex items-center gap-1.5 rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-brand shadow-sm hover:bg-brand-mist/20 transition">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                    Download CSV
+                </a>
+                <button type="button" id="scheduledRunInspectClose" class="rounded-concierge p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition" aria-label="Close">
+                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- Summary & Filters Toolbar -->
+        <div class="border-b border-slate-200 bg-slate-50/60 px-5 py-3 space-y-2.5">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+                <!-- Filter Tabs -->
+                <div class="inline-flex rounded-lg border border-slate-200 bg-white p-0.5 text-xs font-medium text-slate-600 shadow-sm" id="inspectFilterTabs">
+                    <button type="button" class="inspect-filter-tab rounded-md px-2.5 py-1 text-white bg-slate-800 transition" data-filter="all">
+                        All (<span id="inspectCountAll">0</span>)
+                    </button>
+                    <button type="button" class="inspect-filter-tab rounded-md px-2.5 py-1 text-slate-600 hover:text-slate-900 transition" data-filter="saved">
+                        Saved to Pipeline (<span id="inspectCountSaved">0</span>)
+                    </button>
+                    <button type="button" class="inspect-filter-tab rounded-md px-2.5 py-1 text-slate-600 hover:text-slate-900 transition" data-filter="eliminated">
+                        Eliminated (<span id="inspectCountEliminated">0</span>)
+                    </button>
+                    <button type="button" class="inspect-filter-tab rounded-md px-2.5 py-1 text-slate-600 hover:text-slate-900 transition" data-filter="skipped">
+                        In Pipeline / Prev (<span id="inspectCountSkipped">0</span>)
+                    </button>
+                </div>
+
+                <!-- Search Input -->
+                <div class="relative min-w-[200px] flex-1 sm:max-w-xs">
+                    <input type="text" id="inspectSearchInput" placeholder="Filter by title, company, reason..."
+                           class="w-full rounded-md border border-slate-200 bg-white py-1 pl-8 pr-3 text-xs placeholder-slate-400 focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                    <svg class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                </div>
+            </div>
+        </div>
+
+        <!-- Table Body Container -->
+        <div class="min-h-0 flex-1 overflow-y-auto px-5 py-3">
+            <div id="inspectLoading" class="py-12 text-center text-sm text-slate-500">
+                <svg class="animate-spin inline-block w-5 h-5 mr-2 text-slate-400" viewBox="0 0 24 24" fill="none">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Loading audit details...
+            </div>
+            <div id="inspectError" class="hidden py-8 text-center text-sm text-red-600"></div>
+
+            <table id="inspectTable" class="hidden w-full text-left border-collapse text-xs">
+                <thead>
+                    <tr class="border-b border-slate-200 bg-slate-50/50 text-[11px] font-semibold uppercase tracking-wider text-slate-500 sticky top-0">
+                        <th class="py-2.5 px-3">Job Title &amp; Company</th>
+                        <th class="py-2.5 px-3">Location / Source</th>
+                        <th class="py-2.5 px-3">Status</th>
+                        <th class="py-2.5 px-3">Elimination Reason / Details</th>
+                    </tr>
+                </thead>
+                <tbody id="inspectTableBody" class="divide-y divide-slate-100">
+                </tbody>
+            </table>
+            <div id="inspectNoResults" class="hidden py-8 text-center text-xs text-slate-400">
+                No jobs match the current filter criteria.
+            </div>
+        </div>
+
+        <footer class="flex shrink-0 items-center justify-between border-t border-slate-100 bg-slate-50/40 px-5 py-2.5 text-xs text-slate-500">
+            <span>Detailed breakdown kept for the 2 most recent runs.</span>
+            <button type="button" id="scheduledRunInspectFooterClose" class="rounded border border-slate-200 bg-white px-3 py-1 font-medium text-slate-600 hover:bg-slate-50">Done</button>
+        </footer>
+    </div>
+</dialog>
 {% endblock %}
 
 {% block extra_js %}
@@ -602,6 +727,211 @@
             });
         });
     }
+
+    // Scheduled Run Inspector Dialog
+    var inspectDialog = document.getElementById("scheduledRunInspectDialog");
+    var inspectCloseBtn = document.getElementById("scheduledRunInspectClose");
+    var inspectFooterCloseBtn = document.getElementById("scheduledRunInspectFooterClose");
+    var inspectProfileName = document.getElementById("inspectProfileName");
+    var inspectRunMeta = document.getElementById("inspectRunMeta");
+    var inspectDownloadCsvBtn = document.getElementById("inspectDownloadCsvBtn");
+    var inspectLoading = document.getElementById("inspectLoading");
+    var inspectError = document.getElementById("inspectError");
+    var inspectTable = document.getElementById("inspectTable");
+    var inspectTableBody = document.getElementById("inspectTableBody");
+    var inspectNoResults = document.getElementById("inspectNoResults");
+    var inspectSearchInput = document.getElementById("inspectSearchInput");
+    var inspectFilterTabs = document.querySelectorAll(".inspect-filter-tab");
+    var currentAuditItems = [];
+    var activeFilter = "all";
+
+    function closeInspectDialog() {
+        if (inspectDialog && inspectDialog.close) inspectDialog.close();
+    }
+    if (inspectCloseBtn) inspectCloseBtn.addEventListener("click", closeInspectDialog);
+    if (inspectFooterCloseBtn) inspectFooterCloseBtn.addEventListener("click", closeInspectDialog);
+    if (inspectDialog) {
+        inspectDialog.addEventListener("click", function(e) {
+            if (e.target === inspectDialog) closeInspectDialog();
+        });
+    }
+
+    function escapeHtml(str) {
+        if (!str) return "";
+        return String(str)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+
+    function renderAuditRows() {
+        if (!inspectTableBody) return;
+        var q = (inspectSearchInput ? inspectSearchInput.value : "").trim().toLowerCase();
+        var visibleCount = 0;
+        var html = "";
+
+        currentAuditItems.forEach(function(item) {
+            var disp = item.disposition || "";
+            var isSaved = disp === "saved_to_pipeline";
+            var isSkipped = disp === "already_in_pipeline" || disp === "previously_removed";
+            var isEliminated = disp.indexOf("eliminated") === 0;
+
+            if (activeFilter === "saved" && !isSaved) return;
+            if (activeFilter === "eliminated" && !isEliminated) return;
+            if (activeFilter === "skipped" && !isSkipped) return;
+
+            var title = item.title || "";
+            var company = item.company || "";
+            var location = item.location || "";
+            var reason = item.reason || "";
+            var source = item.source || "";
+
+            if (q) {
+                var searchTarget = (title + " " + company + " " + location + " " + reason + " " + source).toLowerCase();
+                if (searchTarget.indexOf(q) === -1) return;
+            }
+
+            visibleCount++;
+
+            var badgeHtml = "";
+            if (isSaved) {
+                badgeHtml = '<span class="inline-flex items-center gap-1 rounded bg-green-50 px-2 py-0.5 font-medium text-green-700 border border-green-200/50"><span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>Saved to Pipeline</span>';
+            } else if (disp === "already_in_pipeline") {
+                badgeHtml = '<span class="inline-flex items-center gap-1 rounded bg-blue-50 px-2 py-0.5 font-medium text-blue-700 border border-blue-200/50"><span class="h-1.5 w-1.5 rounded-full bg-blue-500"></span>In Pipeline</span>';
+            } else if (disp === "previously_removed") {
+                badgeHtml = '<span class="inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 font-medium text-slate-600 border border-slate-200/50"><span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>Prev Removed</span>';
+            } else if (disp === "eliminated_disqualifier") {
+                badgeHtml = '<span class="inline-flex items-center gap-1 rounded bg-amber-50 px-2 py-0.5 font-medium text-amber-700 border border-amber-200/50"><span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>Disqualifier</span>';
+            } else if (disp === "eliminated_disliked") {
+                badgeHtml = '<span class="inline-flex items-center gap-1 rounded bg-rose-50 px-2 py-0.5 font-medium text-rose-700 border border-rose-200/50"><span class="h-1.5 w-1.5 rounded-full bg-rose-500"></span>Disliked</span>';
+            } else {
+                badgeHtml = '<span class="inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 font-medium text-slate-600 border border-slate-200/50"><span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>Eliminated</span>';
+            }
+
+            var linkHtml = item.url
+                ? '<a href="' + encodeURI(item.url) + '" target="_blank" rel="noopener noreferrer" class="font-medium text-slate-900 hover:text-brand hover:underline inline-flex items-center gap-1">' +
+                  escapeHtml(title) +
+                  '<svg class="w-3 h-3 text-slate-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg></a>'
+                : '<span class="font-medium text-slate-900">' + escapeHtml(title) + '</span>';
+
+            html += '<tr class="hover:bg-slate-50/70 transition">' +
+                '<td class="py-2.5 px-3 max-w-[280px] truncate">' +
+                    linkHtml +
+                    '<div class="text-[11px] text-slate-500">' + escapeHtml(company) + '</div>' +
+                '</td>' +
+                '<td class="py-2.5 px-3 max-w-[180px] truncate text-slate-600">' +
+                    '<div>' + escapeHtml(location || "—") + '</div>' +
+                    '<div class="text-[10px] text-slate-400 uppercase tracking-wider">' + escapeHtml(source || "") + '</div>' +
+                '</td>' +
+                '<td class="py-2.5 px-3 whitespace-nowrap">' + badgeHtml + '</td>' +
+                '<td class="py-2.5 px-3 text-slate-600 max-w-[320px] text-[11px]">' + escapeHtml(reason || "—") + '</td>' +
+            '</tr>';
+        });
+
+        inspectTableBody.innerHTML = html;
+        if (visibleCount === 0) {
+            inspectTable.classList.add("hidden");
+            inspectNoResults.classList.remove("hidden");
+        } else {
+            inspectTable.classList.remove("hidden");
+            inspectNoResults.classList.add("hidden");
+        }
+    }
+
+    function updateFilterCounts() {
+        var all = currentAuditItems.length;
+        var saved = 0;
+        var eliminated = 0;
+        var skipped = 0;
+        currentAuditItems.forEach(function(item) {
+            var disp = item.disposition || "";
+            if (disp === "saved_to_pipeline") saved++;
+            else if (disp === "already_in_pipeline" || disp === "previously_removed") skipped++;
+            else if (disp.indexOf("eliminated") === 0) eliminated++;
+        });
+        var countAllEl = document.getElementById("inspectCountAll");
+        var countSavedEl = document.getElementById("inspectCountSaved");
+        var countEliminatedEl = document.getElementById("inspectCountEliminated");
+        var countSkippedEl = document.getElementById("inspectCountSkipped");
+        if (countAllEl) countAllEl.textContent = all;
+        if (countSavedEl) countSavedEl.textContent = saved;
+        if (countEliminatedEl) countEliminatedEl.textContent = eliminated;
+        if (countSkippedEl) countSkippedEl.textContent = skipped;
+    }
+
+    if (inspectSearchInput) {
+        inspectSearchInput.addEventListener("input", renderAuditRows);
+    }
+
+    inspectFilterTabs.forEach(function(tab) {
+        tab.addEventListener("click", function() {
+            inspectFilterTabs.forEach(function(t) {
+                t.classList.remove("text-white", "bg-slate-800");
+                t.classList.add("text-slate-600");
+            });
+            tab.classList.add("text-white", "bg-slate-800");
+            tab.classList.remove("text-slate-600");
+            activeFilter = tab.getAttribute("data-filter") || "all";
+            renderAuditRows();
+        });
+    });
+
+    document.querySelectorAll(".inspect-run-btn").forEach(function(btn) {
+        btn.addEventListener("click", function() {
+            var profile = btn.getAttribute("data-profile") || "";
+            var date = btn.getAttribute("data-date") || "";
+            var jsonUrl = btn.getAttribute("data-json-url") || "";
+            var csvUrl = btn.getAttribute("data-csv-url") || "";
+            var fetched = btn.getAttribute("data-fetched") || "0";
+            var eliminated = btn.getAttribute("data-eliminated") || "0";
+            var saved = btn.getAttribute("data-saved") || "0";
+
+            if (inspectProfileName) inspectProfileName.textContent = profile;
+            if (inspectRunMeta) inspectRunMeta.textContent = date + " · " + fetched + " fetched · " + eliminated + " eliminated · " + saved + " saved";
+            if (inspectDownloadCsvBtn) inspectDownloadCsvBtn.setAttribute("href", csvUrl);
+
+            currentAuditItems = [];
+            activeFilter = "all";
+            if (inspectSearchInput) inspectSearchInput.value = "";
+            inspectFilterTabs.forEach(function(t, idx) {
+                if (idx === 0) {
+                    t.classList.add("text-white", "bg-slate-800");
+                    t.classList.remove("text-slate-600");
+                } else {
+                    t.classList.remove("text-white", "bg-slate-800");
+                    t.classList.add("text-slate-600");
+                }
+            });
+
+            if (inspectLoading) inspectLoading.classList.remove("hidden");
+            if (inspectError) inspectError.classList.add("hidden");
+            if (inspectTable) inspectTable.classList.add("hidden");
+            if (inspectNoResults) inspectNoResults.classList.add("hidden");
+
+            if (inspectDialog && inspectDialog.showModal) inspectDialog.showModal();
+
+            fetch(jsonUrl)
+                .then(function(res) {
+                    if (!res.ok) throw new Error("Could not load run details (" + res.status + ")");
+                    return res.json();
+                })
+                .then(function(data) {
+                    if (inspectLoading) inspectLoading.classList.add("hidden");
+                    currentAuditItems = data.details || [];
+                    updateFilterCounts();
+                    renderAuditRows();
+                })
+                .catch(function(err) {
+                    if (inspectLoading) inspectLoading.classList.add("hidden");
+                    if (inspectError) {
+                        inspectError.textContent = err.message || "Failed to load run details.";
+                        inspectError.classList.remove("hidden");
+                    }
+                });
+        });
+    });
 })();
 </script>
 {% endblock %}

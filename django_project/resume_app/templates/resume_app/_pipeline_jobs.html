@@ -93,9 +93,6 @@
                 <button type="button" id="pipeline-bulk-open-optimizer" class="rounded-concierge border border-brand/20 bg-white px-3 py-1.5 text-xs font-semibold text-brand-ink hover:bg-brand-mist">
                     Open optimizer (selected)
                 </button>
-                <button type="submit" name="action" value="start_apply_agent" class="rounded-concierge border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-900 hover:bg-emerald-50">
-                    Start apply agent (selected)
-                </button>
                 {% endif %}
             </div>
         </div>
@@ -258,10 +255,34 @@
                 <button type="button" id="pipelineInterviewPrepClose" class="rounded-concierge px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100">Close</button>
             </header>
             <div class="min-h-0 flex-1 overflow-y-auto bg-white px-4 py-3">
-                <p id="interview-prep-heading" class="mb-2 text-sm font-semibold text-concierge-slate"></p>
+                <p id="interview-prep-heading" class="mb-2.5 text-sm font-semibold text-concierge-slate"></p>
+
+                <!-- Interview Round Tabs -->
+                <div class="mb-2 flex flex-wrap items-center gap-1.5 border-b border-slate-200 pb-2.5">
+                    <span class="mr-1 text-xs font-semibold text-slate-500">Round:</span>
+                    <button type="button" class="interview-type-tab inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition-colors" data-type="recruiter">
+                        <span>Recruiter Screen</span>
+                        <span class="tab-badge hidden h-1.5 w-1.5 rounded-full bg-emerald-500" title="Prep generated"></span>
+                    </button>
+                    <button type="button" class="interview-type-tab inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition-colors" data-type="hiring_manager">
+                        <span>Hiring Manager</span>
+                        <span class="tab-badge hidden h-1.5 w-1.5 rounded-full bg-emerald-500" title="Prep generated"></span>
+                    </button>
+                    <button type="button" class="interview-type-tab inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition-colors" data-type="behavioral">
+                        <span>Behavioral (STAR)</span>
+                        <span class="tab-badge hidden h-1.5 w-1.5 rounded-full bg-emerald-500" title="Prep generated"></span>
+                    </button>
+                    <button type="button" class="interview-type-tab inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition-colors" data-type="technical">
+                        <span>Technical</span>
+                        <span class="tab-badge hidden h-1.5 w-1.5 rounded-full bg-emerald-500" title="Prep generated"></span>
+                    </button>
+                </div>
+
+                <p id="interview-round-description" class="mb-3 text-xs text-slate-500 italic"></p>
+
                 <div class="mb-3 flex flex-wrap items-center gap-2">
                     <button type="button" id="interview-prep-generate-btn" class="inline-flex items-center gap-1.5 rounded-concierge bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-hover">
-                        <span id="interview-prep-btn-text">Generate interview questions</span>
+                        <span id="interview-prep-btn-text">Generate interview prep</span>
                         <span id="interview-prep-spinner" class="hidden h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-white/40 border-t-white" role="status" aria-hidden="true"></span>
                     </button>
                     <span id="interview-prep-status" class="text-xs text-slate-500" role="status" aria-live="polite"></span>
@@ -513,24 +534,55 @@
             var dlg = document.getElementById('pipelineInterviewPrepDialog');
             var closeBtn = document.getElementById('pipelineInterviewPrepClose');
             var heading = document.getElementById('interview-prep-heading');
+            var roundDescEl = document.getElementById('interview-round-description');
             var contentEl = document.getElementById('interview-prep-content');
             var genBtn = document.getElementById('interview-prep-generate-btn');
             var btnText = document.getElementById('interview-prep-btn-text');
             var spinner = document.getElementById('interview-prep-spinner');
             var statusEl = document.getElementById('interview-prep-status');
+            var tabBtns = document.querySelectorAll('.interview-type-tab');
             var apiBase = '/api/resume/jobs/pipeline-entry';
             var activeEntryId = null;
+
+            var ROUND_META = {
+                recruiter: {
+                    label: 'Recruiter Screen',
+                    description: 'Initial screening with HR or talent recruiter. Focuses on salary expectations, career history, motivation, and cultural fit.'
+                },
+                hiring_manager: {
+                    label: 'Hiring Manager',
+                    description: 'Strategic fit and team impact. Focuses on day-to-day role execution, problem-solving, and cross-functional leadership.'
+                },
+                behavioral: {
+                    label: 'Behavioral (STAR)',
+                    description: 'Situational questions structured in STAR format. Focuses on conflict resolution, failure/learning, and ownership.'
+                },
+                technical: {
+                    label: 'Technical',
+                    description: 'Deep dive into technical skills, architecture choices, stack knowledge, trade-offs, and practical execution.'
+                }
+            };
+
+            var currentRound = 'recruiter';
+            var roundPreps = {};
 
             function setBusy(busy) {
                 if (genBtn) genBtn.disabled = busy;
                 if (spinner) spinner.classList.toggle('hidden', !busy);
-                if (btnText) btnText.textContent = busy ? 'Generating…' : (contentEl && contentEl.textContent.trim() ? 'Regenerate' : 'Generate interview questions');
+                tabBtns.forEach(function(btn) { btn.disabled = busy; });
+                if (btnText) {
+                    var label = (ROUND_META[currentRound] && ROUND_META[currentRound].label) || 'Prep';
+                    var hasData = roundPreps[currentRound] && (roundPreps[currentRound].markdown || roundPreps[currentRound].content);
+                    btnText.textContent = busy ? 'Generating…' : (hasData ? 'Regenerate ' + label : 'Generate ' + label);
+                }
             }
+
             function renderMarkdown(md) {
                 if (!contentEl) return;
                 contentEl.classList.remove('interview-prep-md-fallback');
                 if (!md || !String(md).trim()) {
-                    contentEl.innerHTML = '<p class="text-slate-500">No interview prep yet. Click Generate when you have an interview scheduled.</p>';
+                    var label = (ROUND_META[currentRound] && ROUND_META[currentRound].label) || 'interview';
+                    contentEl.innerHTML = '<p class="text-slate-500">No ' + label + ' prep generated yet. Click Generate below to prepare for this round.</p>';
                     return;
                 }
                 if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
@@ -549,18 +601,76 @@
                 contentEl.classList.add('interview-prep-md-fallback');
                 contentEl.textContent = md;
             }
+
+            function updateRoundUI() {
+                var meta = ROUND_META[currentRound] || ROUND_META.recruiter;
+                if (roundDescEl) roundDescEl.textContent = meta.description || '';
+
+                tabBtns.forEach(function(tab) {
+                    var t = tab.getAttribute('data-type');
+                    var isActive = (t === currentRound);
+                    tab.className = 'interview-type-tab inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs transition-colors ' +
+                        (isActive ? 'font-semibold bg-brand text-white shadow-xs' : 'font-medium bg-slate-100 text-slate-700 hover:bg-slate-200');
+
+                    var badge = tab.querySelector('.tab-badge');
+                    if (badge) {
+                        var hasData = roundPreps[t] && (roundPreps[t].markdown || roundPreps[t].content);
+                        badge.classList.toggle('hidden', !hasData);
+                    }
+                });
+
+                var currentData = roundPreps[currentRound];
+                var hasContent = currentData && (currentData.markdown || currentData.content);
+                if (hasContent) {
+                    renderMarkdown(currentData.markdown || currentData.content);
+                    if (btnText) btnText.textContent = 'Regenerate ' + meta.label;
+                    if (statusEl) {
+                        if (currentData.generated_at) {
+                            try {
+                                var timeStr = new Date(currentData.generated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                                statusEl.textContent = 'Generated at ' + timeStr;
+                            } catch (e) {
+                                statusEl.textContent = 'Generated';
+                            }
+                        } else {
+                            statusEl.textContent = 'Ready';
+                        }
+                    }
+                } else {
+                    renderMarkdown('');
+                    if (btnText) btnText.textContent = 'Generate ' + meta.label;
+                    if (statusEl) statusEl.textContent = '';
+                }
+            }
+
+            tabBtns.forEach(function(tab) {
+                tab.addEventListener('click', function() {
+                    var t = tab.getAttribute('data-type');
+                    if (t && ROUND_META[t] && t !== currentRound) {
+                        currentRound = t;
+                        updateRoundUI();
+                    }
+                });
+            });
+
             function loadPrep(entryId) {
                 if (!entryId) return;
                 fetch(apiBase + '/' + entryId + '/interview-prep', { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
                     .then(function(r) { return r.ok ? r.json() : r.json().then(function(j) { throw new Error(j.detail || 'HTTP ' + r.status); }); })
                     .then(function(data) {
-                        renderMarkdown(data.markdown || data.content || '');
-                        if (btnText) btnText.textContent = (data.markdown || data.content) ? 'Regenerate' : 'Generate interview questions';
+                        roundPreps = data.types_data || {};
+                        if (data.interview_type && ROUND_META[data.interview_type]) {
+                            currentRound = data.interview_type;
+                        } else if (data.available_types && data.available_types.length > 0 && !roundPreps[currentRound]) {
+                            currentRound = data.available_types[0];
+                        }
+                        updateRoundUI();
                     })
                     .catch(function(err) {
                         if (statusEl) statusEl.textContent = err.message || 'Could not load prep.';
                     });
             }
+
             if (closeBtn && dlg) closeBtn.addEventListener('click', function() { if (dlg.open) dlg.close(); });
             document.querySelectorAll('.pipeline-interview-prep-btn').forEach(function(btn) {
                 btn.addEventListener('click', function() {
@@ -568,25 +678,53 @@
                     var title = btn.getAttribute('data-job-title') || 'Job';
                     if (heading) heading.textContent = title;
                     if (statusEl) statusEl.textContent = '';
-                    renderMarkdown('');
+                    currentRound = 'recruiter';
+                    roundPreps = {};
+                    updateRoundUI();
                     try { dlg.showModal(); } catch (e) {}
                     loadPrep(activeEntryId);
                 });
             });
+
+            function getCsrfToken() {
+                var meta = document.querySelector('meta[name="csrf-token"]');
+                if (meta && meta.getAttribute('content')) {
+                    return meta.getAttribute('content');
+                }
+                var input = document.querySelector('input[name="csrfmiddlewaretoken"]');
+                if (input && input.value) {
+                    return input.value;
+                }
+                var match = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+                return match ? decodeURIComponent(match[1]) : '';
+            }
+
             if (genBtn) {
                 genBtn.addEventListener('click', function() {
                     if (!activeEntryId) return;
                     setBusy(true);
-                    if (statusEl) statusEl.textContent = 'Calling LLM…';
+                    var meta = ROUND_META[currentRound] || ROUND_META.recruiter;
+                    if (statusEl) statusEl.textContent = 'Generating ' + meta.label + ' prep…';
+                    var csrf = getCsrfToken();
+                    var headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+                    if (csrf) headers['X-CSRFToken'] = csrf;
                     fetch(apiBase + '/' + activeEntryId + '/generate-interview-prep', {
                         method: 'POST',
                         credentials: 'same-origin',
-                        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                        body: JSON.stringify({})
+                        headers: headers,
+                        body: JSON.stringify({ interview_type: currentRound })
                     })
                     .then(function(r) { return r.ok ? r.json() : r.json().then(function(j) { throw new Error(j.detail || 'HTTP ' + r.status); }); })
                     .then(function(data) {
-                        renderMarkdown(data.markdown || data.content || '');
+                        roundPreps = data.types_data || {};
+                        if (data.markdown || data.content) {
+                            roundPreps[currentRound] = {
+                                markdown: data.markdown,
+                                content: data.content,
+                                generated_at: data.generated_at
+                            };
+                        }
+                        updateRoundUI();
                         if (statusEl) statusEl.textContent = 'Done.';
                         setBusy(false);
                     })

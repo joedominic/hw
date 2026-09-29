@@ -210,10 +210,10 @@ def send_verification_email(user, *, request=None) -> bool:
         base = getattr(settings, "ACCOUNT_EMAIL_BASE_URL", "").rstrip("/")
         absolute = f"{base}{path}" if base else path
 
-    subject = "Verify your ResumeElite email"
+    subject = "Verify your HireEdge email"
     body = (
         f"Hi {user.get_username()},\n\n"
-        f"Confirm your email address for ResumeElite:\n\n{absolute}\n\n"
+        f"Confirm your email address for HireEdge:\n\n{absolute}\n\n"
         "If you did not create this account, you can ignore this message.\n"
     )
     from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "webmaster@localhost")
@@ -297,7 +297,6 @@ def build_account_export(user) -> dict[str, Any]:
         },
         "automation_settings": {
             "stop_llm_requests": automation.stop_llm_requests,
-            "apply_agent_enabled": getattr(automation, "apply_agent_enabled", None),
             "export_replacements": getattr(automation, "export_replacements", None) or [],
         },
         "resumes": resumes,

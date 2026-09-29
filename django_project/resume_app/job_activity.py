@@ -55,7 +55,7 @@ def check_job_listing_active(job: JobListing, timeout_seconds: float = 8.0) -> J
         return JobActivityCheck(active=None, reason="missing_url")
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; ResumeEliteBot/1.0; +https://localhost)",
+        "User-Agent": "Mozilla/5.0 (compatible; HireEdgeBot/1.0; +https://localhost)",
         "Accept-Language": "en-US,en;q=0.9",
     }
     try:

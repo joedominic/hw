@@ -47,17 +47,8 @@ On the search form, **Sites** checkboxes select which boards to query. Implement
 | **Indeed** | [python-jobspy](https://pypi.org/project/python-jobspy/) | Default if none selected |
 | **LinkedIn** | python-jobspy | Fetches full descriptions (`linkedin_fetch_description`) |
 | **Dice** | `resume_app/dice_client.py` | Dice JSON search API (`job-search-api.svc.dhigroupinc.com`), with HTML fallback. Full descriptions are loaded from job-detail JSON-LD when Tailoring or using Auto-fill. |
-| **Adzuna** | `resume_app/adzuna_client.py` | [Adzuna API](https://developer.adzuna.com/) — requires keys in `.env` |
 | **Levels.fyi** | `resume_app/levels_client.py` | Undocumented encrypted jobs API (`api.levels.fyi/v1/job/search`). Full descriptions are loaded from `api.levels.fyi/v1/job/{id}` when Tailoring or using Auto-fill. |
 | **Built In** | `resume_app/builtin_client.py` | BuiltIn.com jobs API / scraper with proxy support. |
-
-**Adzuna setup:** Register at [developer.adzuna.com](https://developer.adzuna.com/), then set:
-
-- `ADZUNA_APP_ID`
-- `ADZUNA_APP_KEY`
-- Optional: `ADZUNA_COUNTRY` (default `us`), `ADZUNA_MAX_PAGES` (default `3`)
-
-If Adzuna is checked but keys are missing, search returns a 502 with a clear error message.
 
 **Dice:** Uses the same JSON search endpoint as the Dice website (no account required). Optional overrides: `DICE_API_KEY`, `DICE_COUNTRY_CODE` (default `US`), `DICE_RADIUS_MILES` (default `30`). If the API fails, the client falls back to scraping `/jobs` HTML.
 

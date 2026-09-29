@@ -368,12 +368,12 @@ class SavedJobSearchViewTests(TestCase):
             name="",
             search_term="Updated term",
             location="Austin",
-            site_names=["adzuna"],
+            site_names=["dice"],
             preset_id=self.saved.id,
         )
         self.assertEqual(updated.name, "Dallas SWE")
         self.assertEqual(updated.search_term, "Updated term")
-        self.assertEqual(updated.site_names, ["adzuna"])
+        self.assertEqual(updated.site_names, ["dice"])
 
     def test_delete_preset_post(self):
         resp = self.client.post(

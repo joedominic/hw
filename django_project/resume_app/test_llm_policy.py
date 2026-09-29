@@ -15,11 +15,14 @@ from resume_app.subscriptions import (
     usage_today,
 )
 from resume_app.llm import (
+    LLMEmailVerificationRequired,
     LLMTokenBudgetExceeded,
+    assert_email_verified,
     check_token_budget,
     consume_token_budget,
     daily_token_limit_for_user,
 )
+from resume_app.account import mark_email_verified
 from resume_app.test_utils import create_user, login_client
 
 
@@ -57,6 +60,34 @@ class TokenBudgetTests(TestCase):
     )
     @patch("resume_app.llm.policy.uses_platform_keys", return_value=False)
     def test_consume_token_budget(self, _mock_plat):
+        consume_token_budget(self.user, 120, provider="OpenAI")
+        self.assertEqual(usage_today(self.user, METRIC_LLM_TOKENS), 120)
+
+    @override_settings(
+        SAAS_ENFORCE_QUOTAS=True,
+        LLM_DAILY_TOKEN_LIMIT_BY_PLAN={"free": 100, "pro": 5000, "unlimited": 0},
+        LLM_PLATFORM_DAILY_TOKEN_LIMIT=0,
+    )
+    def test_check_token_budget_allows_local_provider_even_when_exhausted(self):
+        consume_quota(self.user, METRIC_LLM_TOKENS, 100)
+        # Cloud provider is blocked
+        with self.assertRaises(LLMTokenBudgetExceeded):
+            check_token_budget(self.user, estimated_tokens=10, provider="OpenAI")
+        # Ollama Local is allowed and unmetered
+        check_token_budget(self.user, estimated_tokens=10, provider="Ollama Local")
+        check_token_budget(self.user, estimated_tokens=10, provider="OpenAI", is_local=True)
+
+    @override_settings(
+        SAAS_ENFORCE_QUOTAS=True,
+        LLM_DAILY_TOKEN_LIMIT_BY_PLAN={"free": 500, "pro": 5000, "unlimited": 0},
+        LLM_PLATFORM_DAILY_TOKEN_LIMIT=0,
+    )
+    @patch("resume_app.llm.policy.uses_platform_keys", return_value=False)
+    def test_consume_token_budget_local_provider_not_metered(self, _mock_plat):
+        consume_token_budget(self.user, 120, provider="Ollama Local")
+        self.assertEqual(usage_today(self.user, METRIC_LLM_TOKENS), 0)
+        consume_token_budget(self.user, 120, provider="OpenAI", is_local=True)
+        self.assertEqual(usage_today(self.user, METRIC_LLM_TOKENS), 0)
         consume_token_budget(self.user, 120, provider="OpenAI")
         self.assertEqual(usage_today(self.user, METRIC_LLM_TOKENS), 120)
 
@@ -212,5 +243,47 @@ class SettingsUsageTabAndResetTests(TestCase):
         html = resp.content.decode()
         self.assertIn("Optimizer — cover letter", html)
         self.assertIn("gpt-4o-mini", html)
+
+
+class EmailVerificationLLMGateTests(TestCase):
+    def setUp(self):
+        self.unverified_user = create_user("ev_unverified")
+        self.verified_user = create_user("ev_verified")
+        mark_email_verified(self.verified_user)
+        self.staff_user = create_user("ev_staff")
+        self.staff_user.is_staff = True
+        self.staff_user.save(update_fields=["is_staff"])
+
+    @override_settings(SAAS_REQUIRE_VERIFIED_EMAIL_FOR_LLM=True)
+    def test_unverified_user_blocked_when_enforced(self):
+        with self.assertRaises(LLMEmailVerificationRequired) as ctx:
+            assert_email_verified(self.unverified_user)
+        self.assertIn("Email verification is required", str(ctx.exception))
+
+    @override_settings(SAAS_REQUIRE_VERIFIED_EMAIL_FOR_LLM=True)
+    def test_verified_user_allowed_when_enforced(self):
+        # Should not raise
+        assert_email_verified(self.verified_user)
+
+    @override_settings(SAAS_REQUIRE_VERIFIED_EMAIL_FOR_LLM=True)
+    def test_staff_bypasses_email_verification(self):
+        # Staff should not be blocked even if email is unverified
+        assert_email_verified(self.staff_user)
+
+    @override_settings(SAAS_REQUIRE_VERIFIED_EMAIL_FOR_LLM=False, REQUIRE_EMAIL_VERIFICATION=False)
+    def test_unverified_user_allowed_when_disabled(self):
+        # Should not raise when enforcement is disabled
+        assert_email_verified(self.unverified_user)
+
+    @override_settings(SAAS_REQUIRE_VERIFIED_EMAIL_FOR_LLM=True)
+    def test_gateway_raises_when_unverified(self):
+        from resume_app.llm import call_invoke_llm_messages
+
+        with self.assertRaises(LLMEmailVerificationRequired):
+            call_invoke_llm_messages(
+                [{"role": "user", "content": "Hello"}],
+                user=self.unverified_user,
+            )
+
 
 

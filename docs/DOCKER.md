@@ -1,6 +1,6 @@
 # Docker deployment
 
-ResumeElite runs as **two containers** sharing one image:
+HireEdge runs as **two containers** sharing one image:
 
 | Service | Command | Role |
 |---------|---------|------|

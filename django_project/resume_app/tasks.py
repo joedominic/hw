@@ -439,16 +439,6 @@ def optimize_resume_task(
             )
         )
 
-        # Resume apply-agent attempts that were waiting on this optimization.
-        if optimized_resume.pipeline_entry_id:
-            try:
-                nudge_apply_attempts_for_pipeline_entry(user.id, optimized_resume.pipeline_entry_id)
-            except Exception:
-                logger.exception(
-                    "[optimize_resume_task] failed to nudge apply agent for entry=%s",
-                    optimized_resume.pipeline_entry_id,
-                )
-
         clear_node_llm_debug(str(resume_id))
         return {"status": "success", "resume_id": resume_id}
 
@@ -484,8 +474,8 @@ def _build_pipeline_job_description(job: JobListing, user) -> str:
         if x
     )
     # Use JDCleanserService to strip boilerplate before sending to LLM.
-    # LLM-based cleansing is enabled here for maximum quality in the Optimizer.
-    desc = JDCleanserService.cleanse((job.description or ""), title=title, use_llm=True, user=user)
+    # Local Ollama cleanses the text; falls back to heuristics if unavailable to avoid cloud token usage.
+    desc = JDCleanserService.cleanse((job.description or ""), title=title, use_llm=True, user=user, only_local=True)
     url = (job.url or "").strip()
     tail_parts = [p for p in (desc, f"URL: {url}" if url else "") if p]
     tail = "\n\n".join(tail_parts)
@@ -704,15 +694,22 @@ def run_job_search_task(user_id, task_id):
 
 
 def _prune_old_runs(task):
-    """Keep only the last 5 runs for a task."""
+    """Keep only the last 5 runs for a task, and keep detailed job audit only for the last 2 runs."""
     try:
-        keep_ids = list(
+        run_ids = list(
             JobSearchTaskRun.objects.filter(task=task)
-            .order_by("-started_at")
-            .values_list("id", flat=True)[:5]
+            .order_by("-started_at", "-id")
+            .values_list("id", flat=True)
         )
-        if keep_ids:
-            JobSearchTaskRun.objects.filter(task=task).exclude(id__in=keep_ids).delete()
+        if len(run_ids) > 5:
+            delete_ids = run_ids[5:]
+            JobSearchTaskRun.objects.filter(task=task, id__in=delete_ids).delete()
+            run_ids = run_ids[:5]
+
+        # For runs older than the last 2, clear details to conserve storage
+        if len(run_ids) > 2:
+            clear_ids = run_ids[2:]
+            JobSearchTaskRun.objects.filter(task=task, id__in=clear_ids).update(details=[])
     except Exception:
         logger.exception("[run_job_search_task] Pruning old runs failed for task_id=%s", task.id)
 
@@ -731,7 +728,7 @@ def _run_job_search_task_impl(user_id, task_id):
         status=JobSearchTaskRun.STATUS_RUNNING,
     )
     try:
-        jobs_fetched, jobs_after_filter, jobs_out, _refs = run_job_search_core(
+        jobs_fetched, jobs_after_filter, jobs_out, _refs, audit_items = run_job_search_core(
             user=user,
             search_term=task.search_term,
             location=task.location or None,
@@ -740,22 +737,26 @@ def _run_job_search_task_impl(user_id, task_id):
             site_name=normalize_site_names(
                 task.site_name if isinstance(task.site_name, list) else None
             ),
+            return_audit_log=True,
         )
     except Exception as e:
         logger.exception("[run_job_search_task] task_id=%s core failed: %s", task_id, e)
         run.status = JobSearchTaskRun.STATUS_FAILED
         run.finished_at = timezone.now()
         run.error_message = str(e)
+        run.details = []
         run.save()
         _prune_old_runs(task)
         return {"status": "error", "message": str(e)}
 
+    audit_by_id = {item["job_id"]: item for item in audit_items}
     jobs_added_to_pipeline = 0
     from .search_profile_scope import upsert_pipeline_entry
 
     for payload in jobs_out:
         job_id = payload.id
         pe = PipelineEntry.objects.for_user(user).filter(job_listing_id=job_id, track=task.track).first()
+        audit_entry = audit_by_id.get(job_id)
         if pe is None:
             upsert_pipeline_entry(
                 user,
@@ -764,8 +765,50 @@ def _run_job_search_task_impl(user_id, task_id):
                 defaults={"stage": PipelineEntry.Stage.PIPELINE},
             )
             jobs_added_to_pipeline += 1
+            if audit_entry:
+                audit_entry["disposition"] = "saved_to_pipeline"
+                audit_entry["reason"] = "Saved to Pipeline (New)"
         elif pe.removed_at is not None:
-            pass  # user soft-deleted; do not re-add
+            repost_cooldown_days = getattr(settings, "PIPELINE_DELETED_REPOST_COOLDOWN_DAYS", 14)
+            repost_cooldown = timedelta(days=repost_cooldown_days)
+            now = timezone.now()
+
+            is_reposted = False
+            posted_at = getattr(payload, "posted_at", None)
+            if not posted_at:
+                listing = JobListing.objects.filter(id=job_id).first()
+                if listing and listing.posted_at:
+                    posted_at = listing.posted_at
+
+            if posted_at and pe.removed_at:
+                if (now - pe.removed_at) >= repost_cooldown:
+                    posted_at_dt = posted_at
+                    if timezone.is_naive(posted_at_dt):
+                        posted_at_dt = timezone.make_aware(posted_at_dt)
+                    if posted_at_dt > pe.removed_at:
+                        is_reposted = True
+
+            if is_reposted:
+                pe.removed_at = None
+                pe.stage = PipelineEntry.Stage.PIPELINE
+                pe.save(update_fields=["removed_at", "stage"])
+                jobs_added_to_pipeline += 1
+                if audit_entry:
+                    audit_entry["disposition"] = "reposted_to_pipeline"
+                    date_str = posted_at.strftime("%b %d, %Y") if hasattr(posted_at, "strftime") else str(posted_at)
+                    audit_entry["reason"] = (
+                        f"Re-admitted to Pipeline: Reposted on {date_str} (after {repost_cooldown_days}-day cooldown)"
+                    )
+            else:
+                if audit_entry:
+                    audit_entry["disposition"] = "previously_removed"
+                    audit_entry["reason"] = "Skipped: Previously removed / archived from pipeline"
+        else:
+            if audit_entry:
+                audit_entry["disposition"] = "already_in_pipeline"
+                stage_name = pe.get_stage_display() if hasattr(pe, "get_stage_display") else pe.stage
+                audit_entry["reason"] = f"Skipped: Already in pipeline (Stage: {stage_name})"
+
 
     try:
         from .job_dedupe import dedupe_pipeline_entries
@@ -814,8 +857,10 @@ def _run_job_search_task_impl(user_id, task_id):
     run.jobs_added_to_pipeline = jobs_added_to_pipeline
     run.status = JobSearchTaskRun.STATUS_COMPLETED
     run.finished_at = timezone.now()
+    run.details = audit_items
     run.save()
     _prune_old_runs(task)
+
     logger.info(
         "[run_job_search_task] task_id=%s done: fetched=%d after_filter=%d added=%d",
         task_id, jobs_fetched, jobs_after_filter, jobs_added_to_pipeline,
@@ -958,8 +1003,8 @@ def evaluate_vetting_matching_task(
                 continue
 
             # Cleanse JD for vetting match to save tokens.
-            # LLM-based cleansing is enabled here for high-quality fit check.
-            jd = JDCleanserService.cleanse(raw_jd, title=entry.job_listing.title, use_llm=True, user=user)
+            # Local Ollama cleanses the text; falls back to heuristics if unavailable to avoid cloud token usage.
+            jd = JDCleanserService.cleanse(raw_jd, title=entry.job_listing.title, use_llm=True, user=user, only_local=True)
             jd = jd[:jd_max_chars]
 
             try:
@@ -1779,103 +1824,3 @@ def pipeline_resume_llm_extract_task(run_dir_str: str):
 
     return {"status": "ok", "run_dir": run_dir_str}
 
-
-#
-# Autonomous Apply Agent
-#
-# A per-attempt cache lock prevents the heartbeat from double-processing the same
-# attempt if a previous step is still running (Huey may have multiple workers).
-APPLY_AGENT_STEP_LOCK_PREFIX = "apply_agent_step_lock:"
-APPLY_AGENT_STEP_LOCK_TIMEOUT = 600  # 10 min safety; steps are bounded well below this
-
-
-@db_task()
-def run_apply_agent_step(user_id: int, attempt_id: int):
-    """Advance one ApplicationAttempt by a single state-machine step.
-
-    Browser work happens inside the orchestrator with a hard per-step deadline
-    and a small concurrency semaphore. A per-attempt lock prevents concurrent
-    processing of the same attempt.
-
-    After a successful non-terminal step, immediately enqueue the next step so
-    progress does not depend solely on the 60s heartbeat (which is gated by
-    ``apply_agent_enabled``).
-    """
-    lock_key = f"{APPLY_AGENT_STEP_LOCK_PREFIX}{attempt_id}"
-    if not cache.add(lock_key, 1, APPLY_AGENT_STEP_LOCK_TIMEOUT):
-        return {"status": "skipped", "message": "Attempt already processing", "attempt_id": attempt_id}
-    should_chain = False
-    try:
-        from .apply_agent import orchestrator
-        from .models import ApplicationAttempt
-
-        before = (
-            ApplicationAttempt.objects.filter(id=int(attempt_id), pipeline_entry__owner_id=int(user_id))
-            .values_list("status", flat=True)
-            .first()
-        )
-        result = orchestrator.advance_attempt(int(attempt_id), user_id=int(user_id))
-        after = (result or {}).get("state") or ""
-        # Only chain when the state machine actually progressed. Waiting on the
-        # optimizer or a browser slot leaves status unchanged and must not loop.
-        if (
-            (result or {}).get("status") == "ok"
-            and after in ApplicationAttempt.ACTIVE_STATUSES
-            and after != before
-        ):
-            should_chain = True
-        return result
-    finally:
-        cache.delete(lock_key)
-        if should_chain:
-            run_apply_agent_step(int(user_id), int(attempt_id))
-
-
-def nudge_apply_attempts_for_pipeline_entry(user_id: int, pipeline_entry_id: int) -> int:
-    """Enqueue apply-agent steps for attempts waiting on this pipeline entry's optimizer."""
-    from .models import ApplicationAttempt
-
-    waiting = list(
-        ApplicationAttempt.objects.filter(
-            pipeline_entry_id=int(pipeline_entry_id),
-            pipeline_entry__owner_id=int(user_id),
-            status__in=(
-                ApplicationAttempt.Status.OPTIMIZING,
-                ApplicationAttempt.Status.WAITING_OPTIMIZER,
-            ),
-        ).values_list("id", flat=True)
-    )
-    for attempt_id in waiting:
-        run_apply_agent_step(int(user_id), int(attempt_id))
-    return len(waiting)
-
-
-@db_periodic_task(crontab(minute="*"))
-def apply_agent_heartbeat():
-    """
-    Primary orchestrator driver (every 60s): queries active attempts for enabled
-    users and enqueues run_apply_agent_step for each. This is the source of truth
-    for progression, so a missed optimizer callback or a dead worker never strands an attempt.
-    """
-    from .models import ApplicationAttempt, AppAutomationSettings
-
-    enabled_user_ids = set(
-        AppAutomationSettings.objects.filter(apply_agent_enabled=True)
-        .values_list("owner_id", flat=True)
-    )
-    if not enabled_user_ids:
-        return {"status": "ok", "enqueued": 0}
-
-    active_attempts = list(
-        ApplicationAttempt.objects.filter(
-            pipeline_entry__owner_id__in=enabled_user_ids,
-            status__in=ApplicationAttempt.ACTIVE_STATUSES,
-        ).values_list("id", "pipeline_entry__owner_id")
-    )
-    enqueued = 0
-    for attempt_id, owner_id in active_attempts:
-        run_apply_agent_step(owner_id, attempt_id)
-        enqueued += 1
-    if enqueued:
-        logger.info("[apply_agent_heartbeat] enqueued %s step(s)", enqueued)
-    return {"status": "ok", "enqueued": enqueued}

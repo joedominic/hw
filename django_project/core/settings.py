@@ -19,8 +19,9 @@ _env_file = os.environ.get("ENV_FILE") or os.path.join(BASE_DIR.parent, ".env")
 if os.path.isfile(_env_file):
     environ.Env.read_env(_env_file)
 
-# Detect manage.py test / pytest early (used by DATABASES and cache).
-_IN_TEST = "test" in sys.argv or "pytest" in (sys.argv[0] if sys.argv else "")
+# Detect manage.py test / pytest / makemigrations early (used by DATABASES and cache).
+_IN_TEST = "test" in sys.argv or "pytest" in (sys.argv[0] if sys.argv else "") or "makemigrations" in sys.argv
+
 
 # SECURITY: keep the secret key used in production secret!
 SECRET_KEY = env("SECRET_KEY", default="django-insecure-+a#*@w#!qb+w*1_6vd4my0q2q^!ddes#&#%jueou)q7(5(=v*n")
@@ -73,6 +74,7 @@ TEMPLATES = [
         "OPTIONS": {
             "context_processors": [
                 "django.template.context_processors.request",
+                "django.template.context_processors.csrf",
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "resume_app.context_processors.dev_tools",
@@ -210,6 +212,10 @@ LOGOUT_REDIRECT_URL = "login"
 SIGNUP_ENABLED = env.bool("SIGNUP_ENABLED", default=True)
 DEFAULT_EXPERIENCE_MODE = env("DEFAULT_EXPERIENCE_MODE", default="normal")
 REQUIRE_EMAIL_VERIFICATION = env.bool("REQUIRE_EMAIL_VERIFICATION", default=False)
+SAAS_REQUIRE_VERIFIED_EMAIL_FOR_LLM = env.bool(
+    "SAAS_REQUIRE_VERIFIED_EMAIL_FOR_LLM",
+    default=False,
+)
 LOGIN_EXEMPT_URL_PREFIXES = (
     "/accounts/",
     "/admin/",
@@ -226,7 +232,7 @@ EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
 EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
 EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=False)
 EMAIL_USE_SSL = env.bool("EMAIL_USE_SSL", default=False)
-DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="ResumeElite <noreply@localhost>")
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="HireEdge <noreply@localhost>")
 ACCOUNT_EMAIL_BASE_URL = env("ACCOUNT_EMAIL_BASE_URL", default="")
 
 # Fernet encryption: comma-separated urlsafe keys (newest first). Empty = derive from SECRET_KEY.
@@ -365,12 +371,6 @@ JOB_FOCUS_ROLE_MAX_LIFT = 0.15  # max extra from role when below gate (so combin
 JOB_SEARCH_FETCH_BUFFER = 150  # fetch this many from JobSpy; then filter and take top DISPLAY_LIMIT
 JOB_SEARCH_DISPLAY_LIMIT = 50  # max jobs returned per search (top N after sort)
 JOB_SEARCH_HOURS_OLD = 168  # only jobs posted within this many hours (7 days); passed to JobSpy + post-filter
-
-# Adzuna job search API (https://developer.adzuna.com/) — required when "adzuna" is selected as a source.
-ADZUNA_APP_ID = env("ADZUNA_APP_ID", default="")
-ADZUNA_APP_KEY = env("ADZUNA_APP_KEY", default="")
-ADZUNA_COUNTRY = env("ADZUNA_COUNTRY", default="us")
-ADZUNA_MAX_PAGES = env.int("ADZUNA_MAX_PAGES", default=3)
 
 # Dice job search (JSON API used by dice.com; optional override of public browser key).
 DICE_API_KEY = env("DICE_API_KEY", default="")
@@ -534,4 +534,7 @@ PIPELINE_LLM_CONSOLIDATE = env.bool("PIPELINE_LLM_CONSOLIDATE", default=True)
 PIPELINE_LLM_CONSOLIDATE_MAX_ITEMS_PER_KEY = env.int("PIPELINE_LLM_CONSOLIDATE_MAX_ITEMS_PER_KEY", default=400)
 # Drop keywords that appear fewer than this many times across all batch lines (1 = keep all).
 PIPELINE_LLM_KEYWORD_MIN_COUNT = env.int("PIPELINE_LLM_KEYWORD_MIN_COUNT", default=1)
+
+# Minimum days after a user deleted a job before a verified repost is eligible to reappear in the pipeline
+PIPELINE_DELETED_REPOST_COOLDOWN_DAYS = env.int("PIPELINE_DELETED_REPOST_COOLDOWN_DAYS", default=14)
 

@@ -96,7 +96,7 @@ def _normalize_ws(text: str) -> str:
 def job_listing_fingerprint(job) -> str:
     """
     Cross-board stable key: canonical company + canonical title + normalized description tokens.
-    Collapses cross-board postings (LinkedIn, Indeed, Adzuna) into a unified deduplication cluster.
+    Collapses cross-board postings (LinkedIn, Indeed, Dice) into a unified deduplication cluster.
     """
     c = canonical_company(getattr(job, "company_name", None))
     t = canonical_title(getattr(job, "title", None))

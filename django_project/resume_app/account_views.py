@@ -192,7 +192,7 @@ def handle_account_settings_post(request) -> HttpResponse | None:
     if action == "export_account":
         payload = export_account_json(user)
         response = HttpResponse(payload, content_type="application/json")
-        response["Content-Disposition"] = f'attachment; filename="resumeelite-export-{user.pk}.json"'
+        response["Content-Disposition"] = f'attachment; filename="hireedge-export-{user.pk}.json"'
         return response
 
     if action == "delete_account":

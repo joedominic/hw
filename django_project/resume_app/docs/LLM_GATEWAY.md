@@ -42,7 +42,7 @@ Apply-agent generic fill: 1× `llm_requests` at run start; each browser-use turn
 | Path | Routing |
 |------|---------|
 | Optimizer / Writer / ATS / Recruiter / optimizer JD-cleanse step | `agents` → gateway **cloud-only** (`allow_local=False`) |
-| Pipeline JD cleanse (`JDCleanserService`) | **Ollama Local only** (`only_local=True`); heuristic fallback |
+| Pipeline JD cleanse (`JDCleanserService`) | Prefer **Ollama Local** (`prefer_local=True`), cloud fallback; heuristic fallback |
 | Vetting match / fit check / other non-optimizer product LLM | Prefer **Ollama Local** (`prefer_local=True`) |
 | Job prep, job insights, AI match | Prefer local via gateway defaults |
 | Pipeline skill extract + consolidate | `pipeline_llm_skill_extract` → gateway (prefer local) |

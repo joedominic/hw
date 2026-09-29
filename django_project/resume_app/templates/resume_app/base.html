@@ -3,8 +3,9 @@
 <html lang="en" class="h-full">
 <head>
     <meta charset="utf-8">
-    <title>{% block title %}ResumeElite{% endblock %}</title>
+    <title>{% block title %}HireEdge{% endblock %}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="csrf-token" content="{{ csrf_token }}">
     {% include "resume_app/_tailwind_theme.html" %}
     {% block extra_head %}{% endblock %}
 </head>
@@ -26,7 +27,7 @@
            class="fixed inset-y-0 left-0 z-50 flex w-64 -translate-x-full flex-col border-r border-slate-200 bg-white transition-transform duration-200 lg:static lg:translate-x-0">
         {% if request.user.is_staff and not request.user.is_hijacked %}
         <div class="border-b border-slate-100 px-4 py-4">
-            <a href="{% url 'staff_users' %}" class="text-lg font-bold tracking-tight text-brand">ResumeElite</a>
+            <a href="{% url 'staff_users' %}" class="text-lg font-bold tracking-tight text-brand">HireEdge</a>
             <p class="mt-1 text-sm font-medium text-slate-500">Admin Console</p>
         </div>
         {% elif is_power_user %}
@@ -39,7 +40,7 @@
         </div>
         {% else %}
         <div class="border-b border-slate-100 px-4 py-4">
-            <a href="{% url 'pipeline' %}" class="text-lg font-bold tracking-tight text-brand">ResumeElite</a>
+            <a href="{% url 'pipeline' %}" class="text-lg font-bold tracking-tight text-brand">HireEdge</a>
             <p class="mt-1 text-sm font-medium text-slate-500">Job search workspace</p>
         </div>
         {% endif %}
@@ -63,10 +64,6 @@
                    title="Upload resumes and assign them to search profiles"
                    class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'track_list' or url_name == 'track_delete' %}bg-brand-soft text-brand-ink{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
                     Search profiles
-                </a>
-                <a href="{% url 'apply_agent' %}"
-                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'apply_agent' or url_name == 'apply_agent_profile' or url_name == 'apply_agent_review' %}bg-brand-soft text-brand-ink{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
-                    {% if is_power_user %}Apply Agent{% else %}Applications{% endif %}
                 </a>
             </div>
             {% endif %}
@@ -113,6 +110,10 @@
                    class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'billing' %}bg-brand-soft text-brand-ink{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
                     Billing
                 </a>
+                <a href="{% url 'fit_inspector' %}"
+                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'fit_inspector' %}bg-brand-soft text-brand-ink{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
+                    Fit Inspector
+                </a>
                 {% if perms.resume_app.can_impersonate_users %}
                 <a href="{% url 'staff_users' %}"
                    class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'staff_users' %}bg-brand-soft text-brand-ink{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
@@ -142,7 +143,7 @@
                 <button type="button" id="concierge-menu-btn" class="inline-flex rounded-concierge p-2 text-slate-600 hover:bg-slate-100 lg:hidden" aria-label="Open menu">
                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
                 </button>
-                <a href="{% if request.user.is_staff and not request.user.is_hijacked %}{% url 'staff_users' %}{% else %}{% url 'pipeline' %}{% endif %}" class="text-lg font-bold tracking-tight text-brand">ResumeElite</a>
+                <a href="{% if request.user.is_staff and not request.user.is_hijacked %}{% url 'staff_users' %}{% else %}{% url 'pipeline' %}{% endif %}" class="text-lg font-bold tracking-tight text-brand">HireEdge</a>
                 {% if request.user.is_staff and not request.user.is_hijacked %}
                 <span class="hidden text-xs font-medium text-slate-400 sm:inline">Admin Console</span>
                 {% elif is_power_user %}

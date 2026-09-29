@@ -249,40 +249,6 @@ def pipeline_board_view(request, board_stage: str):
         next_url = request.POST.get("next") or reverse(board_stage) + f"?track={raw_track}"
         selected_ids = [jid for jid in job_ids if jid] or ([job_id] if job_id else [])
 
-        if action == "start_apply_agent":
-            if board_stage != "applying":
-                messages.info(request, "The apply agent can only be started from the Applying board.")
-                return redirect(next_url)
-            entry_ids: list[int] = []
-            for jid in selected_ids:
-                try:
-                    jid_int = int(jid)
-                except (ValueError, TypeError):
-                    continue
-                entry = PipelineEntry.objects.for_user(user).filter(
-                    job_listing_id=jid_int,
-                    track=track_from_form,
-                    stage=PipelineEntry.Stage.APPLYING,
-                    removed_at__isnull=True,
-                ).first()
-                if entry:
-                    entry_ids.append(entry.id)
-
-            from .application.apply_services import ApplyApplicationService
-
-            result = ApplyApplicationService.start_attempts_for_jobs(user, entry_ids)
-            if result.success:
-                if result.started_attempts:
-                    messages.success(
-                        request,
-                        f"Started the apply agent for {len(result.started_attempts)} job(s). Track progress on the Apply Agent page.",
-                    )
-                else:
-                    messages.info(request, result.message)
-            else:
-                messages.error(request, result.message)
-            return redirect(next_url)
-
         if action in {"bulk_delete", "bulk_like", "bulk_dislike", "bulk_promote"}:
             if not selected_ids:
                 messages.info(request, "Select at least one job before running a bulk action.")

@@ -1,6 +1,6 @@
-# ResumeElite — AI Resume Optimizer & Job Application Pipeline
+# HireEdge — AI Job Search, Resume Optimizer & Career Pipeline
 
-An enterprise-grade, AI-powered platform for job seekers and hiring professionals. ResumeElite uses multi-agent LangGraph workflows to tailor resumes to job descriptions, aggregates and ranks job postings across multiple sources (JobSpy, Indeed, LinkedIn, Dice, Levels.fyi, BuiltIn, Adzuna), manages a four-stage application pipeline (Pipeline → Vetting → Applying → Done), and provides autonomous browser-based job application submission (Playwright + ATS adapters + browser-use).
+An enterprise-grade, AI-powered platform for job seekers and hiring professionals. HireEdge uses multi-agent LangGraph workflows to tailor resumes to job descriptions, aggregates and ranks job postings across multiple sources (JobSpy, Indeed, LinkedIn, Dice, Levels.fyi, BuiltIn, Adzuna), manages a four-stage application pipeline (Discovered → Applying → Interview → Offer), and provides AI-powered interview prep and cover letter generation.
 
 ## Tech Stack
 
@@ -9,7 +9,6 @@ An enterprise-grade, AI-powered platform for job seekers and hiring professional
 - **AI & Agent Orchestration:** LangGraph + LangChain (OpenAI, Anthropic, Groq, Google GenAI, Local/Cloud Ollama)
 - **Frontend / UI:** Server-rendered Django Templates + Tailwind CSS (CDN) + vanilla JavaScript `fetch()`
 - **Background Tasks:** Huey 2.6+ (Redis-backed asynchronous task queue & periodic scheduler)
-- **Browser Automation:** Playwright + browser-use (Autonomous Apply Agent for Greenhouse, Lever, Ashby, iCIMS, and generic forms)
 - **Embeddings & NLP:** `sentence-transformers` (`all-MiniLM-L6-v2`), `rank-bm25`, `pdfplumber`, `python-docx`
 - **Billing & Subscriptions:** Stripe Checkout, Customer Portal & Webhooks (Free, Pro, Unlimited plans with daily request & token quotas)
 - **Security:** Fernet encryption for API keys/credentials, `django-hijack` staff impersonation with audit trails, rate limiting, and abuse throttle middleware

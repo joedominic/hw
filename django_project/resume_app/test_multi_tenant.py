@@ -5,7 +5,6 @@ from django.test import Client, TestCase
 
 from resume_app.models import (
     ApplicantProfile,
-    ApplicationAttempt,
     AppAutomationSettings,
     AtsJudgeProfile,
     JobDescription,
@@ -280,7 +279,7 @@ class MonitorAccessControlTests(TestCase):
         self.assertContains(resp, "Periodic Task Schedulers")
         self.assertContains(resp, "Queue Backlog")
 
-    def test_staff_monitor_renders_task_runs_and_attempts(self):
+    def test_staff_monitor_renders_task_runs(self):
         task = JobSearchTask.objects.create(
             owner=self.user,
             name="Senior Backend Role",
@@ -294,30 +293,11 @@ class MonitorAccessControlTests(TestCase):
             jobs_added_to_pipeline=3,
         )
 
-        job = JobListing.objects.create(
-            title="Full Stack Engineer",
-            company_name="InnovateTech",
-            description="Leading SaaS company.",
-            source="test",
-        )
-        track = Track.objects.filter(owner=self.user).first()
-        entry = PipelineEntry.objects.create(
-            owner=self.user,
-            job_listing=job,
-            track=track,
-            stage=PipelineEntry.Stage.APPLYING,
-        )
-        ApplicationAttempt.objects.create(
-            pipeline_entry=entry,
-            status=ApplicationAttempt.Status.SUCCEEDED,
-        )
-
         client = Client()
         client.login(username="admin", password="pass12345!")
         resp = client.get("/jobs/huey/")
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Senior Backend Role")
-        self.assertContains(resp, "InnovateTech")
         self.assertContains(resp, "12")
 
 
@@ -409,7 +389,8 @@ class LandingPageTests(TestCase):
     def test_anonymous_user_sees_landing(self):
         resp = Client().get("/")
         self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "Your job search, automated")
+        self.assertContains(resp, "Your job search, smarter from day one")
+        self.assertContains(resp, "HireEdge")
         self.assertContains(resp, 'href="/accounts/login/"')
         self.assertContains(resp, 'href="/accounts/signup/"')
 

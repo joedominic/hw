@@ -5,13 +5,13 @@ Encapsulates LLM provider routing, candidate fallbacks, rate limiting, kill swit
 from .factory import get_llm
 from .gateway import (
     LLMConcurrencyLimitExceeded,
+    LLMEmailVerificationRequired,
     LLMRequestsDisabled,
     LLMTokenBudgetExceeded,
     LLMUnavailableError,
     NO_CLOUD_LLM_MESSAGE,
     USAGE_QUERY_API_LLM_COMPLETE,
     USAGE_QUERY_API_RESUME_FIT,
-    USAGE_QUERY_APPLY_AGENT,
     USAGE_QUERY_COVER_LETTER,
     USAGE_QUERY_FIT_CHECK,
     USAGE_QUERY_INTERVIEW_PREP,
@@ -41,6 +41,7 @@ from .gateway import (
 )
 from .policy import (
     LLMInvokeTimeout,
+    assert_email_verified,
     assert_llm_kill_switch,
     check_token_budget,
     consume_token_budget,
@@ -50,7 +51,6 @@ from .policy import (
     platform_tokens_used_today,
     run_with_invoke_timeout,
     user_llm_concurrency,
-    wrap_browser_use_llm,
 )
 from .rate_limit import (
     acquire_llm_slot,
@@ -89,10 +89,12 @@ __all__ = [
     "LLMUnavailableError",
     "NO_CLOUD_LLM_MESSAGE",
     "LLMRequestsDisabled",
+    "LLMEmailVerificationRequired",
     "LLMTokenBudgetExceeded",
     "LLMConcurrencyLimitExceeded",
     "LLMInvokeTimeout",
     "assert_llm_kill_switch",
+    "assert_email_verified",
     "check_token_budget",
     "consume_token_budget",
     "daily_token_limit_for_user",
@@ -100,7 +102,6 @@ __all__ = [
     "platform_tokens_used_today",
     "run_with_invoke_timeout",
     "user_llm_concurrency",
-    "wrap_browser_use_llm",
     "estimate_messages_tokens",
     "acquire_llm_slot",
     "try_acquire_llm_slot",
@@ -133,7 +134,6 @@ __all__ = [
     "USAGE_QUERY_PIPELINE_RESUME_REFINE",
     "USAGE_QUERY_PIPELINE_SKILL_EXTRACT",
     "USAGE_QUERY_JD_CLEANSE",
-    "USAGE_QUERY_APPLY_AGENT",
     "USAGE_QUERY_API_LLM_COMPLETE",
     "USAGE_QUERY_API_RESUME_FIT",
     "USAGE_QUERY_UNSPECIFIED",

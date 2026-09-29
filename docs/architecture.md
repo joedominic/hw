@@ -1,6 +1,6 @@
 # Architecture
 
-ResumeElite is a Django 5.2 monolith with a server-rendered HTML UI, Django Ninja JSON APIs, Huey background workers, and LLM/browser automation integrations.
+HireEdge is a Django 5.2 monolith with a server-rendered HTML UI, Django Ninja JSON APIs, Huey background workers, and LLM integrations.
 
 ## Runtime Stack
 

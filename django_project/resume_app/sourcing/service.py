@@ -12,7 +12,6 @@ from django.conf import settings
 from django.utils import timezone
 
 from ..models import JobListing
-from .adapters.adzuna_adapter import AdzunaJobAdapter
 from .adapters.builtin_adapter import BuiltInJobAdapter
 from .adapters.dice_adapter import DiceJobAdapter
 from .adapters.jobspy_adapter import JobSpyJobAdapter
@@ -35,7 +34,6 @@ class JobIngestionService:
             "dice": DiceJobAdapter(),
             "levels": LevelsJobAdapter(),
             "builtin": BuiltInJobAdapter(),
-            "adzuna": AdzunaJobAdapter(),
         }
 
     def register_adapter(self, name: str, adapter: JobSourcePort) -> None:

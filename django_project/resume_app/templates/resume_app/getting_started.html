@@ -1,11 +1,11 @@
 {% extends "resume_app/base.html" %}
 
-{% block title %}Getting started — ResumeElite{% endblock %}
+{% block title %}Getting started — HireEdge{% endblock %}
 
 {% block content %}
 <div class="mx-auto max-w-2xl">
     <div class="mb-8">
-        <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Welcome to ResumeElite</h1>
+        <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Welcome to HireEdge</h1>
         <p class="mt-2 text-sm text-slate-600">
             Complete these steps to start your job search. AI features use the platform default when available—you can add your own API key later in Settings.
         </p>
@@ -15,7 +15,7 @@
 
     {% if progress.platform_llm %}
     <div class="mb-4 rounded-2xl border border-brand/20 bg-brand-mist px-4 py-3 text-sm text-brand-ink">
-        <strong>AI ready.</strong> Resume tailoring and job matching use ResumeElite's built-in provider. You can optionally connect your own key in Settings.
+        <strong>AI ready.</strong> Resume tailoring and job matching use HireEdge's built-in provider. You can optionally connect your own key in Settings.
     </div>
     {% elif progress.llm_done %}
     <div class="mb-4 rounded-2xl border border-brand/20 bg-brand-mist px-4 py-3 text-sm text-brand-ink">

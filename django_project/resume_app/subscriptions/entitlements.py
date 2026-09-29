@@ -172,6 +172,18 @@ def usage_today(user: AbstractBaseUser, metric: str) -> int:
     return int(row.count) if row else 0
 
 
+def _format_quota_exceeded_message(user: AbstractBaseUser, metric: str, limit: int, current: int) -> str:
+    plan = get_user_plan(user)
+    plan_name = plan.name if plan and hasattr(plan, "name") else (getattr(plan, "slug", "") or "Free").title()
+    label = USAGE_METRIC_LABELS.get(metric, metric)
+    return (
+        f"Daily quota exceeded for {label} on plan '{plan_name}' "
+        f"({current:,} / {limit:,} used today, limit resets at midnight). "
+        f"To continue, you can upgrade your plan in Billing, use local Ollama LLMs for free, "
+        f"or reset today's quota in Settings → Usage."
+    )
+
+
 def check_quota(user: AbstractBaseUser, metric: str) -> None:
     """Raise QuotaExceeded if the user cannot consume one more unit."""
     from django.conf import settings
@@ -186,8 +198,10 @@ def check_quota(user: AbstractBaseUser, metric: str) -> None:
     limit = plan_limit(plan, metric)
     if limit <= 0:
         return
-    if usage_today(user, metric) >= limit:
-        raise QuotaExceeded(metric, limit)
+    used = usage_today(user, metric)
+    if used >= limit:
+        msg = _format_quota_exceeded_message(user, metric, limit, used)
+        raise QuotaExceeded(metric, limit, message=msg)
 
 
 @transaction.atomic
@@ -218,7 +232,8 @@ def consume_quota(user: AbstractBaseUser, metric: str, amount: int = 1) -> int:
         defaults={"count": 0},
     )
     if limit > 0 and row.count + amount > limit:
-        raise QuotaExceeded(metric, limit)
+        msg = _format_quota_exceeded_message(user, metric, limit, row.count)
+        raise QuotaExceeded(metric, limit, message=msg)
     UsageCounter.objects.filter(pk=row.pk).update(count=F("count") + amount, updated_at=timezone.now())
     row.refresh_from_db(fields=["count"])
     return int(row.count)

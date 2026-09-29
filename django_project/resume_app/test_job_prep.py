@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
-from django.test import TestCase
+from django.test import Client, TestCase
 
 from .job_prep import (
     InterviewPrepResult,
@@ -15,7 +15,6 @@ from .job_prep import (
     resolve_interview_prep_inputs,
 )
 from .models import (
-    ApplicationAttempt,
     JobDescription,
     JobListing,
     OptimizedResume,
@@ -81,16 +80,6 @@ class ResolveInterviewPrepInputsTests(TestCase):
             pipeline_entry=self.entry,
             cover_letter="Dear Acme team…",
         )
-
-    def test_prefers_succeeded_attempt_resume(self):
-        ApplicationAttempt.objects.create(
-            pipeline_entry=self.entry,
-            optimized_resume=self.opt,
-            status=ApplicationAttempt.Status.SUCCEEDED,
-        )
-        inputs = resolve_interview_prep_inputs(self.entry)
-        self.assertEqual(inputs.resume_text, "Tailored resume for Acme.")
-        self.assertIn("Python", inputs.job_description)
 
     def test_falls_back_to_optimized_resume(self):
         inputs = resolve_interview_prep_inputs(self.entry)
@@ -278,4 +267,188 @@ class CoverLetterSizingAndExportTests(TestCase):
 
         res_docx = client.get(f"/api/resume/export/{self.opt.id}/cover-letter/docx")
         self.assertEqual(res_docx.status_code, 404)
+
+
+class PipelineInterviewPrepCsrfTests(TestCase):
+    def setUp(self):
+        from django.test import Client
+
+        self.user = create_user("prep_csrf_user")
+        self.job = JobListing.objects.create(
+            source="dice",
+            external_id="prep-csrf-1",
+            title="Senior Dev",
+            company_name="Acme",
+            description="Python engineer with Django experience.",
+        )
+        self.entry = PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=self.job,
+            track="ic",
+            stage=PipelineEntry.Stage.DONE,
+        )
+        self.client = Client(enforce_csrf_checks=True)
+        self.client.force_login(self.user)
+
+    def test_generate_interview_prep_requires_csrf_when_enforced(self):
+        url = f"/api/resume/jobs/pipeline-entry/{self.entry.id}/generate-interview-prep"
+        resp = self.client.post(url, data=json.dumps({}), content_type="application/json")
+        self.assertEqual(resp.status_code, 403)
+        self.assertIn("CSRF", resp.content.decode())
+
+    @patch("resume_app.job_prep.generate_interview_prep")
+    @patch("resume_app.jobs_api._get_llm_from_request")
+    def test_generate_interview_prep_succeeds_with_csrf_token(self, mock_llm, mock_gen):
+        from django.middleware.csrf import get_token
+        from django.test import RequestFactory
+
+        mock_gen.return_value = ("{}", "# Markdown", "Prompt")
+        url = f"/api/resume/jobs/pipeline-entry/{self.entry.id}/generate-interview-prep"
+        req = RequestFactory().get("/")
+        csrf_token = get_token(req)
+        self.client.cookies["csrftoken"] = csrf_token
+        resp = self.client.post(
+            url,
+            data=json.dumps({}),
+            content_type="application/json",
+            HTTP_X_CSRFTOKEN=csrf_token,
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["markdown"], "# Markdown")
+
+
+class MultiRoundInterviewPrepTests(TestCase):
+    def setUp(self):
+        self.user = create_user("preprounds")
+        self.job = JobListing.objects.create(
+            source="test",
+            external_id="prep-rounds-1",
+            title="Senior Backend Engineer",
+            company_name="CloudCorp",
+            description="Build scalable distributed systems with Python, Django, and Kubernetes.",
+        )
+        self.entry = PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=self.job,
+            track="ic",
+            stage=PipelineEntry.Stage.DONE,
+        )
+        self.jd = JobDescription.objects.create(content=self.job.description)
+        self.resume = UserResume.objects.create(
+            owner=self.user,
+            file="resume.pdf",
+            original_filename="resume.pdf",
+            track="ic",
+            is_library=True,
+        )
+        self.opt = OptimizedResume.objects.create(
+            owner=self.user,
+            original_resume=self.resume,
+            job_description=self.jd,
+            optimized_content="Staff Software Engineer with deep Python, distributed systems, and AWS experience.",
+            status=OptimizedResume.STATUS_COMPLETED,
+            pipeline_entry=self.entry,
+        )
+        self.client = Client()
+        self.client.force_login(self.user)
+
+    @patch("resume_app.job_prep._llm_invoke_with_retry")
+    def test_generate_interview_prep_for_different_rounds(self, mock_invoke):
+        from resume_app.job_prep import generate_interview_prep, get_all_interview_preps
+
+        # 1. Generate Recruiter round
+        recruiter_payload = {
+            "likely_questions": ["Tell me about yourself.", "Why CloudCorp?", "What are your salary expectations?"],
+            "themes_to_emphasize": ["Communication", "Career narrative"],
+            "suggested_answers": [
+                {
+                    "question": "Why CloudCorp?",
+                    "talking_points": ["Excited about scalable cloud infrastructure"],
+                    "resume_evidence": ["Staff Software Engineer with deep Python"],
+                    "sample_answer": "I have spent 10 years building distributed backend systems, and CloudCorp is at the forefront of cloud reliability."
+                }
+            ],
+            "questions_to_ask": ["What does the hiring timeline look like?"]
+        }
+        mock_invoke.return_value = MagicMock(content=json.dumps(recruiter_payload))
+        stored_recruiter, md_recruiter, prompt_recruiter = generate_interview_prep(
+            self.entry, llm=MagicMock(), interview_type="recruiter"
+        )
+        self.assertIn("Why CloudCorp?", stored_recruiter)
+        self.assertIn("Sample response", md_recruiter)
+        self.assertIn("CloudCorp is at the forefront", md_recruiter)
+        self.assertIn("Questions to ask the interviewer", md_recruiter)
+        self.assertIn("What does the hiring timeline look like?", md_recruiter)
+        self.assertIn("RECRUITER SCREEN", prompt_recruiter.upper())
+        self.assertIn("Why CloudCorp?", prompt_recruiter)
+
+        # 2. Generate Technical round without overwriting recruiter round
+        tech_payload = {
+            "likely_questions": ["Explain distributed caching trade-offs."],
+            "themes_to_emphasize": ["Scalability", "Kubernetes"],
+            "suggested_answers": [
+                {
+                    "question": "Explain distributed caching trade-offs.",
+                    "talking_points": ["Cache invalidation and latency"],
+                    "resume_evidence": ["Distributed systems experience"],
+                    "sample_answer": "In distributed caching, the primary trade-off is between consistency and latency."
+                }
+            ],
+            "questions_to_ask": ["How is technical debt prioritized?"]
+        }
+        mock_invoke.return_value = MagicMock(content=json.dumps(tech_payload))
+        stored_tech, md_tech, prompt_tech = generate_interview_prep(
+            self.entry, llm=MagicMock(), interview_type="technical"
+        )
+        self.assertIn("distributed caching", stored_tech)
+        self.assertIn("TECHNICAL / ARCHITECTURE", prompt_tech.upper())
+
+        # 3. Verify both rounds are preserved in database
+        self.entry.refresh_from_db()
+        all_preps = get_all_interview_preps(self.entry.interview_prep)
+        self.assertIn("recruiter", all_preps)
+        self.assertIn("technical", all_preps)
+        self.assertIn("Tell me about yourself.", all_preps["recruiter"]["content"])
+        self.assertIn("distributed caching", all_preps["technical"]["content"])
+
+    def test_legacy_format_backward_compatibility(self):
+        from resume_app.job_prep import get_all_interview_preps
+
+        legacy_json = json.dumps({
+            "likely_questions": ["Tell me about a conflict."],
+            "themes_to_emphasize": ["Collaboration"],
+            "suggested_answers": [],
+        })
+        preps = get_all_interview_preps(legacy_json)
+        self.assertIn("behavioral", preps)
+        self.assertIn("Tell me about a conflict.", preps["behavioral"]["content"])
+
+    @patch("resume_app.job_prep.generate_interview_prep")
+    @patch("resume_app.jobs_api._get_llm_from_request")
+    def test_api_generate_and_get_round_specific_prep(self, mock_llm, mock_gen):
+        mock_gen.return_value = (
+            json.dumps({"likely_questions": ["How do you handle conflict?"]}),
+            "## Likely questions\n1. How do you handle conflict?",
+            "Prompt text"
+        )
+        # Generate behavioral prep via API
+        post_url = f"/api/resume/jobs/pipeline-entry/{self.entry.id}/generate-interview-prep"
+        resp = self.client.post(
+            post_url,
+            data=json.dumps({"interview_type": "behavioral"}),
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["interview_type"], "behavioral")
+        self.assertIn("How do you handle conflict?", data["markdown"])
+
+        # GET interview prep via API
+        get_url = f"/api/resume/jobs/pipeline-entry/{self.entry.id}/interview-prep?interview_type=behavioral"
+        get_resp = self.client.get(get_url)
+        self.assertEqual(get_resp.status_code, 200)
+        get_data = get_resp.json()
+        self.assertEqual(get_data["interview_type"], "behavioral")
+
+
 

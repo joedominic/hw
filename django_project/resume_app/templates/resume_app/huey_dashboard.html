@@ -1,5 +1,5 @@
 {% extends "resume_app/base.html" %}
-{% block title %}Worker &amp; Task Monitor — ResumeElite Admin{% endblock %}
+{% block title %}Worker &amp; Task Monitor — HireEdge Admin{% endblock %}
 
 {% block content %}
 <div class="mx-auto max-w-6xl space-y-6">
@@ -72,14 +72,14 @@
             <p class="mt-1 text-2xl font-bold {% if active_running > 0 %}text-brand{% else %}text-slate-800{% endif %}">
                 {{ active_running }}
             </p>
-            <p class="mt-1 text-xs text-slate-500">Live search &amp; browser runs</p>
+            <p class="mt-1 text-xs text-slate-500">Live search &amp; task runs</p>
         </div>
 
         {# 3. 24h Activity Volume #}
         <div class="rounded-concierge border border-slate-200 bg-white p-4 shadow-sm">
             <p class="text-xs font-medium uppercase tracking-wider text-slate-400">24-Hour Throughput</p>
-            <p class="mt-1 text-2xl font-bold text-slate-800">{{ searches_24h|add:applies_24h }}</p>
-            <p class="mt-1 text-xs text-slate-500">{{ searches_24h }} searches · {{ applies_24h }} applies</p>
+            <p class="mt-1 text-2xl font-bold text-slate-800">{{ searches_24h }}</p>
+            <p class="mt-1 text-xs text-slate-500">{{ searches_24h }} searches run</p>
         </div>
 
         {# 4. Failed Tasks Alert #}
@@ -268,7 +268,7 @@
         <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-6 py-4">
             <div>
                 <h2 class="text-base font-bold text-concierge-slate">Recent Task Executions (Multi-Tenant Stream)</h2>
-                <p class="text-xs text-slate-500">Live feed of scraper runs, browser application attempts, and background tasks.</p>
+                <p class="text-xs text-slate-500">Live feed of scraper runs and background tasks.</p>
             </div>
             <span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">{{ unified_activity|length }} Recent Events</span>
         </div>

@@ -1,11 +1,10 @@
-# ResumeElite — direct dependencies only (transitive deps resolved by pip).
+# HireEdge — direct dependencies only (transitive deps resolved by pip).
 #
 # Install (two steps — upstream conflict: jobspy pins markdownify<0.14, browser-use needs >=1.2):
 #   pip install -r requirements.txt
 #   pip install --no-deps -r requirements-jobspy.txt
 #
 # torch: not listed — Docker installs CPU wheels (see Dockerfile). Local dev: pip install torch
-# After install, run: playwright install chromium
 
 # --- Web stack ---
 Django==5.2.11
@@ -62,9 +61,3 @@ markdownify>=1.2.0,<2.0.0
 pdfplumber>=0.11.9
 reportlab>=4.2.5
 python-docx>=1.1.2
-
-# --- Apply agent (ATS adapters + browser-use fallback) ---
-# browser-use 0.13.x pins groq==1.0.0 which conflicts with langchain-groq (<1.0.0).
-browser-use>=0.11.7,<0.12.0
-playwright>=1.49.0
-psutil>=5.9.0
