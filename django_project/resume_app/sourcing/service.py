@@ -14,6 +14,7 @@ from django.utils import timezone
 from ..models import JobListing
 from .adapters.builtin_adapter import BuiltInJobAdapter
 from .adapters.dice_adapter import DiceJobAdapter
+from .adapters.greenhouse_adapter import GreenhouseJobAdapter
 from .adapters.jobspy_adapter import JobSpyJobAdapter
 from .adapters.levels_adapter import LevelsJobAdapter
 from .ports import JobSourcePort, RawJobDTO
@@ -34,6 +35,7 @@ class JobIngestionService:
             "dice": DiceJobAdapter(),
             "levels": LevelsJobAdapter(),
             "builtin": BuiltInJobAdapter(),
+            "greenhouse": GreenhouseJobAdapter(),
         }
 
     def register_adapter(self, name: str, adapter: JobSourcePort) -> None:

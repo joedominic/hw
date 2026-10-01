@@ -1319,12 +1319,58 @@ def jobs_fetch_description(request, payload: FetchJobDescriptionRequest):
             job_listing_id=job.id if job else None,
         )
 
+    from .sourcing.clients.greenhouse_client import (
+        enrich_greenhouse_job_listing_description,
+        extract_greenhouse_job_id_and_board,
+        fetch_greenhouse_job_detail,
+    )
+
+    gh_board, gh_jid = extract_greenhouse_job_id_and_board(url)
+    if not gh_jid and job:
+        gh_board, gh_jid = extract_greenhouse_job_id_and_board(job.external_id or "")
+    if gh_jid or (job and (job.source or "").lower() == "greenhouse"):
+        try:
+            if job is not None:
+                if not (job.url or "").strip() and url:
+                    JobListing.objects.filter(pk=job.pk).update(url=url)
+                    job.url = url
+                description = enrich_greenhouse_job_listing_description(job)
+                job.refresh_from_db()
+                if not description:
+                    detail = fetch_greenhouse_job_detail(f"greenhouse:{gh_board}:{gh_jid}" if gh_board else url)
+                    description = detail["description"]
+                else:
+                    detail = {
+                        "title": job.title,
+                        "company_name": job.company_name,
+                        "location": job.location or "",
+                        "job_url": job.url or url,
+                    }
+            else:
+                detail = fetch_greenhouse_job_detail(url)
+                description = detail["description"]
+        except ValueError as e:
+            raise HttpError(400, str(e)) from e
+        except RuntimeError as e:
+            raise HttpError(502, str(e)) from e
+
+        return FetchJobDescriptionResponse(
+            description=description,
+            title=detail.get("title"),
+            company_name=detail.get("company_name"),
+            location=detail.get("location"),
+            source="greenhouse",
+            url=detail.get("job_url") or url,
+            job_listing_id=job.id if job else None,
+        )
+
     raise HttpError(
         400,
         "Unsupported job URL. Currently Auto-fill supports Dice job-detail links "
         "(https://www.dice.com/job-detail/...), Levels.fyi job links "
-        "(https://www.levels.fyi/jobs?jobId=...), and BuiltIn job links "
-        "(https://builtin.com/job/...).",
+        "(https://www.levels.fyi/jobs?jobId=...), BuiltIn job links "
+        "(https://builtin.com/job/...), and Greenhouse job links "
+        "(https://boards.greenhouse.io/... or https://job-boards.greenhouse.io/...).",
     )
 
 
@@ -1350,15 +1396,18 @@ def jobs_focus_breakdown(request, job_listing_id: int, track: Optional[str] = No
 def jobs_get(request, job_listing_id: int):
     """Get a single job listing (full stored description + metadata; e.g. optimizer pre-fill, Local desc)."""
     job = get_object_or_404(JobListing, id=job_listing_id)
-    from .sourcing.clients.dice_client import enrich_dice_job_listing_description
-    from .sourcing.clients.levels_client import enrich_levels_job_listing_description
     from .sourcing.clients.builtin_client import enrich_builtin_job_listing_description
+    from .sourcing.clients.dice_client import enrich_dice_job_listing_description
+    from .sourcing.clients.greenhouse_client import enrich_greenhouse_job_listing_description
+    from .sourcing.clients.levels_client import enrich_levels_job_listing_description
 
     desc = enrich_dice_job_listing_description(job)
     if not desc:
         desc = enrich_levels_job_listing_description(job)
     if not desc:
         desc = enrich_builtin_job_listing_description(job)
+    if not desc:
+        desc = enrich_greenhouse_job_listing_description(job)
     desc = desc or (job.description or "")
     job.refresh_from_db()
     return JobDetailPayload(

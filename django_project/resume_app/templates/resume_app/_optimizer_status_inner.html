@@ -35,21 +35,111 @@
 </div>
 
 {% if status.status == "completed" %}
-<div class="mt-8 border-t border-slate-100 pt-6" id="optimizer-draft-section">
-    <h4 class="text-lg font-semibold text-concierge-slate">New resume draft</h4>
-    <p class="mt-1 text-xs text-slate-500">Edit the text below, then <strong>Save draft</strong> before exporting PDF or Word.</p>
-    <textarea id="optimizer-draft-editor" rows="22"
-              class="mt-3 w-full max-h-[32rem] min-h-[12rem] resize-y rounded-concierge border border-slate-200 bg-white p-4 font-mono text-sm leading-relaxed text-slate-800 focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">{{ status.optimized_content }}</textarea>
-    <div class="mt-3 flex flex-wrap items-center gap-3">
-        <button type="button" id="save-draft-btn" data-resume-id="{{ rid }}"
-                class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">Save draft</button>
-        <span id="save-draft-status" class="text-xs text-slate-500" aria-live="polite"></span>
+<div class="mt-8 border-t border-slate-200 pt-6" id="optimizer-draft-section">
+    <!-- Workbench Header Bar -->
+    <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pb-4 border-b border-slate-100">
+        <div>
+            <div class="flex items-center gap-2">
+                <span class="material-symbols-outlined text-brand text-[20px]">difference</span>
+                <h4 class="text-base font-bold text-slate-900">Dual-Pane Diff Workbench</h4>
+                <span class="rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 uppercase tracking-wide">Live Sync</span>
+            </div>
+            <p class="mt-1 text-xs text-slate-500">Compare your original resume against the tailored version. Edit directly in the right pane—changes auto-save to draft.</p>
+        </div>
+
+        <!-- Mode Selector & Stats -->
+        <div class="flex flex-wrap items-center gap-3">
+            <div class="inline-flex rounded-lg bg-slate-100 p-0.5 text-xs font-semibold" role="tablist" id="diff-view-mode-tabs">
+                <button type="button" class="diff-mode-btn active px-3 py-1.5 rounded-md bg-white text-slate-800 shadow-sm transition" data-mode="split">
+                    Side-by-Side Diff
+                </button>
+                <button type="button" class="diff-mode-btn px-3 py-1.5 rounded-md text-slate-600 hover:text-slate-900 transition" data-mode="tailored-only">
+                    Tailored Draft Only
+                </button>
+                <button type="button" class="diff-mode-btn px-3 py-1.5 rounded-md text-slate-600 hover:text-slate-900 transition" data-mode="original-only">
+                    Original Source Only
+                </button>
+            </div>
+
+            <div class="h-5 w-[1px] bg-slate-200 hidden sm:block"></div>
+
+            <div class="flex items-center gap-2">
+                <button type="button" id="save-draft-btn" data-resume-id="{{ rid }}"
+                        class="inline-flex items-center gap-1.5 rounded-lg bg-brand hover:bg-brand-hover text-white px-3.5 py-1.5 text-xs font-bold shadow-sm transition">
+                    <span class="material-symbols-outlined text-[15px]">save</span>
+                    <span>Save draft</span>
+                </button>
+                <span id="save-draft-status" class="text-xs text-slate-500" aria-live="polite"></span>
+            </div>
+        </div>
     </div>
-    <p class="mt-3 text-sm text-slate-500">Define replacement tokens in Settings → Replacements. Those values are applied automatically when exporting PDF or Word.</p>
-    <div class="mt-4 flex flex-wrap gap-3">
-        <a id="export-pdf-btn" class="inline-flex items-center rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover export-button" href="/api/resume/export/{{ rid }}/pdf" data-base-href="/api/resume/export/{{ rid }}/pdf" data-resume-id="{{ rid }}">Export PDF</a>
-        <a id="export-docx-btn" class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50 export-button" href="/api/resume/export/{{ rid }}/docx" data-base-href="/api/resume/export/{{ rid }}/docx" data-resume-id="{{ rid }}">Export Word</a>
-        <a class="inline-flex items-center text-sm font-medium text-slate-500 hover:text-concierge-slate" href="{% url 'resume_optimizer' %}">Run again</a>
+
+    <!-- Dual Pane Split Workspace -->
+    <div class="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4" id="workbench-panes-grid">
+        <!-- Left Pane: Original Source Resume -->
+        <div class="diff-pane flex flex-col border border-slate-200 rounded-xl bg-slate-50/70 overflow-hidden" id="pane-original-container">
+            <div class="flex items-center justify-between px-4 py-2.5 bg-slate-100/80 border-b border-slate-200 text-xs">
+                <div class="flex items-center gap-2 font-semibold text-slate-700">
+                    <span class="material-symbols-outlined text-slate-500 text-[16px]">description</span>
+                    <span>Original Source:</span>
+                    <span class="font-mono text-slate-900 font-bold" id="diff-original-filename">{{ status.original_filename|default:"Base Resume (PDF)" }}</span>
+                </div>
+                <span class="text-[11px] text-slate-400 font-medium">Read-only baseline</span>
+            </div>
+            <div id="diff-original-scroll-box" class="h-[36rem] overflow-y-auto p-4 font-mono text-xs leading-relaxed text-slate-700 whitespace-pre-wrap select-text">
+{{ status.original_content|default:"Loading original document text..." }}
+            </div>
+        </div>
+
+        <!-- Right Pane: AI-Tailored Draft (Editable & Reactive) -->
+        <div class="diff-pane flex flex-col border border-brand/30 rounded-xl bg-white shadow-sm overflow-hidden" id="pane-tailored-container">
+            <div class="flex items-center justify-between px-4 py-2.5 bg-brand-mist/50 border-b border-brand/20 text-xs">
+                <div class="flex items-center gap-2 font-semibold text-brand-ink">
+                    <span class="material-symbols-outlined text-brand text-[16px]">auto_fix_high</span>
+                    <span>AI-Tailored Draft:</span>
+                    <span class="rounded bg-brand/10 text-brand px-1.5 py-0.5 text-[10px] font-bold">Editable</span>
+                </div>
+                <div class="flex items-center gap-3">
+                    <span id="diff-tailored-wordcount" class="text-[11px] text-slate-500 font-mono font-medium">0 words</span>
+                    <span class="text-slate-300">•</span>
+                    <span class="text-[11px] text-emerald-700 font-medium flex items-center gap-1">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                        Infused &amp; Scored
+                    </span>
+                </div>
+            </div>
+            <textarea id="optimizer-draft-editor" rows="22" data-resume-id="{{ rid }}"
+                      class="h-[36rem] w-full resize-none p-4 font-mono text-xs leading-relaxed text-slate-900 focus:outline-none focus:ring-0 border-0 bg-white"
+                      placeholder="Optimized resume draft...">{{ status.optimized_content }}</textarea>
+        </div>
+    </div>
+
+    <!-- Export & Completion Action Strip -->
+    <div class="mt-4 p-4 bg-slate-50 border border-slate-200 rounded-xl flex flex-wrap items-center justify-between gap-4">
+        <div class="flex items-center gap-2 text-xs text-slate-500">
+            <span class="material-symbols-outlined text-[16px] text-brand">info</span>
+            <span>Tokens from Settings (e.g. contact replacements) are applied automatically on export.</span>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+            <a id="export-pdf-btn" class="inline-flex items-center gap-1.5 rounded-lg bg-brand hover:bg-brand-hover text-white px-3.5 py-2 text-xs font-bold transition shadow-sm export-button" 
+               href="/api/resume/export/{{ rid }}/pdf" data-base-href="/api/resume/export/{{ rid }}/pdf" data-resume-id="{{ rid }}">
+                <span class="material-symbols-outlined text-[16px]">picture_as_pdf</span>
+                <span>Export PDF</span>
+            </a>
+            <a id="export-docx-btn" class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 px-3.5 py-2 text-xs font-bold transition shadow-sm export-button" 
+               href="/api/resume/export/{{ rid }}/docx" data-base-href="/api/resume/export/{{ rid }}/docx" data-resume-id="{{ rid }}">
+                <span class="material-symbols-outlined text-[16px]">description</span>
+                <span>Export Word (.docx)</span>
+            </a>
+            {% if target_job %}
+            <button type="button" onclick="var b = document.getElementById('approve-apply-btn'); if (b) b.click();"
+                    class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 text-xs font-bold transition shadow-sm">
+                <span class="material-symbols-outlined text-[16px]">verified</span>
+                <span>Approve &amp; Mark Applied</span>
+                <kbd class="hidden sm:inline-block ml-1 bg-emerald-800/40 text-emerald-100 px-1 py-0.5 rounded text-[9px] font-mono">Ctrl+Enter</kbd>
+            </button>
+            {% endif %}
+        </div>
     </div>
 </div>
 <div class="mt-8 border-t border-slate-100 pt-6" id="optimizer-cover-letter-section">

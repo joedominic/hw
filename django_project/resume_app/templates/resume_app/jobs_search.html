@@ -390,7 +390,7 @@
     // Safety: if nothing is checked on load (e.g. empty GET), select defaults.
     if (!anySiteChecked()) {
         siteBoxes().forEach(function(cb) {
-            if (cb.value === 'indeed' || cb.value === 'linkedin' || cb.value === 'dice' || cb.value === 'levels' || cb.value === 'builtin') {
+            if (cb.value === 'indeed' || cb.value === 'linkedin' || cb.value === 'dice' || cb.value === 'levels' || cb.value === 'builtin' || cb.value === 'greenhouse') {
                 cb.checked = true;
             }
         });

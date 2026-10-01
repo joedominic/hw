@@ -185,11 +185,11 @@ SYSTEM_DEFAULT_MODELS: dict[str, list[dict]] = {
     # 6. APIs
     USAGE_QUERY_API_LLM_COMPLETE: [
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
-        {"provider": "Ollama Local", "model": "llama3"},
+        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
     ],
     USAGE_QUERY_API_RESUME_FIT: [
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
-        {"provider": "Ollama Local", "model": "llama3"},
+        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
     ],
     # Universal fallback
     "*": [

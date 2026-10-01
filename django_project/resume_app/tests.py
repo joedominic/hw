@@ -129,6 +129,12 @@ class NormalizeSiteNamesTestCase(TestCase):
             ["builtin", "indeed"],
         )
 
+    def test_preserves_greenhouse(self):
+        self.assertEqual(
+            normalize_site_names(["greenhouse", "indeed"]),
+            ["greenhouse", "indeed"],
+        )
+
 
 class JobFetchHelpersTestCase(TestCase):
     def test_per_site_results_cap(self):
@@ -657,25 +663,141 @@ class BuiltInClientTestCase(TestCase):
         self.assertEqual(job.description, desc)
 
 
+class GreenhouseClientTestCase(TestCase):
+    def test_extract_greenhouse_job_id_and_board(self):
+        from resume_app.sourcing.clients.greenhouse_client import extract_greenhouse_job_id_and_board
+
+        b, jid = extract_greenhouse_job_id_and_board("https://boards.greenhouse.io/figma/jobs/5426468004?gh_jid=5426468004")
+        self.assertEqual(b, "figma")
+        self.assertEqual(jid, "5426468004")
+
+        b, jid = extract_greenhouse_job_id_and_board("https://job-boards.greenhouse.io/stripe/jobs/8113337")
+        self.assertEqual(b, "stripe")
+        self.assertEqual(jid, "8113337")
+
+        b, jid = extract_greenhouse_job_id_and_board("https://boards.greenhouse.io/embed/job_app?for=reddit&token=998877")
+        self.assertEqual(b, "reddit")
+        self.assertEqual(jid, "998877")
+
+        b, jid = extract_greenhouse_job_id_and_board("greenhouse:anthropic:554433")
+        self.assertEqual(b, "anthropic")
+        self.assertEqual(jid, "554433")
+
+    @patch("resume_app.sourcing.clients.greenhouse_client.requests.get")
+    def test_fetch_greenhouse_jobs_filters_and_scores(self, mock_get):
+        from resume_app.sourcing.clients.greenhouse_client import fetch_greenhouse_jobs
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "jobs": [
+                {
+                    "id": 101,
+                    "title": "Senior Python Backend Engineer",
+                    "location": {"name": "San Francisco, CA • Remote"},
+                    "absolute_url": "https://boards.greenhouse.io/stripe/jobs/101",
+                    "updated_at": "2026-09-25T12:00:00Z",
+                    "departments": [{"name": "Engineering"}],
+                    "content": "<p>Build scalable payment APIs using Python.</p>",
+                },
+                {
+                    "id": 102,
+                    "title": "Product Designer",
+                    "location": {"name": "New York, NY"},
+                    "absolute_url": "https://boards.greenhouse.io/stripe/jobs/102",
+                    "updated_at": "2026-09-25T12:00:00Z",
+                    "departments": [{"name": "Design"}],
+                    "content": "<p>Design intuitive workflows.</p>",
+                },
+            ]
+        }
+        mock_get.return_value = mock_resp
+
+        results = fetch_greenhouse_jobs("python engineer", location="remote", boards=["stripe"], results_wanted=5)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["title"], "Senior Python Backend Engineer")
+        self.assertEqual(results[0]["company_name"], "Stripe")
+        self.assertEqual(results[0]["source"], "greenhouse")
+        self.assertEqual(results[0]["external_id"], "greenhouse:stripe:101")
+        self.assertIn("Python", results[0]["description"])
+
+    @patch("resume_app.sourcing.clients.greenhouse_client.requests.get")
+    def test_fetch_greenhouse_job_detail(self, mock_get):
+        from resume_app.sourcing.clients.greenhouse_client import fetch_greenhouse_job_detail
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "id": 5426468004,
+            "title": "Engineering Manager",
+            "company_name": "Figma",
+            "location": {"name": "San Francisco, CA"},
+            "content": "&lt;p&gt;Lead exceptional teams.&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Collaborate across functions&lt;/li&gt;&lt;/ul&gt;",
+            "absolute_url": "https://boards.greenhouse.io/figma/jobs/5426468004",
+            "updated_at": "2026-09-20T10:00:00Z",
+        }
+        mock_get.return_value = mock_resp
+
+        detail = fetch_greenhouse_job_detail("https://boards.greenhouse.io/figma/jobs/5426468004")
+        self.assertEqual(detail["title"], "Engineering Manager")
+        self.assertEqual(detail["company_name"], "Figma")
+        self.assertEqual(detail["location"], "San Francisco, CA")
+        self.assertIn("Lead exceptional teams.", detail["description"])
+        self.assertEqual(detail["source"], "greenhouse")
+        self.assertEqual(detail["external_id"], "greenhouse:figma:5426468004")
+
+    @patch("resume_app.sourcing.clients.greenhouse_client.fetch_greenhouse_job_detail")
+    def test_enrich_greenhouse_job_listing_description(self, mock_detail):
+        from resume_app.sourcing.clients.greenhouse_client import enrich_greenhouse_job_listing_description
+        from resume_app.models import JobListing
+
+        mock_detail.return_value = {
+            "title": "Principal Architect",
+            "company_name": "Cloudflare",
+            "location": "Remote, US",
+            "description": "A very detailed description exceeding threshold chars for Cloudflare role.",
+            "job_url": "https://boards.greenhouse.io/cloudflare/jobs/888",
+        }
+
+        job = JobListing.objects.create(
+            source="greenhouse",
+            external_id="greenhouse:cloudflare:888",
+            title="Untitled",
+            company_name="Cloudflare",
+            description="Brief text",
+            url="https://boards.greenhouse.io/cloudflare/jobs/888",
+        )
+
+        desc = enrich_greenhouse_job_listing_description(job)
+        self.assertIn("A very detailed description", desc)
+        job.refresh_from_db()
+        self.assertEqual(job.title, "Principal Architect")
+        self.assertEqual(job.location, "Remote, US")
+
+
 class FetchJobsOrchestratorTestCase(TestCase):
     @patch("resume_app.job_sources._fetch_jobs_jobspy")
     @patch("resume_app.sourcing.clients.levels_client.fetch_levels_jobs")
     @patch("resume_app.sourcing.clients.dice_client.fetch_dice_jobs")
-    def test_fetch_jobs_merges_providers(self, mock_dice, mock_levels, mock_jobspy):
+    @patch("resume_app.sourcing.clients.greenhouse_client.fetch_greenhouse_jobs")
+    def test_fetch_jobs_merges_providers(self, mock_gh, mock_dice, mock_levels, mock_jobspy):
         mock_jobspy.return_value = [
             {"source": "jobspy_indeed", "external_id": "j1", "title": "A"}
         ]
         mock_dice.return_value = [{"source": "dice", "external_id": "d1", "title": "B"}]
         mock_levels.return_value = [{"source": "levels", "external_id": "l1", "title": "D"}]
+        mock_gh.return_value = [{"source": "greenhouse", "external_id": "g1", "title": "G"}]
         rows = fetch_jobs(
             "engineer",
-            site_name=["indeed", "dice", "levels"],
-            results_wanted=30,
+            site_name=["indeed", "dice", "levels", "greenhouse"],
+            results_wanted=40,
         )
-        self.assertEqual(len(rows), 3)
+        self.assertEqual(len(rows), 4)
         mock_jobspy.assert_called_once()
         mock_dice.assert_called_once()
         mock_levels.assert_called_once()
+        mock_gh.assert_called_once()
         self.assertEqual(mock_jobspy.call_args[0][3], 10)
 
 

@@ -43,6 +43,8 @@
                                 class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">Cover letter</button>
                         <button type="button" role="tab" aria-selected="false" aria-controls="prompt-interview-prep-pane" id="prompt-interview-prep-tab" data-prompt-pane="prompt-interview-prep-pane"
                                 class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">Interview prep</button>
+                        <button type="button" role="tab" aria-selected="false" aria-controls="prompt-skill-radar-pane" id="prompt-skill-radar-tab" data-prompt-pane="prompt-skill-radar-pane"
+                                class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">Skill Radar</button>
                     </div>
                     <div class="rounded-b border border-t-0 border-slate-200 bg-slate-50/30 p-4" id="prompt-tab-content">
                         <div id="prompt-writer-pane" role="tabpanel" aria-labelledby="prompt-writer-tab">
@@ -167,6 +169,22 @@
                             <textarea name="prompt_interview_prep_combined" rows="3"
                                       class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs"
                                       placeholder="Optional single template">{{ prompts.interview_prep_legacy_combined }}</textarea>
+                        </div>
+                        <div id="prompt-skill-radar-pane" role="tabpanel" aria-labelledby="prompt-skill-radar-tab" class="hidden">
+                            <p class="mb-2 text-xs text-slate-600">Used for <strong>Fit Diagnostics &amp; Skill Radar</strong> extraction in the Career Cockpit. Invoked locally on <strong>Ollama Local</strong> to extract verified competencies, role gaps, and match scores without cloud token costs.</p>
+                            <p class="mb-2 text-xs font-medium text-slate-600">System (Instructions &amp; strict anti-vague rules)</p>
+                            <textarea name="prompt_skill_radar_system" rows="14"
+                                      class="mb-3 w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
+                                      placeholder="Skill radar system instructions">{{ prompts.skill_radar_system }}</textarea>
+                            <p class="mb-2 text-xs font-medium text-slate-600">User (Dynamic inputs)</p>
+                            <textarea name="prompt_skill_radar_user" rows="8"
+                                      class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
+                                      placeholder="Skill radar user prompt">{{ prompts.skill_radar_user }}</textarea>
+                            <p class="mt-2 text-xs text-slate-500">Placeholders: <code class="rounded bg-slate-100 px-1">{resume_text}</code>, <code class="rounded bg-slate-100 px-1">{job_title}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code></p>
+                            <p class="mt-3 text-xs font-medium text-slate-600">Combined (legacy, optional)</p>
+                            <textarea name="prompt_skill_radar_combined" rows="3"
+                                      class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs"
+                                      placeholder="Optional single template">{{ prompts.skill_radar_legacy_combined }}</textarea>
                         </div>
                     </div>
                 </div>

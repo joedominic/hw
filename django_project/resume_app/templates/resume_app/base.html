@@ -7,9 +7,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token }}">
     {% include "resume_app/_tailwind_theme.html" %}
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+    <style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+            line-height: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            vertical-align: middle;
+        }
+    </style>
     {% block extra_head %}{% endblock %}
 </head>
-<body class="concierge-app min-h-full bg-concierge-soft text-concierge-slate antialiased">
+<body class="concierge-app min-h-full bg-[#F8FAFC] text-slate-900 antialiased flex flex-col">
 {% load hijack %}
 {% if request.user.is_hijacked %}
 <div class="sticky top-0 z-[60] border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-sm text-amber-950">
@@ -18,208 +29,35 @@
     — <form method="post" action="{% url 'hijack:release' %}" class="inline">{% csrf_token %}<button type="submit" class="font-semibold underline">Release</button></form>
 </div>
 {% endif %}
-{% with url_name=request.resolver_match.url_name %}
-<div class="flex min-h-screen">
-    {# Mobile sidebar overlay #}
-    <div id="concierge-sidebar-backdrop" class="fixed inset-0 z-40 bg-concierge-dark/40 lg:hidden hidden" aria-hidden="true"></div>
 
-    <aside id="concierge-sidebar"
-           class="fixed inset-y-0 left-0 z-50 flex w-64 -translate-x-full flex-col border-r border-slate-200 bg-white transition-transform duration-200 lg:static lg:translate-x-0">
-        {% if request.user.is_staff and not request.user.is_hijacked %}
-        <div class="border-b border-slate-100 px-4 py-4">
-            <a href="{% url 'staff_users' %}" class="text-lg font-bold tracking-tight text-brand">HireEdge</a>
-            <p class="mt-1 text-sm font-medium text-slate-500">Admin Console</p>
-        </div>
-        {% elif is_power_user %}
-        <div class="border-b border-slate-100 px-4 py-4">
-            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Optimizer Core</p>
-            <div class="mt-2 inline-flex items-center gap-2 rounded-concierge border border-brand/20 bg-brand-soft px-2 py-1 text-xs font-medium text-brand-ink">
-                <span class="h-1.5 w-1.5 rounded-full bg-brand"></span>
-                Active &amp; ready
-            </div>
-        </div>
+{# Global Standard Top Navigation Header #}
+{% block top_header %}
+{% include "resume_app/_top_nav.html" %}
+{% endblock top_header %}
+
+{# Backward compatibility block for any child referencing sidebar #}
+{% block sidebar %}{% endblock sidebar %}
+
+<main class="{% block main_content_class %}flex-1 w-full px-4 sm:px-6 lg:px-8 py-6{% endblock %}">
+    {% if show_email_verify_banner %}
+    <div class="mb-4 max-w-7xl mx-auto rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+        {% if pending_email %}
+        Confirm <strong>{{ pending_email }}</strong> to finish updating your account email.
         {% else %}
-        <div class="border-b border-slate-100 px-4 py-4">
-            <a href="{% url 'pipeline' %}" class="text-lg font-bold tracking-tight text-brand">HireEdge</a>
-            <p class="mt-1 text-sm font-medium text-slate-500">Job search workspace</p>
-        </div>
+        Please verify your email address to secure your account.
         {% endif %}
-        <nav class="flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 py-4 text-sm">
-            {% if not request.user.is_staff or request.user.is_hijacked %}
-            <p class="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Jobs</p>
-            <div class="ml-2 space-y-0.5 border-l border-slate-200 pl-2">
-                <a href="{% url 'jobs_search' %}"
-                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'jobs_search' or url_name == 'focus_breakdown' or url_name == 'focus_alignment' %}bg-brand-soft text-brand-ink{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
-                    {% if is_power_user %}Search{% else %}Find jobs{% endif %}
-                </a>
-                <a href="{% url 'pipeline' %}"
-                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'pipeline' or url_name == 'vetting' or url_name == 'applying' or url_name == 'done' %}bg-brand-soft text-brand-ink{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
-                    {% if is_power_user %}Dashboard{% else %}My jobs{% endif %}
-                </a>
-                <a href="{% url 'resume_optimizer' %}"
-                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'resume_optimizer' %}bg-brand-soft text-brand-ink{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
-                    {% if is_power_user %}Optimizer{% else %}Tailor resume{% endif %}
-                </a>
-                <a href="{% url 'track_list' %}"
-                   title="Upload resumes and assign them to search profiles"
-                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'track_list' or url_name == 'track_delete' %}bg-brand-soft text-brand-ink{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
-                    Search profiles
-                </a>
-            </div>
-            {% endif %}
-
-            {% if is_power_user or request.user.is_staff %}
-            <p class="mt-4 px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Workflow</p>
-            <div class="ml-2 space-y-0.5 border-l border-slate-200 pl-2">
-                <a href="{% url 'workflow_list' %}"
-                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'workflow_list' or url_name == 'workflow_create' or url_name == 'workflow_edit' or url_name == 'workflow_delete' %}bg-brand-soft text-brand-ink{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
-                    Workflows
-                </a>
-                {% if request.user.is_staff %}
-                <a href="{% url 'prompt_library' %}"
-                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'prompt_library' %}bg-brand-soft text-brand-ink{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
-                    Prompt library
-                </a>
-                {% endif %}
-            </div>
-            {% endif %}
-
-            {% if is_power_user %}
-            <p class="mt-4 px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">Job Search Management</p>
-            <div class="ml-2 space-y-0.5 border-l border-slate-200 pl-2">
-                <a href="{% url 'job_automation' %}"
-                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'job_automation' or url_name == 'job_task_create' or url_name == 'job_task_edit' or url_name == 'job_task_run_now' or url_name == 'job_task_toggle_active' %}bg-brand-soft text-brand-ink{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
-                    Searches
-                </a>
-                {% if request.user.is_staff %}
-                <a href="{% url 'huey_dashboard' %}"
-                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'huey_dashboard' or url_name == 'huey_periodic_revoke' or url_name == 'huey_periodic_restore' or url_name == 'huey_flush_queue' or url_name == 'huey_run_cleanup_now' or url_name == 'huey_task_run_now' %}bg-brand-soft text-brand-ink{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
-                    Monitor
-                </a>
-                {% endif %}
-            </div>
-            {% endif %}
-
-            <p class="mt-4 px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">System</p>
-            <div class="ml-2 space-y-0.5 border-l border-slate-200 pl-2">
-                <a href="{% url 'settings' %}"
-                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'settings' %}bg-brand-soft text-brand-ink{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
-                    Settings
-                </a>
-                <a href="{% url 'billing' %}"
-                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'billing' %}bg-brand-soft text-brand-ink{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
-                    Billing
-                </a>
-                <a href="{% url 'fit_inspector' %}"
-                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'fit_inspector' %}bg-brand-soft text-brand-ink{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
-                    Fit Inspector
-                </a>
-                {% if perms.resume_app.can_impersonate_users %}
-                <a href="{% url 'staff_users' %}"
-                   class="flex items-center rounded-concierge px-3 py-2 font-medium {% if url_name == 'staff_users' %}bg-brand-soft text-brand-ink{% else %}text-slate-600 hover:bg-slate-50{% endif %}">
-                    Staff
-                </a>
-                {% endif %}
-            </div>
-
-            {% if is_power_user %}
-            <div class="mt-auto border-t border-slate-100 pt-4">
-                <div class="mx-1 rounded-concierge bg-concierge-dark px-3 py-3 text-white">
-                    <p class="text-xs font-medium text-slate-300">Workspace</p>
-                    <p class="mt-1 text-sm font-semibold">Job search management</p>
-                    <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
-                        <a href="{% url 'job_automation' %}" class="text-teal-300 hover:text-teal-200">Searches →</a>
-                        {% if request.user.is_staff %}<a href="{% url 'huey_dashboard' %}" class="text-teal-300 hover:text-teal-200">Monitor →</a>{% endif %}
-                    </div>
-                </div>
-            </div>
-            {% endif %}
-        </nav>
-    </aside>
-
-    <div class="flex min-w-0 flex-1 flex-col">
-        <header class="sticky top-0 z-30 flex h-16 items-center justify-between gap-4 border-b border-slate-200 bg-white px-4 lg:px-6">
-            <div class="flex items-center gap-3">
-                <button type="button" id="concierge-menu-btn" class="inline-flex rounded-concierge p-2 text-slate-600 hover:bg-slate-100 lg:hidden" aria-label="Open menu">
-                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
-                </button>
-                <a href="{% if request.user.is_staff and not request.user.is_hijacked %}{% url 'staff_users' %}{% else %}{% url 'pipeline' %}{% endif %}" class="text-lg font-bold tracking-tight text-brand">HireEdge</a>
-                {% if request.user.is_staff and not request.user.is_hijacked %}
-                <span class="hidden text-xs font-medium text-slate-400 sm:inline">Admin Console</span>
-                {% elif is_power_user %}
-                <span class="hidden text-xs font-medium text-slate-400 sm:inline">Digital Concierge</span>
-                {% endif %}
-            </div>
-            {% if is_power_user or request.user.is_staff %}
-            <nav class="hidden flex-wrap items-center gap-1 lg:flex text-sm font-medium text-slate-600" aria-label="Quick links">
-                {% if not request.user.is_staff or request.user.is_hijacked %}
-                <a href="{% url 'resume_optimizer' %}" class="rounded-concierge px-2 py-1 hover:bg-slate-50 hover:text-concierge-slate">Optimizer</a>
-                <a href="{% url 'jobs_search' %}" class="rounded-concierge px-2 py-1 hover:bg-slate-50 hover:text-concierge-slate">Search</a>
-                <a href="{% url 'pipeline' %}" class="rounded-concierge px-2 py-1 {% if url_name == 'pipeline' or url_name == 'vetting' or url_name == 'applying' or url_name == 'done' %}bg-brand-soft text-brand-ink{% else %}hover:bg-slate-50 hover:text-concierge-slate{% endif %}">Dashboard</a>
-                <span class="hidden px-1 text-slate-300 sm:inline" aria-hidden="true">|</span>
-                <a href="{% url 'track_list' %}" class="rounded-concierge px-2 py-1 {% if url_name == 'track_list' or url_name == 'track_delete' %}bg-brand-soft text-brand-ink{% else %}hover:bg-slate-50 hover:text-concierge-slate{% endif %}" title="Tracks">Tracks</a>
-                {% endif %}
-                <a href="{% url 'job_automation' %}" class="rounded-concierge px-2 py-1 {% if url_name == 'job_automation' or url_name == 'job_task_create' or url_name == 'job_task_edit' or url_name == 'job_task_run_now' or url_name == 'job_task_toggle_active' %}bg-brand-soft text-brand-ink{% else %}hover:bg-slate-50 hover:text-concierge-slate{% endif %}">Searches</a>
-                {% if request.user.is_staff %}<a href="{% url 'huey_dashboard' %}" class="rounded-concierge px-2 py-1 {% if url_name == 'huey_dashboard' or url_name == 'huey_periodic_revoke' or url_name == 'huey_periodic_restore' or url_name == 'huey_flush_queue' or url_name == 'huey_run_cleanup_now' or url_name == 'huey_task_run_now' %}bg-brand-soft text-brand-ink{% else %}hover:bg-slate-50 hover:text-concierge-slate{% endif %}">Monitor</a>{% endif %}
-                <a href="{% url 'workflow_list' %}" class="rounded-concierge px-2 py-1 {% if url_name == 'workflow_list' or url_name == 'workflow_create' or url_name == 'workflow_edit' or url_name == 'workflow_delete' %}bg-brand-soft text-brand-ink{% else %}hover:bg-slate-50 hover:text-concierge-slate{% endif %}">Workflows</a>
-                {% if request.user.is_staff %}<a href="{% url 'staff_users' %}" class="rounded-concierge px-2 py-1 {% if url_name == 'staff_users' %}bg-brand-soft text-brand-ink{% else %}hover:bg-slate-50 hover:text-concierge-slate{% endif %}">Staff</a>{% endif %}
-            </nav>
-            {% else %}
-            <div class="hidden lg:block" aria-hidden="true"></div>
-            {% endif %}
-            <div class="flex items-center gap-2">
-                {% if user.is_authenticated %}
-                <span class="hidden text-sm text-slate-600 sm:inline">{{ user.get_username }}</span>
-                <form method="post" action="{% url 'logout' %}" class="inline">
-                    {% csrf_token %}
-                    <button type="submit" class="rounded-concierge px-2 py-1 text-sm font-medium text-slate-600 hover:bg-slate-100">Log out</button>
-                </form>
-                {% else %}
-                <a href="{% url 'login' %}" class="rounded-concierge px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100">Sign in</a>
-                {% endif %}
-                <a href="{% url 'settings' %}" class="rounded-concierge p-2 text-slate-500 hover:bg-slate-100 hover:text-concierge-slate" title="Settings">
-                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                </a>
-            </div>
-        </header>
-
-        <main class="flex-1 px-4 py-6 lg:px-8 lg:py-8">
-            {% if show_email_verify_banner %}
-            <div class="mb-4 rounded-concierge border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
-                {% if pending_email %}
-                Confirm <strong>{{ pending_email }}</strong> to finish updating your account email.
-                {% else %}
-                Please verify your email address to secure your account.
-                {% endif %}
-                <a href="{% url 'settings' %}?tab=account" class="ml-1 font-semibold underline">Account settings</a>
-                <form method="post" action="{% url 'resend_verification' %}" class="mt-2 inline-block sm:ml-2 sm:mt-0">
-                    {% csrf_token %}
-                    <input type="hidden" name="next" value="{{ request.get_full_path }}">
-                    <button type="submit" class="font-semibold underline">Resend email</button>
-                </form>
-            </div>
-            {% endif %}
-            {% block content %}{% endblock %}
-        </main>
+        <a href="{% url 'settings' %}?tab=account" class="ml-1 font-semibold underline">Account settings</a>
+        <form method="post" action="{% url 'resend_verification' %}" class="mt-2 inline-block sm:ml-2 sm:mt-0">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ request.get_full_path }}">
+            <button type="submit" class="font-semibold underline">Resend email</button>
+        </form>
     </div>
-</div>
-{% endwith %}
+    {% endif %}
 
-<script>
-(function () {
-    var sidebar = document.getElementById("concierge-sidebar");
-    var backdrop = document.getElementById("concierge-sidebar-backdrop");
-    var btn = document.getElementById("concierge-menu-btn");
-    function openM() { sidebar.classList.remove("-translate-x-full"); backdrop.classList.remove("hidden"); }
-    function closeM() { sidebar.classList.add("-translate-x-full"); backdrop.classList.add("hidden"); }
-    if (btn && sidebar && backdrop) {
-        btn.addEventListener("click", function () {
-            if (sidebar.classList.contains("-translate-x-full")) openM(); else closeM();
-        });
-        backdrop.addEventListener("click", closeM);
-    }
-})();
-</script>
+    {% block content %}{% endblock %}
+</main>
+
 {% block extra_js %}{% endblock %}
 </body>
 </html>

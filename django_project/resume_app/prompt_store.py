@@ -33,6 +33,9 @@ from .prompts import (
     DEFAULT_RECRUITER_JUDGE_PROMPT,
     DEFAULT_RECRUITER_JUDGE_SYSTEM,
     DEFAULT_RECRUITER_JUDGE_USER,
+    DEFAULT_SKILL_RADAR_PROMPT,
+    DEFAULT_SKILL_RADAR_SYSTEM,
+    DEFAULT_SKILL_RADAR_USER,
     DEFAULT_WRITER_PROMPT,
     DEFAULT_WRITER_SYSTEM,
     DEFAULT_WRITER_USER,
@@ -49,6 +52,7 @@ DEFAULT_PROMPTS: Dict[str, str] = {
     "cover_letter": DEFAULT_COVER_LETTER_PROMPT,
     "interview_prep": DEFAULT_INTERVIEW_PREP_PROMPT,
     "jd_cleanse": DEFAULT_JD_CLEANSE_PROMPT,
+    "skill_radar": DEFAULT_SKILL_RADAR_PROMPT,
 }
 
 _LEGACY_FIELDS = (
@@ -60,6 +64,7 @@ _LEGACY_FIELDS = (
     "cover_letter",
     "interview_prep",
     "jd_cleanse",
+    "skill_radar",
 )
 
 _PROMPT_SPEC = {
@@ -94,6 +99,13 @@ _PROMPT_SPEC = {
         "jd_cleanse_user",
         DEFAULT_JD_CLEANSE_SYSTEM,
         DEFAULT_JD_CLEANSE_USER,
+    ),
+    "skill_radar": (
+        "skill_radar",
+        "skill_radar_system",
+        "skill_radar_user",
+        DEFAULT_SKILL_RADAR_SYSTEM,
+        DEFAULT_SKILL_RADAR_USER,
     ),
 }
 

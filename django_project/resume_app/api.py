@@ -120,6 +120,8 @@ class StatusResponse(Schema):
     ats_score: Optional[int] = None
     recruiter_score: Optional[int] = None
     optimized_content: Optional[str] = None
+    original_content: Optional[str] = None
+    original_filename: Optional[str] = None
     error_message: Optional[str] = None
     total_input_tokens: Optional[int] = None
     total_output_tokens: Optional[int] = None
@@ -884,6 +886,20 @@ def get_status_data(resume_id: int, user, request=None):
             })
 
     cl_at = optimized.cover_letter_generated_at
+
+    original_text = ""
+    original_filename = ""
+    try:
+        if optimized.original_resume:
+            original_filename = optimized.original_resume.original_filename or (
+                optimized.original_resume.file.name if optimized.original_resume.file else "Original Resume"
+            )
+            if optimized.original_resume.file:
+                from .tasks import parse_pdf
+                original_text = parse_pdf(optimized.original_resume.file.path) or ""
+    except Exception as e:
+        logger.debug(f"Could not extract original resume text for resume {resume_id}: {e}")
+
     # "status" must stay the canonical workflow value (queued|running|completed|failed) so
     # the optimizer UI and templates can branch correctly. Human progress lives in status_display.
     return {
@@ -892,6 +908,8 @@ def get_status_data(resume_id: int, user, request=None):
         "ats_score": ats_score,
         "recruiter_score": recruiter_score,
         "optimized_content": optimized.optimized_content,
+        "original_content": original_text,
+        "original_filename": original_filename,
         "error_message": optimized.error_message,
         "total_input_tokens": optimized.total_input_tokens,
         "total_output_tokens": optimized.total_output_tokens,
@@ -967,13 +985,18 @@ def generate_cover_letter_api(request, resume_id: int, payload: JobPrepGenerateR
     try:
         prov = payload.llm_provider
         if not prov:
-            config = LLMProviderConfig.objects.for_user(user).filter(
-                encrypted_api_key__isnull=False
-            ).exclude(encrypted_api_key="").first()
+            config = (
+                LLMProviderConfig.objects.for_user(user)
+                .filter(encrypted_api_key__isnull=False)
+                .exclude(encrypted_api_key="")
+                .order_by("-is_active", "priority")
+                .first()
+            )
             if not config:
                 raise HttpError(400, "No LLM configured. Set up an API key in LLM Config first.")
             prov = config.provider
-            model = payload.llm_model or config.default_model
+            pref = config.preference_rows.order_by("priority").first()
+            model = payload.llm_model or config.default_model or (pref.model if pref else None)
             api_key = decrypt_api_key(config.encrypted_api_key)
         else:
             if prov not in LLM_PROVIDERS:
@@ -982,8 +1005,9 @@ def generate_cover_letter_api(request, resume_id: int, payload: JobPrepGenerateR
             if not config or not config.encrypted_api_key:
                 raise HttpError(400, f"API key required for {prov}.")
             api_key = decrypt_api_key(config.encrypted_api_key)
-            model = payload.llm_model or (config.default_model if config else None)
-        llm = get_llm(prov, api_key, model)
+            pref = config.preference_rows.order_by("priority").first() if config else None
+            model = payload.llm_model or (config.default_model if config else None) or (pref.model if pref else None)
+        llm = get_llm(prov, api_key, model, user=user)
     except HttpError:
         raise
     except Exception as e:
@@ -1578,17 +1602,17 @@ def _build_export_pdf(content: str) -> io.BytesIO:
         c = canvas.Canvas(buf, pagesize=letter)
         width, height = letter
         y = height - inch
-        body_line_height = 18
+        body_line_height = 15
         text_width = width - 2 * inch
         heading_color = (31/255, 78/255, 121/255)
         
         heading_styles = {
-            "heading1": {"font_size": 18, "block_height": 26, "space_after": body_line_height / 3},
-            "heading2": {"font_size": 13, "block_height": 22, "space_after": body_line_height / 3},
-            "heading3": {"font_size": 12, "block_height": 20, "space_after": body_line_height / 4},
-            "heading4": {"font_size": 11, "block_height": 18, "space_after": body_line_height / 5},
-            "heading5": {"font_size": 11, "block_height": 18, "space_after": body_line_height / 5},
-            "heading6": {"font_size": 11, "block_height": 18, "space_after": body_line_height / 5},
+            "heading1": {"font_size": 16, "block_height": 18, "space_before": 14, "space_after": 2},
+            "heading2": {"font_size": 13, "block_height": 15, "space_before": 9, "space_after": 2},
+            "heading3": {"font_size": 12, "block_height": 14, "space_before": 6, "space_after": 2},
+            "heading4": {"font_size": 10, "block_height": 12, "space_before": 4, "space_after": 2},
+            "heading5": {"font_size": 10, "block_height": 12, "space_before": 4, "space_after": 2},
+            "heading6": {"font_size": 10, "block_height": 12, "space_before": 4, "space_after": 2},
         }
 
         for block_type, text in _parse_markdown_blocks(content):
@@ -1597,14 +1621,15 @@ def _build_export_pdf(content: str) -> io.BytesIO:
             if heading_style:
                 block_height = heading_style["block_height"]
             elif block_type == "bullet":
-                block_height = 20
+                block_height = 16
 
             if y < inch + block_height * 3:
                 c.showPage()
                 y = height - inch
 
             if heading_style:
-                y -= body_line_height / 4
+                if y < height - inch - 2:
+                    y -= heading_style.get("space_before", 6)
                 y = _draw_rich_text(
                     c,
                     inch,
@@ -1618,7 +1643,7 @@ def _build_export_pdf(content: str) -> io.BytesIO:
                 )
                 y -= heading_style["space_after"]
             elif block_type == "bullet":
-                c.setFont("Times-Roman", 11)
+                c.setFont("Times-Roman", 10)
                 c.setFillColor(colors.black)
                 c.drawString(inch, y, "•")
                 y = _draw_rich_text(
@@ -1628,7 +1653,7 @@ def _build_export_pdf(content: str) -> io.BytesIO:
                     text_width - 14,
                     _split_style_spans(text),
                     block_height,
-                    font_size=11,
+                    font_size=10,
                     first_line_indent=inch + 14,
                     default_font_name="Times-Roman",
                 )
@@ -1641,7 +1666,7 @@ def _build_export_pdf(content: str) -> io.BytesIO:
                     text_width,
                     _split_style_spans(text),
                     body_line_height,
-                    font_size=11,
+                    font_size=10,
                     default_font_name="Times-Roman",
                 )
                 y -= body_line_height / 5

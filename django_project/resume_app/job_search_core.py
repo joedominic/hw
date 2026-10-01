@@ -61,6 +61,10 @@ def effective_vetting_job_description(job: JobListing, *, enrich: bool = False) 
         from .sourcing.clients.builtin_client import enrich_builtin_job_listing_description
 
         return (enrich_builtin_job_listing_description(job) or current).strip()
+    if src == "greenhouse":
+        from .sourcing.clients.greenhouse_client import enrich_greenhouse_job_listing_description
+
+        return (enrich_greenhouse_job_listing_description(job) or current).strip()
     return current
 
 
@@ -121,6 +125,7 @@ def _job_to_payload(job: JobListing, *, snippet: Optional[str] = None) -> JobPay
         company_name=_safe_display_str(job.company_name) or "—",
         location=_safe_display_str(job.location),
         snippet=_safe_display_str(snippet),
+        description=job.description or "",
         url=job.url or "",
         source=src,
         source_display=format_job_source_label(src),

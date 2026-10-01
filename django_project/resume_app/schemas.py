@@ -22,6 +22,7 @@ class JobPayload(Schema):
     company_name: str
     location: str
     snippet: str
+    description: Optional[str] = None
     url: str
     source: str
     source_display: Optional[str] = None
@@ -43,6 +44,21 @@ class JobPayload(Schema):
     has_interview_prep: Optional[bool] = None
     is_saved: Optional[bool] = False
     is_liked: Optional[bool] = False
+    zero_llm_core_matches: Optional[List[str]] = None
+    zero_llm_stretch_skills: Optional[List[str]] = None
+    zero_llm_match_pct: Optional[int] = None
+    zero_llm_core_json: Optional[str] = None
+    zero_llm_stretch_json: Optional[str] = None
+    similar_jobs_json: Optional[str] = None
+    positive_influences_json: Optional[str] = None
+    negative_influences_json: Optional[str] = None
+    extracted_salary: Optional[str] = None
+    has_date_diff: Optional[bool] = False
+    sourced_age: Optional[str] = None
+    posted_age: Optional[str] = None
+    combined_age: Optional[str] = None
+    zero_llm_fit_summary: Optional[str] = None
+    skill_radar_source: Optional[str] = None
 
 
 class JobDetailPayload(Schema):

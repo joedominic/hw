@@ -25,7 +25,7 @@ DEFAULT_MODELS = {
     "Groq": "llama-3.3-70b-versatile",
     "Google AI Studio": "gemini-1.5-pro",
     "Ollama Cloud": "gpt-oss:120b",
-    "Ollama Local": "llama3",
+    "Ollama Local": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M",
     "OpenRouter": "openai/gpt-4o-mini",
 }
 

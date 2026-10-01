@@ -774,6 +774,7 @@ def _run_job_search_task_impl(user_id, task_id):
             now = timezone.now()
 
             is_reposted = False
+            is_expired_revival = pe.stage == PipelineEntry.Stage.EXPIRED
             posted_at = getattr(payload, "posted_at", None)
             if not posted_at:
                 listing = JobListing.objects.filter(id=job_id).first()
@@ -781,28 +782,45 @@ def _run_job_search_task_impl(user_id, task_id):
                     posted_at = listing.posted_at
 
             if posted_at and pe.removed_at:
-                if (now - pe.removed_at) >= repost_cooldown:
-                    posted_at_dt = posted_at
-                    if timezone.is_naive(posted_at_dt):
-                        posted_at_dt = timezone.make_aware(posted_at_dt)
+                posted_at_dt = posted_at
+                if timezone.is_naive(posted_at_dt):
+                    posted_at_dt = timezone.make_aware(posted_at_dt)
+
+                if is_expired_revival:
+                    # Expired roles are aged out by policy (not disliked/rejected by user).
+                    # If reposted with a date after it was expired or within the fresh window:
                     if posted_at_dt > pe.removed_at:
                         is_reposted = True
+                else:
+                    if (now - pe.removed_at) >= repost_cooldown:
+                        if posted_at_dt > pe.removed_at:
+                            is_reposted = True
 
             if is_reposted:
                 pe.removed_at = None
                 pe.stage = PipelineEntry.Stage.PIPELINE
                 pe.save(update_fields=["removed_at", "stage"])
+                PipelineEntry.objects.filter(pk=pe.pk).update(added_at=now)
+                # Reset fetched_at so the revived repost is fresh on the retention clock
+                JobListing.objects.filter(id=job_id).update(fetched_at=now)
                 jobs_added_to_pipeline += 1
                 if audit_entry:
                     audit_entry["disposition"] = "reposted_to_pipeline"
                     date_str = posted_at.strftime("%b %d, %Y") if hasattr(posted_at, "strftime") else str(posted_at)
-                    audit_entry["reason"] = (
-                        f"Re-admitted to Pipeline: Reposted on {date_str} (after {repost_cooldown_days}-day cooldown)"
-                    )
+                    if is_expired_revival:
+                        audit_entry["reason"] = f"Re-admitted to Pipeline: Reposted on {date_str} (expired role revived)"
+                    else:
+                        audit_entry["reason"] = (
+                            f"Re-admitted to Pipeline: Reposted on {date_str} (after {repost_cooldown_days}-day cooldown)"
+                        )
             else:
                 if audit_entry:
-                    audit_entry["disposition"] = "previously_removed"
-                    audit_entry["reason"] = "Skipped: Previously removed / archived from pipeline"
+                    if is_expired_revival:
+                        audit_entry["disposition"] = "expired_not_reposted"
+                        audit_entry["reason"] = "Skipped: Role was expired by retention policy (not reposted since expiry)"
+                    else:
+                        audit_entry["disposition"] = "previously_removed"
+                        audit_entry["reason"] = "Skipped: Previously removed / archived from pipeline"
         else:
             if audit_entry:
                 audit_entry["disposition"] = "already_in_pipeline"
@@ -1393,30 +1411,29 @@ def apply_cleanup_retention_purge(cfg: AppAutomationSettings) -> int:
     if not track_slugs:
         return 0
 
-    general_days = int(getattr(cfg, "cleanup_job_retention_days", 14) or 14)
+    retention_days = int(getattr(cfg, "cleanup_pipeline_retention_days", 7) or getattr(cfg, "cleanup_job_retention_days", 7) or 7)
+    if retention_days < 1:
+        return 0
 
-    rules: list[tuple[str, int]] = [
-        ("pipeline", int(cfg.cleanup_pipeline_retention_days) if cfg.cleanup_pipeline_retention_days else general_days),
-        ("vetting", int(cfg.cleanup_vetting_retention_days) if cfg.cleanup_vetting_retention_days else general_days),
-        ("applying", int(cfg.cleanup_applying_retention_days) if cfg.cleanup_applying_retention_days else general_days),
-        ("done", int(cfg.cleanup_done_retention_days or 0)),
-    ]
+    cutoff = now - timedelta(days=retention_days)
+
+    # Purge applies to all pre-applied stages based on Sourced Date; Done is strictly protected.
+    stages_to_purge = ["pipeline", "vetting", "applying"]
 
     removed = 0
     for tslug in track_slugs:
-        for stage_key, days in rules:
-            if days < 1:
-                continue
-            cutoff = now - timedelta(days=days)
+        for stage_key in stages_to_purge:
             try:
                 st_q = _cleanup_retention_stage_q(stage_key)
             except ValueError:
                 continue
-            for entry in PipelineEntry.objects.for_user(user).filter(
+            entries_to_purge = PipelineEntry.objects.for_user(user).filter(
                 track=tslug,
                 removed_at__isnull=True,
-                added_at__lt=cutoff,
-            ).filter(st_q):
+                job_listing__fetched_at__lt=cutoff,
+            ).filter(st_q)
+
+            for entry in entries_to_purge:
                 _pipeline_entry_remove_for_cleanup(entry)
                 removed += 1
     if removed:
@@ -1446,7 +1463,14 @@ def _job_listing_has_like_or_dislike(job_listing_id: int) -> bool:
 
 
 def _pipeline_entry_remove_for_cleanup(entry: PipelineEntry) -> None:
-    if _job_listing_has_like_or_dislike(entry.job_listing_id):
+    now = timezone.now()
+    if entry.stage in ("", PipelineEntry.Stage.PIPELINE, PipelineEntry.Stage.VETTING, PipelineEntry.Stage.APPLYING):
+        # Expired due to age without user dislike / negative ML bias:
+        # marked as EXPIRED with removed_at so it stays hidden but can be revived on repost.
+        entry.stage = PipelineEntry.Stage.EXPIRED
+        entry.removed_at = now
+        entry.save(update_fields=["stage", "removed_at"])
+    elif _job_listing_has_like_or_dislike(entry.job_listing_id):
         entry.mark_deleted(save=True)
     else:
         entry.delete()

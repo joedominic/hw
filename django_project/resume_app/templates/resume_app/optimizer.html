@@ -24,12 +24,76 @@
 </style>
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js" crossorigin="anonymous"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet" />
 {% endblock %}
 
-{% block title %}{% if is_power_user %}Setup &amp; configuration{% else %}Tailor your resume{% endif %} — HireEdge{% endblock %}
+{% block title %}{% if target_job %}{{ target_job.title }} — Tailoring Studio{% elif is_power_user %}Setup &amp; configuration{% else %}Tailor your resume{% endif %} — HireEdge{% endblock %}
+
+
+{% block main_content_class %}flex-1 px-4 py-4 lg:px-8 lg:py-6 bg-slate-50/50 min-h-[calc(100vh-3.5rem)]{% endblock %}
 
 {% block content %}
-<div class="mx-auto max-w-6xl">
+<div class="mx-auto max-w-7xl">
+    <!-- Contextual Opportunity Telemetry & Action Bar -->
+    <div class="mb-6 bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div class="flex items-center gap-3">
+            <a href="{% url 'career_cockpit' %}?track={{ pipeline_track|default:'dir-plano' }}&stage=applying" 
+               id="back-to-cockpit-link"
+               class="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-brand bg-slate-100 hover:bg-slate-200 px-3 py-2 rounded-lg transition"
+               title="Return to Career Cockpit (Esc)">
+                <span class="material-symbols-outlined text-[16px]">arrow_back</span>
+                <span>Back to Cockpit</span>
+                <kbd class="hidden sm:inline-block ml-1 bg-white border border-slate-200 text-slate-500 px-1 py-0.5 rounded text-[10px] font-mono">Esc</kbd>
+            </a>
+            <div class="h-6 w-[1px] bg-slate-200 hidden sm:block"></div>
+            {% if target_job %}
+            <div>
+                <div class="flex items-center gap-2">
+                    <span class="text-xs font-bold uppercase tracking-wider text-brand px-1.5 py-0.5 rounded bg-brand-soft">Target Role</span>
+                    <h2 class="text-sm font-bold text-slate-900 leading-tight">{{ target_job.title }}</h2>
+                </div>
+                <div class="flex items-center gap-2 text-xs text-slate-500 mt-1">
+                    <span class="font-semibold text-slate-700">{{ target_job.company_name }}</span>
+                    {% if target_job.location %}
+                    <span>•</span>
+                    <span>{{ target_job.location }}</span>
+                    {% endif %}
+                    {% if prefill_resume_name %}
+                    <span>•</span>
+                    <span class="text-emerald-700 font-medium inline-flex items-center gap-1">
+                        <span class="material-symbols-outlined text-[13px]">description</span>
+                        {{ prefill_resume_name }}
+                    </span>
+                    {% endif %}
+                </div>
+            </div>
+            {% else %}
+            <div>
+                <span class="text-xs font-bold uppercase tracking-wider text-slate-500">Autonomous Tailoring Studio</span>
+                <p class="text-xs text-slate-500">Select or paste an opportunity below to optimize your CV with persona judges.</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="flex items-center gap-3 self-end md:self-auto">
+            {% if target_job %}
+            <form method="post" action="{% url 'resume_optimizer' %}?job_id={{ target_job.id }}&track={{ pipeline_track|default:'dir-plano' }}" id="approve-apply-form" class="inline">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="approve_and_mark_applied"/>
+                <input type="hidden" name="job_id" value="{{ target_job.id }}"/>
+                <input type="hidden" name="track" value="{{ pipeline_track|default:'dir-plano' }}"/>
+                <button type="submit" 
+                        id="approve-apply-btn" 
+                        class="h-9 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-2 transition shadow-sm hover:shadow"
+                        title="Approve tailored resume and advance to Applied stage (Ctrl+Enter)">
+                    <span class="material-symbols-outlined text-[18px]">verified</span>
+                    <span>Approve &amp; Mark Applied</span>
+                    <kbd class="hidden sm:inline-block ml-1 bg-emerald-800/50 text-emerald-100 px-1.5 py-0.5 rounded text-[10px] font-mono">Ctrl+Enter</kbd>
+                </button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
     <div class="mb-8 brand-animate">
         <h1 class="text-3xl font-extrabold tracking-tight text-concierge-slate">{% if is_power_user %}Setup &amp; configuration{% else %}Tailor your resume{% endif %}</h1>
         <p class="mt-2 max-w-2xl text-sm leading-relaxed text-slate-600">
@@ -1024,20 +1088,51 @@
 
     function buildDraftSectionHtml(data, resumeId) {
         var content = data.optimized_content || "";
-        var html = '<div class="mt-8 border-t border-slate-100 pt-6" id="optimizer-draft-section">';
+        var origContent = data.original_content || "Loading original document text...";
+        var origFilename = data.original_filename || "Base Resume (PDF)";
+        var html = '<div class="mt-8 border-t border-slate-200 pt-6" id="optimizer-draft-section">';
         if (data.status === "completed") {
-            html += '<h4 class="text-lg font-semibold text-concierge-slate">New resume draft</h4>';
-            html += '<p class="mt-1 text-xs text-slate-500">Edit the text below, then <strong>Save draft</strong> before exporting PDF or Word.</p>';
-            html += '<textarea id="optimizer-draft-editor" rows="22" data-resume-id="' + esc(resumeId) + '"';
-            html += ' class="mt-3 w-full max-h-[32rem] min-h-[12rem] resize-y rounded-concierge border border-slate-200 bg-white p-4 font-mono text-sm leading-relaxed text-slate-800 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"></textarea>';
-            html += '<div class="mt-3 flex flex-wrap items-center gap-3">';
-            html += '<button type="button" id="save-draft-btn" data-resume-id="' + esc(resumeId) + '" class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">Save draft</button>';
-            html += '<span id="save-draft-status" class="text-xs text-slate-500" aria-live="polite"></span></div>';
-            html += '<p class="mt-3 text-sm text-slate-500">Replacement tokens from Settings apply on export.</p>';
-            html += '<div class="mt-4 flex flex-wrap gap-3">';
-            html += '<a id="export-pdf-btn" class="inline-flex items-center rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover export-button" href="/api/resume/export/' + esc(resumeId) + '/pdf" data-base-href="/api/resume/export/' + esc(resumeId) + '/pdf" data-resume-id="' + esc(resumeId) + '">Export PDF</a>';
-            html += '<a id="export-docx-btn" class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50 export-button" href="/api/resume/export/' + esc(resumeId) + '/docx" data-base-href="/api/resume/export/' + esc(resumeId) + '/docx" data-resume-id="' + esc(resumeId) + '">Export Word</a>';
-            html += '<a class="inline-flex items-center text-sm font-medium text-slate-500 hover:text-concierge-slate" href="{% url 'resume_optimizer' %}">Run again</a></div>';
+            html += '<div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 pb-4 border-b border-slate-100">';
+            html += '<div><div class="flex items-center gap-2">';
+            html += '<span class="material-symbols-outlined text-brand text-[20px]">difference</span>';
+            html += '<h4 class="text-base font-bold text-slate-900">Dual-Pane Diff Workbench</h4>';
+            html += '<span class="rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 uppercase tracking-wide">Live Sync</span></div>';
+            html += '<p class="mt-1 text-xs text-slate-500">Compare your original resume against the tailored version. Edit directly in the right pane—changes auto-save to draft.</p></div>';
+            html += '<div class="flex flex-wrap items-center gap-3">';
+            html += '<div class="inline-flex rounded-lg bg-slate-100 p-0.5 text-xs font-semibold" role="tablist" id="diff-view-mode-tabs">';
+            html += '<button type="button" class="diff-mode-btn active px-3 py-1.5 rounded-md bg-white text-slate-800 shadow-sm transition" data-mode="split">Side-by-Side Diff</button>';
+            html += '<button type="button" class="diff-mode-btn px-3 py-1.5 rounded-md text-slate-600 hover:text-slate-900 transition" data-mode="tailored-only">Tailored Draft Only</button>';
+            html += '<button type="button" class="diff-mode-btn px-3 py-1.5 rounded-md text-slate-600 hover:text-slate-900 transition" data-mode="original-only">Original Source Only</button></div>';
+            html += '<div class="h-5 w-[1px] bg-slate-200 hidden sm:block"></div>';
+            html += '<div class="flex items-center gap-2">';
+            html += '<button type="button" id="save-draft-btn" data-resume-id="' + esc(resumeId) + '" class="inline-flex items-center gap-1.5 rounded-lg bg-brand hover:bg-brand-hover text-white px-3.5 py-1.5 text-xs font-bold shadow-sm transition">';
+            html += '<span class="material-symbols-outlined text-[15px]">save</span><span>Save draft</span></button>';
+            html += '<span id="save-draft-status" class="text-xs text-slate-500" aria-live="polite"></span></div></div></div>';
+
+            html += '<div class="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4" id="workbench-panes-grid">';
+            html += '<div class="diff-pane flex flex-col border border-slate-200 rounded-xl bg-slate-50/70 overflow-hidden" id="pane-original-container">';
+            html += '<div class="flex items-center justify-between px-4 py-2.5 bg-slate-100/80 border-b border-slate-200 text-xs">';
+            html += '<div class="flex items-center gap-2 font-semibold text-slate-700">';
+            html += '<span class="material-symbols-outlined text-slate-500 text-[16px]">description</span><span>Original Source:</span>';
+            html += '<span class="font-mono text-slate-900 font-bold" id="diff-original-filename">' + esc(origFilename) + '</span></div>';
+            html += '<span class="text-[11px] text-slate-400 font-medium">Read-only baseline</span></div>';
+            html += '<div id="diff-original-scroll-box" class="h-[36rem] overflow-y-auto p-4 font-mono text-xs leading-relaxed text-slate-700 whitespace-pre-wrap select-text">' + esc(origContent) + '</div></div>';
+
+            html += '<div class="diff-pane flex flex-col border border-brand/30 rounded-xl bg-white shadow-sm overflow-hidden" id="pane-tailored-container">';
+            html += '<div class="flex items-center justify-between px-4 py-2.5 bg-brand-mist/50 border-b border-brand/20 text-xs">';
+            html += '<div class="flex items-center gap-2 font-semibold text-brand-ink">';
+            html += '<span class="material-symbols-outlined text-brand text-[16px]">auto_fix_high</span><span>AI-Tailored Draft:</span>';
+            html += '<span class="rounded bg-brand/10 text-brand px-1.5 py-0.5 text-[10px] font-bold">Editable</span></div>';
+            html += '<div class="flex items-center gap-3"><span id="diff-tailored-wordcount" class="text-[11px] text-slate-500 font-mono font-medium">0 words</span>';
+            html += '<span class="text-slate-300">•</span><span class="text-[11px] text-emerald-700 font-medium flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>Infused &amp; Scored</span></div></div>';
+            html += '<textarea id="optimizer-draft-editor" rows="22" data-resume-id="' + esc(resumeId) + '" class="h-[36rem] w-full resize-none p-4 font-mono text-xs leading-relaxed text-slate-900 focus:outline-none focus:ring-0 border-0 bg-white" placeholder="Optimized resume draft..."></textarea></div></div>';
+
+            html += '<div class="mt-4 p-4 bg-slate-50 border border-slate-200 rounded-xl flex flex-wrap items-center justify-between gap-4">';
+            html += '<div class="flex items-center gap-2 text-xs text-slate-500"><span class="material-symbols-outlined text-[16px] text-brand">info</span><span>Tokens from Settings (e.g. contact replacements) are applied automatically on export.</span></div>';
+            html += '<div class="flex flex-wrap items-center gap-2">';
+            html += '<a id="export-pdf-btn" class="inline-flex items-center gap-1.5 rounded-lg bg-brand hover:bg-brand-hover text-white px-3.5 py-2 text-xs font-bold transition shadow-sm export-button" href="/api/resume/export/' + esc(resumeId) + '/pdf" data-base-href="/api/resume/export/' + esc(resumeId) + '/pdf" data-resume-id="' + esc(resumeId) + '"><span class="material-symbols-outlined text-[16px]">picture_as_pdf</span><span>Export PDF</span></a>';
+            html += '<a id="export-docx-btn" class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 px-3.5 py-2 text-xs font-bold transition shadow-sm export-button" href="/api/resume/export/' + esc(resumeId) + '/docx" data-base-href="/api/resume/export/' + esc(resumeId) + '/docx" data-resume-id="' + esc(resumeId) + '"><span class="material-symbols-outlined text-[16px]">description</span><span>Export Word (.docx)</span></a>';
+            html += '<button type="button" onclick="var b = document.getElementById(\'approve-apply-btn\'); if (b) b.click();" class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 text-xs font-bold transition shadow-sm"><span class="material-symbols-outlined text-[16px]">verified</span><span>Approve &amp; Mark Applied</span><kbd class="hidden sm:inline-block ml-1 bg-emerald-800/40 text-emerald-100 px-1 py-0.5 rounded text-[9px] font-mono">Ctrl+Enter</kbd></button></div></div>';
         } else {
             html += '<h4 class="text-lg font-semibold text-concierge-slate">Draft so far</h4>';
             html += '<p class="mt-1 text-xs text-slate-500">Run still in progress — you can edit and save after the run <strong>completes</strong>. Exports unlock then.</p>';
@@ -1205,11 +1300,105 @@
         statusBody.innerHTML = html;
         if (data.status === "completed") {
             var draftTa = document.getElementById("optimizer-draft-editor");
-            if (draftTa) draftTa.value = data.optimized_content || "";
+            if (draftTa && data.optimized_content) draftTa.value = data.optimized_content;
+            var origBox = document.getElementById("diff-original-scroll-box");
+            if (origBox && data.original_content) origBox.textContent = data.original_content;
+            var origFn = document.getElementById("diff-original-filename");
+            if (origFn && data.original_filename) origFn.textContent = data.original_filename;
             var clTa = document.getElementById("optimizer-cover-letter-editor");
-            if (clTa) clTa.value = data.cover_letter || "";
+            if (clTa && data.cover_letter) clTa.value = data.cover_letter;
+            initWorkbench();
         }
     }
+
+    function initWorkbench() {
+        initDiffModes();
+        initSyncScroll();
+        updateTailoredStats();
+        var draftTa = document.getElementById("optimizer-draft-editor");
+        if (draftTa) {
+            draftTa.addEventListener("input", function () {
+                window.__optimizerDraftDirty = true;
+                updateTailoredStats();
+            });
+        }
+    }
+
+    function initDiffModes() {
+        var tabs = document.querySelectorAll(".diff-mode-btn");
+        var leftPane = document.getElementById("pane-original-container");
+        var rightPane = document.getElementById("pane-tailored-container");
+        var grid = document.getElementById("workbench-panes-grid");
+        if (!tabs.length || !leftPane || !rightPane || !grid) return;
+
+        tabs.forEach(function (btn) {
+            btn.onclick = function () {
+                tabs.forEach(function (b) {
+                    b.classList.remove("active", "bg-white", "text-slate-800", "shadow-sm");
+                    b.classList.add("text-slate-600");
+                });
+                btn.classList.add("active", "bg-white", "text-slate-800", "shadow-sm");
+                btn.classList.remove("text-slate-600");
+
+                var mode = btn.getAttribute("data-mode");
+                if (mode === "split") {
+                    grid.className = "mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4";
+                    leftPane.classList.remove("hidden");
+                    rightPane.classList.remove("hidden");
+                } else if (mode === "tailored-only") {
+                    grid.className = "mt-4 grid grid-cols-1 gap-4";
+                    leftPane.classList.add("hidden");
+                    rightPane.classList.remove("hidden");
+                } else if (mode === "original-only") {
+                    grid.className = "mt-4 grid grid-cols-1 gap-4";
+                    leftPane.classList.remove("hidden");
+                    rightPane.classList.add("hidden");
+                }
+            };
+        });
+    }
+
+    function initSyncScroll() {
+        var leftBox = document.getElementById("diff-original-scroll-box");
+        var rightBox = document.getElementById("optimizer-draft-editor");
+        if (!leftBox || !rightBox) return;
+
+        var isSyncing = false;
+        leftBox.onscroll = function () {
+            if (isSyncing) return;
+            isSyncing = true;
+            var maxLeft = leftBox.scrollHeight - leftBox.clientHeight;
+            if (maxLeft > 0) {
+                var ratio = leftBox.scrollTop / maxLeft;
+                rightBox.scrollTop = ratio * (rightBox.scrollHeight - rightBox.clientHeight);
+            }
+            setTimeout(function () { isSyncing = false; }, 30);
+        };
+
+        rightBox.onscroll = function () {
+            if (isSyncing) return;
+            isSyncing = true;
+            var maxRight = rightBox.scrollHeight - rightBox.clientHeight;
+            if (maxRight > 0) {
+                var ratio = rightBox.scrollTop / maxRight;
+                leftBox.scrollTop = ratio * (leftBox.scrollHeight - leftBox.clientHeight);
+            }
+            setTimeout(function () { isSyncing = false; }, 30);
+        };
+    }
+
+    function updateTailoredStats() {
+        var editor = document.getElementById("optimizer-draft-editor");
+        var wcLabel = document.getElementById("diff-tailored-wordcount");
+        if (!editor || !wcLabel) return;
+        var text = editor.value || "";
+        var words = text.trim() ? text.trim().split(/\s+/).length : 0;
+        var pages = words > 0 ? Math.max(1, Math.round(words / 350)) : 0;
+        wcLabel.textContent = words + " words" + (words > 0 ? " (~" + pages + " page" + (pages > 1 ? "s" : "") + ")" : "");
+    }
+
+    // Initialize workbench immediately if completed draft is already present in DOM
+    initWorkbench();
 
     var pollTimer = null;
     function startPolling(url, resumeId) {
@@ -1646,6 +1835,22 @@
                 });
         });
     }
+
+    // Keyboard Shortcuts: Esc to Return, Ctrl+Enter to Approve & Mark Applied
+    document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") {
+            var backBtn = document.getElementById("back-to-cockpit-link");
+            if (backBtn && backBtn.href) {
+                window.location.href = backBtn.href;
+            }
+        } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+            var approveBtn = document.getElementById("approve-apply-btn");
+            if (approveBtn) {
+                e.preventDefault();
+                approveBtn.click();
+            }
+        }
+    });
 
 })();
 </script>

@@ -1,0 +1,2014 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <meta name="csrf-token" content="{{ csrf_token }}"/>
+    <title>Career Cockpit — HireEdge</title>
+    
+    <!-- Material Symbols & Typography -->
+    <link href="https://fonts.googleapis.com" rel="preconnect"/>
+    <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet"/>
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+    
+    <!-- Tailwind Script -->
+    <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            DEFAULT: '#0F382A',
+                            dark: '#002217',
+                            soft: '#C1ECD7',
+                            mist: '#F0FDF4',
+                            ink: '#002116',
+                        },
+                        cockpit: {
+                            canvas: '#F8FAFC',
+                            card: '#FFFFFF',
+                            border: '#E2E8F0',
+                            borderHover: '#CBD5E1',
+                            textMain: '#0F172A',
+                            textMuted: '#64748B',
+                            emeraldScore: '#059669',
+                            emeraldBg: '#ECFDF5',
+                            amberScore: '#D97706',
+                            amberBg: '#FEF3C7',
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        display: ['Plus Jakarta Sans', 'sans-serif'],
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+                    }
+                }
+            }
+        };
+    </script>
+    <style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+            line-height: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94A3B8; }
+        .tabular-nums { font-variant-numeric: tabular-nums; }
+    </style>
+</head>
+<body class="bg-cockpit-canvas font-sans text-cockpit-textMain antialiased h-screen flex flex-col select-none overflow-hidden">
+
+    <!-- Top Global Header -->
+    {% include "resume_app/_top_nav.html" %}
+
+    <!-- Tri-Pane Primary Workstation Body -->
+    <div class="flex-1 flex overflow-hidden">
+
+        <!-- ========================================== -->
+        <!-- PANE 1: LEFT CONTROL RAIL (~260px)        -->
+        <!-- ========================================== -->
+        <aside class="hidden md:flex flex-col w-56 lg:w-60 xl:w-64 bg-slate-50/80 border-r border-cockpit-border justify-between shrink-0 h-full overflow-y-auto">
+            <div class="p-3 space-y-3">
+                
+                <!-- Search Profiles List Group -->
+                <div>
+                    <div class="flex items-center justify-between mb-1.5 px-1">
+                        <span class="font-mono text-[10px] text-cockpit-textMuted uppercase tracking-wider font-bold">Search Profiles</span>
+                        <div class="flex items-center gap-1">
+                            <button type="button" onclick="openNewProfileDrawer()" class="text-slate-400 hover:text-brand p-1 rounded hover:bg-slate-200 transition" title="Add new search profile">
+                                <span class="material-symbols-outlined text-[15px]">add</span>
+                            </button>
+                            <button type="button" onclick="openEditProfileDrawer('{{ pipeline_track }}')" class="text-slate-400 hover:text-brand p-1 rounded hover:bg-slate-200 transition" title="Configure current profile">
+                                <span class="material-symbols-outlined text-[15px]">settings</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="space-y-1">
+                        {% for t in pipeline_tracks %}
+                        <div class="group relative flex items-center justify-between p-1.5 rounded-lg border transition-all {% if t.slug == pipeline_track %}bg-white border-brand shadow-sm text-cockpit-textMain{% else %}border-transparent hover:bg-slate-100 text-cockpit-textMuted{% endif %}">
+                            <a href="?track={{ t.slug }}&stage={{ board_stage }}" class="flex-1 flex items-center gap-1.5 truncate">
+                                <span class="w-2 h-2 rounded-full shrink-0 {% if t.slug == pipeline_track %}bg-brand{% else %}bg-slate-300{% endif %}"></span>
+                                <span class="text-xs font-bold truncate">{{ t.label }}</span>
+                            </a>
+                            <div class="flex items-center gap-1 shrink-0">
+                                <span class="font-mono text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded font-medium">{{ t.count }}</span>
+                                <button type="button" onclick="openEditProfileDrawer('{{ t.slug }}')" class="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-brand p-0.5 rounded transition" title="Edit profile">
+                                    <span class="material-symbols-outlined text-[14px]">edit</span>
+                                </button>
+                            </div>
+                        </div>
+                        {% empty %}
+                        <div class="text-xs text-slate-400 p-2">No search profiles configured</div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <!-- Bound Active Resume Card -->
+                <div class="bg-white p-2.5 rounded-lg border border-cockpit-border space-y-1">
+                    <div class="flex items-center justify-between text-[10px] font-mono text-cockpit-textMuted uppercase font-bold">
+                        <span>Bound Resume</span>
+                        <div class="flex items-center gap-1.5">
+                            <span class="text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200">Active</span>
+                            <button type="button" onclick="openEditProfileDrawer('{{ pipeline_track }}')" class="text-brand hover:underline font-semibold text-[10px]">Change</button>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2 text-xs font-semibold text-cockpit-textMain truncate">
+                        <span class="material-symbols-outlined text-[16px] text-brand">description</span>
+                        <span class="truncate">{{ bound_resume.original_filename|default:"Nc_Director_Resume_Final.pdf" }}</span>
+                    </div>
+                </div>
+
+                <!-- Guardrails & Negative Filter Criteria -->
+                <div class="space-y-2.5 pt-2.5 border-t border-slate-200">
+                    <div class="flex items-center justify-between px-1">
+                        <span class="font-mono text-[10px] text-cockpit-textMuted uppercase tracking-wider font-bold">Guardrails &amp; Bounds</span>
+                        <span class="material-symbols-outlined text-cockpit-textMuted text-[14px]">tune</span>
+                    </div>
+
+                    <!-- Search Profile Query Criteria -->
+                    <div class="bg-white p-2.5 rounded-lg border border-cockpit-border space-y-1.5">
+                        <div class="flex items-center justify-between text-cockpit-textMuted text-[10px] font-mono font-bold uppercase">
+                            <span class="flex items-center gap-1">
+                                <span>Criteria</span>
+                                <span class="text-brand font-semibold font-mono">({{ active_search_profile.name|default:pipeline_track }})</span>
+                            </span>
+                            <button type="button" onclick="openEditProfileDrawer('{{ active_search_profile.slug }}')" class="text-brand hover:underline font-semibold flex items-center gap-0.5 text-[10px]" title="Edit search query and settings">
+                                <span>Edit</span>
+                                <span class="material-symbols-outlined text-[12px]">edit</span>
+                            </button>
+                        </div>
+                        
+                        <!-- Search Query -->
+                        <div class="space-y-0.5">
+                            <div class="text-[10px] font-mono text-slate-400 uppercase font-semibold">Search Query:</div>
+                            <div class="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                                <span class="material-symbols-outlined text-[14px] text-brand">search</span>
+                                <span class="truncate">{{ active_search_profile.search_term|default:"No query configured" }}</span>
+                            </div>
+                        </div>
+
+                        <!-- Location -->
+                        <div class="space-y-0.5 pt-1.5 border-t border-slate-100">
+                            <div class="text-[10px] font-mono text-slate-400 uppercase font-semibold">Location:</div>
+                            <div class="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                                <span class="material-symbols-outlined text-[14px] text-emerald-600">location_on</span>
+                                <span class="truncate">{{ active_search_profile.location|default:"Any / Remote" }}</span>
+                            </div>
+                        </div>
+
+                        <!-- Job Boards -->
+                        <div class="space-y-1 pt-1.5 border-t border-slate-100">
+                            <div class="text-[10px] font-mono text-slate-400 uppercase font-semibold">Job Boards:</div>
+                            <div class="flex flex-wrap gap-1">
+                                {% for b in active_search_profile.site_names %}
+                                <span class="font-mono text-[10px] font-medium bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded capitalize">
+                                    {{ b }}
+                                </span>
+                                {% empty %}
+                                <span class="text-[10px] text-slate-400 italic">All default boards</span>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Schedule & Execution Stats -->
+                    <div class="bg-white p-2.5 rounded-lg border border-cockpit-border space-y-1.5">
+                        <div class="flex items-center justify-between">
+                            <span class="font-mono text-[10px] text-cockpit-textMuted uppercase font-bold">Search Schedule</span>
+                            {% if scheduled_task.is_active or active_search_profile.schedule_is_active %}
+                            <span class="inline-flex items-center gap-1 text-[9px] font-bold text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                                <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                                Recurring Active
+                            </span>
+                            {% else %}
+                            <span class="text-[9px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                                Manual / Inactive
+                            </span>
+                            {% endif %}
+                        </div>
+
+                        <!-- Schedule Interval / Time -->
+                        <div class="text-xs text-slate-700 flex items-center justify-between">
+                            <span class="text-slate-500 text-[11px] flex items-center gap-1">
+                                <span class="material-symbols-outlined text-[14px] text-slate-400">schedule</span>
+                                Frequency:
+                            </span>
+                            <span class="font-semibold text-slate-800 text-[11px]">
+                                {% if task_frequency_display %}
+                                    {{ task_frequency_display }}
+                                {% elif scheduled_task.frequency %}
+                                    {{ scheduled_task.frequency }}
+                                {% elif active_search_profile.schedule_interval and active_search_profile.schedule_interval != 'off' %}
+                                    {{ active_search_profile.get_schedule_interval_display|default:active_search_profile.schedule_interval|title }}
+                                    {% if active_search_profile.schedule_time %}@ {{ active_search_profile.schedule_time|time:"H:i" }}{% endif %}
+                                {% else %}
+                                    On-Demand
+                                {% endif %}
+                            </span>
+                        </div>
+
+                        <!-- Last Run & Stats -->
+                        {% if last_task_run %}
+                        <div class="pt-1 border-t border-slate-100 space-y-1">
+                            <div class="flex items-center justify-between text-[11px]">
+                                <span class="text-slate-500">Last run:</span>
+                                <span class="font-medium text-slate-700 font-mono">{{ last_task_run.started_at|timesince }} ago</span>
+                            </div>
+                            <div class="flex items-center justify-between text-[10px] bg-slate-50 p-1.5 rounded border border-slate-200 font-mono">
+                                <span class="text-slate-600">Fetched: <strong class="text-slate-900">{{ last_task_run.jobs_fetched }}</strong></span>
+                                <span class="text-slate-300">•</span>
+                                <span class="text-emerald-700 font-bold">+{{ last_task_run.jobs_added_to_pipeline }} added</span>
+                            </div>
+                        </div>
+                        {% else %}
+                        <div class="pt-1 border-t border-slate-100 text-[10px] text-slate-400 italic">
+                            No automated runs recorded yet.
+                        </div>
+                        {% endif %}
+                    </div>
+
+                    <!-- Negative Keyword Phrases to Avoid -->
+                    <div class="bg-white p-2.5 rounded-lg border border-cockpit-border space-y-1.5">
+                        <div class="flex items-center justify-between">
+                            <span class="font-mono text-[10px] text-cockpit-textMuted uppercase font-bold">Phrases To Avoid</span>
+                            <button type="button" onclick="toggleAddPhraseInput()" class="text-[10px] text-brand hover:underline font-semibold">+ Add</button>
+                        </div>
+                        
+                        <!-- Inline quick-add form (hidden by default) -->
+                        <form id="add-phrase-form" action="" method="post" class="hidden flex items-center gap-1 pt-1">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="add_disqualifier">
+                            <input type="text" name="phrase" placeholder="e.g. intern" required class="flex-1 text-[11px] px-2 py-0.5 rounded border border-slate-300 focus:outline-none focus:ring-1 focus:ring-brand">
+                            <button type="submit" class="text-[10px] font-bold text-white bg-brand px-2 py-0.5 rounded">Add</button>
+                        </form>
+
+                        <div class="flex flex-wrap gap-1">
+                            {% for phrase in disqualifiers %}
+                            <span class="inline-flex items-center gap-1 bg-red-50 text-red-700 border border-red-200 pl-2 pr-1 py-0.5 rounded text-[11px] font-medium group">
+                                <span>{{ phrase }}</span>
+                                <form action="" method="post" class="inline m-0 p-0">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="action" value="remove_disqualifier">
+                                    <input type="hidden" name="phrase" value="{{ phrase }}">
+                                    <button type="submit" class="text-red-400 hover:text-red-700 leading-none flex items-center" title="Remove phrase">
+                                        <span class="material-symbols-outlined text-[13px]">close</span>
+                                    </button>
+                                </form>
+                            </span>
+                            {% empty %}
+                            <span class="text-[11px] text-slate-400 italic">No phrases to avoid configured</span>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <!-- Pipeline Freshness & Auto-Purge Policy (User / Account Level) -->
+                    <div class="bg-amber-50/50 p-2.5 rounded-lg border border-amber-200/90 shadow-sm space-y-2">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-1.5">
+                                <span class="material-symbols-outlined text-[16px] text-amber-600">auto_delete</span>
+                                <span class="font-mono text-[10px] text-amber-950 uppercase font-bold tracking-tight">Pipeline Freshness</span>
+                            </div>
+                            <span class="inline-flex items-center text-[9px] font-bold text-amber-800 bg-amber-100/90 px-1.5 py-0.5 rounded border border-amber-300/80" title="Applied across all search profiles for your account">
+                                Account Policy
+                            </span>
+                        </div>
+
+                        <p class="text-[10px] text-amber-900/80 leading-snug">
+                            Roles older than the retention window (based on Sourced Date) are retired from New, Review, and Applying. Applied roles are never purged.
+                        </p>
+
+                        <!-- Retention Form -->
+                        <form action="" method="post" class="space-y-2 pt-0.5">
+                            {% csrf_token %}
+                            <input type="hidden" name="action" value="update_pipeline_retention">
+                            <div class="flex items-center justify-between gap-2">
+                                <label for="cleanup-retention-select" class="text-[11px] font-medium text-slate-700 shrink-0">
+                                    Drop pre-applied roles:
+                                </label>
+                                <select id="cleanup-retention-select" name="cleanup_pipeline_retention_days" onchange="this.form.submit()" class="text-[11px] font-semibold text-slate-800 bg-white border border-amber-300 rounded px-2 py-1 shadow-sm focus:outline-none focus:ring-1 focus:ring-amber-500 cursor-pointer">
+                                    <option value="3" {% if pipeline_retention_days == 3 %}selected{% endif %}>3 Days</option>
+                                    <option value="5" {% if pipeline_retention_days == 5 %}selected{% endif %}>5 Days</option>
+                                    <option value="7" {% if pipeline_retention_days == 7 or not pipeline_retention_days %}selected{% endif %}>7 Days (1 Week)</option>
+                                    <option value="14" {% if pipeline_retention_days == 14 %}selected{% endif %}>14 Days (2 Weeks)</option>
+                                    <option value="30" {% if pipeline_retention_days == 30 %}selected{% endif %}>30 Days (Maximum)</option>
+                                </select>
+                            </div>
+                        </form>
+
+                        <div class="pt-1.5 border-t border-amber-200/70 flex items-center justify-between">
+                            <span class="text-[10px] text-amber-800/80 font-mono">
+                                Age from: <strong class="text-amber-950 font-semibold">Sourced Date</strong>
+                            </span>
+                            <form action="" method="post" class="inline m-0 p-0">
+                                {% csrf_token %}
+                                <input type="hidden" name="action" value="purge_pipeline_retention_now">
+                                <button type="submit" class="inline-flex items-center gap-1 text-[10px] font-bold text-amber-900 bg-amber-200/80 hover:bg-amber-300 px-2 py-0.5 rounded transition shadow-xs" title="Purge unactioned roles older than retention period now">
+                                    <span class="material-symbols-outlined text-[13px]">cleaning_services</span>
+                                    <span>Purge Now</span>
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer Profile Status -->
+            <div class="p-3 bg-slate-100/70 border-t border-cockpit-border flex items-center justify-between text-xs">
+                <div class="flex items-center gap-2">
+                    <div class="w-6 h-6 rounded-full bg-brand text-brand-soft flex items-center justify-center font-bold text-[10px]">
+                        {{ request.user.username|slice:":2"|upper }}
+                    </div>
+                    <div>
+                        <div class="font-bold text-cockpit-textMain text-[11px] leading-tight">{{ request.user.username }}</div>
+                        <div class="text-[9px] text-emerald-600 font-semibold">Profile Sync: OK</div>
+                    </div>
+                </div>
+                <a href="{% url 'settings' %}" class="text-slate-400 hover:text-slate-700 p-1">
+                    <span class="material-symbols-outlined text-[16px]">tune</span>
+                </a>
+            </div>
+        </aside>
+
+        <!-- ========================================== -->
+        <!-- PANE 2: CENTER WORKSTATION (Feed)         -->
+        <!-- ========================================== -->
+        <main class="flex-1 min-w-[340px] xl:min-w-[480px] xl:max-w-[580px] 2xl:max-w-[660px] flex flex-col bg-slate-50/50 border-r border-cockpit-border h-full overflow-hidden">
+            
+            <!-- Sticky Filter & Hotkey Toolbar -->
+            <div class="p-3.5 border-b border-cockpit-border bg-white shrink-0 space-y-2.5">
+                <div class="flex items-center justify-between gap-2">
+                    <!-- Search Input -->
+                    <div class="relative flex-1">
+                        <span class="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-[16px]">search</span>
+                        <input type="text" id="live-filter-input"
+                               placeholder="Filter opportunities (title, tech, company)..." 
+                               class="w-full bg-slate-50 border border-cockpit-border rounded-lg pl-8 pr-12 py-1.5 text-xs text-cockpit-textMain focus:outline-none focus:ring-1 focus:ring-brand focus:border-brand transition"/>
+                        <span id="filtered-count-badge" class="absolute right-2.5 top-1/2 -translate-y-1/2 font-mono text-[10px] text-slate-500 bg-slate-200 px-1.5 py-0.5 rounded font-bold">
+                            {{ pipeline_jobs|length }}
+                        </span>
+                    </div>
+
+                    <!-- Sort -->
+                    <form method="get" action="{% url 'career_cockpit' %}" id="cockpit-sort-form" class="flex items-center m-0 p-0">
+                        <input type="hidden" name="track" value="{{ pipeline_track }}">
+                        <input type="hidden" name="stage" value="{{ board_stage }}">
+                        <label class="flex items-center gap-1.5 bg-slate-50 border border-cockpit-border rounded-lg px-2.5 py-1.5 text-xs text-cockpit-textMuted hover:border-slate-300 transition cursor-pointer">
+                            <span class="material-symbols-outlined text-[15px] text-slate-400">sort</span>
+                            <span class="text-slate-500 font-medium">Sort:</span>
+                            <select id="cockpit-sort-select" name="sort_by" class="bg-transparent font-semibold text-cockpit-textMain text-xs focus:outline-none cursor-pointer pr-1">
+                                <option value="match" {% if pipeline_sort_by == "match" %}selected{% endif %}>Highest Match</option>
+                                <option value="latest" {% if pipeline_sort_by == "latest" %}selected{% endif %}>Latest / Fresh</option>
+                                <option value="interview" {% if pipeline_sort_by == "interview" %}selected{% endif %}>Interview Prob.</option>
+                                <option value="preference" {% if pipeline_sort_by == "preference" %}selected{% endif %}>Preference Margin</option>
+                                <option value="oldest" {% if pipeline_sort_by == "oldest" %}selected{% endif %}>Oldest</option>
+                            </select>
+                        </label>
+                    </form>
+                </div>
+
+                <!-- Connected Pipeline Stepper Progression -->
+                <div class="space-y-2">
+                    <div class="relative bg-slate-100/90 p-1.5 rounded-xl border border-slate-200">
+                        <div class="flex items-center gap-1 sm:gap-2">
+                            <!-- Stage: New -->
+                            <a href="?track={{ pipeline_track }}&stage=pipeline{% if pipeline_sort_by %}&sort_by={{ pipeline_sort_by }}{% endif %}"
+                               class="flex-1 relative flex flex-col justify-between p-2.5 rounded-lg transition-all {% if board_stage == 'pipeline' %}bg-brand text-white shadow-md ring-2 ring-brand/30{% else %}bg-white text-slate-800 hover:bg-slate-50 border border-slate-200/80 hover:border-slate-300 shadow-xs{% endif %}">
+                                <div class="flex items-center justify-between">
+                                    <span class="text-[11px] font-bold tracking-wider uppercase {% if board_stage == 'pipeline' %}text-emerald-200{% else %}text-slate-500{% endif %}">New</span>
+                                    {% if board_stage == 'pipeline' %}
+                                        <span class="inline-flex items-center gap-1 text-[9px] font-semibold bg-emerald-500/20 text-emerald-100 px-1.5 py-0.5 rounded-full">
+                                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-300 animate-pulse"></span>
+                                            Active
+                                        </span>
+                                    {% endif %}
+                                </div>
+                                <div class="mt-1 flex items-baseline gap-1.5">
+                                    <span class="text-2xl font-bold font-mono tracking-tight leading-none {% if board_stage == 'pipeline' %}text-white{% else %}text-slate-900{% endif %}">
+                                        {{ stage_counts.pipeline|default:"0" }}
+                                    </span>
+                                    <span class="text-[10px] {% if board_stage == 'pipeline' %}text-emerald-100/70{% else %}text-slate-400{% endif %}">roles</span>
+                                </div>
+                                <div class="mt-1 text-[9px] font-medium truncate flex items-center gap-0.5 {% if board_stage == 'pipeline' %}text-emerald-200{% else %}text-slate-400{% endif %}">
+                                    <span>to Review</span>
+                                    <span class="material-symbols-outlined text-[11px]">arrow_forward</span>
+                                </div>
+                            </a>
+
+                            <!-- Directional Flow Connector: New -> Review -->
+                            <div class="shrink-0 flex items-center justify-center -mx-1 z-10">
+                                <div class="w-5 h-5 rounded-full flex items-center justify-center text-xs shadow-2xs {% if board_stage == 'pipeline' %}bg-brand text-white ring-2 ring-brand/20{% elif board_stage == 'vetting' or board_stage == 'applying' or board_stage == 'done' %}bg-emerald-100 text-emerald-700{% else %}bg-slate-200/80 text-slate-400{% endif %}">
+                                    <span class="material-symbols-outlined text-[13px]">chevron_right</span>
+                                </div>
+                            </div>
+
+                            <!-- Stage: Review -->
+                            <a href="?track={{ pipeline_track }}&stage=vetting{% if pipeline_sort_by %}&sort_by={{ pipeline_sort_by }}{% endif %}"
+                               class="flex-1 relative flex flex-col justify-between p-2.5 rounded-lg transition-all {% if board_stage == 'vetting' %}bg-brand text-white shadow-md ring-2 ring-brand/30{% else %}bg-white text-slate-800 hover:bg-slate-50 border border-slate-200/80 hover:border-slate-300 shadow-xs{% endif %}">
+                                <div class="flex items-center justify-between">
+                                    <span class="text-[11px] font-bold tracking-wider uppercase {% if board_stage == 'vetting' %}text-emerald-200{% else %}text-slate-500{% endif %}">Review</span>
+                                    {% if board_stage == 'vetting' %}
+                                        <span class="inline-flex items-center gap-1 text-[9px] font-semibold bg-emerald-500/20 text-emerald-100 px-1.5 py-0.5 rounded-full">
+                                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-300 animate-pulse"></span>
+                                            Active
+                                        </span>
+                                    {% endif %}
+                                </div>
+                                <div class="mt-1 flex items-baseline gap-1.5">
+                                    <span class="text-2xl font-bold font-mono tracking-tight leading-none {% if board_stage == 'vetting' %}text-white{% else %}text-slate-900{% endif %}">
+                                        {{ stage_counts.vetting|default:"0" }}
+                                    </span>
+                                    <span class="text-[10px] {% if board_stage == 'vetting' %}text-emerald-100/70{% else %}text-slate-400{% endif %}">roles</span>
+                                </div>
+                                <div class="mt-1 text-[9px] font-medium truncate flex items-center gap-0.5 {% if board_stage == 'vetting' %}text-emerald-200{% else %}text-slate-400{% endif %}">
+                                    <span>to Applying</span>
+                                    <span class="material-symbols-outlined text-[11px]">arrow_forward</span>
+                                </div>
+                            </a>
+
+                            <!-- Directional Flow Connector: Review -> Applying -->
+                            <div class="shrink-0 flex items-center justify-center -mx-1 z-10">
+                                <div class="w-5 h-5 rounded-full flex items-center justify-center text-xs shadow-2xs {% if board_stage == 'vetting' %}bg-brand text-white ring-2 ring-brand/20{% elif board_stage == 'applying' or board_stage == 'done' %}bg-emerald-100 text-emerald-700{% else %}bg-slate-200/80 text-slate-400{% endif %}">
+                                    <span class="material-symbols-outlined text-[13px]">chevron_right</span>
+                                </div>
+                            </div>
+
+                            <!-- Stage: Applying -->
+                            <a href="?track={{ pipeline_track }}&stage=applying{% if pipeline_sort_by %}&sort_by={{ pipeline_sort_by }}{% endif %}"
+                               class="flex-1 relative flex flex-col justify-between p-2.5 rounded-lg transition-all {% if board_stage == 'applying' %}bg-brand text-white shadow-md ring-2 ring-brand/30{% else %}bg-white text-slate-800 hover:bg-slate-50 border border-slate-200/80 hover:border-slate-300 shadow-xs{% endif %}">
+                                <div class="flex items-center justify-between">
+                                    <span class="text-[11px] font-bold tracking-wider uppercase {% if board_stage == 'applying' %}text-emerald-200{% else %}text-slate-500{% endif %}">Applying</span>
+                                    {% if board_stage == 'applying' %}
+                                        <span class="inline-flex items-center gap-1 text-[9px] font-semibold bg-emerald-500/20 text-emerald-100 px-1.5 py-0.5 rounded-full">
+                                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-300 animate-pulse"></span>
+                                            Active
+                                        </span>
+                                    {% endif %}
+                                </div>
+                                <div class="mt-1 flex items-baseline gap-1.5">
+                                    <span class="text-2xl font-bold font-mono tracking-tight leading-none {% if board_stage == 'applying' %}text-white{% else %}text-slate-900{% endif %}">
+                                        {{ stage_counts.applying|default:"0" }}
+                                    </span>
+                                    <span class="text-[10px] {% if board_stage == 'applying' %}text-emerald-100/70{% else %}text-slate-400{% endif %}">roles</span>
+                                </div>
+                                <div class="mt-1 text-[9px] font-medium truncate flex items-center gap-0.5 {% if board_stage == 'applying' %}text-emerald-200{% else %}text-slate-400{% endif %}">
+                                    <span>to Applied</span>
+                                    <span class="material-symbols-outlined text-[11px]">arrow_forward</span>
+                                </div>
+                            </a>
+
+                            <!-- Directional Flow Connector: Applying -> Applied -->
+                            <div class="shrink-0 flex items-center justify-center -mx-1 z-10">
+                                <div class="w-5 h-5 rounded-full flex items-center justify-center text-xs shadow-2xs {% if board_stage == 'applying' %}bg-brand text-white ring-2 ring-brand/20{% elif board_stage == 'done' %}bg-emerald-100 text-emerald-700{% else %}bg-slate-200/80 text-slate-400{% endif %}">
+                                    <span class="material-symbols-outlined text-[13px]">chevron_right</span>
+                                </div>
+                            </div>
+
+                            <!-- Stage: Applied -->
+                            <a href="?track={{ pipeline_track }}&stage=done{% if pipeline_sort_by %}&sort_by={{ pipeline_sort_by }}{% endif %}"
+                               class="flex-1 relative flex flex-col justify-between p-2.5 rounded-lg transition-all {% if board_stage == 'done' %}bg-brand text-white shadow-md ring-2 ring-brand/30{% else %}bg-white text-slate-800 hover:bg-slate-50 border border-slate-200/80 hover:border-slate-300 shadow-xs{% endif %}">
+                                <div class="flex items-center justify-between">
+                                    <span class="text-[11px] font-bold tracking-wider uppercase {% if board_stage == 'done' %}text-emerald-200{% else %}text-slate-500{% endif %}">Applied</span>
+                                    {% if board_stage == 'done' %}
+                                        <span class="inline-flex items-center gap-1 text-[9px] font-semibold bg-emerald-500/20 text-emerald-100 px-1.5 py-0.5 rounded-full">
+                                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-300 animate-pulse"></span>
+                                            Active
+                                        </span>
+                                    {% endif %}
+                                </div>
+                                <div class="mt-1 flex items-baseline gap-1.5">
+                                    <span class="text-2xl font-bold font-mono tracking-tight leading-none {% if board_stage == 'done' %}text-white{% else %}text-slate-900{% endif %}">
+                                        {{ stage_counts.done|default:"0" }}
+                                    </span>
+                                    <span class="text-[10px] {% if board_stage == 'done' %}text-emerald-100/70{% else %}text-slate-400{% endif %}">roles</span>
+                                </div>
+                                <div class="mt-1 text-[9px] font-medium truncate flex items-center gap-0.5 {% if board_stage == 'done' %}text-emerald-200{% else %}text-slate-400{% endif %}">
+                                    <span>Track Submissions</span>
+                                    <span class="material-symbols-outlined text-[11px]">star</span>
+                                </div>
+                            </a>
+                        </div>
+
+                        <!-- Continuous Funnel Progression Underline Track -->
+                        <div class="mt-1.5 mx-1 h-1 bg-slate-200/80 rounded-full overflow-hidden flex">
+                            <div class="h-full bg-brand rounded-full transition-all duration-300 {% if board_stage == 'pipeline' %}w-1/4{% elif board_stage == 'vetting' %}w-2/4{% elif board_stage == 'applying' %}w-3/4{% else %}w-full{% endif %}"></div>
+                        </div>
+                    </div>
+
+                    <!-- Contextual Stage Purpose & Action Banner -->
+                    <div class="bg-gradient-to-r from-slate-50 to-emerald-50/30 p-2.5 rounded-lg border border-slate-200/80 flex items-center justify-between text-xs">
+                        <div class="flex items-center gap-2.5 min-w-0 pr-2">
+                            <span class="material-symbols-outlined text-[17px] text-brand shrink-0">
+                                {% if board_stage == 'pipeline' %}inbox
+                                {% elif board_stage == 'vetting' %}rule
+                                {% elif board_stage == 'applying' %}send
+                                {% else %}task_alt{% endif %}
+                            </span>
+                            <div class="truncate text-[11px] text-slate-700">
+                                {% if board_stage == 'pipeline' %}
+                                    <strong class="text-brand font-semibold">Intake Funnel:</strong> Screen new matching opportunities. Shortlist target roles to <span class="font-semibold text-slate-900">Review</span> with <kbd class="bg-white px-1 py-0.2 rounded border border-slate-300 font-mono text-[10px] text-brand">E</kbd> or dismiss with <kbd class="bg-white px-1 py-0.2 rounded border border-slate-300 font-mono text-[10px] text-rose-600">X</kbd>.
+                                {% elif board_stage == 'vetting' %}
+                                    <strong class="text-brand font-semibold">Deep Vetting:</strong> Audit skill match and role requirements. Advance confirmed targets to <span class="font-semibold text-slate-900">Applying</span> with <kbd class="bg-white px-1 py-0.2 rounded border border-slate-300 font-mono text-[10px] text-brand">E</kbd>.
+                                {% elif board_stage == 'applying' %}
+                                    <strong class="text-brand font-semibold">Application Sprint:</strong> Tailor targeted resume draft with <kbd class="bg-white px-1 py-0.2 rounded border border-slate-300 font-mono text-[10px] text-brand">T</kbd>, submit application, and advance to <span class="font-semibold text-slate-900">Applied</span>.
+                                {% else %}
+                                    <strong class="text-brand font-semibold">Submitted & Tracking:</strong> Monitor active submissions, recruiter outreach, and interview progression.
+                                {% endif %}
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2 shrink-0 font-mono text-[10px] text-slate-500 border-l border-slate-200 pl-2.5 hidden sm:flex">
+                            <span><kbd class="bg-white px-1.5 py-0.5 rounded border border-slate-200 text-slate-700 font-bold shadow-xs">J/K</kbd> Select</span>
+                            {% if board_stage == 'pipeline' %}
+                                <span><kbd class="bg-white px-1.5 py-0.5 rounded border border-slate-200 text-brand font-bold shadow-xs">E</kbd> Advance</span>
+                                <span><kbd class="bg-white px-1.5 py-0.5 rounded border border-slate-200 text-rose-600 font-bold shadow-xs">X</kbd> Pass</span>
+                            {% elif board_stage == 'vetting' %}
+                                <span><kbd class="bg-white px-1.5 py-0.5 rounded border border-slate-200 text-brand font-bold shadow-xs">E</kbd> Advance</span>
+                            {% elif board_stage == 'applying' %}
+                                <span><kbd class="bg-white px-1.5 py-0.5 rounded border border-slate-200 text-brand font-bold shadow-xs">T</kbd> Tailor</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Scrollable Opportunity Cards Feed -->
+            <div id="opportunity-card-feed" class="flex-1 overflow-y-auto p-3 space-y-2.5">
+                {% for job in pipeline_jobs %}
+                <div class="opportunity-row relative bg-white rounded-lg border border-cockpit-border p-3.5 shadow-sm hover:border-brand/50 hover:shadow transition-all cursor-pointer {% if forloop.first %}selected-job border-2 border-brand shadow-md{% endif %}"
+                     tabindex="0"
+                     data-job-id="{{ job.id }}"
+                     data-job-title="{{ job.title }}"
+                     data-company="{{ job.company_name }}"
+                     data-location="{{ job.location }}"
+                     data-url="{{ job.url }}"
+                     data-match-score="{{ job.zero_llm_match_pct|default:job.focus_percent|default:'78' }}"
+                     data-pref-score="{{ job.preference_margin_percent|default:'0' }}"
+                     data-interview-probability="{{ job.interview_probability|default:'-1' }}"
+                     data-timestamp="{% if job.fetched_at %}{{ job.fetched_at|date:'U' }}{% elif job.posted_at %}{{ job.posted_at|date:'U' }}{% else %}0{% endif %}"
+                     data-source="{{ job.source_display|default:job.source }}"
+                     data-core-matches="{{ job.zero_llm_core_json|default:'[]' }}"
+                     data-stretch-skills="{{ job.zero_llm_stretch_json|default:'[]' }}"
+                     data-fit-summary="{{ job.zero_llm_fit_summary|default:''|escapejs }}"
+                     data-radar-source="{{ job.skill_radar_source|default:'heuristic' }}"
+                     data-similar-jobs="{{ job.similar_jobs_json|default:'[]' }}"
+                     data-positive-influences="{{ job.positive_influences_json|default:'[]' }}"
+                     data-negative-influences="{{ job.negative_influences_json|default:'[]' }}"
+                     data-age="{{ job.combined_age|default:'Recently' }}"
+                     data-salary="{{ job.extracted_salary|default:'' }}"
+                     data-description="{{ job.description|default:job.snippet|escapejs }}">
+                    
+                    <!-- Selection Indicator Accent Stripe -->
+                    <div class="selection-stripe absolute left-0 top-0 bottom-0 w-1.5 bg-brand rounded-l-lg {% if not forloop.first %}hidden{% endif %}"></div>
+
+                    <div class="flex items-start justify-between gap-2 pl-1">
+                        <div class="flex-1 min-w-0">
+                            <h2 class="text-sm font-bold text-cockpit-textMain hover:text-brand truncate leading-snug">
+                                {{ job.title }}
+                            </h2>
+                            <div class="flex items-center gap-2 mt-1 text-xs">
+                                <span class="font-semibold text-brand truncate">{{ job.company_name }}</span>
+                                <span class="text-slate-300">•</span>
+                                <span class="text-slate-500 truncate">{{ job.location }}</span>
+                            </div>
+                        </div>
+
+                        <!-- Match Pill Badge -->
+                        <div class="opportunity-match-pill flex items-center rounded border overflow-hidden shrink-0 font-mono text-xs {% if job.skill_radar_source == 'ollama_local' %}border-emerald-300 bg-emerald-50{% else %}border-slate-200 bg-slate-50{% endif %}">
+                            <span class="{% if job.skill_radar_source == 'ollama_local' %}bg-brand text-white{% else %}bg-slate-700 text-white{% endif %} text-[11px] px-2 py-0.5 font-bold">
+                                {{ job.zero_llm_match_pct|default:job.focus_percent|default:"75" }}%
+                            </span>
+                            {% if job.skill_radar_source == 'ollama_local' %}
+                            <span class="text-emerald-800 text-[10px] px-1.5 py-0.5 font-semibold">
+                                {{ job.zero_llm_core_matches|length|default:"0" }} Verified
+                            </span>
+                            {% else %}
+                            <span class="text-slate-500 text-[10px] px-1.5 py-0.5 font-medium">
+                                Rank Match
+                            </span>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <!-- Meta Tags Strip -->
+                    <div class="mt-2.5 flex items-center justify-between text-xs pl-1">
+                        <div class="flex items-center gap-2">
+                            {% if job.extracted_salary %}
+                            <span class="font-bold text-slate-800 font-mono text-[11px]">{{ job.extracted_salary }}</span>
+                            <span class="text-slate-300">•</span>
+                            {% endif %}
+                            <span class="text-[10px] text-slate-400 font-mono">Full-time</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            {% if job.has_date_diff and job.sourced_age and job.posted_age %}
+                            <span class="inline-flex items-center gap-1 font-mono text-[10px] text-slate-600 bg-slate-100 border border-slate-200/80 px-2 py-0.5 rounded font-medium" title="Sourced: {{ job.fetched_at|date:'M j, Y' }} • Posted: {{ job.posted_at|date:'M j, Y' }}">
+                                <span class="material-symbols-outlined text-[12px] text-slate-500">schedule</span>
+                                <span>{{ job.sourced_age }}</span>
+                                <span class="text-slate-400 font-normal">• {{ job.posted_age }}</span>
+                            </span>
+                            {% elif job.sourced_age %}
+                            <span class="inline-flex items-center gap-1 font-mono text-[10px] text-slate-600 bg-slate-100 border border-slate-200/80 px-2 py-0.5 rounded font-medium" title="Sourced: {{ job.fetched_at|date:'M j, Y' }}">
+                                <span class="material-symbols-outlined text-[12px] text-slate-500">schedule</span>
+                                <span>{{ job.sourced_age }}</span>
+                            </span>
+                            {% elif job.posted_age %}
+                            <span class="inline-flex items-center gap-1 font-mono text-[10px] text-slate-600 bg-slate-100 border border-slate-200/80 px-2 py-0.5 rounded font-medium" title="Posted: {{ job.posted_at|date:'M j, Y' }}">
+                                <span class="material-symbols-outlined text-[12px] text-slate-500">schedule</span>
+                                <span>{{ job.posted_age }}</span>
+                            </span>
+                            {% endif %}
+                            <span class="font-mono text-[10px] text-slate-500 bg-slate-100 px-2 py-0.5 rounded font-medium">
+                                {{ job.source_display|default:job.source|default:"Direct Ingest" }}
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Triage Action Buttons -->
+                    <div class="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between pl-1">
+                        <div class="flex items-center gap-1.5">
+                            {% if board_stage == 'pipeline' %}
+                            <form method="post" action="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage=pipeline" class="inline">
+                                {% csrf_token %}
+                                <input type="hidden" name="action" value="save"/>
+                                <input type="hidden" name="job_id" value="{{ job.id }}"/>
+                                <input type="hidden" name="track" value="{{ pipeline_track }}"/>
+                                <input type="hidden" name="next" value="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage=pipeline"/>
+                                <button type="submit" class="shortlist-btn h-7 px-2.5 rounded bg-brand text-white text-xs font-semibold flex items-center gap-1 hover:bg-brand/90 transition">
+                                    <span class="material-symbols-outlined text-[14px]">thumb_up</span>
+                                    <span>Shortlist</span>
+                                </button>
+                            </form>
+                            {% elif board_stage == 'vetting' %}
+                            <form method="post" action="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage=vetting" class="inline">
+                                {% csrf_token %}
+                                <input type="hidden" name="action" value="save"/>
+                                <input type="hidden" name="job_id" value="{{ job.id }}"/>
+                                <input type="hidden" name="track" value="{{ pipeline_track }}"/>
+                                <input type="hidden" name="next" value="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage=vetting"/>
+                                <button type="submit" class="shortlist-btn h-7 px-2.5 rounded bg-brand text-white text-xs font-semibold flex items-center gap-1 hover:bg-brand/90 transition">
+                                    <span class="material-symbols-outlined text-[14px]">send</span>
+                                    <span>Ready to Apply</span>
+                                </button>
+                            </form>
+                            {% elif board_stage == 'applying' %}
+                            <form method="post" action="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage=applying" class="inline">
+                                {% csrf_token %}
+                                <input type="hidden" name="action" value="save"/>
+                                <input type="hidden" name="job_id" value="{{ job.id }}"/>
+                                <input type="hidden" name="track" value="{{ pipeline_track }}"/>
+                                <input type="hidden" name="next" value="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage=applying"/>
+                                <button type="submit" class="shortlist-btn h-7 px-2.5 rounded bg-brand text-white text-xs font-semibold flex items-center gap-1 hover:bg-brand/90 transition">
+                                    <span class="material-symbols-outlined text-[14px]">check_circle</span>
+                                    <span>Mark Done</span>
+                                </button>
+                            </form>
+                            {% endif %}
+
+                            <form method="post" action="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage={{ board_stage }}" class="inline">
+                                {% csrf_token %}
+                                <input type="hidden" name="action" value="dislike"/>
+                                <input type="hidden" name="job_id" value="{{ job.id }}"/>
+                                <input type="hidden" name="track" value="{{ pipeline_track }}"/>
+                                <input type="hidden" name="next" value="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage={{ board_stage }}"/>
+                                <button type="submit" class="pass-btn w-7 h-7 rounded border border-slate-200 bg-white text-slate-500 hover:text-red-600 hover:border-red-300 flex items-center justify-center transition" title="Pass / Dislike">
+                                    <span class="material-symbols-outlined text-[14px]">thumb_down</span>
+                                </button>
+                            </form>
+                        </div>
+                        <a href="{% url 'resume_optimizer' %}?job_id={{ job.id }}&track={{ pipeline_track }}{% if active_profile.resume %}&resume_id={{ active_profile.resume.id }}{% endif %}" class="tailor-btn h-7 px-2.5 rounded bg-emerald-100 text-emerald-900 font-bold text-xs flex items-center gap-1 hover:bg-emerald-200 transition">
+                            <span class="material-symbols-outlined text-[14px] text-emerald-700">auto_fix_high</span>
+                            <span>Tailor</span>
+                        </a>
+                    </div>
+                </div>
+                {% empty %}
+                <div class="p-8 text-center bg-white rounded-xl border border-dashed border-slate-300">
+                    <span class="material-symbols-outlined text-4xl text-slate-300">inbox</span>
+                    <p class="mt-2 text-sm text-slate-600 font-semibold">No opportunities in this pipeline stage</p>
+                    <a href="{% url 'jobs_search' %}" class="mt-3 inline-block bg-brand text-white px-4 py-2 rounded text-xs font-bold">Find Jobs to Ingest</a>
+                </div>
+                {% endfor %}
+            </div>
+
+            <!-- Feed Bottom Status Bar -->
+            <div class="h-8 bg-slate-100 border-t border-cockpit-border px-4 flex items-center justify-between text-slate-500 text-[11px] shrink-0 font-mono">
+                <span>Showing {{ pipeline_jobs|length }} opportunities</span>
+                <span class="flex items-center gap-1 text-emerald-800 font-bold">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Synced
+                </span>
+            </div>
+        </main>
+
+        <!-- Backdrop for drawer mode on < xl screens -->
+        <div id="inspector-backdrop" class="fixed inset-0 bg-slate-900/40 backdrop-blur-[2px] z-40 hidden xl:hidden transition-opacity duration-200"></div>
+
+        <!-- ========================================== -->
+        <!-- PANE 3: RIGHT DIAGNOSTIC & ACTION INSPECTOR -->
+        <!-- ========================================== -->
+        <section id="cockpit-inspector" 
+                 class="w-full sm:w-[480px] xl:w-[460px] 2xl:w-[500px] bg-white flex flex-col h-full border-l border-cockpit-border shrink-0 fixed inset-y-0 right-0 z-50 xl:relative xl:z-auto xl:shadow-none shadow-2xl transition-transform duration-200 ease-in-out translate-x-full xl:translate-x-0 overflow-hidden">
+            
+            <!-- Inspector Target Header -->
+            <div class="p-4 sm:p-5 border-b border-cockpit-border bg-slate-50/50 shrink-0">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0 flex-1">
+                        <div class="flex items-center gap-2">
+                            <span class="font-mono text-[10px] text-brand-ink bg-brand-soft px-2 py-0.5 rounded font-bold uppercase tracking-wider">
+                                Inspection Target
+                            </span>
+                            <span id="inspect-job-id" class="font-mono text-[10px] text-slate-400">ID: #0</span>
+                        </div>
+                        <h1 id="inspect-job-title" class="font-display text-lg sm:text-xl font-extrabold text-cockpit-textMain mt-1.5 leading-snug truncate">
+                            Select an opportunity
+                        </h1>
+                        <div class="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 text-xs text-slate-600">
+                            <span id="inspect-job-company" class="font-bold text-brand truncate max-w-[180px]"></span>
+                            <span class="text-slate-300">•</span>
+                            <span id="inspect-job-location" class="truncate max-w-[140px]"></span>
+                            <span class="text-slate-300">•</span>
+                            <span id="inspect-job-age-badge" class="inline-flex items-center gap-1 font-mono text-[11px] text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded font-semibold shrink-0">
+                                <span class="material-symbols-outlined text-[13px] text-slate-500">schedule</span>
+                                <span id="inspect-job-age">Posted recently</span>
+                            </span>
+                            <span id="inspect-job-salary-dot" class="text-slate-300 hidden">•</span>
+                            <span id="inspect-job-salary-badge" class="font-bold text-slate-800 shrink-0 hidden text-xs font-mono"></span>
+                        </div>
+                    </div>
+
+                    <!-- Header Actions: Open Posting + Mobile Close -->
+                    <div class="flex items-center gap-1.5 shrink-0">
+                        <a id="inspect-job-url-btn" href="#" target="_blank" rel="noopener noreferrer" 
+                           class="h-8 px-2.5 sm:px-3 rounded border border-slate-300 bg-white text-slate-700 text-xs font-semibold flex items-center gap-1 hover:bg-slate-50 transition shadow-sm">
+                            <span>Open Posting</span>
+                            <span class="material-symbols-outlined text-[14px]">open_in_new</span>
+                        </a>
+                        <button type="button" id="close-inspector-btn" class="xl:hidden w-8 h-8 rounded border border-slate-200 bg-white hover:bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition" title="Close drawer">
+                            <span class="material-symbols-outlined text-[18px]">close</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Primary Action Toolbar -->
+                <div class="mt-3 sm:mt-4 flex items-center gap-2.5 pt-3 border-t border-slate-200">
+                    <button type="button" id="trigger-tailor-btn" class="h-9 px-3.5 rounded bg-brand text-white font-bold text-xs flex items-center gap-1.5 hover:bg-brand/90 transition shadow-sm">
+                        <span class="material-symbols-outlined text-[16px] text-brand-soft">auto_fix_high</span>
+                        <span>Tailor Resume</span>
+                    </button>
+                    <button type="button" id="inspector-action-btn" class="h-9 px-3.5 rounded bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs flex items-center gap-1.5 transition shadow-sm">
+                        <span id="inspector-action-icon" class="material-symbols-outlined text-[16px]">
+                            {% if board_stage == 'pipeline' %}thumb_up
+                            {% elif board_stage == 'vetting' %}send
+                            {% elif board_stage == 'applying' %}check_circle
+                            {% else %}star{% endif %}
+                        </span>
+                        <span id="inspector-action-label">
+                            {% if board_stage == 'pipeline' %}Shortlist to Review
+                            {% elif board_stage == 'vetting' %}Ready to Apply
+                            {% elif board_stage == 'applying' %}Mark Done
+                            {% else %}Saved{% endif %}
+                        </span>
+                    </button>
+                    <button type="button" id="inspector-pass-btn" class="h-9 px-2.5 rounded border border-slate-200 bg-white text-slate-600 hover:text-red-600 hover:border-red-300 font-bold text-xs flex items-center gap-1 transition" title="Pass / Dislike">
+                        <span class="material-symbols-outlined text-[16px]">thumb_down</span>
+                        <span>Pass</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Scrollable Diagnostics & Resume Diff Workbench -->
+            <div class="flex-1 overflow-y-auto p-4 sm:p-5 space-y-5 sm:space-y-6">
+
+                <!-- 1. Full Job Description Reader (FIRST) -->
+                <div class="bg-white rounded-xl p-4 sm:p-5 border border-cockpit-border space-y-3">
+                    <div class="flex items-center justify-between pb-2 border-b border-slate-100">
+                        <div class="flex items-center gap-2">
+                            <span class="material-symbols-outlined text-brand text-[18px]">article</span>
+                            <span class="font-display text-sm font-bold text-cockpit-textMain">Full Job Description</span>
+                        </div>
+                        <button type="button" id="copy-jd-btn" class="h-7 px-2.5 rounded border border-slate-300 bg-white text-slate-700 text-xs font-semibold flex items-center gap-1 hover:bg-slate-50 transition">
+                            <span class="material-symbols-outlined text-[13px]">content_copy</span>
+                            <span>Copy JD</span>
+                        </button>
+                    </div>
+
+                    <div id="inspect-job-description" class="text-xs text-slate-700 font-sans leading-relaxed max-h-[460px] overflow-y-auto bg-slate-50/70 p-4 rounded-lg border border-slate-200 whitespace-pre-wrap select-text">
+Select an opportunity to read the full job description.
+                    </div>
+                </div>
+
+                <!-- 2. Fit Diagnostics & Skill Radar Bento (SECOND) -->
+                <div class="bg-slate-50/90 rounded-xl p-3.5 sm:p-4 border border-cockpit-border space-y-3">
+                    
+                    <!-- Header: Icon, Title, and Match Badge (Responsive: Never wraps title word-by-word) -->
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="flex items-center gap-2.5 min-w-0">
+                            <div class="w-8 h-8 rounded-lg bg-emerald-100 text-brand flex items-center justify-center shrink-0">
+                                <span class="material-symbols-outlined text-[18px]">psychology</span>
+                            </div>
+                            <div class="min-w-0">
+                                <h3 class="font-display text-xs sm:text-sm font-bold text-cockpit-textMain leading-tight">
+                                    Fit Diagnostics &amp; Skill Radar
+                                </h3>
+                                <p class="text-[10px] sm:text-[11px] text-slate-500 mt-0.5 truncate">
+                                    Semantic ATS diagnostics &amp; role gap analysis
+                                </p>
+                            </div>
+                        </div>
+
+                        <!-- Match Pill Badge (Top-Right) -->
+                        <div id="radar-match-score-container" class="shrink-0 flex items-center">
+                            <span id="inspect-match-badge" class="font-mono text-xs font-bold text-emerald-800 bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded shadow-xs hidden">
+                                85% Match
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Toolbar Subrow: Source Badge and Re-Analyze Button (hidden when unanalyzed) -->
+                    <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/80">
+                        <div class="flex items-center gap-1.5 shrink-0">
+                            <span id="radar-source-badge" class="font-mono text-[10px] px-2 py-0.5 rounded font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                                Unanalyzed
+                            </span>
+                        </div>
+
+                        <button type="button" id="trigger-ollama-radar-btn" onclick="promptDeepAnalysisConfirmation()" class="h-6 sm:h-7 px-2.5 sm:px-3 text-[11px] font-bold bg-brand text-white rounded-md hover:bg-brand-dark flex items-center gap-1.5 transition shadow-xs cursor-pointer shrink-0 hidden" title="Re-run deep skill diagnosis via local AI">
+                            <span class="material-symbols-outlined text-[13px]">refresh</span>
+                            <span id="deep-analyze-btn-text">Re-Analyze</span>
+                        </button>
+                    </div>
+
+                    <!-- STATE 1: UNANALYZED PLACEHOLDER (Single clear primary CTA) -->
+                    <div id="radar-unanalyzed-placeholder" class="bg-white rounded-lg border border-slate-200 p-4 text-center space-y-2.5">
+                        <div class="w-9 h-9 rounded-full bg-emerald-50 text-brand flex items-center justify-center mx-auto border border-emerald-100">
+                            <span class="material-symbols-outlined text-[18px]">bolt</span>
+                        </div>
+                        <div class="space-y-1">
+                            <h4 class="text-xs font-bold text-slate-900">Deep Analysis Not Yet Run</h4>
+                            <p class="text-[11px] text-slate-500 max-w-sm mx-auto leading-relaxed">
+                                Extract verified core competencies, evaluate role gaps against your active resume (<strong class="text-slate-700 font-mono">{{ bound_resume.original_filename|default:"resume.pdf" }}</strong>), and generate an executive diagnosis using local AI.
+                            </p>
+                        </div>
+                        <div class="pt-1">
+                            <button type="button" onclick="promptDeepAnalysisConfirmation()" class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-brand text-white text-xs font-bold hover:bg-brand-dark transition shadow-sm cursor-pointer">
+                                <span class="material-symbols-outlined text-[14px]">bolt</span>
+                                <span>Run Deep Analysis</span>
+                            </button>
+                            <div class="text-[10px] text-slate-400 mt-1.5 font-mono flex items-center justify-center gap-1">
+                                <span class="material-symbols-outlined text-[11px] text-slate-400">lock</span>
+                                <span>Private • 100% local inference</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- STATE 2: LOADING PROGRESS STATE -->
+                    <div id="radar-loading-container" class="hidden bg-white rounded-lg border border-brand/30 p-5 text-center space-y-3 shadow-xs">
+                        <div class="relative w-10 h-10 mx-auto flex items-center justify-center">
+                            <div class="w-10 h-10 rounded-full border-2 border-brand/20 border-t-brand animate-spin"></div>
+                            <span class="material-symbols-outlined text-[16px] text-brand absolute">bolt</span>
+                        </div>
+                        <div class="space-y-1">
+                            <h4 class="text-xs font-bold text-slate-900 flex items-center justify-center gap-1.5">
+                                <span>Analyzing with local AI...</span>
+                                <span id="analysis-timer-display" class="font-mono text-[11px] text-brand font-semibold">0s (est. ~1 min)</span>
+                            </h4>
+                            <p class="text-[11px] text-slate-500 max-w-xs mx-auto leading-relaxed">
+                                Evaluating requirements using <strong class="text-slate-700 font-medium">{{ local_model_name|default:"Local AI Model" }}</strong>.
+                            </p>
+                        </div>
+                        <div class="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden max-w-xs mx-auto">
+                            <div id="analysis-progress-bar" class="bg-brand h-1.5 rounded-full transition-all duration-300 w-1/3 animate-pulse"></div>
+                        </div>
+                    </div>
+
+                    <!-- STATE 3: ANALYZED RESULTS STATE (Ollama Local Verified) -->
+                    <div id="radar-results-container" class="space-y-3 hidden">
+                        <!-- Executive Fit Summary Diagnosis -->
+                        <div id="inspect-fit-summary-box" class="p-3 bg-emerald-50/90 border border-emerald-200/90 rounded-lg text-xs text-emerald-950 leading-relaxed font-sans flex items-start gap-2.5">
+                            <span class="material-symbols-outlined text-[18px] text-emerald-700 shrink-0 mt-0.5">psychology</span>
+                            <div class="flex-1 min-w-0">
+                                <span class="font-bold text-emerald-900 block text-[11px] uppercase tracking-wide font-mono">Executive Fit Diagnosis:</span>
+                                <span id="inspect-fit-summary-text" class="text-xs text-emerald-950 font-normal leading-relaxed mt-0.5 block"></span>
+                            </div>
+                        </div>
+
+                        <!-- Core Matched Competencies vs Stretch -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                            <div class="bg-white p-3 rounded-lg border border-slate-200 space-y-2">
+                                <div class="text-[10px] font-mono uppercase font-bold flex items-center gap-1 text-emerald-800">
+                                    <span class="material-symbols-outlined text-[14px] text-emerald-600">verified</span>
+                                    Core Competencies (Verified)
+                                </div>
+                                <div id="inspect-core-competencies" class="flex flex-wrap gap-1.5 min-h-[32px]"></div>
+                            </div>
+
+                            <div class="bg-white p-3 rounded-lg border border-slate-200 space-y-2">
+                                <div class="text-[10px] font-mono uppercase font-bold flex items-center gap-1 text-amber-800">
+                                    <span class="material-symbols-outlined text-[14px] text-amber-600">warning</span>
+                                    Stretch Skills (Role Gaps)
+                                </div>
+                                <div id="inspect-stretch-skills" class="flex flex-wrap gap-1.5 min-h-[32px]"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <p class="text-[10px] text-slate-500 leading-tight">
+                        Calculated against active resume (<strong class="text-brand font-mono">{{ bound_resume.original_filename|default:"resume.pdf" }}</strong>). Powered by <strong>Ollama Local AI</strong> with configurable prompt in Prompt Library.
+                    </p>
+                </div>
+
+                <!-- 3. Ranking Influences & Preference Memory (THIRD) -->
+                <div class="bg-white rounded-xl p-4 border border-cockpit-border space-y-3">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                            <span class="material-symbols-outlined text-brand text-[18px]">psychology</span>
+                            <span class="font-display text-xs font-bold text-cockpit-textMain uppercase tracking-wider">Ranking Influences & Model Memory</span>
+                        </div>
+                        <span class="text-[10px] font-mono text-slate-400">Explainable AI</span>
+                    </div>
+
+                    <p class="text-[11px] text-slate-500 leading-normal">
+                        Roles you liked or passed that guided this opportunity’s ranking. Click <strong class="text-rose-600 font-bold">✕</strong> to remove any influence you disagree with.
+                    </p>
+
+                    <!-- Segmented Toggle Tabs: Positive Boosts vs Negative Penalties -->
+                    <div class="flex items-center p-1 bg-slate-100 rounded-lg text-xs font-semibold">
+                        <button type="button" id="tab-influences-positive" class="flex-1 py-1.5 px-2 rounded-md bg-white text-emerald-800 shadow-sm transition flex items-center justify-center gap-1.5 cursor-pointer">
+                            <span class="material-symbols-outlined text-[15px] text-emerald-600">thumb_up</span>
+                            <span>Liked Boosts</span>
+                            <span id="badge-positive-count" class="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-emerald-100 text-emerald-800 font-bold">0</span>
+                        </button>
+                        <button type="button" id="tab-influences-negative" class="flex-1 py-1.5 px-2 rounded-md text-slate-600 hover:text-slate-900 transition flex items-center justify-center gap-1.5 cursor-pointer">
+                            <span class="material-symbols-outlined text-[15px] text-rose-500">thumb_down</span>
+                            <span>Disliked Penalties</span>
+                            <span id="badge-negative-count" class="text-[10px] font-mono px-1.5 py-0.2 rounded-full bg-rose-100 text-rose-800 font-bold">0</span>
+                        </button>
+                    </div>
+
+                    <!-- Influences List Container -->
+                    <div id="inspect-influences-list" class="space-y-1.5 min-h-[90px]">
+                        <span class="text-xs text-slate-400 italic">Select an opportunity to view ranking influences</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Toast Notification Overlay -->
+    <div id="toast-notify" class="fixed bottom-6 right-6 z-50 transform translate-y-12 opacity-0 transition-all duration-200 bg-slate-900 text-white px-4 py-2.5 rounded-lg shadow-xl text-xs font-semibold flex items-center gap-2">
+        <span class="material-symbols-outlined text-[16px] text-emerald-400">check_circle</span>
+        <span id="toast-message">Notification</span>
+    </div>
+
+    <!-- Client Script for Interactive Triage & Keyboard Shortcuts -->
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const feed = document.getElementById('opportunity-card-feed');
+            const rows = feed ? Array.from(feed.querySelectorAll('.opportunity-row')) : Array.from(document.querySelectorAll('.opportunity-row'));
+            let activeIndex = 0;
+
+            function showToast(msg) {
+                const toast = document.getElementById('toast-notify');
+                const label = document.getElementById('toast-message');
+                if (label) label.textContent = msg;
+                if (toast) {
+                    toast.classList.remove('translate-y-12', 'opacity-0');
+                    setTimeout(() => {
+                        toast.classList.add('translate-y-12', 'opacity-0');
+                    }, 2400);
+                }
+            }
+
+            // Ranking Influences State
+            let currentPositiveInfluences = [];
+            let currentNegativeInfluences = [];
+            let activeInfluenceTab = 'positive'; // 'positive' or 'negative'
+
+            const tabPositive = document.getElementById('tab-influences-positive');
+            const tabNegative = document.getElementById('tab-influences-negative');
+            const badgePositive = document.getElementById('badge-positive-count');
+            const badgeNegative = document.getElementById('badge-negative-count');
+            const influencesContainer = document.getElementById('inspect-influences-list');
+
+            function updateInfluenceTabs() {
+                if (badgePositive) badgePositive.textContent = currentPositiveInfluences.length;
+                if (badgeNegative) badgeNegative.textContent = currentNegativeInfluences.length;
+
+                if (activeInfluenceTab === 'positive') {
+                    if (tabPositive) {
+                        tabPositive.className = 'flex-1 py-1.5 px-2 rounded-md bg-white text-emerald-800 shadow-sm transition flex items-center justify-center gap-1.5 cursor-pointer font-bold';
+                    }
+                    if (tabNegative) {
+                        tabNegative.className = 'flex-1 py-1.5 px-2 rounded-md text-slate-600 hover:text-slate-900 transition flex items-center justify-center gap-1.5 cursor-pointer font-medium';
+                    }
+                } else {
+                    if (tabPositive) {
+                        tabPositive.className = 'flex-1 py-1.5 px-2 rounded-md text-slate-600 hover:text-slate-900 transition flex items-center justify-center gap-1.5 cursor-pointer font-medium';
+                    }
+                    if (tabNegative) {
+                        tabNegative.className = 'flex-1 py-1.5 px-2 rounded-md bg-white text-rose-800 shadow-sm transition flex items-center justify-center gap-1.5 cursor-pointer font-bold';
+                    }
+                }
+                renderInfluencesList();
+            }
+
+            function renderInfluencesList() {
+                if (!influencesContainer) return;
+                const list = activeInfluenceTab === 'positive' ? currentPositiveInfluences : currentNegativeInfluences;
+                const isPositive = activeInfluenceTab === 'positive';
+
+                if (!list || list.length === 0) {
+                    influencesContainer.innerHTML = isPositive
+                        ? '<div class="p-3 rounded-lg bg-slate-50 border border-dashed border-slate-200 text-center"><span class="text-xs text-slate-400 italic">No liked benchmark roles influencing this track yet. Liking opportunities trains positive boost signals.</span></div>'
+                        : '<div class="p-3 rounded-lg bg-slate-50 border border-dashed border-slate-200 text-center"><span class="text-xs text-slate-400 italic">No negative benchmark roles in this track yet. Passing or disliking roles trains penalty filters.</span></div>';
+                    return;
+                }
+
+                influencesContainer.innerHTML = list.map(item => `
+                    <div id="influence-item-${item.job_id}" class="p-2.5 rounded-lg border ${isPositive ? 'border-emerald-100 bg-emerald-50/50 hover:bg-emerald-50/80' : 'border-rose-100 bg-rose-50/50 hover:bg-rose-50/80'} transition-all flex items-center justify-between text-xs group">
+                        <div class="min-w-0 pr-2">
+                            <div class="font-semibold text-slate-800 truncate">${item.title || 'Untitled Role'}</div>
+                            <div class="text-[11px] text-slate-500 truncate flex items-center gap-1.5 mt-0.5">
+                                <span class="font-medium text-slate-600">${item.company || 'Unknown Company'}</span>
+                                ${item.location ? `<span>&bull;</span><span class="truncate max-w-[120px]">${item.location}</span>` : ''}
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2 flex-shrink-0">
+                            <span class="text-xs font-mono font-bold ${isPositive ? 'text-emerald-700 bg-emerald-100/80 border-emerald-200' : 'text-rose-700 bg-rose-100/80 border-rose-200'} px-2 py-0.5 rounded border">
+                                ${isPositive ? '+' : '-'}${item.match_pct || 75}%
+                            </span>
+                            <button type="button" 
+                                    class="remove-influence-btn p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-100/80 rounded transition cursor-pointer"
+                                    title="Disagree & remove from ${isPositive ? 'liked' : 'disliked'} benchmarks"
+                                    data-job-id="${item.job_id}"
+                                    data-title="${(item.title || '').replace(/"/g, '&quot;')}"
+                                    data-type="${item.type}">
+                                <span class="material-symbols-outlined text-[16px]">close</span>
+                            </button>
+                        </div>
+                    </div>
+                `).join('');
+
+                // Wire up remove buttons
+                influencesContainer.querySelectorAll('.remove-influence-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const jid = btn.dataset.jobId;
+                        const jtitle = btn.dataset.title;
+                        const jtype = btn.dataset.type;
+                        removeInfluence(jid, jtitle, jtype);
+                    });
+                });
+            }
+
+            if (tabPositive) {
+                tabPositive.addEventListener('click', () => {
+                    activeInfluenceTab = 'positive';
+                    updateInfluenceTabs();
+                });
+            }
+            if (tabNegative) {
+                tabNegative.addEventListener('click', () => {
+                    activeInfluenceTab = 'negative';
+                    updateInfluenceTabs();
+                });
+            }
+
+            function removeInfluence(jobId, jobTitle, type) {
+                const track = "{{ pipeline_track|escapejs }}";
+                const action = type === 'liked' ? 'unlike' : 'unhide';
+                const endpoint = `/api/resume/jobs/${jobId}/${action}?track=${encodeURIComponent(track)}`;
+                const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+
+                const el = document.getElementById(`influence-item-${jobId}`);
+                if (el) {
+                    el.style.opacity = '0.3';
+                    el.style.pointerEvents = 'none';
+                }
+
+                fetch(endpoint, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': csrf,
+                    },
+                    body: JSON.stringify({})
+                })
+                .then(res => {
+                    if (!res.ok) throw new Error('Failed to remove influence');
+                    return res.json();
+                })
+                .then(data => {
+                    if (type === 'liked') {
+                        currentPositiveInfluences = currentPositiveInfluences.filter(x => String(x.job_id) !== String(jobId));
+                    } else {
+                        currentNegativeInfluences = currentNegativeInfluences.filter(x => String(x.job_id) !== String(jobId));
+                    }
+                    updateInfluenceTabs();
+                    showToast(`Removed "${jobTitle || 'Benchmark'}" from ${type === 'liked' ? 'Liked' : 'Disliked'} model memory`);
+                })
+                .catch(err => {
+                    console.error('Influence removal error:', err);
+                    if (el) {
+                        el.style.opacity = '1';
+                        el.style.pointerEvents = 'auto';
+                    }
+                    showToast(`Error removing influence: ${err.message}`);
+                });
+            }
+
+            function selectJob(target) {
+                let row = null;
+                let index = -1;
+
+                if (typeof target === 'number') {
+                    index = target;
+                    if (index < 0 || index >= rows.length) return;
+                    row = rows[index];
+                } else if (target && (target.nodeType || target.closest)) {
+                    row = target.closest ? target.closest('.opportunity-row') : target;
+                    if (!row) return;
+                    index = rows.indexOf(row);
+                    if (index === -1) {
+                        if (feed) {
+                            rows.length = 0;
+                            rows.push(...feed.querySelectorAll('.opportunity-row'));
+                        }
+                        index = rows.indexOf(row);
+                    }
+                }
+
+                if (!row) return;
+                activeIndex = (index >= 0) ? index : 0;
+
+                rows.forEach(r => {
+                    r.classList.remove('selected-job', 'border-2', 'border-brand', 'shadow-md');
+                    const stripe = r.querySelector('.selection-stripe');
+                    if (stripe) stripe.classList.add('hidden');
+                });
+
+                row.classList.add('selected-job', 'border-2', 'border-brand', 'shadow-md');
+                const stripe = row.querySelector('.selection-stripe');
+                if (stripe) stripe.classList.remove('hidden');
+
+                // Update Inspector
+                document.getElementById('inspect-job-id').textContent = 'ID: #' + row.dataset.jobId;
+                document.getElementById('inspect-job-title').textContent = row.dataset.jobTitle || 'Role Details';
+                document.getElementById('inspect-job-company').textContent = row.dataset.company || '';
+                document.getElementById('inspect-job-location').textContent = row.dataset.location || '';
+                
+                const ageEl = document.getElementById('inspect-job-age');
+                const ageBadge = document.getElementById('inspect-job-age-badge');
+                if (ageEl && ageBadge) {
+                    if (row.dataset.age) {
+                        ageEl.textContent = row.dataset.age;
+                        ageBadge.classList.remove('hidden');
+                    } else {
+                        ageBadge.classList.add('hidden');
+                    }
+                }
+
+                const salaryBadge = document.getElementById('inspect-job-salary-badge');
+                const salaryDot = document.getElementById('inspect-job-salary-dot');
+                if (salaryBadge && salaryDot) {
+                    if (row.dataset.salary && row.dataset.salary.trim()) {
+                        salaryBadge.textContent = row.dataset.salary;
+                        salaryBadge.classList.remove('hidden');
+                        salaryDot.classList.remove('hidden');
+                    } else {
+                        salaryBadge.textContent = '';
+                        salaryBadge.classList.add('hidden');
+                        salaryDot.classList.add('hidden');
+                    }
+                }
+                
+                // Parse zero-LLM skill extraction payload
+                let coreMatches = [];
+                let stretchSkills = [];
+                try {
+                    coreMatches = JSON.parse(row.dataset.coreMatches || '[]');
+                } catch(e) {
+                    coreMatches = [];
+                }
+                try {
+                    stretchSkills = JSON.parse(row.dataset.stretchSkills || '[]');
+                } catch(e) {
+                    stretchSkills = [];
+                }
+
+                const score = row.dataset.matchScore || '';
+                const fitSummary = row.dataset.fitSummary || '';
+                const radarSource = row.dataset.radarSource || 'unanalyzed';
+
+                const unanalyzedBox = document.getElementById('radar-unanalyzed-placeholder');
+                const loadingBox = document.getElementById('radar-loading-container');
+                const resultsBox = document.getElementById('radar-results-container');
+                const matchBadge = document.getElementById('inspect-match-badge');
+                const sourceBadge = document.getElementById('radar-source-badge');
+                const triggerBtn = document.getElementById('trigger-ollama-radar-btn');
+                const deepAnalyzeBtnText = document.getElementById('deep-analyze-btn-text');
+
+                if (radarSource === 'ollama_local' && (coreMatches.length > 0 || fitSummary)) {
+                    if (unanalyzedBox) unanalyzedBox.classList.add('hidden');
+                    if (loadingBox) loadingBox.classList.add('hidden');
+                    if (resultsBox) resultsBox.classList.remove('hidden');
+                    if (triggerBtn) triggerBtn.classList.remove('hidden');
+
+                    if (sourceBadge) {
+                        sourceBadge.textContent = 'Ollama Local • Verified';
+                        sourceBadge.className = 'font-mono text-[10px] px-2 py-0.5 rounded font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200';
+                    }
+                    if (matchBadge) {
+                        matchBadge.textContent = `${score}% Match (${coreMatches.length} Verified)`;
+                        matchBadge.classList.remove('hidden');
+                    }
+                    if (deepAnalyzeBtnText) {
+                        deepAnalyzeBtnText.textContent = 'Re-Analyze';
+                    }
+
+                    // Populate Fit Summary
+                    const summaryBox = document.getElementById('inspect-fit-summary-box');
+                    const summaryText = document.getElementById('inspect-fit-summary-text');
+                    if (fitSummary && summaryBox && summaryText) {
+                        summaryText.textContent = fitSummary;
+                        summaryBox.classList.remove('hidden');
+                    } else if (summaryBox) {
+                        summaryBox.classList.add('hidden');
+                    }
+
+                    // Populate Core Competencies
+                    const coreContainer = document.getElementById('inspect-core-competencies');
+                    if (coreContainer) {
+                        if (coreMatches.length > 0) {
+                            coreContainer.innerHTML = coreMatches.map(skill => `
+                                <span class="inline-flex items-center gap-1 bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-1 rounded text-xs font-semibold">
+                                    <span class="material-symbols-outlined text-[13px] text-emerald-600">check_circle</span>
+                                    <span>${skill}</span>
+                                </span>
+                            `).join('');
+                        } else {
+                            coreContainer.innerHTML = '<span class="text-xs text-slate-400 italic">No direct keyword overlap</span>';
+                        }
+                    }
+
+                    // Populate Stretch Skills
+                    const stretchContainer = document.getElementById('inspect-stretch-skills');
+                    if (stretchContainer) {
+                        if (stretchSkills.length > 0) {
+                            stretchContainer.innerHTML = stretchSkills.map(skill => `
+                                <span class="inline-flex items-center gap-1 bg-amber-50 text-amber-900 border border-amber-200 px-2.5 py-1 rounded text-xs font-semibold">
+                                    <span class="material-symbols-outlined text-[13px] text-amber-600">add_circle</span>
+                                    <span>${skill}</span>
+                                </span>
+                            `).join('');
+                        } else {
+                            stretchContainer.innerHTML = '<span class="text-xs text-emerald-700 font-medium">All core target skills verified in active resume</span>';
+                        }
+                    }
+                } else {
+                    // Unanalyzed / Not yet run state
+                    if (unanalyzedBox) unanalyzedBox.classList.remove('hidden');
+                    if (loadingBox) loadingBox.classList.add('hidden');
+                    if (resultsBox) resultsBox.classList.add('hidden');
+                    if (triggerBtn) triggerBtn.classList.add('hidden');
+
+                    if (sourceBadge) {
+                        sourceBadge.textContent = 'Unanalyzed';
+                        sourceBadge.className = 'font-mono text-[10px] px-2 py-0.5 rounded font-semibold bg-slate-100 text-slate-500 border border-slate-200';
+                    }
+                    if (matchBadge) {
+                        matchBadge.classList.add('hidden');
+                    }
+                    if (deepAnalyzeBtnText) {
+                        deepAnalyzeBtnText.textContent = 'Deep Analyze';
+                    }
+                }
+
+                // Update Ranking Influences
+                try {
+                    currentPositiveInfluences = JSON.parse(row.dataset.positiveInfluences || '[]');
+                } catch(e) {
+                    currentPositiveInfluences = [];
+                }
+                try {
+                    currentNegativeInfluences = JSON.parse(row.dataset.negativeInfluences || '[]');
+                } catch(e) {
+                    currentNegativeInfluences = [];
+                }
+                updateInfluenceTabs();
+
+                const urlBtn = document.getElementById('inspect-job-url-btn');
+                if (row.dataset.url) {
+                    urlBtn.href = row.dataset.url;
+                    urlBtn.classList.remove('hidden');
+                } else {
+                    urlBtn.classList.add('hidden');
+                }
+
+                const desc = document.getElementById('inspect-job-description');
+                let rawText = row.dataset.description || 'No raw description available.';
+                try {
+                    rawText = rawText.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+                } catch (e) {}
+                desc.textContent = rawText;
+
+                row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+
+            // Responsive Drawer Controls for Narrow Screens
+            const inspector = document.getElementById('cockpit-inspector');
+            const backdrop = document.getElementById('inspector-backdrop');
+            const toggleInspectorBtn = document.getElementById('toggle-inspector-btn');
+            const closeInspectorBtn = document.getElementById('close-inspector-btn');
+
+            function openInspector() {
+                if (inspector) {
+                    inspector.classList.remove('translate-x-full');
+                    inspector.classList.add('translate-x-0');
+                }
+                if (backdrop) {
+                    backdrop.classList.remove('hidden');
+                }
+            }
+
+            function closeInspector() {
+                if (inspector) {
+                    inspector.classList.remove('translate-x-0');
+                    inspector.classList.add('translate-x-full');
+                }
+                if (backdrop) {
+                    backdrop.classList.add('hidden');
+                }
+            }
+
+            if (toggleInspectorBtn) {
+                toggleInspectorBtn.addEventListener('click', () => {
+                    const isClosed = inspector && inspector.classList.contains('translate-x-full');
+                    if (isClosed) openInspector();
+                    else closeInspector();
+                });
+            }
+
+            if (closeInspectorBtn) {
+                closeInspectorBtn.addEventListener('click', closeInspector);
+            }
+
+            if (backdrop) {
+                backdrop.addEventListener('click', closeInspector);
+            }
+
+            // Delegated click handling on feed (resilient to sorting, filtering, and DOM updates)
+            if (feed) {
+                feed.addEventListener('click', (e) => {
+                    if (e.target.closest('.shortlist-btn') || e.target.closest('.pass-btn')) {
+                        return;
+                    }
+                    const row = e.target.closest('.opportunity-row');
+                    if (!row) return;
+
+                    selectJob(row);
+                    if (window.innerWidth < 1280) openInspector();
+
+                    if (e.target.closest('.tailor-btn')) {
+                        showToast(`Loaded details for: ${row.dataset.jobTitle || 'Role'}`);
+                    }
+                });
+            }
+
+            // Initialize first job
+            if (rows.length > 0) {
+                selectJob(0);
+            }
+
+            // Client-side Instant Sorting
+            const sortSelect = document.getElementById('cockpit-sort-select');
+
+            function performSort(sortBy) {
+                if (!feed) return;
+                const cardList = Array.from(feed.querySelectorAll('.opportunity-row'));
+                if (cardList.length === 0) return;
+
+                cardList.sort((a, b) => {
+                    if (sortBy === 'match') {
+                        const sA = parseFloat(a.dataset.matchScore || '0');
+                        const sB = parseFloat(b.dataset.matchScore || '0');
+                        if (sB !== sA) return sB - sA;
+                        return (parseInt(b.dataset.timestamp || '0') - parseInt(a.dataset.timestamp || '0'));
+                    } else if (sortBy === 'latest') {
+                        return (parseInt(b.dataset.timestamp || '0') - parseInt(a.dataset.timestamp || '0'));
+                    } else if (sortBy === 'oldest') {
+                        return (parseInt(a.dataset.timestamp || '0') - parseInt(b.dataset.timestamp || '0'));
+                    } else if (sortBy === 'interview') {
+                        const pA = parseInt(a.dataset.interviewProbability || '-1');
+                        const pB = parseInt(b.dataset.interviewProbability || '-1');
+                        if (pB !== pA) return pB - pA;
+                        return (parseInt(b.dataset.timestamp || '0') - parseInt(a.dataset.timestamp || '0'));
+                    } else if (sortBy === 'preference') {
+                        const prA = parseFloat(a.dataset.prefScore || '0');
+                        const prB = parseFloat(b.dataset.prefScore || '0');
+                        if (prB !== prA) return prB - prA;
+                        return (parseInt(b.dataset.timestamp || '0') - parseInt(a.dataset.timestamp || '0'));
+                    }
+                    return 0;
+                });
+
+                cardList.forEach(c => feed.appendChild(c));
+                rows.length = 0;
+                rows.push(...feed.querySelectorAll('.opportunity-row'));
+                
+                // Keep the first visible job selected
+                const firstVis = rows.findIndex(r => r.style.display !== 'none');
+                if (firstVis >= 0) {
+                    selectJob(firstVis);
+                }
+
+                // Update URL query parameter without page reload
+                const currentUrl = new URL(window.location.href);
+                currentUrl.searchParams.set('sort_by', sortBy);
+                window.history.replaceState({}, '', currentUrl.toString());
+                showToast(`Sorted by: ${sortSelect?.options[sortSelect.selectedIndex]?.text || sortBy}`);
+            }
+
+            if (sortSelect) {
+                sortSelect.addEventListener('change', (e) => {
+                    performSort(e.target.value);
+                });
+            }
+
+            // Keyboard navigation (J/K/E/X/T/Escape)
+            window.addEventListener('keydown', (e) => {
+                if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+                if (e.key === 'Escape') {
+                    closeInspector();
+                    return;
+                }
+
+                if (e.key === 'j' || e.key === 'J' || e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    let nextIndex = activeIndex + 1;
+                    while (nextIndex < rows.length && rows[nextIndex].style.display === 'none') {
+                        nextIndex++;
+                    }
+                    if (nextIndex < rows.length) {
+                        selectJob(nextIndex);
+                    }
+                } else if (e.key === 'k' || e.key === 'K' || e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    let prevIndex = activeIndex - 1;
+                    while (prevIndex >= 0 && rows[prevIndex].style.display === 'none') {
+                        prevIndex--;
+                    }
+                    if (prevIndex >= 0) {
+                        selectJob(prevIndex);
+                    }
+                } else if (e.key === 'e' || e.key === 'E') {
+                    e.preventDefault();
+                    if (rows[activeIndex]) {
+                        const form = rows[activeIndex].querySelector('form:not([action*="dislike"])');
+                        if (form) {
+                            showToast(`Advancing: ${rows[activeIndex].dataset.jobTitle}`);
+                            form.submit();
+                        }
+                    }
+                } else if (e.key === 'x' || e.key === 'X') {
+                    e.preventDefault();
+                    if (rows[activeIndex]) {
+                        const passForm = rows[activeIndex].querySelector('form input[name="action"][value="dislike"]')?.closest('form');
+                        if (passForm) {
+                            showToast(`Passing: ${rows[activeIndex].dataset.jobTitle}`);
+                            passForm.submit();
+                        }
+                    }
+                } else if (e.key === 't' || e.key === 'T') {
+                    e.preventDefault();
+                    if (rows[activeIndex]) {
+                        const jobId = rows[activeIndex].dataset.jobId;
+                        const track = '{{ pipeline_track }}';
+                        const resumeId = '{% if active_profile.resume %}{{ active_profile.resume.id }}{% endif %}';
+                        let url = `{% url 'resume_optimizer' %}?job_id=${jobId}&track=${track}`;
+                        if (resumeId) url += `&resume_id=${resumeId}`;
+                        window.location.href = url;
+                    }
+                }
+            });
+
+            // ==========================================
+            // DEEP ANALYZE WITH OLLAMA LOCAL & CONFIRMATION
+            // ==========================================
+            let analysisTimerInterval = null;
+
+            window.promptDeepAnalysisConfirmation = function() {
+                if (!rows[activeIndex]) return;
+                const row = rows[activeIndex];
+                const title = row.dataset.jobTitle || 'Role';
+                const company = row.dataset.company || '';
+                const modalTitle = document.getElementById('modal-analysis-job-title');
+                if (modalTitle) {
+                    modalTitle.textContent = company ? `${title} (${company})` : title;
+                }
+                const modal = document.getElementById('deep-analysis-modal');
+                if (modal) {
+                    modal.classList.remove('hidden');
+                }
+            };
+
+            window.closeDeepAnalysisConfirm = function() {
+                const modal = document.getElementById('deep-analysis-modal');
+                if (modal) {
+                    modal.classList.add('hidden');
+                }
+            };
+
+            window.executeDeepAnalysis = async function() {
+                closeDeepAnalysisConfirm();
+                if (!rows[activeIndex]) return;
+                const row = rows[activeIndex];
+                const jobId = row.dataset.jobId;
+                const track = '{{ pipeline_track }}';
+
+                const unanalyzedBox = document.getElementById('radar-unanalyzed-placeholder');
+                const loadingBox = document.getElementById('radar-loading-container');
+                const resultsBox = document.getElementById('radar-results-container');
+                const triggerBtn = document.getElementById('trigger-ollama-radar-btn');
+                const timerDisplay = document.getElementById('analysis-timer-display');
+                const progressBar = document.getElementById('analysis-progress-bar');
+
+                if (unanalyzedBox) unanalyzedBox.classList.add('hidden');
+                if (resultsBox) resultsBox.classList.add('hidden');
+                if (loadingBox) loadingBox.classList.remove('hidden');
+                if (triggerBtn) {
+                    triggerBtn.disabled = true;
+                    triggerBtn.classList.add('hidden', 'opacity-50', 'pointer-events-none');
+                }
+
+                let elapsedSeconds = 0;
+                if (timerDisplay) timerDisplay.textContent = '0s (est. ~1 min)';
+                if (progressBar) progressBar.style.width = '8%';
+                
+                clearInterval(analysisTimerInterval);
+                analysisTimerInterval = setInterval(() => {
+                    elapsedSeconds++;
+                    if (timerDisplay) {
+                        timerDisplay.textContent = `${elapsedSeconds}s (est. ~1 min)`;
+                    }
+                    if (progressBar) {
+                        const pct = Math.min(94, 8 + Math.round((elapsedSeconds / 60) * 86));
+                        progressBar.style.width = `${pct}%`;
+                    }
+                }, 1000);
+
+                try {
+                    showToast('Running deep analysis with local AI (~1 min)...');
+                    const resp = await fetch(`/jobs/cockpit/api/skill-radar/?job_id=${jobId}&track=${track}&force=1`);
+                    const data = await resp.json();
+                    
+                    clearInterval(analysisTimerInterval);
+                    if (progressBar) progressBar.style.width = '100%';
+
+                    if (data.status === 'ok' && data.data && !data.data.error) {
+                        const res = data.data;
+                        row.dataset.coreMatches = JSON.stringify(res.core_competencies || []);
+                        row.dataset.stretchSkills = JSON.stringify(res.stretch_skills || []);
+                        row.dataset.matchScore = res.match_score;
+                        row.dataset.fitSummary = res.fit_summary || '';
+                        row.dataset.radarSource = 'ollama_local';
+
+                        // Update the card's badge in the middle feed
+                        const cardPill = row.querySelector('.opportunity-match-pill');
+                        if (cardPill) {
+                            cardPill.className = 'opportunity-match-pill flex items-center rounded border overflow-hidden shrink-0 font-mono text-xs border-emerald-300 bg-emerald-50';
+                            cardPill.innerHTML = `
+                                <span class="bg-brand text-white text-[11px] px-2 py-0.5 font-bold">${res.match_score}%</span>
+                                <span class="text-emerald-800 text-[10px] px-1.5 py-0.5 font-semibold">${(res.core_competencies || []).length} Verified</span>
+                            `;
+                        }
+
+                        selectJob(row);
+                        showToast('Local deep analysis complete!');
+                    } else {
+                        const err = (data.data && data.data.error) || data.error || 'Failed to complete analysis';
+                        showToast(`Analysis notice: ${err}`);
+                        selectJob(row);
+                    }
+                } catch (err) {
+                    clearInterval(analysisTimerInterval);
+                    console.error(err);
+                    showToast('Could not complete local analysis.');
+                    selectJob(row);
+                } finally {
+                    if (triggerBtn) {
+                        triggerBtn.disabled = false;
+                        triggerBtn.classList.remove('opacity-50', 'pointer-events-none');
+                    }
+                }
+            };
+
+            const triggerRadarBtn = document.getElementById('trigger-ollama-radar-btn');
+            if (triggerRadarBtn) {
+                triggerRadarBtn.addEventListener('click', promptDeepAnalysisConfirmation);
+            }
+
+            const confirmAnalysisBtn = document.getElementById('confirm-run-analysis-btn');
+            if (confirmAnalysisBtn) {
+                confirmAnalysisBtn.addEventListener('click', executeDeepAnalysis);
+            }
+
+            // Trigger tailor button in inspector
+            const triggerTailorBtn = document.getElementById('trigger-tailor-btn');
+            if (triggerTailorBtn) {
+                triggerTailorBtn.addEventListener('click', () => {
+                    if (rows[activeIndex]) {
+                        const jobId = rows[activeIndex].dataset.jobId;
+                        const track = '{{ pipeline_track }}';
+                        const resumeId = '{% if active_profile.resume %}{{ active_profile.resume.id }}{% endif %}';
+                        let url = `{% url 'resume_optimizer' %}?job_id=${jobId}&track=${track}`;
+                        if (resumeId) url += `&resume_id=${resumeId}`;
+                        window.location.href = url;
+                    }
+                });
+            }
+
+            // Inspector Action Toolbar Buttons
+            const inspectorActionBtn = document.getElementById('inspector-action-btn');
+            if (inspectorActionBtn) {
+                inspectorActionBtn.addEventListener('click', () => {
+                    if (rows[activeIndex]) {
+                        const form = rows[activeIndex].querySelector('form:not([action*="dislike"])');
+                        if (form) {
+                            showToast(`Submitting: ${rows[activeIndex].dataset.jobTitle}`);
+                            form.submit();
+                        }
+                    }
+                });
+            }
+
+            const inspectorPassBtn = document.getElementById('inspector-pass-btn');
+            if (inspectorPassBtn) {
+                inspectorPassBtn.addEventListener('click', () => {
+                    if (rows[activeIndex]) {
+                        const passForm = rows[activeIndex].querySelector('form input[name="action"][value="dislike"]')?.closest('form');
+                        if (passForm) {
+                            showToast(`Passing: ${rows[activeIndex].dataset.jobTitle}`);
+                            passForm.submit();
+                        }
+                    }
+                });
+            }
+
+            // Live filter input
+            const filterInput = document.getElementById('live-filter-input');
+            if (filterInput) {
+                filterInput.addEventListener('input', (e) => {
+                    const q = e.target.value.toLowerCase().trim();
+                    let count = 0;
+                    rows.forEach(r => {
+                        const text = (r.dataset.jobTitle + ' ' + r.dataset.company + ' ' + r.dataset.location).toLowerCase();
+                        if (!q || text.includes(q)) {
+                            r.style.display = '';
+                            count++;
+                        } else {
+                            r.style.display = 'none';
+                        }
+                    });
+                    const countBadge = document.getElementById('filtered-count-badge');
+                    if (countBadge) countBadge.textContent = count;
+                });
+            }
+
+            // Copy JD button
+            const copyJdBtn = document.getElementById('copy-jd-btn');
+            if (copyJdBtn) {
+                copyJdBtn.addEventListener('click', () => {
+                    const text = document.getElementById('inspect-job-description').innerText;
+                    navigator.clipboard.writeText(text).then(() => {
+                        showToast('Job description copied to clipboard!');
+                    });
+                });
+            }
+        });
+
+        // ==========================================
+        // COMPACT SEARCH PROFILE DRAWER LOGIC
+        // ==========================================
+        const searchProfilesData = {{ search_profiles_json|safe }};
+
+        function showDrawer() {
+            const backdrop = document.getElementById('profile-drawer-backdrop');
+            const panel = document.getElementById('profile-drawer-panel');
+            backdrop.classList.remove('hidden');
+            setTimeout(() => {
+                panel.classList.remove('translate-x-full');
+            }, 10);
+        }
+
+        function closeProfileDrawer() {
+            const backdrop = document.getElementById('profile-drawer-backdrop');
+            const panel = document.getElementById('profile-drawer-panel');
+            panel.classList.add('translate-x-full');
+            setTimeout(() => {
+                backdrop.classList.add('hidden');
+            }, 200);
+        }
+
+        function openEditProfileDrawer(slug) {
+            const profile = searchProfilesData.find(p => p.slug === slug) || searchProfilesData[0];
+            if (!profile) return;
+
+            document.getElementById('drawer-title').textContent = 'Edit Search Profile';
+            document.getElementById('drawer-subtitle').textContent = `Profile: ${profile.name}`;
+            document.getElementById('drawer-action').value = 'save_search_profile';
+            document.getElementById('drawer-preset-id').value = profile.id;
+            document.getElementById('drawer-name').value = profile.name;
+            document.getElementById('drawer-search-term').value = profile.search_term;
+            document.getElementById('drawer-location').value = profile.location;
+            document.getElementById('drawer-resume').value = profile.resume_id || '';
+            document.getElementById('drawer-schedule-interval').value = profile.schedule_interval || 'off';
+            document.getElementById('drawer-schedule-time').value = profile.schedule_time || '09:00';
+            document.getElementById('drawer-is-default').checked = !!profile.is_default;
+
+            const sites = profile.site_names || ['indeed', 'linkedin'];
+            ['indeed', 'linkedin', 'dice', 'ziprecruiter', 'greenhouse'].forEach(b => {
+                const el = document.getElementById('board-' + b);
+                if (el) el.checked = sites.includes(b);
+            });
+
+            const deleteBtn = document.getElementById('drawer-delete-btn');
+            if (searchProfilesData.length > 1) {
+                deleteBtn.classList.remove('hidden');
+                document.getElementById('delete-profile-id').value = profile.id;
+            } else {
+                deleteBtn.classList.add('hidden');
+            }
+
+            // Reset upload file input label
+            const uploadLabel = document.getElementById('upload-label');
+            if (uploadLabel) uploadLabel.textContent = '+ Upload PDF';
+            const fileInput = document.getElementById('drawer-resume-file');
+            if (fileInput) fileInput.value = '';
+
+            showDrawer();
+        }
+
+        function openNewProfileDrawer() {
+            document.getElementById('drawer-title').textContent = 'New Search Profile';
+            document.getElementById('drawer-subtitle').textContent = 'Create targeted search criteria';
+            document.getElementById('drawer-action').value = 'save_search_profile';
+            document.getElementById('drawer-preset-id').value = '';
+            document.getElementById('drawer-name').value = '';
+            document.getElementById('drawer-search-term').value = '';
+            document.getElementById('drawer-location').value = '';
+            document.getElementById('drawer-resume').value = '';
+            document.getElementById('drawer-schedule-interval').value = 'off';
+            document.getElementById('drawer-schedule-time').value = '09:00';
+            document.getElementById('drawer-is-default').checked = false;
+
+            ['indeed', 'linkedin', 'dice', 'ziprecruiter', 'greenhouse'].forEach(b => {
+                const el = document.getElementById('board-' + b);
+                if (el) el.checked = (b === 'indeed' || b === 'linkedin' || b === 'greenhouse');
+            });
+
+            document.getElementById('drawer-delete-btn').classList.add('hidden');
+
+            const uploadLabel = document.getElementById('upload-label');
+            if (uploadLabel) uploadLabel.textContent = '+ Upload PDF';
+            const fileInput = document.getElementById('drawer-resume-file');
+            if (fileInput) fileInput.value = '';
+
+            showDrawer();
+        }
+
+        function confirmDeleteProfile() {
+            const name = document.getElementById('drawer-name').value || 'this profile';
+            if (confirm(`Are you sure you want to delete profile "${name}"? This will also remove associated pipeline entries.`)) {
+                document.getElementById('delete-profile-form').submit();
+            }
+        }
+
+        function onDrawerResumeFileSelected(input) {
+            if (input.files && input.files[0]) {
+                const label = document.getElementById('upload-label');
+                if (label) label.textContent = input.files[0].name.substring(0, 18) + '...';
+            }
+        }
+
+        function toggleAddPhraseInput() {
+            const form = document.getElementById('add-phrase-form');
+            if (form) form.classList.toggle('hidden');
+        }
+    </script>
+
+    <!-- ========================================== -->
+    <!-- COMPACT SEARCH PROFILE CONFIGURATION DRAWER -->
+    <!-- ========================================== -->
+    <div id="profile-drawer-backdrop" class="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 hidden transition-opacity duration-200">
+        <div class="fixed inset-y-0 right-0 w-full max-w-md bg-white shadow-2xl border-l border-slate-200 flex flex-col transform translate-x-full transition-transform duration-200 ease-in-out" id="profile-drawer-panel">
+            
+            <!-- Drawer Header (Compact ~48px) -->
+            <div class="px-5 py-3 border-b border-slate-200 flex items-center justify-between bg-slate-50/70 shrink-0">
+                <div class="flex items-center gap-2">
+                    <div class="w-7 h-7 rounded-lg bg-[#0F382A] text-white flex items-center justify-center">
+                        <span class="material-symbols-outlined text-[17px]">tune</span>
+                    </div>
+                    <div>
+                        <h2 id="drawer-title" class="text-xs font-bold text-slate-900 leading-tight">Edit Search Profile</h2>
+                        <span id="drawer-subtitle" class="font-mono text-[10px] text-slate-500">Target Criteria &amp; Automation</span>
+                    </div>
+                </div>
+                <button type="button" onclick="closeProfileDrawer()" class="text-slate-400 hover:text-slate-700 p-1 rounded-lg hover:bg-slate-200 transition">
+                    <span class="material-symbols-outlined text-[20px]">close</span>
+                </button>
+            </div>
+
+            <!-- Drawer Form (Compact ~400px height, no scrollbar needed on normal screens) -->
+            <form id="profile-drawer-form" action="" method="post" enctype="multipart/form-data" class="flex-1 flex flex-col justify-between overflow-y-auto">
+                {% csrf_token %}
+                <input type="hidden" name="action" id="drawer-action" value="save_search_profile">
+                <input type="hidden" name="preset_id" id="drawer-preset-id" value="">
+
+                <div class="p-4 sm:p-5 space-y-3">
+                    
+                    <!-- Row 1: Profile Name & Bound Resume (2 cols) -->
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-[10px] font-mono font-bold uppercase text-slate-500 mb-1">
+                                Profile Name <span class="text-rose-500">*</span>
+                            </label>
+                            <input type="text" id="drawer-name" name="name" required placeholder="e.g. Dallas Director"
+                                   class="w-full h-8 text-xs px-2.5 rounded-md border border-slate-300 focus:outline-none focus:ring-1 focus:ring-[#0F382A] focus:border-[#0F382A]">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-mono font-bold uppercase text-slate-500 mb-1">
+                                Bound Resume
+                            </label>
+                            <select id="drawer-resume" name="resume_id" 
+                                    class="w-full h-8 text-xs px-2 rounded-md border border-slate-300 focus:outline-none focus:ring-1 focus:ring-[#0F382A] focus:border-[#0F382A] bg-white">
+                                <option value="">None / Auto</option>
+                                {% for r in user_resumes %}
+                                <option value="{{ r.id }}">{{ r.original_filename|truncatechars:22 }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Row 2: Search Query (Full width plain query input) -->
+                    <div>
+                        <div class="flex items-center justify-between mb-1">
+                            <label class="block text-[10px] font-mono font-bold uppercase text-slate-500">
+                                Search Query <span class="text-rose-500">*</span>
+                            </label>
+                            <span class="text-[9px] text-slate-400 font-mono">Job title or plain query</span>
+                        </div>
+                        <div class="relative">
+                            <span class="material-symbols-outlined absolute left-2.5 top-1.5 text-[15px] text-slate-400">search</span>
+                            <input type="text" id="drawer-search-term" name="search_term" required placeholder="e.g. Software Architecture OR Engineering Director"
+                                   class="w-full h-8 text-xs pl-8 pr-2.5 rounded-md border border-slate-300 focus:outline-none focus:ring-1 focus:ring-[#0F382A] focus:border-[#0F382A]">
+                        </div>
+                    </div>
+
+                    <!-- Row 3: Location & Automation Schedule (2 cols) -->
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-[10px] font-mono font-bold uppercase text-slate-500 mb-1">
+                                Location
+                            </label>
+                            <div class="relative">
+                                <span class="material-symbols-outlined absolute left-2.5 top-1.5 text-[15px] text-slate-400">location_on</span>
+                                <input type="text" id="drawer-location" name="location" placeholder="e.g. Dallas, TX or Remote"
+                                       class="w-full h-8 text-xs pl-8 pr-2.5 rounded-md border border-slate-300 focus:outline-none focus:ring-1 focus:ring-[#0F382A] focus:border-[#0F382A]">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-mono font-bold uppercase text-slate-500 mb-1">
+                                Automated Run
+                            </label>
+                            <div class="flex items-center gap-1.5">
+                                <select id="drawer-schedule-interval" name="schedule_interval" 
+                                        class="flex-1 h-8 text-xs px-1.5 rounded-md border border-slate-300 focus:outline-none focus:ring-1 focus:ring-[#0F382A] focus:border-[#0F382A] bg-white">
+                                    <option value="off">Off</option>
+                                    <option value="daily">Daily</option>
+                                    <option value="weekdays">Weekdays</option>
+                                    <option value="weekly">Weekly</option>
+                                </select>
+                                <input type="time" id="drawer-schedule-time" name="schedule_time" value="09:00"
+                                       class="w-20 h-8 text-xs px-1.5 rounded-md border border-slate-300 focus:outline-none focus:ring-1 focus:ring-[#0F382A] focus:border-[#0F382A]">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Row 4: Job Boards (Compact pill checkboxes) -->
+                    <div>
+                        <label class="block text-[10px] font-mono font-bold uppercase text-slate-500 mb-1.5">
+                            Job Boards
+                        </label>
+                        <div class="grid grid-cols-4 gap-2">
+                            <label class="flex items-center gap-1.5 p-1.5 rounded border border-slate-200 hover:bg-slate-50 cursor-pointer text-xs">
+                                <input type="checkbox" name="site_names" value="indeed" id="board-indeed" class="rounded text-[#0F382A] focus:ring-[#0F382A]">
+                                <span class="text-[11px] font-medium text-slate-700">Indeed</span>
+                            </label>
+                            <label class="flex items-center gap-1.5 p-1.5 rounded border border-slate-200 hover:bg-slate-50 cursor-pointer text-xs">
+                                <input type="checkbox" name="site_names" value="linkedin" id="board-linkedin" class="rounded text-[#0F382A] focus:ring-[#0F382A]">
+                                <span class="text-[11px] font-medium text-slate-700">LinkedIn</span>
+                            </label>
+                            <label class="flex items-center gap-1.5 p-1.5 rounded border border-slate-200 hover:bg-slate-50 cursor-pointer text-xs">
+                                <input type="checkbox" name="site_names" value="dice" id="board-dice" class="rounded text-[#0F382A] focus:ring-[#0F382A]">
+                                <span class="text-[11px] font-medium text-slate-700">Dice</span>
+                            </label>
+                            <label class="flex items-center gap-1.5 p-1.5 rounded border border-slate-200 hover:bg-slate-50 cursor-pointer text-xs">
+                                <input type="checkbox" name="site_names" value="ziprecruiter" id="board-ziprecruiter" class="rounded text-[#0F382A] focus:ring-[#0F382A]">
+                                <span class="text-[11px] font-medium text-slate-700">Zip</span>
+                            </label>
+                            <label class="flex items-center gap-1.5 p-1.5 rounded border border-slate-200 hover:bg-slate-50 cursor-pointer text-xs">
+                                <input type="checkbox" name="site_names" value="greenhouse" id="board-greenhouse" class="rounded text-[#0F382A] focus:ring-[#0F382A]">
+                                <span class="text-[11px] font-medium text-slate-700">Greenhouse</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Row 5: Set as Default & Upload PDF Trigger -->
+                    <div class="pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
+                        <label class="flex items-center gap-2 cursor-pointer select-none">
+                            <input type="checkbox" id="drawer-is-default" name="is_default" value="1" class="rounded text-[#0F382A] focus:ring-[#0F382A]">
+                            <span class="text-xs font-medium text-slate-700">Default profile for new roles</span>
+                        </label>
+                        <button type="button" onclick="document.getElementById('drawer-resume-file').click()" class="text-[11px] font-semibold text-[#0F382A] hover:underline flex items-center gap-1">
+                            <span class="material-symbols-outlined text-[13px]">upload_file</span>
+                            <span id="upload-label">+ Upload PDF</span>
+                        </button>
+                        <input type="file" id="drawer-resume-file" name="resume_file" accept=".pdf" class="hidden" onchange="onDrawerResumeFileSelected(this)">
+                    </div>
+
+                </div>
+
+                <!-- Drawer Footer (Fixed compact toolbar ~48px) -->
+                <div class="p-3 sm:px-5 border-t border-slate-200 bg-slate-50 flex items-center justify-between shrink-0">
+                    <button type="button" id="drawer-delete-btn" onclick="confirmDeleteProfile()" class="text-xs text-rose-600 hover:text-rose-800 font-semibold hover:bg-rose-50 px-2 py-1.5 rounded transition hidden">
+                        Delete Profile
+                    </button>
+                    <div class="flex items-center gap-2 ml-auto">
+                        <button type="button" onclick="closeProfileDrawer()" class="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-200 rounded font-medium transition">
+                            Cancel
+                        </button>
+                        <button type="submit" class="px-4 py-1.5 text-xs text-white bg-[#0F382A] hover:bg-[#164e3b] rounded-lg font-bold shadow-sm transition">
+                            Save Profile
+                        </button>
+                    </div>
+                </div>
+            </form>
+
+            <!-- Hidden Delete Form -->
+            <form id="delete-profile-form" action="" method="post" class="hidden">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="delete_search_profile">
+                <input type="hidden" name="delete_profile_id" id="delete-profile-id" value="">
+            </form>
+        </div>
+    </div>
+
+    <!-- Deep Analysis Confirmation Modal (~1 min advisory) -->
+    <div id="deep-analysis-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 hidden">
+        <div class="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div class="p-5 space-y-4">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 rounded-full bg-emerald-100 text-brand flex items-center justify-center shrink-0">
+                        <span class="material-symbols-outlined text-[22px]">bolt</span>
+                    </div>
+                    <div>
+                        <h3 class="text-sm font-bold text-slate-900">Run Deep Skill Analysis?</h3>
+                        <p class="text-[11px] text-slate-500">Local AI inference via Ollama</p>
+                    </div>
+                </div>
+
+                <div class="p-3.5 bg-slate-50 rounded-lg border border-slate-200 space-y-2 text-xs text-slate-700">
+                    <div class="font-semibold text-slate-900 flex items-center justify-between">
+                        <span id="modal-analysis-job-title" class="truncate max-w-[280px]">Selected Opportunity</span>
+                        <span class="text-[10px] text-brand bg-brand-soft px-1.5 py-0.5 rounded font-mono font-bold shrink-0">{{ local_model_name|default:"Local AI Model" }}</span>
+                    </div>
+                    <div class="text-[11px] text-amber-800 bg-amber-50 border border-amber-200/80 p-2.5 rounded-md flex items-start gap-2">
+                        <span class="material-symbols-outlined text-[16px] text-amber-600 shrink-0 mt-0.5">timer</span>
+                        <span>This semantic evaluation will take approximately <strong>a minute</strong> to process.</span>
+                    </div>
+                    <p class="text-[11px] text-slate-500 leading-normal">
+                        Evaluates required technical skills against your active resume (<strong class="text-slate-700 font-mono">{{ bound_resume.original_filename|default:"resume.pdf" }}</strong>), extracts verified competencies, and highlights role gaps with zero cloud token cost.
+                    </p>
+                </div>
+
+                <div class="flex items-center justify-end gap-2 pt-1">
+                    <button type="button" onclick="closeDeepAnalysisConfirm()" class="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 rounded-lg hover:bg-slate-100 transition cursor-pointer">
+                        Cancel
+                    </button>
+                    <button type="button" id="confirm-run-analysis-btn" class="px-4 py-2 text-xs font-bold text-white bg-brand hover:bg-brand-dark rounded-lg flex items-center gap-1.5 shadow-sm transition cursor-pointer">
+                        <span class="material-symbols-outlined text-[15px]">play_arrow</span>
+                        <span>Proceed with Analysis</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

@@ -332,6 +332,9 @@ class SystemPromptProfile(models.Model):
     interview_prep = models.TextField(blank=True)
     interview_prep_system = models.TextField(blank=True)
     interview_prep_user = models.TextField(blank=True)
+    skill_radar = models.TextField(blank=True)
+    skill_radar_system = models.TextField(blank=True)
+    skill_radar_user = models.TextField(blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -654,6 +657,10 @@ class AppAutomationSettings(models.Model):
         default=70,
         help_text="Promote Vetting → Applying when interview probability is >= this (0–100).",
     )
+    weekly_target_applications = models.PositiveSmallIntegerField(
+        default=10,
+        help_text="Target applications to submit per week.",
+    )
     applying_optimizer_workflow = models.ForeignKey(
         "OptimizerWorkflow",
         null=True,
@@ -667,12 +674,12 @@ class AppAutomationSettings(models.Model):
         help_text="When set, the app will not send any LLM API requests (kill switch).",
     )
     cleanup_job_retention_days = models.PositiveSmallIntegerField(
-        default=14,
-        help_text="Cleanup Manager: remove non-applied jobs older than this many days (default 14 days / 2 weeks; 0 = off).",
+        default=7,
+        help_text="Cleanup Manager: remove non-applied jobs older than this many days (default 7 days / 1 week; 0 = off).",
     )
     cleanup_pipeline_retention_days = models.PositiveSmallIntegerField(
-        default=14,
-        help_text="Cleanup Manager: remove Pipeline-stage rows older than this many days (0 = off).",
+        default=7,
+        help_text="Cleanup Manager: remove Pipeline-stage rows older than this many days (default 7 days).",
     )
     cleanup_vetting_retention_days = models.PositiveSmallIntegerField(
         default=14,
@@ -730,9 +737,10 @@ class AppAutomationSettings(models.Model):
                 "pipeline_preference_margin_min": 0,
                 "vetting_to_applying_enabled": False,
                 "vetting_interview_probability_min": 70,
+                "weekly_target_applications": 10,
                 "stop_llm_requests": False,
-                "cleanup_job_retention_days": 14,
-                "cleanup_pipeline_retention_days": 14,
+                "cleanup_job_retention_days": 7,
+                "cleanup_pipeline_retention_days": 7,
                 "cleanup_vetting_retention_days": 14,
                 "cleanup_applying_retention_days": 14,
                 "cleanup_done_retention_days": 0,
@@ -1275,6 +1283,7 @@ class PipelineEntry(models.Model):
         APPLYING = "applying", "Applying"
         DONE = "done", "Done"
         DELETED = "deleted", "Deleted"
+        EXPIRED = "expired", "Expired"
 
     job_listing = models.ForeignKey(JobListing, on_delete=models.CASCADE)
     search_profile = models.ForeignKey(
@@ -1297,6 +1306,7 @@ class PipelineEntry(models.Model):
         help_text="Lightweight stage for this job in the pipeline (e.g. vetting, applying, done). Blank means legacy/default pipeline.",
     )
     added_at = models.DateTimeField(auto_now_add=True)
+    applied_at = models.DateTimeField(null=True, blank=True, help_text="Timestamp when moved to Done / applied.")
     removed_at = models.DateTimeField(null=True, blank=True)
 
     # Vetting stage: interview probability + short explanation derived from Matching prompt.
@@ -1380,8 +1390,10 @@ class PipelineEntry(models.Model):
         if not self.can_mark_done():
             return
         self.stage = self.Stage.DONE
+        if self.applied_at is None:
+            self.applied_at = timezone.now()
         if save:
-            self.save(update_fields=["stage"])
+            self.save(update_fields=["stage", "applied_at"])
 
     def mark_deleted(self, save: bool = True):
         # Move to deleted stage and set removed_at so background tasks won't re-add.

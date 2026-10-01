@@ -53,7 +53,14 @@ from .jobs_api import (
     JobSearchRequest,
     MarkAppliedRequest,
 )
-from .pipeline_board import applying_view, done_view, pipeline_view, vetting_view
+from .pipeline_board import (
+    applying_view,
+    career_cockpit_view,
+    cockpit_skill_radar_api,
+    done_view,
+    pipeline_view,
+    vetting_view,
+)
 from .models import (
     JobListingAction,
     PipelineEntry,
@@ -262,16 +269,24 @@ def optimizer_view(request):
     job_id = request.GET.get("job_id")
     prefill_job_description = ""
     prefill_resume_id = None
+    target_job = None
     if job_id:
         from .models import JobListing
+        from .sourcing.clients.builtin_client import enrich_builtin_job_listing_description
         from .sourcing.clients.dice_client import enrich_dice_job_listing_description
+        from .sourcing.clients.greenhouse_client import enrich_greenhouse_job_listing_description
         from .sourcing.clients.levels_client import enrich_levels_job_listing_description
 
         try:
-            job = JobListing.objects.get(id=int(job_id))
+            target_job = JobListing.objects.get(id=int(job_id))
+            job = target_job
             prefill_job_description = enrich_dice_job_listing_description(job)
             if not prefill_job_description:
                 prefill_job_description = enrich_levels_job_listing_description(job)
+            if not prefill_job_description:
+                prefill_job_description = enrich_builtin_job_listing_description(job)
+            if not prefill_job_description:
+                prefill_job_description = enrich_greenhouse_job_listing_description(job)
             if not prefill_job_description:
                 prefill_job_description = (job.description or "").strip()
             request.session["optimizer_prefill_job_description"] = prefill_job_description
@@ -290,8 +305,28 @@ def optimizer_view(request):
                 request.session.modified = True
         except (ValueError, TypeError):
             pass
+    elif request.GET.get("track"):
+        track_slug = request.GET.get("track")
+        from .models import UserResume, SearchProfile
+        ur = UserResume.objects.filter(owner=request.user, track=track_slug, is_library=True).first()
+        if not ur:
+            sp = SearchProfile.objects.filter(owner=request.user, slug=track_slug).first()
+            if sp and sp.resume:
+                ur = sp.resume
+        if ur:
+            prefill_resume_id = ur.id
+            request.session["optimizer_resume_id"] = ur.id
+            request.session.modified = True
     elif request.session.get("optimizer_resume_id"):
         prefill_resume_id = request.session.get("optimizer_resume_id")
+
+    if not prefill_resume_id:
+        from .models import UserResume
+        ur = UserResume.objects.filter(owner=request.user, is_library=True).order_by("-id").first()
+        if ur:
+            prefill_resume_id = ur.id
+            request.session["optimizer_resume_id"] = ur.id
+            request.session.modified = True
 
     # LLM models + key status
     llm_models = []
@@ -324,7 +359,45 @@ def optimizer_view(request):
     if request.method == "POST":
         action = request.POST.get("action")
 
-        if action in ("reset_prompts", "save_prompts"):
+        if action == "approve_and_mark_applied":
+            target_job_id = request.POST.get("job_id") or request.GET.get("job_id")
+            track_slug = request.POST.get("track") or request.GET.get("track") or "dir-plano"
+            if target_job_id:
+                try:
+                    from .models import PipelineEntry
+                    from .domain.event_bus import event_bus
+                    from .domain.events import JobMarkedApplied
+                    entry = PipelineEntry.objects.filter(
+                        owner=request.user,
+                        job_listing_id=int(target_job_id),
+                        track=track_slug,
+                    ).first()
+                    if not entry:
+                        entry = PipelineEntry.objects.filter(
+                            owner=request.user,
+                            job_listing_id=int(target_job_id),
+                        ).first()
+                    if entry:
+                        entry.mark_done(save=True)
+                        event_bus.publish(JobMarkedApplied(user_id=request.user.id, entry_id=entry.id, track=entry.track))
+                        messages.success(request, "Opportunity approved & moved to Applied!")
+                    else:
+                        from .models import JobListing
+                        jl = JobListing.objects.filter(id=int(target_job_id)).first()
+                        if jl:
+                            pe = PipelineEntry.objects.create(
+                                owner=request.user,
+                                job_listing=jl,
+                                track=track_slug,
+                                stage=PipelineEntry.Stage.DONE,
+                            )
+                            event_bus.publish(JobMarkedApplied(user_id=request.user.id, entry_id=pe.id, track=track_slug))
+                            messages.success(request, "Opportunity approved & moved to Applied!")
+                except Exception as e:
+                    messages.error(request, f"Could not advance pipeline stage: {e}")
+            return redirect(f"/jobs/cockpit/?track={track_slug}&stage=done")
+
+        elif action in ("reset_prompts", "save_prompts"):
             messages.info(
                 request,
                 "Prompts are managed system-wide by admins in the Prompt library.",
@@ -583,6 +656,8 @@ def optimizer_view(request):
         "selected_ats_profile_id": selected_ats_profile_id,
         "optimizer_temperature": request.session.get("optimizer_temperature", "0.7"),
         "wizard_initial_step": wizard_initial_step,
+        "target_job": target_job,
+        "pipeline_track": request.GET.get("track") or (target_job.track if target_job and hasattr(target_job, "track") and target_job.track else "dir-plano"),
     }
     return render(request, "resume_app/optimizer.html", context)
 
@@ -761,23 +836,16 @@ def settings_view(request):
 
             cjob = _cleanup_days("cleanup_job_retention_days")
             if cjob is None:
-                cjob = 14
-            cp = _cleanup_days("cleanup_pipeline_retention_days") or cjob
-            cv = _cleanup_days("cleanup_vetting_retention_days") or cjob
-            ca = _cleanup_days("cleanup_applying_retention_days") or cjob
-            cd = _cleanup_days("cleanup_done_retention_days")
+                cjob = 7
+            cjob = max(1, min(30, cjob))
             cg = _cleanup_days("cleanup_generated_resume_retention_days")
-            if cd is None or cg is None:
-                messages.error(
-                    request,
-                    "Cleanup retention days must be whole numbers from 0 (off) through 365.",
-                )
-                return redirect(reverse("settings") + "?tab=app")
+            if cg is None:
+                cg = 7
             automation.cleanup_job_retention_days = cjob
-            automation.cleanup_pipeline_retention_days = cp
-            automation.cleanup_vetting_retention_days = cv
-            automation.cleanup_applying_retention_days = ca
-            automation.cleanup_done_retention_days = cd
+            automation.cleanup_pipeline_retention_days = cjob
+            automation.cleanup_vetting_retention_days = cjob
+            automation.cleanup_applying_retention_days = cjob
+            automation.cleanup_done_retention_days = 0  # Applied jobs are strictly exempt from purge
             automation.cleanup_generated_resume_retention_days = cg
 
             automation.save(
@@ -1034,17 +1102,18 @@ def settings_view(request):
         elif action == "save_prompt_model_preferences":
             from .models import TenantPromptModelPreference
 
-            # 1. Global Tenant Default
-            global_choice = (request.POST.get("global_default_provider_model") or "").strip()
-            if global_choice and "::" in global_choice:
-                g_prov, g_mod = global_choice.split("::", 1)
-                TenantPromptModelPreference.objects.update_or_create(
-                    owner=user,
-                    query_kind="__default__",
-                    defaults={"provider": g_prov, "model": g_mod, "is_active": True},
-                )
-            else:
-                TenantPromptModelPreference.objects.for_user(user).filter(query_kind="__default__").delete()
+            # 1. Global Tenant Default (not settable by tenants in the UI)
+            if request.user.is_superuser and "global_default_provider_model" in request.POST:
+                global_choice = (request.POST.get("global_default_provider_model") or "").strip()
+                if global_choice and "::" in global_choice:
+                    g_prov, g_mod = global_choice.split("::", 1)
+                    TenantPromptModelPreference.objects.update_or_create(
+                        owner=user,
+                        query_kind="__default__",
+                        defaults={"provider": g_prov, "model": g_mod, "is_active": True},
+                    )
+                else:
+                    TenantPromptModelPreference.objects.for_user(user).filter(query_kind="__default__").delete()
 
             # 2. Per-Prompt Overrides
             for key, val in request.POST.items():
@@ -1837,6 +1906,11 @@ def prompt_library_view(request):
             ip_combined = request.POST.get("prompt_interview_prep_combined") or ""
             ip_leg, ip_sys, ip_usr = _prompt_triple(ip_sys, ip_usr, ip_combined)
 
+            sr_sys = request.POST.get("prompt_skill_radar_system") or ""
+            sr_usr = request.POST.get("prompt_skill_radar_user") or ""
+            sr_combined = request.POST.get("prompt_skill_radar_combined") or ""
+            sr_leg, sr_sys, sr_usr = _prompt_triple(sr_sys, sr_usr, sr_combined)
+
             prompts = {
                 "writer": writer_leg,
                 "writer_system": writer_sys,
@@ -1859,6 +1933,9 @@ def prompt_library_view(request):
                 "interview_prep": ip_leg,
                 "interview_prep_system": ip_sys,
                 "interview_prep_user": ip_usr,
+                "skill_radar": sr_leg,
+                "skill_radar_system": sr_sys,
+                "skill_radar_user": sr_usr,
             }
             save_prompts_to_profile(request, prompts)
             prompts = get_effective_prompts(request)
@@ -4247,4 +4324,90 @@ def fit_inspector_view(request):
         "default_filter": default_filter,
     }
     return render(request, "resume_app/fit_inspector.html", context)
+
+
+@login_required
+def performance_dashboard_view(request):
+    """
+    Motivational Career Performance & Momentum Dashboard.
+    Renders immediately with cached data or fast skeleton placeholders,
+    progressively hydrated by client-side telemetry fetch.
+    """
+    user = get_active_user(request)
+    from django.core.cache import cache
+    cache_key = f"perf_stats_{user.id}"
+    cached_stats = cache.get(cache_key)
+
+    return render(request, "resume_app/performance_dashboard.html", {
+        "stats": cached_stats,
+        "is_cached": bool(cached_stats),
+        "active_tab": "performance",
+    })
+
+
+@login_required
+def dashboard_metrics_api(request):
+    """
+    Asynchronous JSON telemetry endpoint for progressive dashboard hydration.
+    """
+    user = get_active_user(request)
+    from django.core.cache import cache
+    from .dashboard_stats import get_performance_dashboard_stats
+
+    cache_key = f"perf_stats_{user.id}"
+    if request.GET.get("refresh") == "1":
+        cache.delete(cache_key)
+
+    stats = cache.get(cache_key)
+    if not stats:
+        stats = get_performance_dashboard_stats(user)
+        cache.set(cache_key, stats, timeout=120)  # 2 minute cache
+
+    return JsonResponse({"status": "ok", "stats": stats})
+
+
+@login_required
+def update_dashboard_settings_api(request):
+    """
+    API endpoint to update user settings directly from the dashboard controls.
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "POST required"}, status=405)
+    user = get_active_user(request)
+    try:
+        data = json.loads(request.body)
+    except Exception:
+        data = request.POST
+
+    from .models import AppAutomationSettings, ApplicantProfile, UserDisqualifier
+    settings = AppAutomationSettings.get_for_user(user)
+
+    if "weekly_target_applications" in data:
+        try:
+            val = max(1, min(100, int(data["weekly_target_applications"])))
+            settings.weekly_target_applications = val
+            settings.save(update_fields=["weekly_target_applications"])
+        except (ValueError, TypeError):
+            pass
+
+    if "min_comp_floor" in data:
+        profile = ApplicantProfile.get_for_user(user)
+        profile.salary_expectation = str(data["min_comp_floor"]).strip()
+        profile.save(update_fields=["salary_expectation"])
+
+    if "add_disqualifier" in data:
+        phrase = str(data["add_disqualifier"]).strip()
+        if phrase:
+            UserDisqualifier.objects.get_or_create(owner=user, phrase=phrase)
+
+    if "remove_disqualifier" in data:
+        phrase = str(data["remove_disqualifier"]).strip()
+        if phrase:
+            UserDisqualifier.objects.filter(owner=user, phrase__iexact=phrase).delete()
+
+    return JsonResponse({
+        "status": "ok",
+        "weekly_target_applications": settings.weekly_target_applications,
+    })
+
 
