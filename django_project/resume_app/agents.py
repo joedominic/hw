@@ -210,6 +210,12 @@ def build_llm_messages_for_prompt(
         out.append(SystemMessage(content=_format_prompt(sys_t, **format_kwargs)))
     if usr_t:
         out.append(HumanMessage(content=_format_prompt(usr_t, **format_kwargs)))
+    guardrail = format_kwargs.get("length_guardrail")
+    if guardrail and "{length_guardrail}" not in (leg or (sys_t + " " + usr_t)):
+        if out and isinstance(out[0], SystemMessage):
+            out[0].content += f"\n\n### Length & Substance Constraint\n{guardrail}"
+        elif out:
+            out[-1].content += f"\n\n### Length & Substance Constraint\n{guardrail}"
     return out
 
 
@@ -408,82 +414,10 @@ def _parse_fit_check_fallback(content: str) -> "FitCheckResult":
     )
 
 
-def run_fit_check(
-    resume_text: str,
-    job_description: str,
-    llm,
-    *,
-    user,
-    prompt_template: str = None,
-    prompt_system: str = None,
-    prompt_user: str = None,
-    prompt_legacy: str = None,
-    job_cache_key: str | None = None,
-    usage_query_kind: str | None = None,
-) -> dict:
-    """Returns { score: int, reasoning: str, thoughts: str }. Score 0-100; if < 50 caller may ask user to confirm."""
-    fmt = dict(resume_text=resume_text, job_description=job_description)
-    if prompt_template and str(prompt_template).strip():
-        messages = [HumanMessage(content=_format_prompt(str(prompt_template).strip(), **fmt))]
-    else:
-        leg = (prompt_legacy or "").strip()
-        st = (prompt_system or "").strip()
-        ut = (prompt_user or "").strip()
-        if not leg and not st and not ut:
-            messages = build_llm_messages_for_prompt(
-                legacy_combined=None,
-                system_template=DEFAULT_FIT_CHECK_SYSTEM,
-                user_template=DEFAULT_FIT_CHECK_USER,
-                format_kwargs=fmt,
-            )
-        else:
-            messages = build_llm_messages_for_prompt(
-                legacy_combined=leg or None,
-                system_template=st or None,
-                user_template=ut or None,
-                format_kwargs=fmt,
-            )
-    from .llm import USAGE_QUERY_FIT_CHECK
-
-    _qk = usage_query_kind or USAGE_QUERY_FIT_CHECK
-    dbg = "\n\n---\n\n".join(f"{type(m).__name__}:{getattr(m, 'content', '')}" for m in messages)
-    try:
-        result = _llm_invoke_with_retry(
-            llm,
-            messages,
-            user=user,
-            structured_schema=FitCheckResult,
-            job_cache_key=job_cache_key,
-            usage_query_kind=_qk,
-            prefer_local=True,
-            only_local=False,
-            allow_local=True,
-        )
-        if isinstance(result, FitCheckResult):
-            return {"score": result.score, "reasoning": result.reasoning, "thoughts": result.thoughts}
-        parsed = _parse_fit_check_fallback_from_parsers(str(result))
-        return {"score": parsed.score, "reasoning": parsed.reasoning, "thoughts": parsed.thoughts}
-    except Exception as e:
-        logger.warning("fit_check structured output failed: %s", e)
-        raw = _llm_invoke_with_retry(
-            llm,
-            messages,
-            user=user,
-            job_cache_key=job_cache_key,
-            usage_query_kind=_qk,
-            prefer_local=True,
-            only_local=False,
-            allow_local=True,
-        )
-        content = raw.content if hasattr(raw, "content") else str(raw)
-        parsed = _parse_fit_check_fallback_from_parsers(content)
-        return {"score": parsed.score, "reasoning": parsed.reasoning, "thoughts": parsed.thoughts}
-
-
 def run_matching(
     resume_text: str,
     job_description: str,
-    llm,
+    llm=None,
     *,
     user,
     prompt_template: str = None,
@@ -494,10 +428,34 @@ def run_matching(
     usage_query_kind: str | None = None,
     return_debug: bool = False,
     only_local: bool = False,
+    prefer_local: bool = True,
+    job_id: Any | None = None,
+    resume_id: Any | None = None,
 ) -> dict:
-    """Returns { score: int, reasoning: str, interview_probability: int|None }. Score 0-100.
-    Used after job search for independent LLM match score.
-    Uses raw LLM call + parser (no structured output) so all providers return parseable text."""
+    """Returns { score: int, reasoning: str, interview_probability: int|None, thoughts: str }. Score 0-100.
+    Unified evaluator for candidate-job fit across search, on-demand AI match, and background pipeline vetting.
+    Targeted to Local LLM by default with unified cross-workflow caching.
+    """
+    from django.core.cache import cache
+
+    # Unified cache resolution: derive job-match:{job_id}:{resume_id}
+    unified_key = None
+    if job_id and resume_id:
+        unified_key = f"job-match:{job_id}:{resume_id}"
+    elif job_cache_key and (":" in str(job_cache_key)):
+        parts = str(job_cache_key).split(":")
+        if len(parts) >= 3 and parts[-2].isdigit() and parts[-1].isdigit():
+            unified_key = f"job-match:{parts[-2]}:{parts[-1]}"
+
+    if unified_key:
+        cached_result = cache.get(unified_key)
+        if cached_result and isinstance(cached_result, dict) and "score" in cached_result:
+            logger.info("[matching] Unified cache HIT for %s", unified_key)
+            res = dict(cached_result)
+            if return_debug and "raw_llm_content" not in res:
+                res["raw_llm_content"] = "(from unified cache)"
+            return res
+
     fmt = dict(resume_text=resume_text, job_description=job_description)
     if prompt_template and str(prompt_template).strip():
         messages = [HumanMessage(content=_format_prompt(str(prompt_template).strip(), **fmt))]
@@ -523,14 +481,14 @@ def run_matching(
 
     _qk = usage_query_kind or USAGE_QUERY_MATCHING
     dbg = "\n\n---\n\n".join(f"{type(m).__name__}:{getattr(m, 'content', '')}" for m in messages)
-    logger.info("[matching] messages=%s total_chars=%s", len(messages), len(dbg))
+    logger.info("[matching] messages=%s total_chars=%s qk=%s prefer_local=%s", len(messages), len(dbg), _qk, prefer_local)
     raw = _llm_invoke_with_retry(
         llm,
         messages,
         user=user,
         job_cache_key=job_cache_key,
         usage_query_kind=_qk,
-        prefer_local=True,
+        prefer_local=prefer_local,
         only_local=only_local,
         allow_local=True,
     )
@@ -545,10 +503,76 @@ def run_matching(
         "score": parsed.score,
         "reasoning": parsed.reasoning,
         "interview_probability": parsed.interview_probability,
+        "thoughts": parsed.thoughts,
     }
+
+    if unified_key:
+        cache.set(unified_key, out, 7 * 86400)
+
+    # Automatically synchronize JobMatchResult table if IDs are present
+    if job_id and resume_id and user:
+        try:
+            from .models import JobMatchResult
+            JobMatchResult.objects.update_or_create(
+                owner=user,
+                job_listing_id=job_id,
+                resume_id=resume_id,
+                defaults={
+                    "fit_score": parsed.score,
+                    "reasoning": parsed.reasoning,
+                    "status": JobMatchResult.STATUS_ANALYZED,
+                },
+            )
+        except Exception as e:
+            logger.debug("Could not sync JobMatchResult: %s", e)
+
     if return_debug:
         out["raw_llm_content"] = content or ""
     return out
+
+
+def run_fit_check(
+    resume_text: str,
+    job_description: str,
+    llm=None,
+    *,
+    user,
+    prompt_template: str = None,
+    prompt_system: str = None,
+    prompt_user: str = None,
+    prompt_legacy: str = None,
+    job_cache_key: str | None = None,
+    usage_query_kind: str | None = None,
+    job_id: Any | None = None,
+    resume_id: Any | None = None,
+) -> dict:
+    """Unified candidate-job fit check. Delegates directly to run_matching()
+    to share prompts, Local LLM defaults, and unified cross-workflow cache.
+    Returns { score: int, reasoning: str, thoughts: str, interview_probability: int|None }.
+    """
+    from .llm import USAGE_QUERY_MATCHING
+
+    res = run_matching(
+        resume_text=resume_text,
+        job_description=job_description,
+        llm=llm,
+        user=user,
+        prompt_template=prompt_template,
+        prompt_system=prompt_system,
+        prompt_user=prompt_user,
+        prompt_legacy=prompt_legacy,
+        job_cache_key=job_cache_key,
+        usage_query_kind=usage_query_kind or USAGE_QUERY_MATCHING,
+        job_id=job_id,
+        resume_id=resume_id,
+        prefer_local=True,
+    )
+    return {
+        "score": res.get("score", 50),
+        "reasoning": res.get("reasoning", ""),
+        "thoughts": res.get("thoughts", ""),
+        "interview_probability": res.get("interview_probability"),
+    }
 
 
 # --- State Definition ---
@@ -698,6 +722,20 @@ def writer_node(state: AgentState):
         if should_include_full_job_description(jd_writer, jd_full)
         else omitted_duplicate_field_note()
     )
+    source_words = len(src.split()) if src else 0
+    if source_words >= 150:
+        target_min = int(source_words * 0.85)
+        target_max = int(source_words * 1.08)
+        length_guardrail = (
+            f"The source resume contains approximately {source_words} words. "
+            f"Your tailored resume MUST preserve approximately the same level of depth, breadth, and detail, targeting roughly {target_min}–{target_max} words. "
+            "Do NOT summarize, drop career history, omit bullet points, or delete older roles to make it shorter."
+        )
+    else:
+        length_guardrail = (
+            "Preserve all career history, bullet points, and achievements without aggressive summarization."
+        )
+
     fmt = dict(
         resume_text=resume_body_this_step,
         job_description=jd_writer,
@@ -705,6 +743,8 @@ def writer_node(state: AgentState):
         feedback=", ".join(_state_get(state, "feedback") or []),
         optimized_resume=prior,
         source_resume_text=source_for_prompt,
+        source_word_count=source_words,
+        length_guardrail=length_guardrail,
         optimization_notes=_state_get(state, "optimization_notes") or "(none)",
         pipeline_skills_json=_state_get(state, "pipeline_skills_json") or "(none)",
         job_highlights=_state_get(state, "job_highlights") or "(none)",

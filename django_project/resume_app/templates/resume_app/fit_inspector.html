@@ -28,6 +28,7 @@
                         </option>
                     {% endfor %}
                 </select>
+                {% if sim_job_id %}<input type="hidden" name="job_id" value="{{ sim_job_id }}">{% endif %}
                 {% if sim_title %}<input type="hidden" name="title" value="{{ sim_title }}">{% endif %}
                 {% if sim_company %}<input type="hidden" name="company" value="{{ sim_company }}">{% endif %}
             </form>
@@ -38,8 +39,19 @@
     <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <div class="mb-4 flex items-center justify-between border-b border-slate-100 pb-3">
             <div>
-                <h2 class="text-base font-semibold text-concierge-slate">Job Fit Simulator</h2>
-                <p class="text-xs text-slate-500">Paste any job posting to test how the AI recommendation engine scores and ranks it.</p>
+                <div class="flex items-center gap-2">
+                    <h2 class="text-base font-semibold text-concierge-slate">Job Fit Simulator</h2>
+                    {% if sim_job_id %}
+                        <span class="rounded bg-brand-soft text-brand-ink px-2 py-0.5 text-xs font-mono font-bold">Job #{{ sim_job_id }}</span>
+                    {% endif %}
+                </div>
+                <p class="text-xs text-slate-500">
+                    {% if sim_job_id %}
+                        Loaded directly from search pipeline. Inspecting AI preference vectors, title closeness, and driver similarity.
+                    {% else %}
+                        Paste any job posting to test how the AI recommendation engine scores and ranks it.
+                    {% endif %}
+                </p>
             </div>
             <div class="flex gap-2">
                 <span class="inline-flex items-center gap-1 rounded bg-green-50 px-2 py-1 text-xs font-medium text-green-700">
@@ -55,6 +67,8 @@
             {% csrf_token %}
             <input type="hidden" name="action" value="analyze">
             <input type="hidden" name="track" value="{{ selected_track }}">
+            {% if sim_job_id %}<input type="hidden" name="job_id" value="{{ sim_job_id }}">{% endif %}
+
 
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
@@ -97,39 +111,73 @@
         {% else %}
             <div class="space-y-6">
                 <!-- Verdict Banner & Score Metrics -->
+                <!-- Primary V1 Score & Engine Breakdown Cards -->
                 <div class="grid grid-cols-1 gap-4 sm:grid-cols-4">
-                    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                        <div class="text-xs font-medium text-slate-500 uppercase tracking-wide">Liked Similarity</div>
-                        <div class="mt-2 flex items-baseline gap-1">
-                            <span class="text-2xl font-bold text-slate-900">{{ analysis.like_percent }}%</span>
-                        </div>
-                        <div class="mt-1 text-xs text-slate-400">Similarity to positive centroid</div>
-                    </div>
-
-                    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                        <div class="text-xs font-medium text-slate-500 uppercase tracking-wide">Disliked Similarity</div>
-                        <div class="mt-2 flex items-baseline gap-1">
-                            <span class="text-2xl font-bold text-slate-900">
-                                {% if analysis.dislike_percent is not None %}{{ analysis.dislike_percent }}%{% else %}—{% endif %}
+                    <!-- Card 1: V1 Match Score -->
+                    <div class="rounded-xl border border-brand/30 bg-white p-4 shadow-sm relative overflow-hidden">
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs font-bold text-brand uppercase tracking-wide">V1 Match Score</span>
+                            <span class="rounded px-1.5 py-0.5 text-[10px] font-semibold {% if analysis.v1_score >= analysis.threshold %}bg-emerald-100 text-emerald-800{% else %}bg-slate-100 text-slate-600{% endif %}">
+                                Min {{ analysis.threshold }}%
                             </span>
                         </div>
-                        <div class="mt-1 text-xs text-slate-400">Similarity to negative centroid</div>
+                        <div class="mt-2 flex items-baseline gap-1.5">
+                            <span class="text-3xl font-extrabold {% if analysis.v1_score >= analysis.threshold %}text-emerald-600{% else %}text-slate-800{% endif %}">
+                                {{ analysis.v1_score }}%
+                            </span>
+                            {% if analysis.guardrail_applied %}
+                                <span class="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 border border-amber-200" title="Capped by Title Guardrail">Guardrail Active</span>
+                            {% endif %}
+                        </div>
+                        <div class="mt-1 text-xs text-slate-500">Pipeline ranking & promotion score</div>
                     </div>
 
+                    <!-- Card 2: Title Textual Match -->
                     <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                        <div class="text-xs font-medium text-slate-500 uppercase tracking-wide">Preference Margin</div>
+                        <div class="text-xs font-medium text-slate-500 uppercase tracking-wide">Title Match (35%)</div>
                         <div class="mt-2 flex items-baseline gap-1">
-                            <span class="text-2xl font-bold {% if analysis.margin_percent is not None and analysis.margin_percent < -5 %}text-red-600{% elif analysis.margin_percent is not None and analysis.margin_percent >= 10 %}text-emerald-600{% else %}text-slate-900{% endif %}">
+                            <span class="text-2xl font-bold text-slate-900">{{ analysis.title_textual_pct }}%</span>
+                        </div>
+                        <div class="mt-1 text-xs text-slate-400">Lexical recall & qualifier checks</div>
+                    </div>
+
+                    <!-- Card 3: Description Semantic Match -->
+                    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                        <div class="text-xs font-medium text-slate-500 uppercase tracking-wide">Desc Semantic (65%)</div>
+                        <div class="mt-2 flex items-baseline gap-1">
+                            <span class="text-2xl font-bold text-slate-900">{{ analysis.desc_calibrated_pct }}%</span>
+                        </div>
+                        <div class="mt-1 text-xs text-slate-400">Calibrated embedding alignment</div>
+                    </div>
+
+                    <!-- Card 4: Outcome Verdict -->
+                    <div class="rounded-xl border p-4 shadow-sm {{ analysis.verdict_style }}">
+                        <div class="text-xs font-semibold uppercase tracking-wide">Pipeline Verdict</div>
+                        <div class="mt-1.5 text-base font-bold">{{ analysis.verdict_label }}</div>
+                        <div class="mt-1 text-xs leading-relaxed opacity-90">{{ analysis.verdict_desc }}</div>
+                    </div>
+                </div>
+
+                <!-- Secondary Baseline Row: Preference Margins -->
+                <div class="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-2.5 text-xs text-slate-600">
+                    <div class="flex items-center gap-6">
+                        <div>
+                            <span class="font-medium text-slate-500">Liked Similarity:</span>
+                            <span class="font-bold text-slate-800 ml-1">{{ analysis.like_percent }}%</span>
+                        </div>
+                        <div>
+                            <span class="font-medium text-slate-500">Disliked Similarity:</span>
+                            <span class="font-bold text-slate-800 ml-1">{% if analysis.dislike_percent is not None %}{{ analysis.dislike_percent }}%{% else %}—{% endif %}</span>
+                        </div>
+                        <div>
+                            <span class="font-medium text-slate-500">Preference Margin:</span>
+                            <span class="font-bold ml-1 {% if analysis.margin_percent is not None and analysis.margin_percent < -5 %}text-red-600{% elif analysis.margin_percent is not None and analysis.margin_percent >= 10 %}text-emerald-600{% else %}text-slate-800{% endif %}">
                                 {% if analysis.margin_percent is not None %}{% if analysis.margin_percent > 0 %}+{% endif %}{{ analysis.margin_percent }}%{% else %}—{% endif %}
                             </span>
                         </div>
-                        <div class="mt-1 text-xs text-slate-400">(Liked % − Disliked %)</div>
                     </div>
-
-                    <div class="rounded-xl border p-4 shadow-sm {{ analysis.verdict_style }}">
-                        <div class="text-xs font-semibold uppercase tracking-wide">Outcome Verdict</div>
-                        <div class="mt-1.5 text-base font-bold">{{ analysis.verdict_label }}</div>
-                        <div class="mt-1 text-xs leading-relaxed opacity-90">{{ analysis.verdict_desc }}</div>
+                    <div class="text-[11px] text-slate-400">
+                        Negative margin guardrail blocks promotion if &lt; -5%
                     </div>
                 </div>
 
@@ -142,7 +190,7 @@
                                 <span class="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">👍</span>
                                 <h3 class="text-sm font-semibold text-slate-900">Top Liked Drivers (Positive Pull)</h3>
                             </div>
-                            <span class="text-xs text-slate-400">Higher % = More Influence</span>
+                            <span class="text-xs text-slate-400">Pairwise V1 Score</span>
                         </div>
 
                         <div class="mt-3 divide-y divide-slate-100">
@@ -153,7 +201,10 @@
                                         <div class="text-xs text-slate-500">{{ j.company }}</div>
                                     </div>
                                     <div class="flex items-center gap-3 shrink-0">
-                                        <span class="rounded bg-emerald-50 px-2 py-0.5 text-xs font-bold text-emerald-700 border border-emerald-200">{{ j.similarity_percent }}% match</span>
+                                        <div class="text-right">
+                                            <span class="rounded bg-emerald-50 px-2 py-0.5 text-xs font-bold text-emerald-700 border border-emerald-200">{{ j.similarity_percent }}% V1 match</span>
+                                            <div class="text-[10px] text-slate-400 mt-0.5">Title: {{ j.title_pct }}% · Semantic: {{ j.desc_pct }}%</div>
+                                        </div>
                                         <form method="post" onsubmit="return confirm('Remove this job from your Liked training set? Centroid will be updated immediately.');">
                                             {% csrf_token %}
                                             <input type="hidden" name="action" value="remove_like">

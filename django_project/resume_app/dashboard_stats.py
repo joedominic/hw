@@ -23,6 +23,7 @@ from .models import (
     SearchProfile,
     UsageCounter,
     UserDisqualifier,
+    EmployerInterviewEvent,
 )
 
 logger = logging.getLogger(__name__)
@@ -203,52 +204,156 @@ def get_performance_dashboard_stats(user) -> dict:
         },
     ]
 
-    # 9. Confirmed Recruiter Screens
-    confirmed_screens = [
-        {
-            "company": "Stripe",
-            "role": "Staff Infrastructure Architect",
-            "time_display": "Hiring Manager Screen • Tomorrow 2:00 PM CST",
-            "stage_label": "Stage 2: Technical Screen",
-            "status_color": "emerald",
-            "initials": "STR",
-            "action_url": "/cockpit/?company=Stripe",
-        },
-        {
-            "company": "Coinbase",
-            "role": "Senior Director, Cloud Platform",
-            "time_display": "Initial Recruiter Screen • Friday 10:30 AM CST",
-            "stage_label": "Stage 1: Recruiter Screen",
-            "status_color": "blue",
-            "initials": "COIN",
-            "action_url": "/cockpit/?company=Coinbase",
-        },
-        {
-            "company": "FedEx",
-            "role": "Managing Director, Data Platforms",
-            "time_display": "Technical Director Interview • Oct 3, Plano TX Campus",
-            "stage_label": "Stage 3: Panel Deep Dive",
-            "status_color": "purple",
-            "initials": "FDX",
-            "action_url": "/cockpit/?company=FedEx",
-        },
-        {
-            "company": "Capital One",
-            "role": "Director of Engineering",
-            "time_display": "Screen Completed • Awaiting Next Round Notification",
-            "stage_label": "Awaiting Notice",
-            "status_color": "amber",
-            "initials": "C1",
-            "action_url": "/cockpit/?company=Capital+One",
-        },
-    ]
+    # 9. Confirmed Recruiter Screens & Employer Responses (Live Data)
+    applied_done_qs = PipelineEntry.objects.filter(owner=user, stage=PipelineEntry.Stage.DONE)
+    actual_applied_count = applied_done_qs.count()
 
-    # 10. Milestone breakdown
+    # Outbound response rate calculation:
+    # A job counts as a response if it moved past APPLIED_PENDING / blank / withdrawn.
+    responded_qs = applied_done_qs.exclude(
+        post_apply_substatus__in=[
+            "",
+            PipelineEntry.PostApplySubstatus.APPLIED_PENDING,
+            PipelineEntry.PostApplySubstatus.WITHDRAWN,
+        ]
+    )
+    responded_count = responded_qs.count()
+
+    if actual_applied_count > 0:
+        response_rate_val = round((responded_count / actual_applied_count) * 100, 1)
+        outbound_response_rate = f"{response_rate_val}%"
+        multiplier = round(response_rate_val / 6.6, 1)
+        if multiplier >= 1.0:
+            outbound_benchmark_multiplier = f"{multiplier}x higher than executive market benchmark of 6.6% • Top Tier"
+        else:
+            outbound_benchmark_multiplier = "Market benchmark is 6.6% • Active telemetry tracking"
+    else:
+        outbound_response_rate = "0.0%"
+        outbound_benchmark_multiplier = "Awaiting first logged application response • Market benchmark 6.6%"
+
+    # 10. Milestone stage counters
+    milestone_first_round = applied_done_qs.filter(
+        post_apply_substatus__in=[
+            PipelineEntry.PostApplySubstatus.RECRUITER_CALL,
+            PipelineEntry.PostApplySubstatus.HIRING_MANAGER,
+        ]
+    ).count()
+
+    milestone_tech_deep_dive = applied_done_qs.filter(
+        post_apply_substatus=PipelineEntry.PostApplySubstatus.PANEL_INTERVIEW
+    ).count()
+
+    milestone_finalist = applied_done_qs.filter(
+        post_apply_substatus=PipelineEntry.PostApplySubstatus.OFFER
+    ).count()
+
     milestones = {
-        "first_round": 2,
-        "tech_deep_dive": 1,
-        "finalist_round": 1,
+        "first_round": milestone_first_round,
+        "tech_deep_dive": milestone_tech_deep_dive,
+        "finalist_round": milestone_finalist,
     }
+
+    # Fetch scheduled or active interview events (exclude past events and cancelled/rejected)
+    now = timezone.now()
+    interview_events = (
+        EmployerInterviewEvent.objects.filter(owner=user)
+        .exclude(status__in=[
+            EmployerInterviewEvent.Status.COMPLETED,
+            EmployerInterviewEvent.Status.CANCELLED,
+        ])
+        .exclude(round_type=PipelineEntry.PostApplySubstatus.ARCHIVED_REJECTED)
+        .filter(Q(scheduled_at__isnull=True) | Q(scheduled_at__gte=now))
+        .select_related("pipeline_entry__job_listing")
+        .order_by("scheduled_at", "-created_at")
+    )
+
+    confirmed_screens = []
+    seen_pipeline_entry_ids = set()
+
+    for event in interview_events:
+        pe = event.pipeline_entry
+        seen_pipeline_entry_ids.add(pe.id)
+        job = pe.job_listing
+
+        color = "emerald"
+        if event.round_type in ("recruiter_call", "hiring_manager"):
+            color = "blue"
+        elif event.round_type == "panel_interview":
+            color = "purple"
+        elif event.round_type == "offer":
+            color = "emerald"
+        elif event.round_type == "archived_rejected":
+            color = "slate"
+
+        if event.scheduled_at:
+            time_display = f"{event.get_round_type_display()} • {event.scheduled_at.strftime('%b %d, %I:%M %p')}"
+            if event.location_or_link:
+                time_display += f" ({event.location_or_link[:25]})"
+        else:
+            time_display = f"{event.get_round_type_display()} • Scheduled"
+
+        raw_company = (job.company_name or "Company").strip()
+        initials = "".join([w[0].upper() for w in raw_company.split() if w])[:3] or "JOB"
+
+        confirmed_screens.append({
+            "id": event.id,
+            "pipeline_entry_id": pe.id,
+            "company": raw_company,
+            "role": job.title or "Target Role",
+            "time_display": time_display,
+            "stage_label": event.get_round_type_display(),
+            "status_color": color,
+            "initials": initials,
+            "action_url": f"/jobs/cockpit/?track={pe.track}&stage=done&job_id={job.id}",
+            "status": event.status,
+            "interviewer_names": event.interviewer_names,
+            "location_or_link": event.location_or_link,
+            "notes": event.notes,
+        })
+
+    # Also include applied jobs where substatus was advanced even if no event record exists yet
+    # Exclude past interviews, withdrawn, and rejected
+    active_unlogged_pe = (
+        applied_done_qs.exclude(
+            post_apply_substatus__in=[
+                "",
+                PipelineEntry.PostApplySubstatus.APPLIED_PENDING,
+                PipelineEntry.PostApplySubstatus.WITHDRAWN,
+                PipelineEntry.PostApplySubstatus.ARCHIVED_REJECTED,
+            ]
+        )
+        .exclude(id__in=seen_pipeline_entry_ids)
+        .filter(Q(next_interview_at__isnull=True) | Q(next_interview_at__gte=now))
+        .select_related("job_listing")[:5]
+    )
+
+    for pe in active_unlogged_pe:
+        job = pe.job_listing
+        raw_company = (job.company_name or "Company").strip()
+        initials = "".join([w[0].upper() for w in raw_company.split() if w])[:3] or "JOB"
+        color = "blue" if pe.post_apply_substatus in ("recruiter_call", "hiring_manager") else "purple" if pe.post_apply_substatus == "panel_interview" else "emerald"
+
+        time_str = "Status Logged • Awaiting Schedule"
+        if pe.next_interview_at:
+            time_str = f"Scheduled • {pe.next_interview_at.strftime('%b %d, %I:%M %p')}"
+
+        confirmed_screens.append({
+            "id": None,
+            "pipeline_entry_id": pe.id,
+            "company": raw_company,
+            "role": job.title or "Target Role",
+            "time_display": time_str,
+            "stage_label": pe.get_post_apply_substatus_display(),
+            "status_color": color,
+            "initials": initials,
+            "action_url": f"/jobs/cockpit/?track={pe.track}&stage=done&job_id={job.id}",
+            "status": "scheduled",
+            "interviewer_names": "",
+            "location_or_link": "",
+            "notes": "",
+        })
+
+    recruiter_screens_booked = len(confirmed_screens)
 
     # 11. System Automation & Bounds
     default_profile = SearchProfile.get_by_slug(user, SearchProfile.get_default_slug(user))
@@ -275,8 +380,8 @@ def get_performance_dashboard_stats(user) -> dict:
         "total_in_pipeline": total_in_pipeline,
         "shortlist_to_applied_pct": f"{round((total_applied / max(1, total_in_pipeline)) * 100, 1)}%",
         "funnel_stages": funnel_stages,
-        "outbound_response_rate": "21.1%",
-        "outbound_benchmark_multiplier": "3.2x",
+        "outbound_response_rate": outbound_response_rate,
+        "outbound_benchmark_multiplier": outbound_benchmark_multiplier,
         "confirmed_screens": confirmed_screens,
         "milestones": milestones,
         "avg_ats_score": avg_ats_score,

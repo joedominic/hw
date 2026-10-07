@@ -633,6 +633,16 @@ def _ordered_eligible_candidates(
                 target_pref = TenantPromptModelPreference.objects.for_user(user).filter(
                     query_kind=usage_query_kind, is_active=True
                 ).first()
+                if not target_pref and usage_query_kind in (
+                    USAGE_QUERY_FIT_CHECK,
+                    USAGE_QUERY_PIPELINE_VETTING,
+                    USAGE_QUERY_JOBS_AI_MATCH,
+                    USAGE_QUERY_KEYWORD_SEARCH_FIT,
+                    USAGE_QUERY_JOBS_MATCH_API,
+                ):
+                    target_pref = TenantPromptModelPreference.objects.for_user(user).filter(
+                        query_kind=USAGE_QUERY_MATCHING, is_active=True
+                    ).first()
 
             if target_pref is None:
                 target_pref = TenantPromptModelPreference.objects.for_user(user).filter(
@@ -800,6 +810,16 @@ def invoke_llm_messages(
     assert_email_verified(user)
 
     est = estimate_tokens_from_messages(messages)
+    if usage_query_kind in (
+        USAGE_QUERY_MATCHING,
+        USAGE_QUERY_FIT_CHECK,
+        USAGE_QUERY_PIPELINE_VETTING,
+        USAGE_QUERY_JOBS_AI_MATCH,
+        USAGE_QUERY_KEYWORD_SEARCH_FIT,
+        USAGE_QUERY_JOBS_MATCH_API,
+        USAGE_QUERY_PIPELINE_SKILL_EXTRACT,
+    ):
+        prefer_local = True
 
     if llm_override is None and job_cache_key and job_cache_key.strip().isdigit() and usage_query_kind:
         try:

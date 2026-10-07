@@ -111,7 +111,7 @@ def title_company_key(title: str | None, company: str | None) -> tuple[str, str]
     return (canonical_title(title), canonical_company(company))
 
 
-def dedupe_payloads_by_title_company(payloads: list) -> list:
+def dedupe_payloads_by_title_company(payloads: list, dropped_details: Optional[dict] = None) -> list:
     """
     Collapse multi-location / cross-board duplicates in search results.
 
@@ -122,22 +122,33 @@ def dedupe_payloads_by_title_company(payloads: list) -> list:
     if not payloads:
         return payloads
     seen: set[tuple[str, str]] = set()
+    canonical_info: dict[tuple[str, str], tuple[str, str]] = {}
     out: list = []
     for payload in payloads:
         title = getattr(payload, "title", None)
         company = getattr(payload, "company_name", None)
+        pid = getattr(payload, "id", None)
         if isinstance(payload, dict):
             title = payload.get("title")
             company = payload.get("company_name")
+            pid = payload.get("id")
         key = title_company_key(title, company)
         if not key[0] and not key[1]:
             out.append(payload)
             continue
         if key in seen:
+            if dropped_details is not None and pid is not None:
+                orig_title, orig_company = canonical_info.get(key, (title or "", company or ""))
+                dropped_details[pid] = {
+                    "disposition": "eliminated_duplicate",
+                    "reason": f"Eliminated: Duplicate posting of '{orig_title}' at {orig_company}",
+                }
             continue
         seen.add(key)
+        canonical_info[key] = (title or "", company or "")
         out.append(payload)
     return out
+
 
 
 def stage_filter_q(stage: str, *, include_done: bool) -> models.Q:

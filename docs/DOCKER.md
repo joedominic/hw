@@ -105,7 +105,7 @@ HUEY_REDIS_HOST=host.docker.internal
 - **web** enqueues tasks (optimize, job search, vetting, etc.) to Redis.
 - **huey** runs `run_huey` with 2 thread workers and the periodic scheduler.
 - Do **not** set `HUEY_IMMEDIATE=1` in Docker — tasks would run in the web process and periodic crons would not schedule.
-- With **SQLite**, run **one** `huey` replica. With **MySQL** (`MYSQL_*` in `.env`), multiple web/huey workers are viable; still keep apply-agent browser concurrency low.
+- With **SQLite**, run **one** `huey` replica. With **MySQL** (`MYSQL_*` in `.env`), multiple web/huey workers are viable across tenants.
 
 Periodic tasks (require huey + Redis):
 
@@ -140,7 +140,6 @@ After `docker compose up --build`:
 ## Image notes
 
 - Base: `python:3.12-slim-bookworm`; CPU-only PyTorch from `download.pytorch.org/whl/cpu`
-- `playwright` is in `requirements.txt` (apply-agent); install Chromium in the image via `playwright install`
 - Build context: repo root (`JobApp-Main/`)
 - Compose `env_file: .env` injects variables into the container environment (optional file; copy from `.env.example`)
 

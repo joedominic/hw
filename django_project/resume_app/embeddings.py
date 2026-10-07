@@ -3,9 +3,13 @@ Local embeddings for job text using sentence-transformers.
 Hybrid: title-only vector + full vector (title + role-focused description).
 Role-focused description strips boilerplate via heuristics (no LLM).
 """
+import os
 import re
 import logging
+import threading
 from typing import List, Optional, Tuple, Sequence
+
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +17,7 @@ logger = logging.getLogger(__name__)
 # EMBEDDING_DIM can change if you swap models; ensure all stored vectors are
 # recomputed or versioned when doing so.
 _MODEL = None
+_MODEL_LOCK = threading.Lock()
 _MODEL_NAME = "all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
 
@@ -104,7 +109,7 @@ def is_boilerplate_sentence(sentence: str) -> bool:
     return any(phrase in lower for phrase in BOILERPLATE_SENTENCE_PHRASES)
 
 
-def get_role_sentences(title: str, description: str, max_role_chars: int = 800) -> List[str]:
+def get_role_sentences(title: str, description: str, max_role_chars: int = 2500) -> List[str]:
     """Role-focused text -> split into sentences -> drop boilerplate. Returns list of sentences to embed."""
     role_text = extract_role_description(description or "", title or "", max_chars=max_role_chars)
     if not role_text:
@@ -248,7 +253,7 @@ def title_only_for_embedding(title: str, company_name: str = "") -> str:
     return ""
 
 
-def full_text_for_embedding(title: str, description: str, max_role_chars: int = 800) -> str:
+def full_text_for_embedding(title: str, description: str, max_role_chars: int = 2500) -> str:
     """Text for full vector: title + role-focused description slice."""
     t = (title or "").strip()
     role_slice = extract_role_description(description or "", t, max_chars=max_role_chars)
@@ -262,12 +267,22 @@ def full_text_for_embedding(title: str, description: str, max_role_chars: int = 
 def _get_model():
     global _MODEL
     if _MODEL is None:
-        try:
-            from sentence_transformers import SentenceTransformer
-            _MODEL = SentenceTransformer(_MODEL_NAME)
-        except Exception as e:
-            logger.warning("Failed to load embedding model %s: %s", _MODEL_NAME, e)
-            raise
+        with _MODEL_LOCK:
+            if _MODEL is None:
+                try:
+                    import torch
+                    torch.set_num_threads(1)
+                except Exception:
+                    pass
+                try:
+                    from sentence_transformers import SentenceTransformer
+                    try:
+                        _MODEL = SentenceTransformer(_MODEL_NAME, local_files_only=True)
+                    except Exception:
+                        _MODEL = SentenceTransformer(_MODEL_NAME)
+                except Exception as e:
+                    logger.warning("Failed to load embedding model %s: %s", _MODEL_NAME, e)
+                    raise
     return _MODEL
 
 

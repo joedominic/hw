@@ -1,9 +1,48 @@
 {% if messages %}
-<div class="mb-6 space-y-2">
+<div class="mb-6 space-y-2" id="concierge-messages-container">
     {% for message in messages %}
-        <div class="rounded-concierge border px-4 py-3 text-sm {% if message.tags == 'error' %}border-red-200 bg-red-50 text-red-900{% elif message.tags == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-900{% elif message.tags == 'warning' %}border-amber-200 bg-amber-50 text-amber-900{% else %}border-slate-200 bg-white text-slate-800{% endif %}" role="alert">
-            {{ message }}
+        {% with msg_text=message.message|default:message|stringformat:"s" %}
+        {% if "phrases to avoid" not in msg_text and "Job removed" not in msg_text and "Job moved" not in msg_text and "Job liked" not in msg_text and "job(s) from the pipeline" not in msg_text and "expired role(s)" not in msg_text and "Shortlisted " not in msg_text and "Advanced " not in msg_text %}
+        <div class="concierge-alert flex items-start justify-between gap-3 rounded-lg border px-4 py-3 text-sm shadow-sm transition-all {% if message.tags == 'error' %}border-rose-200 bg-rose-50 text-rose-900{% elif message.tags == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-900{% elif message.tags == 'warning' %}border-amber-200 bg-amber-50 text-amber-900{% else %}border-slate-200 bg-white text-slate-800{% endif %}" role="alert">
+            <div class="flex items-center gap-2">
+                {% if message.tags == 'error' %}
+                <span class="material-symbols-outlined text-[18px] text-rose-600 shrink-0">error</span>
+                {% elif message.tags == 'success' %}
+                <span class="material-symbols-outlined text-[18px] text-emerald-600 shrink-0">check_circle</span>
+                {% elif message.tags == 'warning' %}
+                <span class="material-symbols-outlined text-[18px] text-amber-600 shrink-0">warning</span>
+                {% else %}
+                <span class="material-symbols-outlined text-[18px] text-slate-500 shrink-0">info</span>
+                {% endif %}
+                <span class="font-medium message-text">{{ message }}</span>
+            </div>
+            <button type="button" onclick="this.closest('.concierge-alert').remove()" class="text-slate-400 hover:text-slate-700 p-0.5 rounded transition shrink-0" aria-label="Dismiss">
+                <span class="material-symbols-outlined text-[16px]">close</span>
+            </button>
         </div>
+        {% endif %}
+        {% endwith %}
     {% endfor %}
 </div>
+<script>
+    (function() {
+        var container = document.getElementById('concierge-messages-container');
+        if (container) {
+            var alerts = container.querySelectorAll('.concierge-alert');
+            var seen = new Set();
+            alerts.forEach(function(alert) {
+                var textEl = alert.querySelector('.message-text');
+                var text = textEl ? textEl.textContent.trim() : '';
+                if (!text || seen.has(text)) {
+                    alert.remove();
+                } else {
+                    seen.add(text);
+                }
+            });
+            if (container.querySelectorAll('.concierge-alert').length === 0) {
+                container.remove();
+            }
+        }
+    })();
+</script>
 {% endif %}

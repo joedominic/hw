@@ -80,6 +80,11 @@
                 <span>Select all</span>
             </label>
             <div class="flex flex-wrap gap-2">
+                {% if board_stage != "done" %}
+                <button type="submit" name="action" value="bulk_promote" class="rounded-concierge border border-brand/20 bg-brand text-white px-3 py-1.5 text-xs font-semibold hover:bg-brand-hover">
+                    Move to next stage
+                </button>
+                {% endif %}
                 <button type="submit" name="action" value="bulk_like" class="rounded-concierge border border-sky-200 bg-white px-3 py-1.5 text-xs font-semibold text-sky-900 hover:bg-sky-50">
                     Like selected
                 </button>
@@ -112,6 +117,12 @@
                 </span>
             </div>
             <div class="flex flex-wrap items-center gap-3">
+                {% if board_stage != "done" %}
+                <button type="submit" name="action" value="bulk_promote" class="inline-flex items-center gap-1.5 text-sm font-semibold text-brand hover:underline">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+                    Move to next stage
+                </button>
+                {% endif %}
                 {% if stage_label == "applying" %}
                 <button type="button" id="pipeline-bulk-open-optimizer" class="text-sm font-semibold text-brand hover:underline">
                     Tailor selected
@@ -140,9 +151,9 @@
                         <p class="font-semibold text-concierge-slate">{{ j.title }}</p>
                         <div class="mt-1 flex flex-wrap items-center gap-1">
                             {% if j.focus_percent is not None %}
-                                <span class="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-900">Fit {{ j.focus_percent }}{% if j.focus_percent_after_penalty is not None %}→{{ j.focus_percent_after_penalty }}{% endif %}%</span>
+                                <span class="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-900">Score {{ j.focus_percent }}{% if j.focus_percent_after_penalty is not None %}→{{ j.focus_percent_after_penalty }}{% endif %}%</span>
                                 {% if request.user.is_staff %}
-                                <a href="{% url 'focus_breakdown' j.id %}?track={{ pipeline_track }}" class="rounded-concierge border border-sky-200 px-2 py-0.5 text-xs font-medium text-sky-800 hover:bg-sky-50">Why?</a>
+                                <a href="{% url 'fit_inspector' %}?job_id={{ j.id }}&track={{ pipeline_track }}" class="rounded-concierge border border-sky-200 px-2 py-0.5 text-xs font-medium text-sky-800 hover:bg-sky-50">Why?</a>
                                 {% endif %}
                             {% endif %}
                             {% if stage_label == "vetting" or stage_label == "applying" %}
@@ -150,7 +161,7 @@
                             {% endif %}
                             {% if j.preference_margin_percent is not None %}
                                 <span class="rounded-full px-2 py-0.5 text-xs font-medium {% if j.preference_margin_percent < -3 %}bg-rose-100 text-rose-900 border border-rose-200{% elif j.preference_margin_percent > 3 %}bg-emerald-100 text-emerald-900 border border-emerald-200{% else %}bg-slate-100 text-slate-700 border border-slate-200{% endif %}"
-                                      title="Preference Margin: difference between liked vs disliked job signals (controls auto-promotion to Review).">Pref {% if j.preference_margin_percent > 0 %}+{% endif %}{{ j.preference_margin_percent }}%</span>
+                                      title="Preference Margin: difference between liked vs disliked job signals.">Pref {% if j.preference_margin_percent > 0 %}+{% endif %}{{ j.preference_margin_percent }}%</span>
                             {% elif stage_label == "pipeline" %}
                                 <span class="rounded-full bg-slate-50 border border-dashed border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-500"
                                       title="Preference Margin: Neutral. Like (👍) or Dislike (👎) jobs in this track to train automated promotion to Review.">Pref: Neutral</span>
@@ -293,6 +304,66 @@
     </dialog>
 
     <script>
+        function formatJobInfoForCopy(title, company, location) {
+            const parts = [];
+            if (title && title.trim()) parts.push(title.trim());
+            if (company && company.trim() && company.trim() !== '—') parts.push(company.trim());
+            if (location && location.trim() && location.trim() !== '—') parts.push(location.trim());
+            return parts.join(' - ');
+        }
+
+        function copyJobToClipboard(btn, title, company, location) {
+            const text = formatJobInfoForCopy(title, company, location);
+            if (!text) return;
+
+            function showCopiedFeedback() {
+                if (btn) {
+                    const icon = btn.querySelector('.material-symbols-outlined') || btn;
+                    const prevText = icon.textContent;
+                    icon.textContent = 'check';
+                    btn.classList.add('text-emerald-600');
+                    btn.classList.remove('text-slate-400');
+                    const prevTitle = btn.getAttribute('title') || '';
+                    btn.setAttribute('title', 'Copied to clipboard!');
+                    setTimeout(() => {
+                        icon.textContent = prevText || 'content_copy';
+                        btn.classList.remove('text-emerald-600');
+                        btn.classList.add('text-slate-400');
+                        btn.setAttribute('title', prevTitle || 'Copy title, company & location');
+                    }, 1600);
+                }
+            }
+
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(showCopiedFeedback).catch(() => {
+                    fallbackCopyText(text);
+                    showCopiedFeedback();
+                });
+            } else {
+                fallbackCopyText(text);
+                showCopiedFeedback();
+            }
+        }
+        window.copyJobToClipboard = copyJobToClipboard;
+
+        function fallbackCopyText(text) {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            ta.style.top = '0';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            try {
+                document.execCommand('copy');
+            } catch(err) {
+                console.error('Fallback copy failed', err);
+            }
+            document.body.removeChild(ta);
+        }
+        window.fallbackCopyText = fallbackCopyText;
+
         (function() {
             var btn = document.getElementById("pipeline-bulk-open-optimizer");
             if (btn) {

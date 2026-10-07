@@ -1,0 +1,379 @@
+<!-- ========================================================== -->
+<!-- SLIDE-OVER DRAWER: LOG EMPLOYER RESPONSE & INTERVIEW STAGE -->
+<!-- ========================================================== -->
+<div id="log-interview-backdrop" class="fixed inset-0 bg-slate-900/50 backdrop-blur-[2px] z-50 hidden transition-opacity duration-300 opacity-0" onclick="closeLogInterviewDrawer()"></div>
+<aside id="log-interview-drawer" class="fixed top-0 right-0 h-full w-full max-w-lg bg-white border-l border-slate-200 shadow-2xl z-50 transform translate-x-full transition-transform duration-300 flex flex-col">
+    <!-- Drawer Header -->
+    <div class="px-6 py-5 border-b border-slate-200 flex items-center justify-between bg-slate-50/70">
+        <div>
+            <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                <h3 class="text-base font-display font-bold text-slate-900">Log Employer Response &amp; Screen</h3>
+            </div>
+            <p class="text-xs text-slate-500 mt-0.5">Record recruiter outreach, schedule interview rounds, or update outcomes.</p>
+        </div>
+        <button type="button" onclick="closeLogInterviewDrawer()" class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition cursor-pointer" title="Close (ESC)">
+            <span class="material-symbols-outlined text-[20px]">close</span>
+        </button>
+    </div>
+
+    <!-- Drawer Body Form -->
+    <form id="log-interview-form" onsubmit="submitLogInterviewForm(event)" class="flex-1 overflow-y-auto p-6 space-y-5">
+        {% csrf_token %}
+        <!-- Target Opportunity -->
+        <div>
+            <label for="drawer-pe-select" class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
+                Target Opportunity <span class="text-red-500">*</span>
+            </label>
+            <select id="drawer-pe-select" required class="w-full text-xs font-medium bg-white border border-slate-300 rounded-lg px-3 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0F382A] focus:border-[#0F382A] transition">
+                <option value="" disabled selected>Loading applied opportunities...</option>
+            </select>
+            <span class="text-[11px] text-slate-400 mt-1 block">Only roles submitted/in Applied stage appear here.</span>
+        </div>
+
+        <!-- Milestone Stage Matrix -->
+        <div>
+            <label class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-2">
+                Milestone Stage <span class="text-red-500">*</span>
+            </label>
+            <div class="grid grid-cols-2 gap-2 text-xs">
+                <label class="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 hover:border-slate-300 cursor-pointer transition has-[:checked]:bg-emerald-50/60 has-[:checked]:border-emerald-300 has-[:checked]:text-emerald-950">
+                    <input type="radio" name="round_type" value="recruiter_call" checked class="text-[#0F382A] focus:ring-[#0F382A]"/>
+                    <div>
+                        <span class="font-bold block text-slate-900">Recruiter Call</span>
+                        <span class="text-[10px] text-slate-500 block">Initial screen &amp; compensation</span>
+                    </div>
+                </label>
+                <label class="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 hover:border-slate-300 cursor-pointer transition has-[:checked]:bg-emerald-50/60 has-[:checked]:border-emerald-300 has-[:checked]:text-emerald-950">
+                    <input type="radio" name="round_type" value="hiring_manager" class="text-[#0F382A] focus:ring-[#0F382A]"/>
+                    <div>
+                        <span class="font-bold block text-slate-900">Hiring Manager</span>
+                        <span class="text-[10px] text-slate-500 block">Role alignment &amp; domain deep dive</span>
+                    </div>
+                </label>
+                <label class="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 hover:border-slate-300 cursor-pointer transition has-[:checked]:bg-emerald-50/60 has-[:checked]:border-emerald-300 has-[:checked]:text-emerald-950">
+                    <input type="radio" name="round_type" value="panel_interview" class="text-[#0F382A] focus:ring-[#0F382A]"/>
+                    <div>
+                        <span class="font-bold block text-slate-900">Panel / Tech Screen</span>
+                        <span class="text-[10px] text-slate-500 block">Architecture or multi-person panel</span>
+                    </div>
+                </label>
+                <label class="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 hover:border-slate-300 cursor-pointer transition has-[:checked]:bg-emerald-50/60 has-[:checked]:border-emerald-300 has-[:checked]:text-emerald-950">
+                    <input type="radio" name="round_type" value="offer" class="text-[#0F382A] focus:ring-[#0F382A]"/>
+                    <div>
+                        <span class="font-bold block text-slate-900">Offer Received</span>
+                        <span class="text-[10px] text-slate-500 block">Compensation &amp; closing</span>
+                    </div>
+                </label>
+            </div>
+            <div class="mt-2">
+                <label class="flex items-center gap-2 p-2 rounded-lg border border-slate-100 hover:border-slate-200 cursor-pointer text-xs has-[:checked]:bg-slate-100 has-[:checked]:border-slate-300">
+                    <input type="radio" name="round_type" value="archived_rejected" class="text-slate-600 focus:ring-slate-400"/>
+                    <span class="text-slate-600 text-[11px] font-medium">Position Closed / Not Moving Forward</span>
+                </label>
+            </div>
+        </div>
+
+        <!-- Schedule Date & Time -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+                <label for="drawer-scheduled-at" class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
+                    Scheduled Date &amp; Time
+                </label>
+                <input type="datetime-local" id="drawer-scheduled-at" class="w-full text-xs font-medium bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0F382A] focus:border-[#0F382A] transition"/>
+            </div>
+            <div>
+                <label for="drawer-duration" class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
+                    Est. Duration
+                </label>
+                <select id="drawer-duration" class="w-full text-xs font-medium bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0F382A] focus:border-[#0F382A] transition">
+                    <option value="30">30 Minutes (Screen)</option>
+                    <option value="45" selected>45 Minutes (Standard)</option>
+                    <option value="60">60 Minutes (Deep Dive)</option>
+                    <option value="120">2 Hours (Panel Half)</option>
+                    <option value="240">4 Hours (Full Panel)</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Interviewers / Contacts -->
+        <div>
+            <label for="drawer-interviewers" class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
+                Recruiter / Interviewer Names
+            </label>
+            <input type="text" id="drawer-interviewers" placeholder="e.g. Sarah Connor (Talent Lead), Dave Chen (VP)" class="w-full text-xs font-medium bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0F382A] focus:border-[#0F382A] transition"/>
+        </div>
+
+        <!-- Meeting Location / Link -->
+        <div>
+            <label for="drawer-location" class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
+                Meeting Link or Location
+            </label>
+            <input type="text" id="drawer-location" placeholder="e.g. Zoom link or Plano Campus, Bldg B" class="w-full text-xs font-medium bg-white border border-slate-300 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0F382A] focus:border-[#0F382A] transition"/>
+        </div>
+
+        <!-- Strategic Notes -->
+        <div>
+            <label for="drawer-notes" class="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
+                Strategic Notes &amp; Prep Focus
+            </label>
+            <textarea id="drawer-notes" rows="3" placeholder="Key competencies to highlight, salary band discussed, or team notes..." class="w-full text-xs font-medium bg-white border border-slate-300 rounded-lg p-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0F382A] focus:border-[#0F382A] transition"></textarea>
+        </div>
+
+        <!-- Auto-Generate Prep Kit Checkbox -->
+        <div class="p-3 rounded-lg bg-emerald-50/70 border border-emerald-200 flex items-start gap-2.5">
+            <input type="checkbox" id="drawer-generate-prep" checked class="mt-0.5 text-[#0F382A] focus:ring-[#0F382A] rounded border-slate-300"/>
+            <div>
+                <label for="drawer-generate-prep" class="text-xs font-bold text-slate-900 block cursor-pointer">
+                    Auto-generate STAR Interview Prep Kit
+                </label>
+                <span class="text-[11px] text-slate-600 block mt-0.5">
+                    Synthesizes tailored situational questions, architectural deep dives, and talking points matched to this job.
+                </span>
+            </div>
+        </div>
+
+        <div id="drawer-error-alert" class="hidden p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700"></div>
+    </form>
+
+    <!-- Drawer Footer -->
+    <div class="p-4 border-t border-slate-200 bg-slate-50 flex items-center justify-end gap-2.5 shrink-0">
+        <button type="button" onclick="closeLogInterviewDrawer()" class="px-4 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-700 transition cursor-pointer">
+            Cancel
+        </button>
+        <button type="submit" form="log-interview-form" id="drawer-submit-btn" class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-[#0F382A] hover:bg-[#134E39] text-white text-xs font-semibold shadow-xs transition cursor-pointer">
+            <span class="material-symbols-outlined text-[16px]">check_circle</span>
+            <span>Record Milestone &amp; Sync Pipeline</span>
+        </button>
+    </div>
+</aside>
+
+<script>
+    // Shared Drawer Management for Logging Interview / Employer Response
+    let cachedAppliedJobs = [];
+
+    function openLogInterviewDrawer(selectedPeId = null) {
+        const drawer = document.getElementById('log-interview-drawer');
+        const backdrop = document.getElementById('log-interview-backdrop');
+        if (!drawer || !backdrop) return;
+
+        backdrop.classList.remove('hidden');
+        setTimeout(() => {
+            backdrop.classList.remove('opacity-0');
+            backdrop.classList.add('opacity-100');
+            drawer.classList.remove('translate-x-full');
+            drawer.classList.add('translate-x-0');
+        }, 10);
+
+        loadAppliedJobsIntoDropdown(selectedPeId);
+    }
+
+    function openLogInterviewDrawerForJob(peId, companyName, roleTitle) {
+        openLogInterviewDrawer(peId);
+    }
+
+    function closeLogInterviewDrawer() {
+        const drawer = document.getElementById('log-interview-drawer');
+        const backdrop = document.getElementById('log-interview-backdrop');
+        if (!drawer || !backdrop) return;
+
+        drawer.classList.remove('translate-x-0');
+        drawer.classList.add('translate-x-full');
+        backdrop.classList.remove('opacity-100');
+        backdrop.classList.add('opacity-0');
+        setTimeout(() => {
+            backdrop.classList.add('hidden');
+        }, 300);
+    }
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            const drawer = document.getElementById('log-interview-drawer');
+            if (drawer && !drawer.classList.contains('translate-x-full')) {
+                closeLogInterviewDrawer();
+            }
+        }
+    });
+
+    async function loadAppliedJobsIntoDropdown(preselectId = null) {
+        const select = document.getElementById('drawer-pe-select');
+        if (!select) return;
+
+        try {
+            const res = await fetch('/api/resume/jobs/pipeline/applied-jobs');
+            if (!res.ok) throw new Error('Failed to fetch applied jobs');
+            const data = await res.json();
+            cachedAppliedJobs = data.items || [];
+
+            select.innerHTML = '';
+            if (cachedAppliedJobs.length === 0) {
+                select.innerHTML = '<option value="" disabled selected>No applied jobs found. Mark a job as Applied first.</option>';
+                return;
+            }
+
+            let foundPreselect = false;
+            cachedAppliedJobs.forEach((job) => {
+                const opt = document.createElement('option');
+                opt.value = job.pipeline_entry_id;
+                opt.textContent = `${job.title} — ${job.company} (${job.substatus_display || 'Applied'})`;
+                if (preselectId && String(job.pipeline_entry_id) === String(preselectId)) {
+                    opt.selected = true;
+                    foundPreselect = true;
+                }
+                select.appendChild(opt);
+            });
+
+            if (!foundPreselect && cachedAppliedJobs.length > 0 && !preselectId) {
+                select.selectedIndex = 0;
+            }
+
+            syncDrawerFormWithSelectedJob(select.value);
+        } catch (err) {
+            select.innerHTML = `<option value="" disabled selected>Error loading jobs: ${err.message}</option>`;
+        }
+    }
+
+    function syncDrawerFormWithSelectedJob(peId) {
+        if (!peId) return;
+        const job = cachedAppliedJobs.find(j => String(j.pipeline_entry_id) === String(peId));
+        if (!job) return;
+
+        // 1. Milestone stage (round_type)
+        const roundToSelect = (job.event && job.event.round_type) || (job.substatus && job.substatus !== 'applied_pending' ? job.substatus : 'recruiter_call');
+        const roundRadio = document.querySelector(`input[name="round_type"][value="${roundToSelect}"]`);
+        if (roundRadio) {
+            roundRadio.checked = true;
+        } else {
+            const firstRadio = document.querySelector('input[name="round_type"][value="recruiter_call"]');
+            if (firstRadio) firstRadio.checked = true;
+        }
+
+        // 2. Scheduled date & time
+        const scheduleInput = document.getElementById('drawer-scheduled-at');
+        const rawDate = (job.event && job.event.scheduled_at) || job.next_interview_at;
+        if (scheduleInput) {
+            if (rawDate) {
+                try {
+                    const d = new Date(rawDate);
+                    const pad = (n) => String(n).padStart(2, '0');
+                    const localIso = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+                    scheduleInput.value = localIso;
+                } catch (e) {
+                    scheduleInput.value = '';
+                }
+            } else {
+                scheduleInput.value = '';
+            }
+        }
+
+        // 3. Duration
+        const durationSelect = document.getElementById('drawer-duration');
+        if (durationSelect) {
+            const dur = (job.event && job.event.duration_minutes) || 45;
+            durationSelect.value = String(dur);
+        }
+
+        // 4. Interviewers
+        const interviewersInput = document.getElementById('drawer-interviewers');
+        if (interviewersInput) {
+            interviewersInput.value = (job.event && job.event.interviewer_names) || '';
+        }
+
+        // 5. Location / Link
+        const locationInput = document.getElementById('drawer-location');
+        if (locationInput) {
+            locationInput.value = (job.event && job.event.location_or_link) || '';
+        }
+
+        // 6. Notes
+        const notesInput = document.getElementById('drawer-notes');
+        if (notesInput) {
+            notesInput.value = (job.event && job.event.notes) || '';
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        const select = document.getElementById('drawer-pe-select');
+        if (select) {
+            select.addEventListener('change', () => {
+                syncDrawerFormWithSelectedJob(select.value);
+            });
+        }
+    });
+
+    async function submitLogInterviewForm(e) {
+        e.preventDefault();
+        const peId = document.getElementById('drawer-pe-select').value;
+        const errorAlert = document.getElementById('drawer-error-alert');
+        const submitBtn = document.getElementById('drawer-submit-btn');
+
+        if (!peId) {
+            if (errorAlert) {
+                errorAlert.innerText = 'Please select a target opportunity.';
+                errorAlert.classList.remove('hidden');
+            }
+            return;
+        }
+
+        const selectedRound = document.querySelector('input[name="round_type"]:checked')?.value || 'recruiter_call';
+        const scheduledAt = document.getElementById('drawer-scheduled-at').value || null;
+        const duration = parseInt(document.getElementById('drawer-duration').value || '45', 10);
+        const interviewers = document.getElementById('drawer-interviewers').value || '';
+        const locationLink = document.getElementById('drawer-location').value || '';
+        const notes = document.getElementById('drawer-notes').value || '';
+        const generatePrep = document.getElementById('drawer-generate-prep')?.checked || false;
+
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<span class="material-symbols-outlined text-[16px] animate-spin">refresh</span> Recording...';
+        }
+        if (errorAlert) errorAlert.classList.add('hidden');
+
+        try {
+            const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
+            const payload = {
+                round_type: selectedRound,
+                status: 'scheduled',
+                scheduled_at: scheduledAt ? new Date(scheduledAt).toISOString() : null,
+                duration_minutes: duration,
+                interviewer_names: interviewers,
+                location_or_link: locationLink,
+                notes: notes,
+                generate_prep: generatePrep,
+            };
+
+            const res = await fetch(`/api/resume/jobs/pipeline-entry/${peId}/log-interview`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrfToken,
+                },
+                body: JSON.stringify(payload),
+            });
+
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                throw new Error(errData.detail || errData.message || 'Failed to record interview milestone');
+            }
+
+            const data = await res.json();
+            closeLogInterviewDrawer();
+
+            if (typeof window.onLogInterviewSuccess === 'function') {
+                window.onLogInterviewSuccess(data);
+            } else {
+                window.location.reload();
+            }
+        } catch (err) {
+            if (errorAlert) {
+                errorAlert.innerText = err.message;
+                errorAlert.classList.remove('hidden');
+            }
+        } finally {
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<span class="material-symbols-outlined text-[16px]">check_circle</span> Record Milestone & Sync Pipeline';
+            }
+        }
+    }
+</script>

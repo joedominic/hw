@@ -315,9 +315,15 @@
                             <h3 class="text-sm font-display font-bold text-slate-900">Active Pipeline & Employer Responses</h3>
                             <p class="text-xs text-slate-500 font-medium">Scheduled recruiter screens and verified interview progression</p>
                         </div>
-                        <span class="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
-                            {{ stats.recruiter_screens_booked|default:"4" }} Active Screens
-                        </span>
+                        <div class="flex items-center gap-2">
+                            <span id="header-active-screens-badge" class="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                                {{ stats.recruiter_screens_booked|default:"0" }} Active Screens
+                            </span>
+                            <button type="button" onclick="openLogInterviewDrawer()" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0F382A] hover:bg-[#134E39] text-white text-xs font-semibold shadow-xs transition cursor-pointer">
+                                <span class="material-symbols-outlined text-[16px]">add</span>
+                                <span>Log Response</span>
+                            </button>
+                        </div>
                     </div>
 
                     <!-- Outbound Response Rate Banner -->
@@ -327,16 +333,16 @@
                                 <span class="material-symbols-outlined text-[20px]">trending_up</span>
                             </span>
                             <div>
-                                <div class="text-sm font-bold text-slate-900">
-                                    {{ stats.outbound_response_rate|default:"21.1%" }} Outbound Response Rate
+                                <div id="outbound-response-rate-text" class="text-sm font-bold text-slate-900">
+                                    {{ stats.outbound_response_rate|default:"0.0%" }} Outbound Response Rate
                                 </div>
-                                <span class="text-xs text-emerald-800 font-medium">
-                                    {{ stats.outbound_benchmark_multiplier|default:"3.2x" }} higher than executive market benchmark of 6.6% • Top 3% ATS Tier
+                                <span id="outbound-benchmark-text" class="text-xs text-emerald-800 font-medium">
+                                    {{ stats.outbound_benchmark_multiplier|default:"Market benchmark is 6.6%" }}
                                 </span>
                             </div>
                         </div>
-                        <a href="{% url 'career_cockpit' %}" class="text-xs font-semibold text-brand hover:underline self-start sm:self-center">
-                            Benchmark Details ↗
+                        <a href="{% url 'career_cockpit' %}?stage=done" class="text-xs font-semibold text-brand hover:underline self-start sm:self-center">
+                            Applied Queue ↗
                         </a>
                     </div>
 
@@ -344,117 +350,72 @@
                     <div class="grid grid-cols-3 gap-2.5">
                         <div class="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-center">
                             <span class="text-[11px] font-medium text-slate-500 block">First Round</span>
-                            <span id="milestone-first-round" class="text-base font-display font-extrabold text-slate-900 tabular-nums">{{ stats.milestones.first_round|default:"2" }}</span>
+                            <span id="milestone-first-round" class="text-base font-display font-extrabold text-slate-900 tabular-nums">{{ stats.milestones.first_round|default:"0" }}</span>
                         </div>
                         <div class="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-center">
                             <span class="text-[11px] font-medium text-slate-500 block">Tech Deep Dive</span>
-                            <span id="milestone-tech-deep-dive" class="text-base font-display font-extrabold text-slate-900 tabular-nums">{{ stats.milestones.tech_deep_dive|default:"1" }}</span>
+                            <span id="milestone-tech-deep-dive" class="text-base font-display font-extrabold text-slate-900 tabular-nums">{{ stats.milestones.tech_deep_dive|default:"0" }}</span>
                         </div>
                         <div class="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-center">
-                            <span class="text-[11px] font-medium text-slate-500 block">Finalist Round</span>
-                            <span id="milestone-finalist-round" class="text-base font-display font-extrabold text-slate-900 tabular-nums">{{ stats.milestones.finalist_round|default:"1" }}</span>
+                            <span class="text-[11px] font-medium text-slate-500 block">Finalist / Offer</span>
+                            <span id="milestone-finalist-round" class="text-base font-display font-extrabold text-slate-900 tabular-nums">{{ stats.milestones.finalist_round|default:"0" }}</span>
                         </div>
                     </div>
 
                     <!-- Interactive Recruiter Screen Cards List -->
                     <div class="space-y-2.5 pt-1">
-                        <span class="text-xs font-bold uppercase tracking-wider text-slate-400 block">Confirmed Interview Stages</span>
-                        <div class="space-y-2">
-                            <a href="/cockpit/?company=Stripe" class="flex items-center justify-between p-3.5 rounded-xl border border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm transition cursor-pointer group">
-                                <div class="flex items-center gap-3">
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs font-bold uppercase tracking-wider text-slate-400 block">Confirmed Interview Stages</span>
+                            <span id="active-screens-counter-label" class="text-xs text-slate-500 font-medium">{{ stats.confirmed_screens|length }} Tracked</span>
+                        </div>
+                        <div id="confirmed-screens-list" class="space-y-2">
+                            {% for screen in stats.confirmed_screens %}
+                            <div class="flex items-center justify-between p-3.5 rounded-xl border border-slate-200 bg-white hover:border-slate-300 hover:shadow-xs transition group">
+                                <div class="flex items-center gap-3 min-w-0">
                                     <div class="w-9 h-9 rounded-lg bg-slate-100 text-slate-800 font-bold text-xs flex items-center justify-center border border-slate-200 shrink-0">
-                                        STR
+                                        {{ screen.initials }}
                                     </div>
-                                    <div>
-                                        <div class="text-xs font-bold text-slate-900 group-hover:text-brand transition flex items-center gap-2">
-                                            <span>Stripe</span>
-                                            <span class="text-slate-300 font-normal">•</span>
-                                            <span class="text-slate-700 font-medium">Staff Infrastructure Architect</span>
+                                    <div class="min-w-0">
+                                        <div class="text-xs font-bold text-slate-900 group-hover:text-brand transition flex items-center gap-2 truncate">
+                                            <span class="truncate">{{ screen.company }}</span>
+                                            <span class="text-slate-300 font-normal shrink-0">•</span>
+                                            <span class="text-slate-700 font-medium truncate">{{ screen.role }}</span>
                                         </div>
-                                        <div class="text-xs text-slate-500 mt-0.5">
-                                            Hiring Manager Screen • Tomorrow 2:00 PM CST
+                                        <div class="text-xs text-slate-500 mt-0.5 truncate flex items-center gap-1.5">
+                                            <span class="material-symbols-outlined text-[14px] text-slate-400">schedule</span>
+                                            <span>{{ screen.time_display }}</span>
                                         </div>
                                     </div>
                                 </div>
-                                <div class="flex items-center gap-2.5">
-                                    <span class="text-xs font-semibold px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200">
-                                        Stage 2: Technical Screen
+                                <div class="flex items-center gap-2 shrink-0">
+                                    <span class="text-xs font-semibold px-2 py-0.5 rounded-md bg-{{ screen.status_color }}-50 text-{{ screen.status_color }}-800 border border-{{ screen.status_color }}-200">
+                                        {{ screen.stage_label }}
                                     </span>
-                                    <span class="material-symbols-outlined text-[16px] text-slate-400 group-hover:text-slate-700 transition">chevron_right</span>
+                                    <button type="button" onclick="openLogInterviewDrawerForJob('{{ screen.pipeline_entry_id }}', '{{ screen.company|escapejs }}', '{{ screen.role|escapejs }}')" class="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition cursor-pointer" title="Update Milestone / Stage">
+                                        <span class="material-symbols-outlined text-[18px]">edit_calendar</span>
+                                    </button>
+                                    <a href="{{ screen.action_url }}" class="p-1 rounded text-slate-400 hover:text-brand hover:bg-slate-100 transition" title="View in Cockpit">
+                                        <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+                                    </a>
                                 </div>
-                            </a>
-
-                            <a href="/cockpit/?company=Coinbase" class="flex items-center justify-between p-3.5 rounded-xl border border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm transition cursor-pointer group">
-                                <div class="flex items-center gap-3">
-                                    <div class="w-9 h-9 rounded-lg bg-slate-100 text-slate-800 font-bold text-xs flex items-center justify-center border border-slate-200 shrink-0">
-                                        COIN
-                                    </div>
-                                    <div>
-                                        <div class="text-xs font-bold text-slate-900 group-hover:text-brand transition flex items-center gap-2">
-                                            <span>Coinbase</span>
-                                            <span class="text-slate-300 font-normal">•</span>
-                                            <span class="text-slate-700 font-medium">Senior Director, Cloud Platform</span>
-                                        </div>
-                                        <div class="text-xs text-slate-500 mt-0.5">
-                                            Initial Recruiter Screen • Friday 10:30 AM CST
-                                        </div>
-                                    </div>
+                            </div>
+                            {% empty %}
+                            <div class="p-5 rounded-xl border border-dashed border-slate-200 bg-slate-50/50 text-center space-y-2">
+                                <div class="w-10 h-10 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
+                                    <span class="material-symbols-outlined text-[20px]">calendar_add_on</span>
                                 </div>
-                                <div class="flex items-center gap-2.5">
-                                    <span class="text-xs font-semibold px-2 py-0.5 rounded-md bg-blue-50 text-blue-800 border border-blue-200">
-                                        Stage 1: Recruiter Screen
-                                    </span>
-                                    <span class="material-symbols-outlined text-[16px] text-slate-400 group-hover:text-slate-700 transition">chevron_right</span>
+                                <div>
+                                    <h4 class="text-xs font-bold text-slate-800">No Active Screens Scheduled Yet</h4>
+                                    <p class="text-[11px] text-slate-500 mt-0.5 max-w-sm mx-auto">
+                                        Log recruiter callbacks, hiring manager screens, or panel interviews to activate live response telemetry and stage progression.
+                                    </p>
                                 </div>
-                            </a>
-
-                            <a href="/cockpit/?company=FedEx" class="flex items-center justify-between p-3.5 rounded-xl border border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm transition cursor-pointer group">
-                                <div class="flex items-center gap-3">
-                                    <div class="w-9 h-9 rounded-lg bg-slate-100 text-slate-800 font-bold text-xs flex items-center justify-center border border-slate-200 shrink-0">
-                                        FDX
-                                    </div>
-                                    <div>
-                                        <div class="text-xs font-bold text-slate-900 group-hover:text-brand transition flex items-center gap-2">
-                                            <span>FedEx</span>
-                                            <span class="text-slate-300 font-normal">•</span>
-                                            <span class="text-slate-700 font-medium">Managing Director, Data Platforms</span>
-                                        </div>
-                                        <div class="text-xs text-slate-500 mt-0.5">
-                                            Technical Director Interview • Oct 3, Plano TX Campus
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="flex items-center gap-2.5">
-                                    <span class="text-xs font-semibold px-2 py-0.5 rounded-md bg-purple-50 text-purple-800 border border-purple-200">
-                                        Stage 3: Panel Deep Dive
-                                    </span>
-                                    <span class="material-symbols-outlined text-[16px] text-slate-400 group-hover:text-slate-700 transition">chevron_right</span>
-                                </div>
-                            </a>
-
-                            <a href="/cockpit/?company=Capital+One" class="flex items-center justify-between p-3.5 rounded-xl border border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm transition cursor-pointer group">
-                                <div class="flex items-center gap-3">
-                                    <div class="w-9 h-9 rounded-lg bg-slate-100 text-slate-800 font-bold text-xs flex items-center justify-center border border-slate-200 shrink-0">
-                                        C1
-                                    </div>
-                                    <div>
-                                        <div class="text-xs font-bold text-slate-900 group-hover:text-brand transition flex items-center gap-2">
-                                            <span>Capital One</span>
-                                            <span class="text-slate-300 font-normal">•</span>
-                                            <span class="text-slate-700 font-medium">Director of Engineering</span>
-                                        </div>
-                                        <div class="text-xs text-slate-500 mt-0.5">
-                                            Screen Completed • Awaiting Next Round Notification
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="flex items-center gap-2.5">
-                                    <span class="text-xs font-semibold px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200">
-                                        Awaiting Notice
-                                    </span>
-                                    <span class="material-symbols-outlined text-[16px] text-slate-400 group-hover:text-slate-700 transition">chevron_right</span>
-                                </div>
-                            </a>
+                                <button type="button" onclick="openLogInterviewDrawer()" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 text-xs font-semibold shadow-2xs transition cursor-pointer">
+                                    <span class="material-symbols-outlined text-[15px]">add</span>
+                                    <span>Log First Screen</span>
+                                </button>
+                            </div>
+                            {% endfor %}
                         </div>
                     </div>
                 </div>
@@ -739,13 +700,93 @@
                 const kwAligned = document.getElementById('resume-keywords-aligned');
                 if (kwAligned) kwAligned.innerText = s.keywords_aligned;
 
-                // 8. Executive Time Saved & Career ROI
-                const roiHours = document.getElementById('roi-hours-saved');
-                if (roiHours) roiHours.innerText = s.executive_hours_saved;
-                const roiVal = document.getElementById('roi-value-preserved');
-                if (roiVal) roiVal.innerText = s.executive_value_preserved;
+                // Outbound Response Rate & Benchmark
+                const respRateText = document.getElementById('outbound-response-rate-text');
+                if (respRateText && s.outbound_response_rate) {
+                    respRateText.innerText = `${s.outbound_response_rate} Outbound Response Rate`;
+                }
+                const benchText = document.getElementById('outbound-benchmark-text');
+                if (benchText && s.outbound_benchmark_multiplier) {
+                    benchText.innerText = s.outbound_benchmark_multiplier;
+                }
+
+                // Confirmed Screens Counter & Dynamic List
+                const screensCounter = document.getElementById('active-screens-counter-label');
+                if (screensCounter && Array.isArray(s.confirmed_screens)) {
+                    screensCounter.innerText = `${s.confirmed_screens.length} Tracked`;
+                }
+
+                const screensList = document.getElementById('confirmed-screens-list');
+                if (screensList && Array.isArray(s.confirmed_screens)) {
+                    if (s.confirmed_screens.length === 0) {
+                        screensList.innerHTML = `
+                            <div class="p-5 rounded-xl border border-dashed border-slate-200 bg-slate-50/50 text-center space-y-2">
+                                <div class="w-10 h-10 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
+                                    <span class="material-symbols-outlined text-[20px]">calendar_add_on</span>
+                                </div>
+                                <div>
+                                    <h4 class="text-xs font-bold text-slate-800">No Active Screens Scheduled Yet</h4>
+                                    <p class="text-[11px] text-slate-500 mt-0.5 max-w-sm mx-auto">
+                                        Log recruiter callbacks, hiring manager screens, or panel interviews to activate live response telemetry and stage progression.
+                                    </p>
+                                </div>
+                                <button type="button" onclick="openLogInterviewDrawer()" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 text-xs font-semibold shadow-2xs transition cursor-pointer">
+                                    <span class="material-symbols-outlined text-[15px]">add</span>
+                                    <span>Log First Screen</span>
+                                </button>
+                            </div>
+                        `;
+                    } else {
+                        screensList.innerHTML = s.confirmed_screens.map(screen => `
+                            <div class="flex items-center justify-between p-3.5 rounded-xl border border-slate-200 bg-white hover:border-slate-300 hover:shadow-xs transition group">
+                                <div class="flex items-center gap-3 min-w-0">
+                                    <div class="w-9 h-9 rounded-lg bg-slate-100 text-slate-800 font-bold text-xs flex items-center justify-center border border-slate-200 shrink-0">
+                                        ${screen.initials || 'JOB'}
+                                    </div>
+                                    <div class="min-w-0">
+                                        <div class="text-xs font-bold text-slate-900 group-hover:text-brand transition flex items-center gap-2 truncate">
+                                            <span class="truncate">${screen.company}</span>
+                                            <span class="text-slate-300 font-normal shrink-0">•</span>
+                                            <span class="text-slate-700 font-medium truncate">${screen.role}</span>
+                                        </div>
+                                        <div class="text-xs text-slate-500 mt-0.5 truncate flex items-center gap-1.5">
+                                            <span class="material-symbols-outlined text-[14px] text-slate-400">schedule</span>
+                                            <span>${screen.time_display}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="flex items-center gap-2 shrink-0">
+                                    <span class="text-xs font-semibold px-2 py-0.5 rounded-md bg-${screen.status_color}-50 text-${screen.status_color}-800 border border-${screen.status_color}-200">
+                                        ${screen.stage_label}
+                                    </span>
+                                    <button type="button" onclick="openLogInterviewDrawerForJob('${screen.pipeline_entry_id}', '${(screen.company || '').replace(/'/g, "\\'")}', '${(screen.role || '').replace(/'/g, "\\'")}')" class="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition cursor-pointer" title="Update Milestone / Stage">
+                                        <span class="material-symbols-outlined text-[18px]">edit_calendar</span>
+                                    </button>
+                                    <a href="${screen.action_url}" class="p-1 rounded text-slate-400 hover:text-brand hover:bg-slate-100 transition" title="View in Cockpit">
+                                        <span class="material-symbols-outlined text-[18px]">chevron_right</span>
+                                    </a>
+                                </div>
+                            </div>
+                        `).join('');
+                    }
+                }
             }
+
+            window.onLogInterviewSuccess = function(data) {
+                // Instantly re-fetch metrics with cache busting to reflect the new screen
+                fetch('/performance/api/metrics/?refresh=1')
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === 'ok' && data.stats) {
+                            hydrateTelemetry(data.stats);
+                        }
+                    })
+                    .catch(() => window.location.reload());
+            };
         });
     </script>
+
+    {% include "resume_app/_log_interview_drawer.html" %}
 </body>
 </html>
+

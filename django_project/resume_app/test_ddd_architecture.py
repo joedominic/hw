@@ -185,6 +185,46 @@ class PipelineApplicationServiceTestCase(TestCase):
         self.assertEqual(res_done.promoted_count, 1)
         self.entry.refresh_from_db()
         self.assertEqual(self.entry.stage, PipelineEntry.Stage.DONE)
+        from .models import JobListingAction
+        self.assertTrue(
+            JobListingAction.objects.filter(
+                owner=self.user,
+                job_listing=self.job,
+                action=JobListingAction.ActionType.LIKED,
+            ).exists()
+        )
+
+    def test_mark_done_auto_tags_liked_and_clears_opposing_sentiment(self):
+        from .models import JobListingAction
+        # Simulate an existing DISLIKED sentiment beforehand
+        JobListingAction.objects.create(
+            owner=self.user,
+            job_listing=self.job,
+            action=JobListingAction.ActionType.DISLIKED,
+            track="general",
+        )
+        self.assertTrue(
+            JobListingAction.objects.filter(
+                owner=self.user, job_listing=self.job, action=JobListingAction.ActionType.DISLIKED
+            ).exists()
+        )
+
+        # Mark done directly
+        self.entry.mark_done(save=True)
+        self.assertEqual(self.entry.stage, PipelineEntry.Stage.DONE)
+
+        # Must now be LIKED, and DISLIKED must be cleared
+        self.assertTrue(
+            JobListingAction.objects.filter(
+                owner=self.user, job_listing=self.job, action=JobListingAction.ActionType.LIKED
+            ).exists()
+        )
+        self.assertFalse(
+            JobListingAction.objects.filter(
+                owner=self.user, job_listing=self.job, action=JobListingAction.ActionType.DISLIKED
+            ).exists()
+        )
+
 
 
 class BoundedContextPackageImportTestCase(TestCase):

@@ -68,6 +68,8 @@ def save_optimized_draft_content(resume_id: int, content: str, *, user):
         )
     if not (content or "").strip():
         raise DraftSaveError("Draft cannot be empty.")
+    from .utils import sanitize_resume_markdown
+    content = sanitize_resume_markdown(content)
     optimized.optimized_content = content
     optimized.save(update_fields=["optimized_content", "updated_at"])
     return optimized

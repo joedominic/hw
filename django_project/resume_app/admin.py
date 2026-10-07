@@ -24,6 +24,8 @@ from .models import (
     OptimizerWorkflow,
     SystemPromptProfile,
     UserPromptProfile,
+    EmployerInterviewEvent,
+    PipelineEntry,
 )
 
 
@@ -104,6 +106,8 @@ class AppAutomationSettingsAdmin(admin.ModelAdmin):
     list_display = (
         "id",
         "pipeline_to_vetting_enabled",
+        "pipeline_match_score_min",
+        "pipeline_purge_match_score_max",
         "pipeline_preference_margin_min",
         "vetting_to_applying_enabled",
         "vetting_interview_probability_min",
@@ -269,3 +273,12 @@ class UserPromptProfileAdmin(admin.ModelAdmin):
 class ApplicantProfileAdmin(admin.ModelAdmin):
     list_display = ("id", "full_name", "email", "updated_at")
     readonly_fields = ("updated_at",)
+
+
+@admin.register(EmployerInterviewEvent)
+class EmployerInterviewEventAdmin(admin.ModelAdmin):
+    list_display = ("owner", "pipeline_entry", "round_type", "status", "scheduled_at", "interviewer_names")
+    list_filter = ("round_type", "status")
+    raw_id_fields = ("owner", "pipeline_entry")
+    search_fields = ("interviewer_names", "location_or_link", "notes")
+

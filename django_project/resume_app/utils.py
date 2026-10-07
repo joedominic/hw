@@ -101,3 +101,85 @@ def cron_to_short_description(cron: str) -> str:
     """Backwards-compatible wrapper calling format_cron_human_friendly."""
     return format_cron_human_friendly(cron)
 
+
+def sanitize_resume_markdown(text: str) -> str:
+    """
+    Sanitize and normalize resume markdown so it contains clean, standard typography
+    without mojibake (ï¿½, \\ufffd), non-standard hyphens, or broken characters.
+    Ensures safe rendering in browser drawers and seamless conversion to PDF/Word.
+    """
+    if not text:
+        return text or ""
+
+    import re
+
+    # 1. Fix common UTF-8 double-encoding / mojibake sequences
+    mojibake_map = {
+        "â€¢": "•",
+        "â€“": "-",
+        "â€”": "-",
+        "â€™": "'",
+        "â€˜": "'",
+        "â€œ": '"',
+        "â€\x9d": '"',
+        "â€¦": "...",
+        "Â·": "•",
+        "Â": " ",
+    }
+    for bad, good in mojibake_map.items():
+        text = text.replace(bad, good)
+
+    # 2. Fix replacement characters (ï¿½ and \ufffd)
+    # If in contractions or possessives (e.g. sectorï¿½s, donï¿½t), replace with '
+    text = re.sub(r"(\w+)\s*(?:ï¿½|\ufffd)\s*s\b", r"\1's", text)
+    text = re.sub(r"(\w+)\s*(?:ï¿½|\ufffd)\s*t\b", r"\1't", text)
+    text = re.sub(r"(\w+)\s*(?:ï¿½|\ufffd)\s*re\b", r"\1're", text)
+    text = re.sub(r"(\w+)\s*(?:ï¿½|\ufffd)\s*ve\b", r"\1've", text)
+    text = re.sub(r"(\w+)\s*(?:ï¿½|\ufffd)\s*ll\b", r"\1'll", text)
+    text = re.sub(r"(\w+)\s*(?:ï¿½|\ufffd)\s*d\b", r"\1'd", text)
+
+    # If in date ranges or number ranges (e.g. 2016 ï¿½ 2023 or 2016ï¿½Present), replace with -
+    text = re.sub(r"(\d{4})\s*(?:ï¿½|\ufffd)\s*(\d{4}|Present)", r"\1 - \2", text, flags=re.IGNORECASE)
+    text = re.sub(r"(\d{2}/\d{4})\s*(?:ï¿½|\ufffd)\s*(\d{2}/\d{4}|Present)", r"\1 - \2", text, flags=re.IGNORECASE)
+
+    # If surrounded by text or spaces (as a skill/item separator), replace with •
+    text = re.sub(r"\s*(?:ï¿½|\ufffd)\s*", " • ", text)
+
+    # 3. Unicode normalization for typographic characters
+    char_map = {
+        "\u2011": "-",  # non-breaking hyphen
+        "\u2010": "-",  # hyphen
+        "\u2012": "-",  # figure dash
+        "\u2013": "-",  # en dash
+        "\u2014": "-",  # em dash
+        "\u2015": "-",  # horizontal bar
+        "\u2212": "-",  # minus sign
+        "\u00a0": " ",  # non-breaking space
+        "\u202f": " ",  # narrow no-break space
+        "\u2007": " ",  # figure space
+        "\u2009": " ",  # thin space
+        "\u200b": "",   # zero-width space
+        "\u200c": "",   # zero-width non-joiner
+        "\u200d": "",   # zero-width joiner
+        "\ufeff": "",   # BOM
+        "\u2018": "'",  # left single quote
+        "\u2019": "'",  # right single quote
+        "\u201a": "'",  # single low-9 quote
+        "\u201b": "'",  # single high-reversed-9 quote
+        "\u201c": '"',  # left double quote
+        "\u201d": '"',  # right double quote
+        "\u201e": '"',  # double low-9 quote
+        "\u2026": "...",# horizontal ellipsis
+        "\u00b7": "•",  # middle dot -> bullet
+        "\u2219": "•",  # bullet operator -> bullet
+    }
+    for bad_ch, good_ch in char_map.items():
+        text = text.replace(bad_ch, good_ch)
+
+    # Clean up double bullets or irregular spacing around bullets
+    text = re.sub(r"•\s*•", "•", text)
+    text = re.sub(r"([^\s\n])•", r"\1 •", text)
+    text = re.sub(r"•([^\s\n])", r"• \1", text)
+
+    return text.strip()
+

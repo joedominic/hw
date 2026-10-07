@@ -136,13 +136,18 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 - optional prompt override: `matching_prompt`
 
 **When it runs:**
-- Backfills vetting probability values via `process_user_vetting_matching_task(user_id)`.
-- Runs immediately when pipeline rows are auto-promoted from Pipeline → Vetting.
+- Enqueued when opportunities move into the **Review (`Vetting`) stage** (manual card shortlist, `apply_pipeline_auto_promotions`, or saving a job directly to Review).
+- Backfills unanalyzed or outdated Vetting entries periodically via `_evaluate_due_vetting_matching_for_user(user)`.
+- **Stage Isolation:** Strictly restricted to `Stage.VETTING` entries; raw `PIPELINE` ("New") jobs are never analyzed to protect compute resources.
 
 **What it does:**
-- Uses a **per-tenant lock** (`vetting_matching_task_running:u{user_id}`) so multiple users can evaluate vetting matches concurrently.
-- Loads existing, active pipeline entries in VETTING stage for that user.
-- Calls `run_matching(...)` through `resume_app.llm` and records interview probabilities.
+- Uses a **per-tenant lock** (`vetting_matching_task_running:u{user_id}`) ensuring sequential calls per user for optimal KV cache reuse while allowing multiple users to run concurrently.
+- Parses candidate resume for the entry's track (falling back to primary library resume) and supplies the full text (up to 4,000 chars) to the LLM.
+- Strips JD boilerplate using fast heuristic regex cleansing (`use_llm=False`) so Ollama's KV cache is not invalidated between calls.
+- Executes deep semantic fit analysis via `SkillRadarService.analyze(...)` on local Ollama, leveraging prompt prefix caching (`Candidate Resume` placed before `Job Description`) for a ~70% speedup (~2s per warm job).
+- Persists results to `PipelineEntry` (`vetting_interview_probability`, `vetting_interview_reasoning`, `vetting_interview_resume_id`, `vetting_interview_scored_at`) and caches structured diagnostic JSON (`core_competencies`, `stretch_skills`, `fit_summary`) in Redis (`cockpit_ollama_skill_radar_{user_id}_{resume_id}_{job_id}`).
+- Evaluates auto-promotions from Review to Applying via `apply_vetting_to_applying_promotions(user, [entry.id])` if candidate meets the threshold.
+- Gracefully falls back to legacy `run_matching` if an explicit prompt override or cloud LLM override is specified.
 
 ---
 

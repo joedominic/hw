@@ -10,6 +10,7 @@ import logging
 from datetime import timedelta
 from urllib.parse import urlencode
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.cache import cache
@@ -49,7 +50,6 @@ from .jobs_api import (
     jobs_unsave as api_jobs_unsave,
     jobs_mark_applied as api_jobs_mark_applied,
     get_focus_breakdown,
-    get_focus_sentence_alignment,
     JobSearchRequest,
     MarkAppliedRequest,
 )
@@ -69,6 +69,7 @@ from .models import (
     Track,
     JobListingEmbedding,
     LLMProviderConfig,
+    AppAutomationSettings,
 )
 from .pipeline_llm_skill_extract import resolve_provider_api_key
 from .preference import invalidate_preference_cache, invalidate_disliked_embeddings_cache
@@ -267,32 +268,99 @@ def optimizer_view(request):
     # OptimizedResume id: loads status, agent logs, Word/PDF download in the status card.
     opt_id = request.GET.get("opt_id")
     job_id = request.GET.get("job_id")
+    track_slug = request.GET.get("track") or request.session.get("optimizer_track")
     prefill_job_description = ""
     prefill_resume_id = None
     target_job = None
-    if job_id:
+
+    opt_record = None
+    if opt_id:
+        from .models import OptimizedResume
+        try:
+            opt_record = OptimizedResume.objects.filter(id=int(opt_id), owner=request.user).first()
+        except (ValueError, TypeError):
+            opt_record = None
+
+    if not job_id and opt_record:
+        if opt_record.pipeline_entry:
+            target_job = opt_record.pipeline_entry.job_listing
+            job_id = str(target_job.id)
+            if not track_slug:
+                track_slug = opt_record.pipeline_entry.track
+        else:
+            session_jid = request.session.get("optimizer_job_id")
+            if session_jid:
+                from .models import JobListing
+                try:
+                    target_job = JobListing.objects.get(id=int(session_jid))
+                    job_id = str(target_job.id)
+                    if not track_slug:
+                        track_slug = request.session.get("optimizer_track")
+                except JobListing.DoesNotExist:
+                    pass
+
+            if not target_job and opt_record.job_description and opt_record.job_description.content:
+                import re
+                from .models import PipelineEntry
+                opt_norm = re.sub(r'\s+', ' ', opt_record.job_description.content).strip().lower()
+                pref_track = track_slug or request.session.get("job_search_track")
+                candidate_entries = list(
+                    PipelineEntry.objects.filter(owner=request.user, stage=PipelineEntry.Stage.APPLYING)
+                    .select_related("job_listing")
+                )
+                if pref_track:
+                    candidate_entries.sort(key=lambda e: 0 if e.track == pref_track else 1)
+                for pe in candidate_entries:
+                    jd_norm = re.sub(r'\s+', ' ', pe.job_listing.description or '').strip().lower()
+                    if jd_norm and (jd_norm[:100] in opt_norm or opt_norm[:100] in jd_norm):
+                        target_job = pe.job_listing
+                        job_id = str(target_job.id)
+                        if not track_slug:
+                            track_slug = pe.track
+                        opt_record.pipeline_entry = pe
+                        opt_record.save(update_fields=["pipeline_entry"])
+                        break
+
+    if job_id and not target_job:
         from .models import JobListing
+        try:
+            target_job = JobListing.objects.get(id=int(job_id))
+        except (ValueError, JobListing.DoesNotExist):
+            target_job = None
+
+    if target_job:
         from .sourcing.clients.builtin_client import enrich_builtin_job_listing_description
         from .sourcing.clients.dice_client import enrich_dice_job_listing_description
         from .sourcing.clients.greenhouse_client import enrich_greenhouse_job_listing_description
         from .sourcing.clients.levels_client import enrich_levels_job_listing_description
 
-        try:
-            target_job = JobListing.objects.get(id=int(job_id))
-            job = target_job
-            prefill_job_description = enrich_dice_job_listing_description(job)
-            if not prefill_job_description:
-                prefill_job_description = enrich_levels_job_listing_description(job)
-            if not prefill_job_description:
-                prefill_job_description = enrich_builtin_job_listing_description(job)
-            if not prefill_job_description:
-                prefill_job_description = enrich_greenhouse_job_listing_description(job)
-            if not prefill_job_description:
-                prefill_job_description = (job.description or "").strip()
-            request.session["optimizer_prefill_job_description"] = prefill_job_description
-            request.session.modified = True
-        except (ValueError, JobListing.DoesNotExist):
-            pass
+        job = target_job
+        prefill_job_description = enrich_dice_job_listing_description(job)
+        if not prefill_job_description:
+            prefill_job_description = enrich_levels_job_listing_description(job)
+        if not prefill_job_description:
+            prefill_job_description = enrich_builtin_job_listing_description(job)
+        if not prefill_job_description:
+            prefill_job_description = enrich_greenhouse_job_listing_description(job)
+        if not prefill_job_description:
+            prefill_job_description = (job.description or "").strip()
+        request.session["optimizer_prefill_job_description"] = prefill_job_description
+        request.session["optimizer_job_id"] = target_job.id
+        if track_slug:
+            request.session["optimizer_track"] = track_slug
+        request.session.modified = True
+
+        if opt_record and not opt_record.pipeline_entry:
+            from .models import PipelineEntry
+            entry_qs = PipelineEntry.objects.filter(owner=request.user, job_listing=target_job)
+            if track_slug:
+                pe_match = entry_qs.filter(track=track_slug).first()
+            else:
+                pe_match = None
+            pe_link = pe_match or entry_qs.first()
+            if pe_link:
+                opt_record.pipeline_entry = pe_link
+                opt_record.save(update_fields=["pipeline_entry"])
     else:
         prefill_job_description = request.session.get("optimizer_prefill_job_description", "")
     if resume_id:
@@ -305,8 +373,7 @@ def optimizer_view(request):
                 request.session.modified = True
         except (ValueError, TypeError):
             pass
-    elif request.GET.get("track"):
-        track_slug = request.GET.get("track")
+    elif track_slug:
         from .models import UserResume, SearchProfile
         ur = UserResume.objects.filter(owner=request.user, track=track_slug, is_library=True).first()
         if not ur:
@@ -360,13 +427,58 @@ def optimizer_view(request):
         action = request.POST.get("action")
 
         if action == "approve_and_mark_applied":
-            target_job_id = request.POST.get("job_id") or request.GET.get("job_id")
-            track_slug = request.POST.get("track") or request.GET.get("track") or "dir-plano"
+            target_job_id = request.POST.get("job_id") or request.GET.get("job_id") or request.session.get("optimizer_job_id")
+            track_slug = request.POST.get("track") or request.GET.get("track") or request.session.get("optimizer_track") or track_slug or "dir-plano"
+            opt_id_val = request.POST.get("opt_id") or request.GET.get("opt_id") or opt_id
+
+            from .models import OptimizedResume, PipelineEntry
+            from .domain.event_bus import event_bus
+            from .domain.events import JobMarkedApplied
+
+            opt = None
+            if opt_id_val:
+                try:
+                    opt = OptimizedResume.objects.filter(id=int(opt_id_val), owner=request.user).first()
+                except (ValueError, TypeError):
+                    opt = None
+
+            if not target_job_id and opt:
+                if opt.pipeline_entry:
+                    target_job_id = opt.pipeline_entry.job_listing_id
+                    track_slug = opt.pipeline_entry.track
+                else:
+                    if opt.job_description and opt.job_description.content:
+                        import re
+                        opt_norm = re.sub(r'\s+', ' ', opt.job_description.content).strip().lower()
+                        pref_track = track_slug or request.session.get("job_search_track")
+                        candidate_entries = list(
+                            PipelineEntry.objects.filter(owner=request.user, stage=PipelineEntry.Stage.APPLYING)
+                            .select_related("job_listing")
+                        )
+                        if pref_track:
+                            candidate_entries.sort(key=lambda e: 0 if e.track == pref_track else 1)
+                        for pe in candidate_entries:
+                            jd_norm = re.sub(r'\s+', ' ', pe.job_listing.description or '').strip().lower()
+                            if jd_norm and (jd_norm[:100] in opt_norm or opt_norm[:100] in jd_norm):
+                                target_job_id = pe.job_listing_id
+                                track_slug = pe.track
+                                opt.pipeline_entry = pe
+                                opt.save(update_fields=["pipeline_entry"])
+                                break
+
+            markdown_text = (request.POST.get("markdown") or "").strip()
+            if not markdown_text and opt:
+                markdown_text = (opt.optimized_content or "").strip()
+
+            from .utils import sanitize_resume_markdown
+            markdown_text = sanitize_resume_markdown(markdown_text)
+
+            if opt and markdown_text and markdown_text != (opt.optimized_content or "").strip():
+                opt.optimized_content = markdown_text
+                opt.save(update_fields=["optimized_content"])
+
             if target_job_id:
                 try:
-                    from .models import PipelineEntry
-                    from .domain.event_bus import event_bus
-                    from .domain.events import JobMarkedApplied
                     entry = PipelineEntry.objects.filter(
                         owner=request.user,
                         job_listing_id=int(target_job_id),
@@ -378,23 +490,42 @@ def optimizer_view(request):
                             job_listing_id=int(target_job_id),
                         ).first()
                     if entry:
+                        if markdown_text:
+                            entry.applied_resume_markdown = markdown_text
+                        if opt:
+                            entry.applied_optimized_resume = opt
+                            if not opt.pipeline_entry:
+                                opt.pipeline_entry = entry
+                                opt.save(update_fields=["pipeline_entry"])
                         entry.mark_done(save=True)
+                        track_slug = entry.track
                         event_bus.publish(JobMarkedApplied(user_id=request.user.id, entry_id=entry.id, track=entry.track))
                         messages.success(request, "Opportunity approved & moved to Applied!")
                     else:
                         from .models import JobListing
                         jl = JobListing.objects.filter(id=int(target_job_id)).first()
                         if jl:
+                            from django.utils import timezone
+                            from .track_actions import record_job_liked
                             pe = PipelineEntry.objects.create(
                                 owner=request.user,
                                 job_listing=jl,
                                 track=track_slug,
                                 stage=PipelineEntry.Stage.DONE,
+                                applied_at=timezone.now(),
+                                applied_resume_markdown=markdown_text or "",
+                                applied_optimized_resume=opt,
                             )
+                            if opt and not opt.pipeline_entry:
+                                opt.pipeline_entry = pe
+                                opt.save(update_fields=["pipeline_entry"])
+                            record_job_liked(user=request.user, job=jl, track=track_slug)
                             event_bus.publish(JobMarkedApplied(user_id=request.user.id, entry_id=pe.id, track=track_slug))
-                            messages.success(request, "Opportunity approved & moved to Applied!")
+                            messages.success(request, "Opportunity approved & moved to Applied (tagged as Liked)!")
                 except Exception as e:
                     messages.error(request, f"Could not advance pipeline stage: {e}")
+            else:
+                messages.error(request, "No target opportunity associated with this tailored resume.")
             return redirect(f"/jobs/cockpit/?track={track_slug}&stage=done")
 
         elif action in ("reset_prompts", "save_prompts"):
@@ -531,8 +662,31 @@ def optimizer_view(request):
 
                     result = api_optimize_resume(request, payload=payload, file=resume_file)
                     opt_id = result.get("resume_id")
+                    if opt_id:
+                        target_jid = request.POST.get("job_id") or request.GET.get("job_id") or request.session.get("optimizer_job_id") or (target_job.id if target_job else None)
+                        tr_slug = request.POST.get("track") or request.GET.get("track") or request.session.get("optimizer_track") or track_slug
+                        if target_jid:
+                            from .models import PipelineEntry, OptimizedResume
+                            pe = PipelineEntry.objects.filter(owner=request.user, job_listing_id=int(target_jid))
+                            if tr_slug:
+                                pe_match = pe.filter(track=tr_slug).first()
+                            else:
+                                pe_match = None
+                            entry_to_link = pe_match or pe.first()
+                            if entry_to_link:
+                                opt_rec = OptimizedResume.objects.filter(id=int(opt_id), owner=request.user).first()
+                                if opt_rec and not opt_rec.pipeline_entry:
+                                    opt_rec.pipeline_entry = entry_to_link
+                                    opt_rec.save(update_fields=["pipeline_entry"])
+
                     messages.success(request, f"Optimization started for resume #{opt_id}.")
-                    return redirect(f"{reverse('resume_optimizer')}?opt_id={opt_id}")
+                    redirect_url = f"{reverse('resume_optimizer')}?opt_id={opt_id}"
+                    resolved_jid = job_id or (target_job.id if target_job else None)
+                    if resolved_jid:
+                        redirect_url += f"&job_id={resolved_jid}"
+                    if track_slug:
+                        redirect_url += f"&track={track_slug}"
+                    return redirect(redirect_url)
                 except HttpError as e:
                     messages.error(request, str(e))
                 except Exception as e:
@@ -641,6 +795,7 @@ def optimizer_view(request):
         "llm_key_error": llm_key_error,
         "prompts": prompts,
         "resume_id": resume_id,
+        "opt_id": opt_id,
         "optimized_resume_id": optimized_resume_id,
         "status": status_data,
         "prefill_job_description": prefill_job_description,
@@ -657,7 +812,7 @@ def optimizer_view(request):
         "optimizer_temperature": request.session.get("optimizer_temperature", "0.7"),
         "wizard_initial_step": wizard_initial_step,
         "target_job": target_job,
-        "pipeline_track": request.GET.get("track") or (target_job.track if target_job and hasattr(target_job, "track") and target_job.track else "dir-plano"),
+        "pipeline_track": track_slug or (target_job.track if target_job and hasattr(target_job, "track") and target_job.track else "dir-plano"),
     }
     return render(request, "resume_app/optimizer.html", context)
 
@@ -794,6 +949,28 @@ def settings_view(request):
             except ValueError:
                 messages.error(request, "Pref margin threshold must be a whole number.")
                 return redirect(reverse("settings") + "?tab=app")
+            raw_match_min = request.POST.get("pipeline_match_score_min")
+            if raw_match_min is not None and raw_match_min.strip() != "":
+                try:
+                    pmm = int(raw_match_min.strip())
+                    if pmm < 0 or pmm > 100:
+                        messages.error(request, "Match score threshold must be between 0 and 100.")
+                        return redirect(reverse("settings") + "?tab=app")
+                    automation.pipeline_match_score_min = pmm
+                except ValueError:
+                    messages.error(request, "Match score threshold must be a whole number.")
+                    return redirect(reverse("settings") + "?tab=app")
+            raw_purge_max = request.POST.get("pipeline_purge_match_score_max")
+            if raw_purge_max is not None and raw_purge_max.strip() != "":
+                try:
+                    ppm = int(raw_purge_max.strip())
+                    if ppm < 0 or ppm > 100:
+                        messages.error(request, "Auto-dismiss match score threshold must be between 0 and 100.")
+                        return redirect(reverse("settings") + "?tab=app")
+                    automation.pipeline_purge_match_score_max = ppm
+                except ValueError:
+                    messages.error(request, "Auto-dismiss match score threshold must be a whole number.")
+                    return redirect(reverse("settings") + "?tab=app")
             try:
                 vip = int(
                     (request.POST.get("vetting_interview_probability_min") or "70").strip()
@@ -851,6 +1028,8 @@ def settings_view(request):
             automation.save(
                 update_fields=[
                     "pipeline_to_vetting_enabled",
+                    "pipeline_match_score_min",
+                    "pipeline_purge_match_score_max",
                     "pipeline_preference_margin_min",
                     "vetting_to_applying_enabled",
                     "vetting_interview_probability_min",
@@ -1129,6 +1308,24 @@ def settings_view(request):
                         )
                     else:
                         TenantPromptModelPreference.objects.for_user(user).filter(query_kind=qk).delete()
+
+                    if qk == "matching":
+                        for alias_qk in (
+                            "fit_check",
+                            "pipeline_vetting_matching",
+                            "jobs_ai_match",
+                            "keyword_search_fit",
+                            "jobs_match_api",
+                        ):
+                            if val and "::" in val:
+                                p_prov, p_mod = val.split("::", 1)
+                                TenantPromptModelPreference.objects.update_or_create(
+                                    owner=user,
+                                    query_kind=alias_qk,
+                                    defaults={"provider": p_prov, "model": p_mod, "is_active": True},
+                                )
+                            else:
+                                TenantPromptModelPreference.objects.for_user(user).filter(query_kind=alias_qk).delete()
 
             messages.success(request, "Prompt & Workflow model preferences saved successfully.")
             return redirect(reverse("settings") + "?tab=llm")
@@ -1542,30 +1739,18 @@ def settings_view(request):
         },
         {
             "category": "Job Matching & Sourcing",
-            "description": "High-volume evaluation prompts for search results and automated candidate pipelines.",
+            "description": "High-volume evaluation prompts for search results, candidate pipelines, and skill intelligence.",
             "items": [
                 {
                     "query_kind": USAGE_QUERY_MATCHING,
-                    "label": "Job Search Matcher",
-                    "hint": "Calculates semantic fit and qualification match percentage on job listings.",
+                    "label": "Job Fit & Alignment Matcher",
+                    "hint": "Unified engine for job match scoring, fit diagnostics, and pipeline candidate vetting.",
                     "selected": stored_prompt_prefs.get(USAGE_QUERY_MATCHING, ""),
                 },
                 {
-                    "query_kind": USAGE_QUERY_FIT_CHECK,
-                    "label": "Quick Fit Check",
-                    "hint": "Fast sanity check for seniority, track alignment, and disqualifiers.",
-                    "selected": stored_prompt_prefs.get(USAGE_QUERY_FIT_CHECK, ""),
-                },
-                {
-                    "query_kind": USAGE_QUERY_PIPELINE_VETTING,
-                    "label": "Pipeline Vetting & Screening",
-                    "hint": "Background worker evaluating new jobs discovered by scheduled searches.",
-                    "selected": stored_prompt_prefs.get(USAGE_QUERY_PIPELINE_VETTING, ""),
-                },
-                {
                     "query_kind": USAGE_QUERY_PIPELINE_SKILL_EXTRACT,
-                    "label": "Resume Skill Extraction",
-                    "hint": "Extracts normalized hard/soft skills and technologies from uploaded resumes.",
+                    "label": "Pipeline Skill & Market Extraction",
+                    "hint": "Extracts market-wide skill taxonomy, tools, and methodologies from batches of job descriptions.",
                     "selected": stored_prompt_prefs.get(USAGE_QUERY_PIPELINE_SKILL_EXTRACT, ""),
                 },
             ],
@@ -2313,7 +2498,7 @@ def job_search_view(request):
                 api_jobs_dislike(request, job_listing_id=int(job_id))
                 sep = "&" if "?" in next_url else "?"
                 next_url = f"{next_url}{sep}disqualifier_job_id={job_id}"
-                messages.success(request, "Job disliked. It will stay out of results and affect FIT.")
+                messages.success(request, "Job disliked. It will stay out of results and refine Match Scoring.")
             elif action == "hide":
                 api_jobs_hide(request, job_listing_id=int(job_id))
                 messages.success(request, "Job hidden from future searches.")
@@ -2686,35 +2871,13 @@ def job_search_view(request):
 
 
 def job_tasks_view(request):
-    """List job search tasks with next run and run history."""
-    tracks_qs = Track.ensure_baseline(request.user)
-    track_list = list(tracks_qs)
-    selected_slug = (request.GET.get("track") or "").strip().lower()
-    if not selected_slug and track_list:
-        selected_slug = track_list[0].slug
-    selected_track = None
-    if selected_slug:
-        selected_track = next((t for t in track_list if t.slug == selected_slug), None)
-    if not selected_track and track_list:
-        selected_track = track_list[0]
-        selected_slug = selected_track.slug
+    """Decommissioned in favor of Career Cockpit Search Schedule. Redirects to career_cockpit."""
+    track = (request.GET.get("track") or "").strip()
+    cockpit_url = reverse("career_cockpit")
+    if track:
+        cockpit_url += f"?track={track}"
+    return redirect(cockpit_url)
 
-    tasks_qs = JobSearchTask.objects.for_user(request.user).order_by("name", "id")
-    if selected_slug:
-        tasks_qs = tasks_qs.filter(track=selected_slug)
-    tasks = list(tasks_qs)
-    for t in tasks:
-        t.recent_runs = list(t.runs.all()[:10])
-        t.last_run = t.recent_runs[0] if t.recent_runs else None
-        t.schedule_description = cron_to_short_description(t.frequency or "")
-
-    context = {
-        "tracks": track_list,
-        "selected_track": selected_track,
-        "selected_track_slug": selected_slug,
-        "tasks": tasks,
-    }
-    return render(request, "resume_app/job_automation.html", context)
 
 
 @_staff_required
@@ -3045,7 +3208,10 @@ def job_task_create_view(request):
     task.next_run_at = get_next_run_at(task.frequency)
     task.save()
     messages.success(request, f"Task \"{task.name or task.search_term}\" created. Next run: {task.next_run_at}")
-    return redirect("job_automation")
+    cockpit_url = reverse("career_cockpit")
+    if task.track:
+        cockpit_url += f"?track={task.track}"
+    return redirect(cockpit_url)
 
 
 def job_task_edit_view(request, task_id):
@@ -3089,25 +3255,147 @@ def job_task_edit_view(request, task_id):
         return redirect("job_task_edit", task_id=task_id)
     task.save()
     messages.success(request, "Task updated.")
-    return redirect("job_automation")
+    cockpit_url = reverse("career_cockpit")
+    if task.track:
+        cockpit_url += f"?track={task.track}"
+    return redirect(cockpit_url)
 
 
 def job_task_run_now_view(request, task_id):
-    """Enqueue run_job_search_task once (does not change next_run_at)."""
+    """Enqueue run_job_search_task once with 60-min cooldown and concurrency check."""
     task = get_owned_or_404(JobSearchTask, request.user, id=task_id)
-    run_job_search_task(task.owner_id, task_id)
-    messages.success(request, f"Task \"{task.name or task.search_term}\" queued to run now.")
-    return redirect("job_automation")
+    is_ajax = (
+        request.headers.get("x-requested-with") == "XMLHttpRequest"
+        or "application/json" in request.headers.get("accept", "")
+        or request.content_type == "application/json"
+    )
+
+    track_slug = task.track or (task.saved_search.slug if task.saved_search else "")
+    cockpit_url = reverse("career_cockpit")
+    if track_slug:
+        cockpit_url += f"?track={track_slug}"
+    redirect_url = request.POST.get("next") or request.GET.get("next") or cockpit_url
+
+    from django.core.cache import cache
+    import time
+    from .tasks import get_job_search_task_lock_key
+    from .models import JobSearchTaskRun
+
+    # 1. Check if a search task is already actively running for this user
+    lock_key = get_job_search_task_lock_key(request.user.id)
+    is_running = bool(cache.get(lock_key)) or task.runs.filter(status=JobSearchTaskRun.STATUS_RUNNING).exists()
+    if is_running:
+        msg = "A search task is already actively running for your account. Please wait for it to complete."
+        if is_ajax:
+            return JsonResponse({"status": "running", "message": msg}, status=409)
+        messages.warning(request, msg)
+        return redirect(redirect_url)
+
+    # 2. Check 60-minute manual cooldown (cleared on failed run so user can retry immediately)
+    COOLDOWN_SECONDS = 3600
+    cooldown_key = f"job_task_manual_cooldown:{task.id}"
+    last_run = task.runs.first()
+    if last_run and last_run.status == JobSearchTaskRun.STATUS_FAILED and not is_running:
+        cache.delete(cooldown_key)
+        expires_at = None
+    else:
+        expires_at = cache.get(cooldown_key)
+
+    now = time.time()
+    if expires_at and expires_at > now:
+        remaining = int(expires_at - now)
+        mins = max(1, (remaining + 59) // 60)
+        msg = f"Task is on cooldown. Please wait {mins} minute{'s' if mins != 1 else ''} before running again."
+        if is_ajax:
+            return JsonResponse({
+                "status": "cooldown",
+                "message": msg,
+                "cooldown_remaining_seconds": remaining,
+            }, status=429)
+        messages.warning(request, msg)
+        return redirect(redirect_url)
+
+    # 3. Set cooldown, mark pending, and enqueue task
+    cache.set(cooldown_key, now + COOLDOWN_SECONDS, timeout=COOLDOWN_SECONDS)
+    cache.set(f"job_task_pending:{task.id}", now, timeout=180)
+    run_job_search_task(task.owner_id, task.id)
+
+    task_label = task.name or (task.saved_search.name if task.saved_search else None) or task.search_term
+    msg = f'Search "{task_label}" queued to run now.'
+    if is_ajax:
+        return JsonResponse({
+            "status": "queued",
+            "message": msg,
+            "task_id": task.id,
+            "cooldown_remaining_seconds": COOLDOWN_SECONDS,
+        })
+
+    messages.success(request, msg)
+    return redirect(redirect_url)
+
+
+def job_task_status_view(request, task_id):
+    """Return JSON status of a JobSearchTask (running state, last run, cooldown)."""
+    task = get_owned_or_404(JobSearchTask, request.user, id=task_id)
+    from django.core.cache import cache
+    from django.utils.timesince import timesince
+    import time
+    from .tasks import get_job_search_task_lock_key
+    from .models import JobSearchTaskRun
+
+    is_pending = bool(cache.get(f"job_task_pending:{task.id}"))
+    lock_key = get_job_search_task_lock_key(request.user.id)
+    is_running = is_pending or bool(cache.get(lock_key)) or task.runs.filter(status=JobSearchTaskRun.STATUS_RUNNING).exists()
+
+    cooldown_key = f"job_task_manual_cooldown:{task.id}"
+    last_run = task.runs.first()
+    if last_run and last_run.status == JobSearchTaskRun.STATUS_FAILED and not is_running:
+        cache.delete(cooldown_key)
+        cooldown_remaining = 0
+    else:
+        expires_at = cache.get(cooldown_key)
+        now = time.time()
+        cooldown_remaining = max(0, int(expires_at - now)) if (expires_at and expires_at > now) else 0
+
+    last_run = task.runs.first()
+    last_run_data = None
+    if last_run:
+        last_run_data = {
+            "id": last_run.id,
+            "status": last_run.status,
+            "started_at": last_run.started_at.isoformat() if last_run.started_at else None,
+            "finished_at": last_run.finished_at.isoformat() if last_run.finished_at else None,
+            "jobs_fetched": last_run.jobs_fetched,
+            "jobs_added": last_run.jobs_added_to_pipeline,
+            "jobs_eliminated": last_run.jobs_eliminated,
+            "has_details": bool(last_run.details),
+            "date_display": last_run.started_at.strftime("%b %d, %Y · %I:%M %p") if last_run.started_at else "",
+            "timesince": timesince(last_run.started_at) if last_run.started_at else "",
+            "json_url": reverse("scheduled_run_details_json", args=[last_run.id]),
+            "csv_url": reverse("download_scheduled_run_csv", args=[last_run.id]),
+        }
+
+    return JsonResponse({
+        "status": "ok",
+        "task_id": task.id,
+        "is_running": is_running,
+        "cooldown_remaining_seconds": cooldown_remaining,
+        "last_run": last_run_data,
+    })
 
 
 def job_task_toggle_active_view(request, task_id):
-    """Toggle is_active and redirect to task list."""
+    """Toggle is_active and redirect to Cockpit."""
     task = get_owned_or_404(JobSearchTask, request.user, id=task_id)
     task.is_active = not task.is_active
     task.save()
     status = "activated" if task.is_active else "paused"
     messages.success(request, f"Task \"{task.name or task.search_term}\" {status}.")
-    return redirect("job_automation")
+    cockpit_url = reverse("career_cockpit")
+    if task.track:
+        cockpit_url += f"?track={task.track}"
+    return redirect(cockpit_url)
+
 
 
 MAX_TRACK_RESUME_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -3761,6 +4049,7 @@ def download_scheduled_run_csv_view(request, run_id: int):
         "previously_removed": "Previously Removed",
         "eliminated_disqualifier": "Eliminated: Disqualifier",
         "eliminated_disliked": "Eliminated: Disliked",
+        "eliminated_hidden": "Eliminated: Hidden",
         "eliminated_duplicate": "Eliminated: Duplicate",
     }
 
@@ -3802,6 +4091,7 @@ def scheduled_run_details_json_view(request, run_id: int):
     return JsonResponse({
         "run_id": run.id,
         "profile_name": profile_name,
+        "track": run.task.track or "",
         "started_at": run.started_at.isoformat() if run.started_at else None,
         "status": run.get_status_display(),
         "jobs_fetched": run.jobs_fetched,
@@ -3810,6 +4100,7 @@ def scheduled_run_details_json_view(request, run_id: int):
         "details": run.details or [],
         "jobs": run.details or [],
     })
+
 
 
 def vetting_match_debug_view(request, job_listing_id: int):
@@ -3972,17 +4263,9 @@ def focus_breakdown_view(request, job_listing_id: int):
 @_staff_required
 def focus_alignment_view(request, job_listing_id: int, liked_job_id: int):
     """
-    Staff-only sentence-level view: for a given liked job row, show how each job
-    sentence aligned with that liked job's sentences to produce the Role %.
+    Legacy alignment view: redirect to the V1 Fit Inspector.
     """
-    data = get_focus_sentence_alignment(job_listing_id, liked_job_id)
-    if data is None:
-        messages.error(
-            request,
-            "Could not compute sentence-level alignment (maybe no role sentences or embeddings yet).",
-        )
-        return redirect("focus_breakdown", job_listing_id=job_listing_id)
-    return render(request, "resume_app/focus_alignment.html", {"alignment": data})
+    return redirect(f"{reverse('fit_inspector')}?job_id={job_listing_id}")
 
 
 def optimizer_save_draft_view(request, resume_id: int):
@@ -4152,11 +4435,27 @@ def fit_inspector_view(request):
                 messages.error(request, f"Failed to remove dislike: {e}")
 
     # Form inputs for simulation
+    job_id_param = (request.POST.get("job_id") or request.GET.get("job_id") or "").strip()
     sim_title = (request.POST.get("title") or request.GET.get("title") or "").strip()
     sim_company = (request.POST.get("company") or request.GET.get("company") or "").strip()
     sim_description = (request.POST.get("description") or request.GET.get("description") or "").strip()
 
+    loaded_job = None
+    if job_id_param:
+        try:
+            loaded_job = JobListing.objects.filter(id=int(job_id_param)).first()
+            if loaded_job:
+                if not sim_title:
+                    sim_title = loaded_job.title or ""
+                if not sim_company:
+                    sim_company = loaded_job.company_name or ""
+                if not sim_description:
+                    sim_description = loaded_job.description or ""
+        except (ValueError, TypeError):
+            pass
+
     analysis = None
+
     if sim_title or sim_description:
         try:
             if sim_description:
@@ -4182,8 +4481,46 @@ def fit_inspector_view(request):
                 }
             else:
                 liked_centroid, disliked_centroid, liked_jobs = prefs
+                liked_titles = [ltitle for _, ltitle, _, _, _ in (liked_jobs or [])]
+
+                from .job_ranking import compute_title_textual_closeness, calibrate_desc_semantic_score
+
+                # Target search terms for the profile
+                target_terms = [norm_track]
+                sp = SearchProfile.objects.filter(owner=user, slug=norm_track).first()
+                if sp:
+                    if sp.search_term:
+                        target_terms.append(sp.search_term)
+                    if sp.name and sp.name not in target_terms:
+                        target_terms.append(sp.name)
+
+                # 1. Title Textual Closeness
+                t_score, t_details = compute_title_textual_closeness(sim_title, target_terms, liked_titles)
+                title_textual_pct = round(t_score * 100, 1)
+
+                # 2. Description Calibrated Semantic Closeness
                 sim_liked = embedding_module.cosine_similarity(input_vec, liked_centroid)
                 like_pct = int(round(max(0.0, min(1.0, (sim_liked + 1.0) / 2.0)) * 100))
+                d_score = calibrate_desc_semantic_score(sim_liked)
+                desc_calibrated_pct = round(d_score * 100, 1)
+
+                # 3. Hybrid Base Score (35% Title, 65% Description)
+                alpha_title = getattr(settings, "JOB_FOCUS_V1_TITLE_WEIGHT", 0.35)
+                alpha_desc = getattr(settings, "JOB_FOCUS_V1_DESC_WEIGHT", 0.65)
+                raw_hybrid = alpha_title * t_score + alpha_desc * d_score
+
+                # 4. Title Guardrail
+                guardrail_applied = False
+                if t_score < 0.15:
+                    final_hybrid = min(raw_hybrid, t_score + 0.15)
+                    guardrail_applied = (final_hybrid < raw_hybrid)
+                elif t_score < 0.30:
+                    final_hybrid = min(raw_hybrid, t_score + 0.35)
+                    guardrail_applied = (final_hybrid < raw_hybrid)
+                else:
+                    final_hybrid = raw_hybrid
+
+                v1_score = int(round(final_hybrid * 100))
 
                 dislike_pct = None
                 margin_pct = None
@@ -4192,36 +4529,50 @@ def fit_inspector_view(request):
                     dislike_pct = int(round(max(0.0, min(1.0, (sim_disliked + 1.0) / 2.0)) * 100))
                     margin_pct = like_pct - dislike_pct
 
-                # Determine verdict
-                if margin_pct is not None and margin_pct < -5:
-                    verdict_label = "Auto-Dislike Alert (Low Fit)"
-                    verdict_desc = f"Preference margin is {margin_pct}% (below the -5% threshold). Scheduled runs would automatically drop this job."
-                    verdict_style = "bg-rose-50 text-rose-800 border-rose-200"
-                elif margin_pct is not None and margin_pct >= 10:
-                    verdict_label = "Strong Fit"
-                    verdict_desc = f"Preference margin is +{margin_pct}%. Highly aligned with your liked jobs profile."
-                    verdict_style = "bg-emerald-50 text-emerald-800 border-emerald-200"
-                elif margin_pct is not None:
-                    verdict_label = "Moderate / Neutral Fit"
-                    verdict_desc = f"Preference margin is {margin_pct:+d}%. Within acceptable thresholds."
-                    verdict_style = "bg-sky-50 text-sky-800 border-sky-200"
-                else:
-                    verdict_label = "Liked Baseline Only"
-                    verdict_desc = f"Similarity to liked jobs is {like_pct}%. No disliked centroid to compute margin."
-                    verdict_style = "bg-slate-50 text-slate-800 border-slate-200"
+                # Determine verdict based on V1 Match Score and threshold
+                cfg = AppAutomationSettings.get_for_user(user)
+                threshold = getattr(cfg, "pipeline_match_score_min", 60)
 
-                # Rank top 5 liked job drivers
+                if margin_pct is not None and margin_pct < -5:
+                    verdict_label = "Disliked Traits Alert (Blocked)"
+                    verdict_desc = f"V1 Match Score is {v1_score}%, but preference margin is {margin_pct}% (below -5% guardrail). Auto-promotion to Review is blocked."
+                    verdict_style = "bg-amber-50 text-amber-800 border-amber-200"
+                elif v1_score >= threshold:
+                    verdict_label = "Auto-Promote to Review (High Fit)"
+                    verdict_desc = f"V1 Match Score is {v1_score}% (meets the {threshold}% threshold). Qualified for automatic intake promotion."
+                    verdict_style = "bg-emerald-50 text-emerald-800 border-emerald-200"
+                else:
+                    verdict_label = "Below Threshold (Intake Only)"
+                    if guardrail_applied:
+                        verdict_desc = f"V1 Match Score is {v1_score}% (below {threshold}% threshold). Title match is {title_textual_pct}%; Title Guardrail capped description lift from {int(round(raw_hybrid * 100))}% down to {v1_score}%."
+                    else:
+                        verdict_desc = f"V1 Match Score is {v1_score}% (below {threshold}% threshold). Title match: {title_textual_pct}%, Description semantic: {desc_calibrated_pct}%."
+                    verdict_style = "bg-rose-50 text-rose-800 border-rose-200"
+
+                # Rank top 5 liked job drivers using pairwise V1 matching
                 liked_drivers = []
                 for ljid, ljtitle, ljcomp, ljemb, _ in liked_jobs or []:
                     if ljemb:
-                        s = embedding_module.cosine_similarity(input_vec, ljemb)
-                        p = int(round(max(0.0, min(1.0, (s + 1.0) / 2.0)) * 100))
+                        lt_score, _ = compute_title_textual_closeness(sim_title, [ljtitle or ""], [ljtitle or ""])
+                        raw_sim = embedding_module.cosine_similarity(input_vec, ljemb)
+                        cal_sim = calibrate_desc_semantic_score(raw_sim)
+                        pair_raw = alpha_title * lt_score + alpha_desc * cal_sim
+                        if lt_score < 0.20:
+                            pair_final = min(pair_raw, lt_score + 0.10)
+                        elif lt_score < 0.40:
+                            pair_final = min(pair_raw, lt_score + 0.25)
+                        else:
+                            pair_final = pair_raw
+                        p_v1 = int(round(pair_final * 100))
                         liked_drivers.append(
                             {
                                 "job_id": ljid,
                                 "title": ljtitle or "Untitled",
                                 "company": ljcomp or "Unknown",
-                                "similarity_percent": p,
+                                "similarity_percent": p_v1,
+                                "title_pct": round(lt_score * 100, 1),
+                                "desc_pct": round(cal_sim * 100, 1),
+                                "raw_cosine_pct": int(round(max(0.0, min(1.0, (raw_sim + 1.0) / 2.0)) * 100)),
                             }
                         )
                 liked_drivers.sort(key=lambda x: -x["similarity_percent"])
@@ -4250,6 +4601,12 @@ def fit_inspector_view(request):
 
                 analysis = {
                     "has_baseline": True,
+                    "v1_score": v1_score,
+                    "title_textual_pct": title_textual_pct,
+                    "desc_calibrated_pct": desc_calibrated_pct,
+                    "guardrail_applied": guardrail_applied,
+                    "raw_hybrid_pct": int(round(raw_hybrid * 100)),
+                    "threshold": threshold,
                     "like_percent": like_pct,
                     "dislike_percent": dislike_pct,
                     "margin_percent": margin_pct,
@@ -4313,6 +4670,8 @@ def fit_inspector_view(request):
     context = {
         "search_profiles": search_profiles,
         "selected_track": norm_track,
+        "sim_job_id": job_id_param,
+        "loaded_job": loaded_job,
         "sim_title": sim_title,
         "sim_company": sim_company,
         "sim_description": sim_description,
@@ -4337,6 +4696,10 @@ def performance_dashboard_view(request):
     from django.core.cache import cache
     cache_key = f"perf_stats_{user.id}"
     cached_stats = cache.get(cache_key)
+    if not cached_stats:
+        from .dashboard_stats import get_performance_dashboard_stats
+        cached_stats = get_performance_dashboard_stats(user)
+        cache.set(cache_key, cached_stats, timeout=120)
 
     return render(request, "resume_app/performance_dashboard.html", {
         "stats": cached_stats,
@@ -4409,5 +4772,110 @@ def update_dashboard_settings_api(request):
         "status": "ok",
         "weekly_target_applications": settings.weekly_target_applications,
     })
+
+
+@login_required
+def pipeline_applied_resume_json_view(request, entry_id: int):
+    """
+    Return JSON snapshot of the applied/tailored resume markdown for a pipeline entry.
+    """
+    user = get_active_user(request)
+    entry = get_owned_or_404(PipelineEntry, user, id=entry_id)
+    job = entry.job_listing
+
+    markdown = entry.applied_resume_markdown or ""
+    if not markdown and entry.applied_optimized_resume:
+        markdown = entry.applied_optimized_resume.optimized_content or ""
+    elif not markdown:
+        opt = entry.optimized_resumes.filter(status="completed").exclude(optimized_content="").order_by("-updated_at").first()
+        if opt and (opt.optimized_content or "").strip():
+            markdown = opt.optimized_content
+            entry.applied_resume_markdown = markdown
+            entry.applied_optimized_resume = opt
+            entry.save(update_fields=["applied_resume_markdown", "applied_optimized_resume"])
+
+    from .utils import sanitize_resume_markdown
+    sanitized = sanitize_resume_markdown(markdown)
+    if sanitized != markdown:
+        markdown = sanitized
+        entry.applied_resume_markdown = sanitized
+        entry.save(update_fields=["applied_resume_markdown"])
+
+    return JsonResponse({
+        "success": True,
+        "entry_id": entry.id,
+        "job_listing_id": entry.job_listing_id,
+        "job_title": job.title if job else "",
+        "company_name": job.company_name if job else "",
+        "has_resume": bool(markdown.strip()),
+        "markdown": markdown,
+        "applied_at": entry.applied_at.isoformat() if entry.applied_at else None,
+        "optimized_resume_id": entry.applied_optimized_resume_id,
+    })
+
+
+@login_required
+def pipeline_export_pdf_view(request, entry_id: int):
+    """
+    Export snapshot of applied resume markdown as PDF.
+    """
+    from django.http import Http404, HttpResponse
+    from .api import _apply_export_replacements, _build_export_pdf, _export_file_response, _format_export_filename
+    from .utils import sanitize_resume_markdown
+
+    user = get_active_user(request)
+    entry = get_owned_or_404(PipelineEntry, user, id=entry_id)
+    content = entry.applied_resume_markdown or ""
+    if not content and entry.applied_optimized_resume:
+        content = entry.applied_optimized_resume.optimized_content or ""
+    if not content.strip():
+        raise Http404("No applied resume markdown available for export.")
+
+    content = sanitize_resume_markdown(content)
+    content = _apply_export_replacements(content, request)
+    buf = _build_export_pdf(content)
+    if buf is None:
+        return HttpResponse("PDF export requires reportlab; install with: pip install reportlab", status=503)
+
+    job = entry.job_listing
+    company = (job.company_name or "").strip() if job else ""
+    title = (job.title or "").strip() if job else ""
+    filename = _format_export_filename("applied_resume", company, title, "pdf")
+    return _export_file_response(buf, filename=filename, content_type="application/pdf")
+
+
+@login_required
+def pipeline_export_docx_view(request, entry_id: int):
+    """
+    Export snapshot of applied resume markdown as Word (DOCX).
+    """
+    from django.http import Http404, HttpResponse
+    from .api import _apply_export_replacements, _build_export_docx, _export_file_response, _format_export_filename
+    from .utils import sanitize_resume_markdown
+
+    user = get_active_user(request)
+    entry = get_owned_or_404(PipelineEntry, user, id=entry_id)
+    content = entry.applied_resume_markdown or ""
+    if not content and entry.applied_optimized_resume:
+        content = entry.applied_optimized_resume.optimized_content or ""
+    if not content.strip():
+        raise Http404("No applied resume markdown available for export.")
+
+    content = sanitize_resume_markdown(content)
+    content = _apply_export_replacements(content, request)
+    buf = _build_export_docx(content)
+    if buf is None:
+        return HttpResponse("Word export requires python-docx; install with: pip install python-docx", status=503)
+
+    job = entry.job_listing
+    company = (job.company_name or "").strip() if job else ""
+    title = (job.title or "").strip() if job else ""
+    filename = _format_export_filename("applied_resume", company, title, "docx")
+    return _export_file_response(
+        buf,
+        filename=filename,
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
 
 

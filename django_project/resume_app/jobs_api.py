@@ -25,6 +25,7 @@ from .models import (
     UserDisqualifier,
     PipelineEntry,
     Track,
+    EmployerInterviewEvent,
 )
 from .job_sources import fetch_jobs, normalize_site_names, upsert_job_listing_from_fetch
 from .job_search_core import (
@@ -87,8 +88,10 @@ from .schemas import (
     InterviewPrepGenerateRequest,
     InterviewPrepResponse,
     InterviewPrepSaveRequest,
+    LogInterviewEventRequest,
+    LogInterviewEventResponse,
 )
-from .job_ranking import get_focus_breakdown, get_focus_sentence_alignment, rank_jobs_by_preference
+from .job_ranking import get_focus_breakdown, rank_jobs_by_preference
 from .llm import LLM_PROVIDERS
 from .utils import format_job_source_label
 from .disqualifiers import (
@@ -611,6 +614,9 @@ def jobs_ai_match(request, payload: AiMatchRequest):
                 prompt_user=mu,
                 prompt_legacy=ml or None,
                 job_cache_key=f"ai-match:{jid}:{payload.resume_id}",
+                job_id=jid,
+                resume_id=payload.resume_id,
+                prefer_local=True,
             )
             score = result.get("score")
             reasoning = result.get("reasoning") or ""
@@ -809,6 +815,128 @@ def pipeline_interview_prep_save(request, pipeline_entry_id: int, payload: Inter
     save_interview_prep_data(entry, target_type, payload.interview_prep or "")
     return {"ok": True, "interview_prep": entry.interview_prep or "", "interview_type": target_type}
 
+
+@router.get("/pipeline/applied-jobs")
+def pipeline_applied_jobs(request):
+    """Return all opportunities currently in Stage.DONE (Applied) for the user."""
+    user = api_user(request)
+    entries = (
+        PipelineEntry.objects.filter(owner=user, stage=PipelineEntry.Stage.DONE)
+        .select_related("job_listing")
+        .order_by("-applied_at", "-added_at")
+    )
+    entry_ids = [e.id for e in entries]
+    latest_events = {}
+    if entry_ids:
+        for ev in EmployerInterviewEvent.objects.filter(pipeline_entry_id__in=entry_ids).order_by("-created_at"):
+            if ev.pipeline_entry_id not in latest_events:
+                latest_events[ev.pipeline_entry_id] = ev
+
+    items = []
+    for e in entries:
+        job = e.job_listing
+        ev = latest_events.get(e.id)
+        items.append({
+            "pipeline_entry_id": e.id,
+            "job_listing_id": job.id,
+            "title": job.title,
+            "company": job.company_name,
+            "location": job.location,
+            "applied_at": e.applied_at.isoformat() if e.applied_at else None,
+            "substatus": e.post_apply_substatus,
+            "substatus_display": e.get_post_apply_substatus_display(),
+            "next_interview_at": e.next_interview_at.isoformat() if e.next_interview_at else None,
+            "has_interview_prep": bool((e.interview_prep or "").strip()),
+            "event": {
+                "id": ev.id,
+                "round_type": ev.round_type,
+                "status": ev.status,
+                "scheduled_at": ev.scheduled_at.isoformat() if ev.scheduled_at else None,
+                "duration_minutes": ev.duration_minutes,
+                "interviewer_names": ev.interviewer_names,
+                "location_or_link": ev.location_or_link,
+                "notes": ev.notes,
+            } if ev else None,
+        })
+    return {"items": items}
+
+
+@router.post("/pipeline-entry/{pipeline_entry_id}/log-interview", response=LogInterviewEventResponse)
+def pipeline_log_interview_event(request, pipeline_entry_id: int, payload: LogInterviewEventRequest):
+    """Log an employer response or interview milestone for an applied job."""
+    from datetime import datetime
+    from django.core.cache import cache
+    from django.utils.dateparse import parse_datetime
+
+    user = api_user(request)
+    entry = get_owned_or_404(PipelineEntry, user, id=pipeline_entry_id)
+    if entry.stage != PipelineEntry.Stage.DONE:
+        raise HttpError(400, "Interview milestones can only be logged for applied (Done) jobs.")
+
+    scheduled_dt = None
+    if payload.scheduled_at:
+        try:
+            scheduled_dt = parse_datetime(payload.scheduled_at)
+            if scheduled_dt is None:
+                scheduled_dt = datetime.fromisoformat(payload.scheduled_at.replace("Z", "+00:00"))
+        except Exception:
+            scheduled_dt = None
+
+    # Update the entry's substatus & next interview timestamp
+    entry.update_post_apply_substatus(
+        substatus=payload.round_type,
+        next_interview_at=scheduled_dt,
+        save=True,
+    )
+
+    # Create the event log
+    event = EmployerInterviewEvent.objects.create(
+        owner=user,
+        pipeline_entry=entry,
+        round_type=payload.round_type,
+        status=payload.status or EmployerInterviewEvent.Status.SCHEDULED,
+        scheduled_at=scheduled_dt,
+        duration_minutes=payload.duration_minutes or 45,
+        interviewer_names=(payload.interviewer_names or "").strip(),
+        location_or_link=(payload.location_or_link or "").strip(),
+        notes=(payload.notes or "").strip(),
+    )
+
+    # Invalidate dashboard telemetry cache so performance dashboard reflects immediately
+    cache.delete(f"perf_stats_{user.id}")
+
+    # Optionally trigger interview prep if requested
+    if payload.generate_prep:
+        try:
+            from .job_prep import generate_interview_prep
+            prep_type = "recruiter"
+            if payload.round_type in ("panel_interview", "tech_deep_dive"):
+                prep_type = "technical"
+            elif payload.round_type == "hiring_manager":
+                prep_type = "hiring_manager"
+            elif payload.round_type == "behavioral":
+                prep_type = "behavioral"
+            llm = _get_llm_from_request(user)
+            generate_interview_prep(entry, llm=llm, interview_type=prep_type)
+        except Exception as exc:
+            logger.warning("Auto-generating interview prep during event log failed: %s", exc)
+
+    entry.refresh_from_db()
+
+    return LogInterviewEventResponse(
+        ok=True,
+        event_id=event.id,
+        pipeline_entry_id=entry.id,
+        substatus=entry.post_apply_substatus,
+        substatus_display=entry.get_post_apply_substatus_display(),
+        next_interview_at=entry.next_interview_at.isoformat() if entry.next_interview_at else None,
+        interviewer_names=event.interviewer_names,
+        location_or_link=event.location_or_link,
+        notes=event.notes,
+        duration_minutes=event.duration_minutes,
+        status=event.status,
+        has_interview_prep=bool((entry.interview_prep or "").strip()),
+    )
 
 
 @router.post("/pipeline-resume-summary/start", response=PipelineResumeSummaryStartResponse)
@@ -1051,6 +1179,9 @@ def jobs_run_keyword_search(request, payload: RunKeywordSearchRequest):
                     user=user,
                     prompt_template=None,
                     job_cache_key=f"keyword-fit:{job.id}:{res.id}",
+                    job_id=job.id,
+                    resume_id=res.id,
+                    prefer_local=True,
                     usage_query_kind=USAGE_QUERY_KEYWORD_SEARCH_FIT,
                 )
             except (LLMRequestsDisabled, LLMEmailVerificationRequired) as e:
@@ -1454,6 +1585,9 @@ def jobs_match(request, job_listing_id: int, payload: MatchRequest):
             user=user,
             prompt_template=None,
             job_cache_key=f"match:{job.id}:{resume.id}",
+            job_id=job.id,
+            resume_id=resume.id,
+            prefer_local=True,
             usage_query_kind=USAGE_QUERY_JOBS_MATCH_API,
         )
     except LLMRequestsDisabled as e:
@@ -1502,37 +1636,10 @@ def jobs_like(request, job_listing_id: int, track: Optional[str] = None, profile
     user = api_user(request)
     job = get_object_or_404(JobListing, id=job_listing_id)
     raw_track = _resolve_track_from_request(user, request, track=track, profile=profile)
-    dw = dual_write_track_fields(user=user, slug=raw_track)
-    with transaction.atomic():
-        JobListingAction.objects.get_or_create(
-            owner=user,
-            job_listing=job,
-            action=JobListingAction.ActionType.LIKED,
-            track=dw["track"],
-            defaults={"search_profile": dw["search_profile"]},
-        )
-        JobListingAction.objects.for_user(user).filter(
-            job_listing=job,
-            action__in=[
-                JobListingAction.ActionType.DISLIKED,
-                JobListingAction.ActionType.HIDDEN,
-            ],
-        ).filter(q_clear_on_sentiment_change(dw["track"])).delete()
-        JobListingEmbedding.objects.for_user(user).filter(
-            job_listing=job, embedding_type=JobListingEmbedding.EmbeddingType.DISLIKED
-        ).filter(q_clear_on_sentiment_change(dw["track"])).delete()
-    invalidate_preference_cache(user)
-    invalidate_disliked_embeddings_cache(user)
-    from . import embeddings as embedding_module
-    _store_feedback_embedding_async(
-        user=user,
-        job=job,
-        embedding_type=JobListingEmbedding.EmbeddingType.LIKED,
-        track=dw["track"],
-        search_profile=dw["search_profile"],
-        embed_fn=embedding_module.embed_job_text,
-    )
+    from .track_actions import record_job_liked
+    record_job_liked(user=user, job=job, track=raw_track)
     return {"success": True}
+
 
 
 @router.post("/{job_listing_id}/unlike")

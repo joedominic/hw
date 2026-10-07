@@ -552,14 +552,24 @@
                                {% if app_automation.pipeline_to_vetting_enabled %}checked{% endif %}>
                         <span>
                             <span class="font-medium text-concierge-slate">Auto-move Pipeline → Vetting</span>
-                            <span class="mt-1 block text-sm font-normal text-slate-600">When Pref margin is at or above the threshold.</span>
+                            <span class="mt-1 block text-sm font-normal text-slate-600">When Match Score is at or above the threshold.</span>
                         </span>
                     </label>
-                    <div class="mt-4 sm:max-w-xs">
-                        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="pipeline-pref-min">Minimum Pref margin (%)</label>
-                        <input type="number" id="pipeline-pref-min" name="pipeline_preference_margin_min"
-                               value="{{ app_automation.pipeline_preference_margin_min }}"
-                               class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                    <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="pipeline-match-min">Minimum Match Score (%)</label>
+                            <input type="number" id="pipeline-match-min" name="pipeline_match_score_min"
+                                   value="{{ app_automation.pipeline_match_score_min|default:60 }}" min="0" max="100"
+                                   class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                            <p class="mt-1 text-xs text-slate-500">Auto-promote from Pipeline to Review when score meets or exceeds this (default 60%).</p>
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="pipeline-purge-max">Auto-dismiss Below Match Score (%)</label>
+                            <input type="number" id="pipeline-purge-max" name="pipeline_purge_match_score_max"
+                                   value="{{ app_automation.pipeline_purge_match_score_max|default:25 }}" min="0" max="100"
+                                   class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate">
+                            <p class="mt-1 text-xs text-slate-500">Auto-dismiss roles from Pipeline when score is strictly below this (default 25%, 0 to disable).</p>
+                        </div>
                     </div>
                 </div>
 

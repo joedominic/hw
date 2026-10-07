@@ -1,157 +1,144 @@
 # API And Route Reference
 
-Routes are registered in `django_project/core/urls.py`. The site uses server-rendered Django views for pages and Django Ninja JSON endpoints under `/api/resume/`.
+This document catalogs the complete route surface for HireEdge, registered across `django_project/core/urls.py`, `resume_app/api.py`, and `resume_app/jobs_api.py`.
 
-## Authentication Behavior
+---
 
-The app uses Django session authentication. `LoginRequiredMiddleware` protects the site by default.
+## 1. Authentication & Security Policies
 
-- Unauthenticated HTML requests redirect to `/accounts/login/`.
-- Unauthenticated `/api/*` requests return JSON `401`.
-- Public routes include `/` (landing), `/accounts/*`, `/admin/`, and `/static/`. `/media/` requires auth and owner authorization.
-- Data access should remain owner-scoped unless a model is intentionally global.
+- **Global Protection:** `LoginRequiredMiddleware` protects the site. Unauthenticated HTML requests redirect to `/accounts/login/`; unauthenticated `/api/*` requests return JSON `401`.
+- **Public Exceptions:** `/` (landing), `/accounts/*` (auth flows), `/admin/`, `/static/`, `/legal/privacy/`, and `/legal/terms/`.
+- **API Authentication:** Supports Django session auth or Bearer token auth (`Authorization: Bearer <token>`) via `CustomerApiKey` (`SessionOrApiKeyAuth`).
+- **Media Authorization:** `/media/<path>` requests are routed through `serve_media_view`, which validates that the requesting user owns the requested asset.
 
-## HTML Routes
+---
 
-### Accounts And Landing
+## 2. Server-Rendered HTML Routes
 
-- `GET /` - public landing page; redirects authenticated users into the workspace.
-- `GET/POST /accounts/login/` - login.
-- `POST /accounts/logout/` - logout.
-- `GET/POST /accounts/signup/` - signup when `SIGNUP_ENABLED` is true; seeds default user data and sends verification email.
-- `GET/POST /accounts/password-reset/` (+ done / confirm / complete) - password reset.
-- `GET /billing/` - plan usage and Stripe checkout/portal.
-- `POST /billing/stripe/webhook/` - Stripe webhooks (signature required when `DEBUG=False`; unsigned JSON allowed only in DEBUG).
-- `GET /legal/privacy/`, `GET /legal/terms/` - public legal pages.
-- `GET /accounts/verify-email/<uidb64>/<token>/` - confirm account email.
-- `POST /accounts/resend-verification/` - resend verification email (authenticated).
+### 2.1 Accounts, Billing & Staff
+- `GET /` — Public landing page.
+- `GET/POST /accounts/login/` — User login.
+- `POST /accounts/logout/` — User logout.
+- `GET/POST /accounts/signup/` — Registration (when `SIGNUP_ENABLED=True`).
+- `GET/POST /accounts/password-reset/` (+ `done/`, `confirm/`, `complete/`) — Standard password reset flow.
+- `GET /accounts/verify-email/<uidb64>/<token>/` — Confirm account email.
+- `POST /accounts/resend-verification/` — Resend verification email.
+- `GET /getting-started/` — Onboarding checklist.
+- `GET /billing/` — Plan quotas, usage ledger, and Stripe checkout/portal integration.
+- `POST /billing/stripe/webhook/` — Stripe webhook receiver (verifies signatures in production).
+- `GET /staff/users/` — Staff dashboard for user search, quota auditing, and plan adjustment.
+- `POST /staff/users/<user_id>/action/` — Staff administrative actions (suspend, activate, set plan).
+- `/hijack/` — Staff user impersonation via `django-hijack` (audited in `ImpersonationAuditLog`).
+- `/admin/` — Django admin console.
+- `GET /legal/privacy/`, `GET /legal/terms/` — Public compliance pages.
 
-### Resume And LLM
+---
 
-- `GET/POST /resume/optimizer/` - optimizer home.
-- `GET /resume/status/<resume_id>/` - optimization status JSON for the HTML UI.
-- `POST /resume/status/<resume_id>/draft/` - save edited optimized text.
-- `GET /resume/optimizer/context/<resume_id>/` - debug writer context (`optimizer_context_snapshot`: JD/resume char budgets from last run).
-- `GET/POST /settings/` - LLM keys, model preferences, usage, and automation settings.
-- `GET/POST /resume/prompts/` - staff-only system Prompt Library and global ATS judge profiles.
-- `GET/POST /resume/llm-test/` - developer LLM test page when enabled.
+### 2.2 Career Cockpit & Job Automation
+- `GET /jobs/cockpit/` — **Career Cockpit dashboard**; central hub for search profiles, task schedules, manual triggers, and run logs.
+- `GET /jobs/cockpit/api/skill-radar/` — Skill frequency radar JSON for the active search profile.
+- `POST /jobs/tasks/<task_id>/run/` — Trigger manual search run immediately (sets atomic pending key + 60m cooldown).
+- `GET /jobs/tasks/<task_id>/status/` — JSON status endpoint polled by browser during active search.
+- `POST /jobs/tasks/<task_id>/toggle/` — Toggle task active/inactive status.
+- `GET/POST /jobs/tasks/new/` — Create a scheduled search task.
+- `GET/POST /jobs/tasks/<task_id>/edit/` — Edit an existing search task.
+- `GET /jobs/tracks/scheduled-runs/<run_id>/details-json/` — Disposition breakdown JSON for the Cockpit inspection modal.
+- `GET /jobs/tracks/scheduled-runs/<run_id>/download-csv/` — Download run job dispositions as CSV.
+- `GET /jobs/automation/` — **Decommissioned legacy route; redirects to `/jobs/cockpit/`**.
 
-### Workflows
+---
 
-- `GET /workspace/workflows/` - list system-wide workflows (staff).
-- `GET/POST /workspace/workflows/new/` - create system-wide workflow (staff).
-- `GET/POST /workspace/workflows/<id>/edit/` - edit system-wide workflow (staff).
-- `POST /workspace/workflows/<id>/delete/` - delete system-wide workflow (staff).
+### 2.3 Job Search & Pipeline Management
+- `GET/POST /jobs/search/` — Search external jobs (Indeed, LinkedIn, Greenhouse, BuiltIn, Levels.fyi, Dice) and submit feedback.
+- `GET/POST /jobs/pipeline/` — Pipeline Kanban board (Stage: New).
+- `GET/POST /jobs/vetting/` — Vetting Kanban board (Stage: Review).
+- `GET/POST /jobs/applying/` — Applying Kanban board (Stage: Tailoring).
+- `GET/POST /jobs/done/` — Done Kanban board (Stage: Applied / Completed).
+- `GET /jobs/tracks/` — Search profile management and resume assignment.
+- `POST /jobs/tracks/<slug>/delete/` — Delete a search profile.
+- `GET /jobs/<job_listing_id>/focus-breakdown/` — Staff-only focus score diagnostics.
+- `GET /jobs/<job_listing_id>/focus-breakdown/<liked_job_id>/` — Staff-only focus alignment analysis.
+- `GET/POST /jobs/vetting/match-debug/<job_listing_id>/` — Single-job resume match debugging.
 
-### Jobs And Pipeline
+---
 
-- `GET/POST /jobs/search/` - search external jobs and record feedback.
-- `GET /jobs/<job_listing_id>/focus-breakdown/` - staff-only focus score debug.
-- `GET /jobs/<job_listing_id>/focus-breakdown/<liked_job_id>/` - staff-only focus alignment debug.
-- `GET/POST /jobs/pipeline/` - pipeline stage board.
-- `GET/POST /jobs/vetting/` - vetting stage board.
-- `GET/POST /jobs/applying/` - applying stage board.
-- `GET/POST /jobs/done/` - done stage board.
-- `GET/POST /jobs/vetting/match-debug/<job_listing_id>/` - one-job matching debug.
+### 2.4 Performance Dashboard & Fit Diagnostics
+- `GET /performance/` — Momentum & application conversion dashboard.
+- `GET /performance/api/metrics/` — Progressive hydration JSON endpoint for metrics (accepts `?refresh=1`).
+- `POST /performance/settings/` — Update performance dashboard tracking settings.
+- `GET /system/fit-inspector/` — Diagnostics for semantic embeddings, BM25 keywords, and recruiter scoring.
 
-### Apply Agent
+---
 
-- `GET/POST /jobs/apply-agent/` - dashboard and start actions.
-- `GET/POST /jobs/apply-agent/<attempt_id>/` - review, approve, reject, or override URL.
-- `GET/POST /jobs/apply-agent/profile/` - applicant profile and apply-agent LLM settings.
+### 2.5 Resume Optimizer & Prompts
+- `GET/POST /resume/optimizer/` — Main AI resume optimizer interface.
+- `GET /resume/status/<resume_id>/` — Polling status endpoint for active optimization runs.
+- `POST /resume/status/<resume_id>/draft/` — Save edited resume text draft.
+- `GET /resume/optimizer/context/<resume_id>/` — Inspect `optimizer_context_snapshot` token budgets.
+- `GET/POST /resume/prompts/` — Staff prompt library and global ATS judge profile editor.
+- `GET/POST /resume/llm-test/` — Developer test view for LLM completions.
+- `GET /workspace/workflows/` — List system-wide optimizer workflows (staff).
+- `GET/POST /workspace/workflows/new/` — Create optimizer workflow (staff).
+- `GET/POST /workspace/workflows/<id>/edit/` — Edit optimizer workflow (staff).
+- `GET/POST /settings/` — User settings (LLM keys, model preferences, usage, stop controls).
 
-### Tracks, Tasks, And Huey
+---
 
-- `GET/POST /jobs/tracks/` - manage search profiles and resume library (available in normal and power modes).
-- `POST /jobs/tracks/<slug>/delete/` - delete a search profile.
-- `GET /jobs/automation/` - scheduled search tasks.
-- `GET/POST /jobs/tasks/new/` - create scheduled search task.
-- `GET/POST /jobs/tasks/<id>/edit/` - edit task.
-- `POST /jobs/tasks/<id>/run/` - enqueue task immediately.
-- `POST /jobs/tasks/<id>/toggle/` - activate or deactivate task.
-- `GET /jobs/huey/` - Huey monitor.
-- `POST /jobs/huey/periodic/<task_name>/revoke/` - pause periodic task.
-- `POST /jobs/huey/periodic/<task_name>/restore/` - restore periodic task.
-- `POST /jobs/huey/flush-queue/` - flush pending queue.
-- `POST /jobs/huey/run-cleanup/` - run cleanup.
-- `POST /jobs/huey/task/<task_name>/run/` - run known Huey task.
+### 2.6 Huey Queue Monitor (Staff Only)
+- `GET /jobs/huey/` — Huey worker dashboard (queue depths, worker health, periodic tasks).
+- `POST /jobs/huey/periodic/<task_name>/revoke/` — Pause periodic task.
+- `POST /jobs/huey/periodic/<task_name>/restore/` — Restore periodic task.
+- `POST /jobs/huey/flush-queue/` — Flush pending task queue.
+- `POST /jobs/huey/run-cleanup/` — Trigger database and resume file cleanup.
+- `POST /jobs/huey/task/<task_name>/run/` — Execute specific task immediately.
 
-### Staff
+---
 
-- `GET /staff/users/` - staff user search and hijack controls.
-- `/hijack/` - django-hijack acquire/release routes.
-- `/admin/` - Django admin.
+## 3. Django Ninja REST API: `/api/resume/`
 
-## JSON API: `/api/resume/`
+Mounted in `resume_app/api.py`.
 
-Defined mainly in `resume_app/api.py`.
+### 3.1 Optimizer & LLM Operations
+- `POST /api/resume/optimize` — Upload source PDF and job description; enqueues `optimize_resume_task`.
+- `GET /api/resume/status/{resume_id}` — Retrieve optimization run state, scores, and logs.
+- `POST /api/resume/status/{resume_id}/draft` — Persist modified resume markdown.
+- `POST /api/resume/status/{resume_id}/generate-cover-letter` — Generate tailored cover letter.
+- `POST /api/resume/status/{resume_id}/save-cover-letter` — Persist edited cover letter.
+- `POST /api/resume/status/{resume_id}/cancel` — Cancel active optimization task.
+- `POST /api/resume/run-step` — Execute an isolated step (`writer`, `ats_judge`, `recruiter_judge`, or `jd_cleanse`).
+- `POST /api/resume/fit-check` — Score resume fit against a job description.
+- `POST /api/resume/llm/complete` — Generic LLM completion (requires `api_access` plan permission).
+- `POST /api/resume/llm/connect` — Validate and store encrypted provider API keys.
+- `GET /api/resume/llm/models` — Retrieve available models for a provider.
+- `POST /api/resume/llm/set-default-model` — Set default provider/model preference.
+- `GET /api/resume/export/{resume_id}/pdf` — Export tailored resume as PDF.
+- `GET /api/resume/export/{resume_id}/docx` — Export tailored resume as Word document.
 
-- `POST /api/resume/llm/complete` - generic LLM completion (requires plan `api_access`; input capped by `LLM_COMPLETE_MAX_INPUT_CHARS`).
-- `POST /api/resume/run-step` - run one optimizer step (`writer`, `ats_judge`, `recruiter_judge`, or `jd_cleanse`).
-- `POST /api/resume/fit-check` - score resume fit against a JD.
-- `GET /api/resume/prompts` - default prompt templates.
-- `POST /api/resume/optimize` - upload PDF/JD and enqueue optimization.
-- `GET /api/resume/status/{resume_id}` - owner-scoped optimization status.
-- `POST /api/resume/status/{resume_id}/draft` - save draft.
-- `POST /api/resume/status/{resume_id}/generate-cover-letter` - generate cover letter.
-- `POST /api/resume/status/{resume_id}/save-cover-letter` - save edited cover letter.
-- `POST /api/resume/status/{resume_id}/cancel` - cancel queued/running optimization.
-- `GET /api/resume/ats-judge-profiles[...]` - list/read system ATS profiles; `POST/PUT/DELETE` are staff-only.
-- `GET/POST/PUT/DELETE /api/resume/workflows[...]` - list/get for all users; create/update/delete staff-only (system-wide).
-- `POST /api/resume/llm/connect` - validate and store provider key.
-- `GET /api/resume/llm/models` - list models for a provider.
-- `POST /api/resume/llm/set-default-model` - set default model.
-- `GET /api/resume/export/{resume_id}/pdf` - export PDF.
-- `GET /api/resume/export/{resume_id}/docx` - export DOCX.
+---
 
-## JSON API: `/api/resume/jobs/`
+## 4. Django Ninja REST API: `/api/resume/jobs/`
 
-Defined in `resume_app/jobs_api.py`.
+Mounted in `resume_app/jobs_api.py`.
 
-- `GET /api/resume/jobs/resumes` - library resumes.
-- `GET /api/resume/jobs/pipeline` - owner pipeline jobs.
-- `POST /api/resume/jobs/pipeline/delete` - soft-delete pipeline entry.
-- `POST /api/resume/jobs/search` - external job search.
-- `POST /api/resume/jobs/ai-match` - LLM match batch.
-- `POST /api/resume/jobs/insights` - multi-job insights.
-- `GET /api/resume/jobs/pipeline-entry/{id}/interview-prep` - fetch prep.
-- `POST /api/resume/jobs/pipeline-entry/{id}/generate-interview-prep` - generate prep.
-- `POST /api/resume/jobs/pipeline-entry/{id}/save-interview-prep` - save prep.
-- `POST /api/resume/jobs/pipeline-resume-summary/start` - start batch skill extraction.
-- `GET /api/resume/jobs/pipeline-resume-summary/status` - poll extraction.
-- `POST /api/resume/jobs/pipeline-resume-summary/stop` - stop extraction.
-- `GET /api/resume/jobs/matches` - saved match results.
-- `POST /api/resume/jobs/run-keyword-search` - keyword search and fit checks.
-- `GET /api/resume/jobs/saved` - saved jobs.
-- `GET /api/resume/jobs/disliked` - disliked jobs.
-- `GET/POST/DELETE /api/resume/jobs/disqualifiers[...]` - disqualifier CRUD.
-- `GET /api/resume/jobs/focus-breakdown/{job_listing_id}` - staff-only focus debug.
-- `GET /api/resume/jobs/{job_listing_id}` - global job detail (Dice listings with short summaries are enriched from the job-detail page).
-- `POST /api/resume/jobs/fetch-description` - Auto-fill full job description from a Dice job-detail URL.
-- `POST /api/resume/jobs/{job_listing_id}/match` - fit check and save result.
-- `POST /api/resume/jobs/{job_listing_id}/mark-applied` - mark applied.
-- `POST /api/resume/jobs/{job_listing_id}/like` - like job (preference signal; Find jobs UI toggles in place).
-- `POST /api/resume/jobs/{job_listing_id}/unlike` - clear like for this job/profile.
-- `POST /api/resume/jobs/{job_listing_id}/dislike` - dislike job (exclude + FIT preference; Find jobs removes the card).
-- `POST /api/resume/jobs/{job_listing_id}/hide` - hide from search only (no FIT impact).
-- `POST /api/resume/jobs/{job_listing_id}/unhide` - restore a hidden/disliked job to search.
-- `POST /api/resume/jobs/{job_listing_id}/save` - save job to favourites and ensure a My jobs pipeline entry (new saves land in Review/`vetting`; existing active stages are left unchanged). Find jobs UI uses AJAX; no page reload.
-- `POST /api/resume/jobs/{job_listing_id}/unsave` - unsave job and soft-delete its pipeline entry for the active profile.
-
-## JSON API: `/api/resume/apply/`
-
-Defined in `resume_app/apply_api.py`.
-
-- `POST /api/resume/apply/start` - create attempts for Applying-stage pipeline entries.
-- `GET /api/resume/apply/{attempt_id}` - attempt status and steps.
-- `POST /api/resume/apply/{attempt_id}/approve` - approve attempt.
-- `POST /api/resume/apply/{attempt_id}/reject` - reject attempt.
-- `POST /api/resume/apply/{attempt_id}/override-url` - set URL and rerun.
-
-## API Implementation Notes
-
-- Session auth is the primary API auth mechanism.
-- Owner-scoped endpoints should use `api_user(request)` and `get_owned_or_404()`.
-- `JobListing` detail is global; user-specific decisions belong in related owned models.
-- Apply-agent attempts should be scoped through `pipeline_entry__owner`.
-- For new long-running API actions, create durable state first, enqueue Huey work, then expose a pollable status route.
+### 4.1 Jobs, Pipeline & Feedback Actions
+- `GET /api/resume/jobs/pipeline` — Retrieve user's pipeline jobs for active stage/profile.
+- `POST /api/resume/jobs/pipeline/delete` — Soft-delete pipeline entry.
+- `POST /api/resume/jobs/search` — Execute multi-board search query.
+- `POST /api/resume/jobs/ai-match` — Run batch LLM fit evaluations.
+- `POST /api/resume/jobs/insights` — Extract aggregated skill insights across multiple jobs.
+- `GET /api/resume/jobs/{job_listing_id}` — Retrieve global job listing details.
+- `POST /api/resume/jobs/fetch-description` — Fetch and enrich full job description from source URL.
+- `POST /api/resume/jobs/{job_listing_id}/save` — Save job to Favourites and add to pipeline in `Vetting` stage.
+- `POST /api/resume/jobs/{job_listing_id}/unsave` — Unsave job and remove pipeline entry.
+- `POST /api/resume/jobs/{job_listing_id}/like` — Record like action; updates preference centroid vector.
+- `POST /api/resume/jobs/{job_listing_id}/unlike` — Clear like action.
+- `POST /api/resume/jobs/{job_listing_id}/dislike` — Record dislike action; deprioritizes similar jobs and hides card.
+- `POST /api/resume/jobs/{job_listing_id}/hide` — Hide listing from search without altering preference centroid.
+- `POST /api/resume/jobs/{job_listing_id}/unhide` — Restore previously hidden listing.
+- `POST /api/resume/jobs/{job_listing_id}/mark-applied` — Move pipeline entry to `Done` stage.
+- `GET /api/resume/jobs/pipeline-entry/{id}/interview-prep` — Retrieve saved interview preparation questions.
+- `POST /api/resume/jobs/pipeline-entry/{id}/generate-interview-prep` — Generate customized interview preparation using LLM.
+- `POST /api/resume/jobs/pipeline-entry/{id}/save-interview-prep` — Save user-edited interview preparation.
+- `GET /api/resume/jobs/disqualifiers` — List user exclusion keyword rules.
+- `POST /api/resume/jobs/disqualifiers` — Create exclusion keyword rule.
+- `DELETE /api/resume/jobs/disqualifiers/{id}` — Delete exclusion rule.

@@ -76,12 +76,14 @@
         </div>
 
         <div class="flex items-center gap-3 self-end md:self-auto">
-            {% if target_job %}
-            <form method="post" action="{% url 'resume_optimizer' %}?job_id={{ target_job.id }}&track={{ pipeline_track|default:'dir-plano' }}" id="approve-apply-form" class="inline">
+            {% if target_job or optimized_resume_id %}
+            <form method="post" action="{% url 'resume_optimizer' %}{% if target_job %}?job_id={{ target_job.id }}&track={{ pipeline_track|default:'dir-plano' }}{% elif optimized_resume_id %}?opt_id={{ optimized_resume_id }}{% endif %}" id="approve-apply-form" class="inline" onsubmit="if (window.syncApproveMarkdown) window.syncApproveMarkdown();">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="approve_and_mark_applied"/>
-                <input type="hidden" name="job_id" value="{{ target_job.id }}"/>
-                <input type="hidden" name="track" value="{{ pipeline_track|default:'dir-plano' }}"/>
+                <input type="hidden" name="job_id" value="{% if target_job %}{{ target_job.id }}{% endif %}" id="approve-apply-job-id"/>
+                <input type="hidden" name="track" value="{{ pipeline_track|default:'dir-plano' }}" id="approve-apply-track"/>
+                <input type="hidden" name="opt_id" value="{{ optimized_resume_id|default:'' }}" id="approve-apply-opt-id"/>
+                <input type="hidden" name="markdown" value="" id="approve-apply-markdown"/>
                 <button type="submit" 
                         id="approve-apply-btn" 
                         class="h-9 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-2 transition shadow-sm hover:shadow"
@@ -127,15 +129,7 @@
         </div>
     </div>
 
-    {% if messages %}
-        <div class="mb-6 space-y-2">
-            {% for message in messages %}
-                <div class="rounded-concierge border px-4 py-3 text-sm {% if message.tags == 'error' %}border-red-200 bg-red-50 text-red-900{% elif message.tags == 'success' %}border-brand/20 bg-brand-mist text-brand-ink{% else %}border-slate-200 bg-white text-slate-800{% endif %}" role="alert">
-                    {{ message }}
-                </div>
-            {% endfor %}
-        </div>
-    {% endif %}
+    {% include "resume_app/_concierge_messages.html" %}
 
     <form method="post" enctype="multipart/form-data" id="optimizer-form" class="space-y-8">
         {% csrf_token %}
@@ -1132,7 +1126,7 @@
             html += '<div class="flex flex-wrap items-center gap-2">';
             html += '<a id="export-pdf-btn" class="inline-flex items-center gap-1.5 rounded-lg bg-brand hover:bg-brand-hover text-white px-3.5 py-2 text-xs font-bold transition shadow-sm export-button" href="/api/resume/export/' + esc(resumeId) + '/pdf" data-base-href="/api/resume/export/' + esc(resumeId) + '/pdf" data-resume-id="' + esc(resumeId) + '"><span class="material-symbols-outlined text-[16px]">picture_as_pdf</span><span>Export PDF</span></a>';
             html += '<a id="export-docx-btn" class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 px-3.5 py-2 text-xs font-bold transition shadow-sm export-button" href="/api/resume/export/' + esc(resumeId) + '/docx" data-base-href="/api/resume/export/' + esc(resumeId) + '/docx" data-resume-id="' + esc(resumeId) + '"><span class="material-symbols-outlined text-[16px]">description</span><span>Export Word (.docx)</span></a>';
-            html += '<button type="button" onclick="var b = document.getElementById(\'approve-apply-btn\'); if (b) b.click();" class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 text-xs font-bold transition shadow-sm"><span class="material-symbols-outlined text-[16px]">verified</span><span>Approve &amp; Mark Applied</span><kbd class="hidden sm:inline-block ml-1 bg-emerald-800/40 text-emerald-100 px-1 py-0.5 rounded text-[9px] font-mono">Ctrl+Enter</kbd></button></div></div>';
+            html += '<button type="button" onclick="window.submitApproveAndApply();" class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 text-xs font-bold transition shadow-sm"><span class="material-symbols-outlined text-[16px]">verified</span><span>Approve &amp; Mark Applied</span><kbd class="hidden sm:inline-block ml-1 bg-emerald-800/40 text-emerald-100 px-1 py-0.5 rounded text-[9px] font-mono">Ctrl+Enter</kbd></button></div></div>';
         } else {
             html += '<h4 class="text-lg font-semibold text-concierge-slate">Draft so far</h4>';
             html += '<p class="mt-1 text-xs text-slate-500">Run still in progress — you can edit and save after the run <strong>completes</strong>. Exports unlock then.</p>';
@@ -1836,6 +1830,85 @@
         });
     }
 
+    // Form and Markdown Sync for Approve & Mark Applied
+    window.syncApproveMarkdown = function () {
+        var editor = document.getElementById("optimizer-draft-editor");
+        var mdInput = document.getElementById("approve-apply-markdown");
+        if (editor && mdInput) {
+            mdInput.value = editor.value;
+        }
+    };
+
+    window.submitApproveAndApply = function () {
+        if (window.syncApproveMarkdown) {
+            window.syncApproveMarkdown();
+        }
+        var form = document.getElementById("approve-apply-form");
+        if (form) {
+            var submitBtn = document.getElementById("approve-apply-btn");
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '<span class="material-symbols-outlined text-[18px] animate-spin">refresh</span><span>Approving...</span>';
+            }
+            form.submit();
+            return;
+        }
+
+        // Dynamic fallback if form was not pre-rendered in DOM
+        var fallbackForm = document.createElement("form");
+        fallbackForm.method = "POST";
+        fallbackForm.action = window.location.pathname + window.location.search;
+        var csrf = document.querySelector("[name=csrfmiddlewaretoken]");
+        if (csrf) {
+            var csrfInput = document.createElement("input");
+            csrfInput.type = "hidden";
+            csrfInput.name = "csrfmiddlewaretoken";
+            csrfInput.value = csrf.value;
+            fallbackForm.appendChild(csrfInput);
+        }
+        var actionInput = document.createElement("input");
+        actionInput.type = "hidden";
+        actionInput.name = "action";
+        actionInput.value = "approve_and_mark_applied";
+        fallbackForm.appendChild(actionInput);
+
+        var editor = document.getElementById("optimizer-draft-editor");
+        if (editor) {
+            var mdInput = document.createElement("input");
+            mdInput.type = "hidden";
+            mdInput.name = "markdown";
+            mdInput.value = editor.value;
+            fallbackForm.appendChild(mdInput);
+        }
+        var urlParams = new URLSearchParams(window.location.search);
+        var optId = urlParams.get("opt_id");
+        if (optId) {
+            var optInput = document.createElement("input");
+            optInput.type = "hidden";
+            optInput.name = "opt_id";
+            optInput.value = optId;
+            fallbackForm.appendChild(optInput);
+        }
+        var jobId = urlParams.get("job_id");
+        if (jobId) {
+            var jInput = document.createElement("input");
+            jInput.type = "hidden";
+            jInput.name = "job_id";
+            jInput.value = jobId;
+            fallbackForm.appendChild(jInput);
+        }
+        var tr = urlParams.get("track");
+        if (tr) {
+            var trInput = document.createElement("input");
+            trInput.type = "hidden";
+            trInput.name = "track";
+            trInput.value = tr;
+            fallbackForm.appendChild(trInput);
+        }
+        document.body.appendChild(fallbackForm);
+        fallbackForm.submit();
+    };
+
     // Keyboard Shortcuts: Esc to Return, Ctrl+Enter to Approve & Mark Applied
     document.addEventListener("keydown", function (e) {
         if (e.key === "Escape") {
@@ -1844,11 +1917,8 @@
                 window.location.href = backBtn.href;
             }
         } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-            var approveBtn = document.getElementById("approve-apply-btn");
-            if (approveBtn) {
-                e.preventDefault();
-                approveBtn.click();
-            }
+            e.preventDefault();
+            window.submitApproveAndApply();
         }
     });
 

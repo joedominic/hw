@@ -6,6 +6,14 @@ DEFAULT_WRITER_SYSTEM = """You are an expert Resume Writer. Your task is to tail
 Ensure you highlight relevant skills and experiences without hallucinating any information.
 Priority of facts: (1) Original upload / source_resume_text (2) Retrieved resume bullets, if any (3) Supporting notes and JSON (4) Role-focused job description excerpt.
 If resume_text or source_resume_text was truncated for length, do not invent content to fill gaps.
+
+### Length, Detail & Signal Preservation Guardrails (CRITICAL)
+1. **Preserve Scope, Depth & Breadth:** Do NOT summarize, collapse, or aggressively condense the resume. The tailored resume must preserve the technical depth, breadth, and professional weight of the original document.
+2. **Retain All Roles & Full Bullet Sets:** Retain EVERY role, company, date, degree, and certification from the source resume. Maintain approximately the same number of bullet points per role as the source resume. Do not drop older positions or delete bullets simply because they are less directly related to the target role.
+3. **Word Count Alignment:** The output must match the length and substance of the source resume within ±10% (e.g. if the source resume is ~1,000 words across 2 pages, the tailored output must also be ~900–1,100 words). Do not turn a multi-page executive resume into a single-page summary.
+4. **Tailor via Refinement, NOT Deletion:** "Tailoring" means refining bullet phrasing, foregrounding matching keywords and technologies, sharpening metrics, and highlighting transferable achievements—NEVER deleting half the candidate's accomplishments.
+5. **Protect Secondary Signals:** Retain domain accomplishments, secondary technologies, and foundational engineering work even if not explicitly demanded in the target JD; human interviewers and ATS search queries rely on them.
+
 Format your output using simple markdown so it can be exported to Word and PDF with proper formatting:
 - Use ## for section headings (e.g. ## EXPERIENCE, ## EDUCATION).
 - Use **bold** for emphasis on key terms or job titles.
@@ -18,6 +26,9 @@ DEFAULT_WRITER_USER = """Resume you are tailoring or revising now ({resume_text}
 
 Original upload — factual anchor only (unchanged across steps; do not invent experience beyond this):
 {source_resume_text}
+
+Length & Scope Directive:
+{length_guardrail}
 
 Supporting context (optional fields may show "(none)"):
 Notes:
@@ -100,7 +111,7 @@ Return ONLY a single JSON object (no markdown) with this exact schema:
 {
   "score": <int 0-100>,
   "interview_probability": <int 0-100>,
-  "reasoning": <string, 2-3 sentences covering match/seniority and why that maps to the interview probability. Include a sentence that starts with: Interview probability: and includes a numeric percent (e.g. 42%).>,
+  "reasoning": <string, 2-3 sentences providing an executive diagnosis of technical match strengths, seniority alignment, and key gaps impacting interview callback odds.>,
   "thoughts": <string, key strengths and gaps vs the role (why/why not fit)>
 }"""
 
@@ -306,18 +317,23 @@ Respond in Markdown with these sections:
 Keep bullets concise and truthful to the phrase list."""
 
 DEFAULT_SKILL_RADAR_SYSTEM = """You are an expert technical recruiter and ATS skills analyzer.
-Your task is to analyze a candidate's resume against a target job description and extract precise, high-value skill diagnostics.
+Your task is to analyze a candidate's resume against a target job description and extract precise, high-value skill diagnostics and realistic interview callback probability.
 
 STRICT INSTRUCTIONS:
 1. Extract 5 to 8 "core_competencies": concrete, specific technical skills, architectural patterns, programming languages, cloud platforms, tools, or domain qualifications explicitly required by the job that are CLEARLY SUBSTANTIATED by evidence in the candidate's resume.
 2. Extract 3 to 6 "stretch_skills": crucial technical, architectural, tooling, or domain requirements in the job description that are MISSING, WEAK, or UNSUBSTANTIATED in the candidate's resume.
 3. FORBIDDEN VAGUE KEYWORDS: Never return generic filler, soft skills, or fluff (e.g. do NOT return "Communication", "Team Player", "Problem Solving", "Experience With", "Fast Paced", "Responsibilities Include", "Track Record", "Self Starter", "Best Practices", "Strong Work Ethic", "Cross Functional"). Return ONLY concrete hard skills, technologies, frameworks, architectures, methodologies, or specialized domains (e.g. "Kubernetes", "AWS Lambda", "Microservices", "Event-Driven Architecture", "PostgreSQL", "Go", "Distributed Systems", "CI/CD Pipelines", "HIPAA Compliance").
-4. "match_score": integer 0-100 indicating the percentage of critical job requirements covered by the candidate's resume.
-5. "fit_summary": 1 to 2 sentences providing an executive diagnosis of the candidate's primary strength for this role and the most critical gap.
+4. "match_score": integer 0-100 indicating the technical and functional requirements match (what % of required technologies and job skills are covered by the candidate).
+5. "interview_probability": integer 0-100 estimating realistic odds of receiving a recruiter screening interview callback. This is DISTINCT from match_score:
+   - Account for seniority level match (e.g. if the role is Director/Principal and the candidate is Senior without executive/architect scope, or conversely where senior overqualification causes rejection, reduce interview probability).
+   - Account for critical stretch gaps: missing mandatory/core requirements hurts callback odds more severely than missing secondary tooling.
+   - Ground in real-world recruiting: highly competitive roles rarely exceed 75-85% interview callback odds even for strong fits.
+6. "fit_summary": 1 to 2 sentences providing an executive diagnosis of the candidate's primary strength for this role and the most critical gap affecting their callback odds.
 
 Return ONLY a valid JSON object matching this schema exactly (no markdown, no code fences, no extra text):
 {
   "match_score": 85,
+  "interview_probability": 68,
   "core_competencies": ["Skill 1", "Skill 2"],
   "stretch_skills": ["Gap 1", "Gap 2"],
   "fit_summary": "Strong alignment in ...; stretch gap in ..."

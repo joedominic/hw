@@ -24,10 +24,18 @@ def experience_context(request):
         }
     exp = UserExperienceSettings.get_for_user(user)
     verified = is_email_verified(user)
+    require_verify = getattr(settings, "REQUIRE_EMAIL_VERIFICATION", False)
+    # Only show verification banner if explicitly required by config and user is not staff/superuser,
+    # or if the user explicitly initiated an email change that requires confirmation.
+    show_banner = bool(exp.pending_email)
+    if require_verify and not verified and not getattr(user, "is_staff", False) and not getattr(user, "is_superuser", False):
+        show_banner = True
+
     return {
         "is_power_user": is_power_user(user),
         "onboarding": onboarding_progress(user),
         "email_verified": verified,
-        "show_email_verify_banner": (not verified) or bool(exp.pending_email),
+        "show_email_verify_banner": show_banner,
         "pending_email": exp.pending_email or "",
     }
+

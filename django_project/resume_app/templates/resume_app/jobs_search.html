@@ -794,13 +794,13 @@ document.addEventListener('DOMContentLoaded', function() {
             e.preventDefault();
             var whyJobId = parseInt(whyBtn.getAttribute('data-job-id') || '0', 10);
             if (!whyJobId) return;
-            openModal('Why this fit?');
+            openModal('Why this score?');
             var track = currentTrack();
             var url = apiBase + '/focus-breakdown/' + whyJobId + (track ? ('?track=' + encodeURIComponent(track)) : '');
             fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
                 .then(function(r) {
                     return r.ok ? r.json() : r.json().then(function(j) {
-                        throw new Error(j.detail || (r.status === 404 ? 'Like some jobs first to see fit details.' : 'Failed to load fit breakdown'));
+                        throw new Error(j.detail || (r.status === 404 ? 'Like some jobs first to see score details.' : 'Failed to load score breakdown'));
                     });
                 })
                 .then(function(data) { assessBody.innerHTML = renderFocusBreakdown(data); })

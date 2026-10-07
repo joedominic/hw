@@ -14,9 +14,18 @@
                                class="job-select-checkbox mt-1.5 h-4 w-4 shrink-0 rounded border-slate-300 text-brand focus:ring-brand"
                                type="checkbox" name="job_ids" value="{{ j.id }}" id="job-select-{{ j.id }}"
                                {% if board_stage == "applying" %}data-optimizer-url="{% url 'resume_optimizer' %}?job_id={{ j.id }}{% if j.optimizer_user_resume_id %}&amp;resume_id={{ j.optimizer_user_resume_id }}{% endif %}"{% endif %}>
-                        <div class="min-w-0">
-                            <h3 class="text-base font-bold leading-snug text-concierge-slate sm:text-lg">{{ j.title }}</h3>
-                            <p class="mt-1 text-sm text-slate-500">
+                        <div class="min-w-0 flex-1 select-text">
+                            <div class="flex items-center gap-1.5 min-w-0">
+                                <h3 class="text-base font-bold leading-snug text-concierge-slate sm:text-lg select-text">{{ j.title }}</h3>
+                                <button type="button"
+                                        class="copy-job-card-btn text-slate-400 hover:text-slate-700 p-0.5 rounded hover:bg-slate-200/70 transition shrink-0 inline-flex items-center justify-center cursor-pointer"
+                                        title="Copy title, company & location to clipboard"
+                                        aria-label="Copy job details"
+                                        onclick="event.stopPropagation(); copyJobToClipboard(this, '{{ j.title|escapejs }}', '{{ j.company_name|escapejs }}', '{{ j.location|escapejs }}')">
+                                    <span class="material-symbols-outlined text-[16px] pointer-events-none">content_copy</span>
+                                </button>
+                            </div>
+                            <p class="mt-1 text-sm text-slate-500 select-text">
                                 <span class="font-medium text-slate-600">{{ j.company_name|default:"—" }}</span>
                                 {% if j.location %}<span class="mx-1.5 text-slate-300">·</span>{{ j.location }}{% endif %}
                             </p>
@@ -25,13 +34,13 @@
                 </div>
                 <div class="flex shrink-0 flex-col items-end gap-2 sm:flex-row sm:items-center">
                     {% if match_pct is not None %}
-                    <span class="inline-flex items-center rounded-full bg-brand-soft px-2.5 py-1 text-xs font-bold text-brand-ink" title="Fit to jobs you liked">
+                    <span class="inline-flex items-center rounded-full bg-brand-soft px-2.5 py-1 text-xs font-bold text-brand-ink" title="Match Score based on title & role alignment">
                         {{ match_pct }}% Match
                     </span>
                     {% endif %}
                     {% if j.preference_margin_percent is not None %}
                         <span class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold {% if j.preference_margin_percent < -3 %}bg-rose-50 text-rose-800 border border-rose-200{% elif j.preference_margin_percent > 3 %}bg-emerald-50 text-emerald-800 border border-emerald-200{% else %}bg-slate-100 text-slate-700 border border-slate-200{% endif %}"
-                              title="Preference Margin: difference between liked vs disliked job signals (controls auto-promotion to Review).">
+                              title="Preference Margin: difference between liked vs disliked job signals.">
                             Pref {% if j.preference_margin_percent > 0 %}+{% endif %}{{ j.preference_margin_percent }}%
                         </span>
                     {% elif board_stage == "pipeline" %}
@@ -123,7 +132,7 @@
                 {% endif %}
 
                 {% if board_stage == "vetting" or board_stage == "applying" %}
-                <a href="{% url 'resume_optimizer' %}?job_id={{ j.id }}{% if j.optimizer_user_resume_id %}&amp;resume_id={{ j.optimizer_user_resume_id }}{% endif %}"
+                <a href="{% url 'resume_optimizer' %}?job_id={{ j.id }}&amp;track={{ pipeline_track|default:'dir-plano' }}{% if j.optimizer_user_resume_id %}&amp;resume_id={{ j.optimizer_user_resume_id }}{% endif %}"
                    class="inline-flex items-center rounded-xl border border-brand/30 bg-white px-3.5 py-2 text-sm font-semibold text-brand hover:bg-brand-mist"
                    {% if board_stage == "applying" %}target="_blank" rel="noopener noreferrer"{% endif %}>
                     Tailor Resume
@@ -141,7 +150,7 @@
 
                 {% if board_stage == "applying" or board_stage == "done" %}
                     {% if j.optimized_resume_id %}
-                    <a href="{% url 'resume_optimizer' %}?opt_id={{ j.optimized_resume_id }}"
+                    <a href="{% url 'resume_optimizer' %}?opt_id={{ j.optimized_resume_id }}&amp;job_id={{ j.id }}&amp;track={{ pipeline_track|default:'dir-plano' }}"
                        class="inline-flex items-center rounded-xl border border-brand/20 bg-brand-mist px-3.5 py-2 text-sm font-medium text-brand-ink hover:bg-brand-soft">
                         Tailored draft
                     </a>

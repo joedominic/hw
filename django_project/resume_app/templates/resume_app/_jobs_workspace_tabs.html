@@ -1,22 +1,19 @@
-{# Jobs workspace: Searches ↔ Monitor ↔ Cockpit. Optional workspace_automation_track preserves ?track= on Searches link. #}
+{# Jobs workspace: Cockpit ↔ Monitor (staff only). #}
 {% with u=request.resolver_match.url_name %}
-{# Do not use request.GET.track in |default: — missing keys raise VariableDoesNotExist. #}
 <nav class="mb-6" aria-label="Jobs workspace">
     <div class="flex flex-wrap items-center gap-2">
         <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Workspace</span>
         <div class="inline-flex rounded-concierge border border-slate-200 bg-slate-50/80 p-0.5 text-sm shadow-sm">
-                <a href="{% url 'job_automation' %}{% if workspace_automation_track %}?track={{ workspace_automation_track }}{% elif 'track' in request.GET %}?track={{ request.GET.track }}{% endif %}"
-                   class="rounded-concierge px-3 py-1.5 font-medium transition-colors {% if u == 'job_automation' or u == 'job_task_create' or u == 'job_task_edit' or u == 'job_task_run_now' or u == 'job_task_toggle_active' %}bg-white text-concierge-slate shadow-sm{% else %}text-slate-600 hover:bg-white/80{% endif %}">
-                    Searches
-                </a>
-                <a href="{% url 'huey_dashboard' %}"
-                   class="rounded-concierge px-3 py-1.5 font-medium transition-colors {% if u == 'huey_dashboard' or u == 'huey_periodic_revoke' or u == 'huey_periodic_restore' or u == 'huey_flush_queue' or u == 'huey_run_cleanup_now' or u == 'huey_task_run_now' %}bg-white text-concierge-slate shadow-sm{% else %}text-slate-600 hover:bg-white/80{% endif %}">
-                    Monitor
-                </a>
-                <a href="{% url 'career_cockpit' %}"
-                   class="rounded-concierge px-3 py-1.5 font-medium transition-colors {% if u == 'career_cockpit' %}bg-white text-concierge-slate shadow-sm{% else %}text-slate-600 hover:bg-white/80{% endif %}">
-                    Cockpit
-                </a>
+            <a href="{% url 'career_cockpit' %}{% if workspace_automation_track %}?track={{ workspace_automation_track }}{% elif 'track' in request.GET %}?track={{ request.GET.track }}{% endif %}"
+               class="rounded-concierge px-3 py-1.5 font-medium transition-colors {% if u == 'career_cockpit' or u == 'job_automation' or u == 'job_task_create' or u == 'job_task_edit' %}bg-white text-concierge-slate shadow-sm{% else %}text-slate-600 hover:bg-white/80{% endif %}">
+                Cockpit
+            </a>
+            {% if request.user.is_staff %}
+            <a href="{% url 'huey_dashboard' %}"
+               class="rounded-concierge px-3 py-1.5 font-medium transition-colors {% if u == 'huey_dashboard' or u == 'huey_periodic_revoke' or u == 'huey_periodic_restore' or u == 'huey_flush_queue' or u == 'huey_run_cleanup_now' or u == 'huey_task_run_now' %}bg-white text-concierge-slate shadow-sm{% else %}text-slate-600 hover:bg-white/80{% endif %}">
+                Monitor
+            </a>
+            {% endif %}
         </div>
     </div>
 </nav>

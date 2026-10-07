@@ -616,6 +616,8 @@ def llm_invoke_pipeline_batch(
         user=user,
         llm_override=llm,
         usage_query_kind=USAGE_QUERY_PIPELINE_SKILL_EXTRACT,
+        prefer_local=True,
+        allow_local=True,
     )
     raw = getattr(response, "content", None) or ""
     if isinstance(raw, list):

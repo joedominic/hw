@@ -46,7 +46,12 @@ def saved_search_profile_tabs(user) -> list[dict[str, str]]:
         if not slug or slug in seen:
             continue
         seen.add(slug)
-        tabs.append({"slug": slug, "label": saved.name})
+        tabs.append({
+            "slug": slug,
+            "label": saved.name,
+            "id": saved.id,
+            "is_default": bool(saved.is_default),
+        })
     return tabs
 
 

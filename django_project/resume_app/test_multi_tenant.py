@@ -235,22 +235,21 @@ class ImpersonationTests(TestCase):
         client = Client()
         client.login(username="support", password="pass12345!")
 
-        # Staff user browsing settings: JOBS section should NOT be present
+        # Staff user browsing settings: Admin Console should be present
         resp = client.get("/settings/")
         self.assertEqual(resp.status_code, 200)
         content = resp.content.decode("utf-8")
         self.assertIn("Admin Console", content)
-        self.assertNotIn(">Find jobs<", content)
-        self.assertNotIn(">My jobs<", content)
 
-        # Hijack target candidate: JOBS section MUST be present
+        # Hijack target candidate: Candidate view active, Admin Console hidden
         client.post("/hijack/acquire/", {"user_pk": self.target.pk, "next": "/"})
         resp = client.get("/settings/")
         self.assertEqual(resp.status_code, 200)
         content = resp.content.decode("utf-8")
         self.assertIn("Viewing as", content)
-        self.assertIn("Find jobs", content)
-        self.assertIn("My jobs", content)
+        self.assertIn("Cockpit", content)
+        self.assertIn("Discover", content)
+        self.assertNotIn("Admin Console", content)
 
 
 class MonitorAccessControlTests(TestCase):

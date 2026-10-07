@@ -26,6 +26,7 @@ from .search_profile_scope import resolve_active_profile_slug
 from .jobs_api import (
     jobs_dislike as api_jobs_dislike,
     jobs_like as api_jobs_like,
+    jobs_unlike as api_jobs_unlike,
     jobs_save as api_jobs_save,
 )
 from .llm import get_active_llm_provider
@@ -34,6 +35,7 @@ from .models import (
     AppAutomationSettings,
     JobListingAction,
     JobListingEmbedding,
+    JobListingTrackMetrics,
     JobSearchTask,
     OptimizedResume,
     PipelineEntry,
@@ -83,18 +85,44 @@ def _attach_optimized_resume_ids_for_stage(user, pipeline_jobs, raw_track: str, 
     pe_by_job = {e.job_listing_id: e for e in pe_rows}
     entry_ids_list = [e.id for e in pe_by_job.values()]
     latest_by_entry: dict[int, int] = {}
+    latest_events: dict[int, Any] = {}
     if entry_ids_list:
+        from .models import EmployerInterviewEvent
         for orow in OptimizedResume.objects.for_user(user).filter(
             pipeline_entry_id__in=entry_ids_list
         ).order_by("-created_at"):
             eid = orow.pipeline_entry_id
             if eid is not None and eid not in latest_by_entry:
                 latest_by_entry[eid] = orow.id
+        for ev in EmployerInterviewEvent.objects.filter(
+            pipeline_entry_id__in=entry_ids_list
+        ).order_by("-created_at"):
+            if ev.pipeline_entry_id not in latest_events:
+                latest_events[ev.pipeline_entry_id] = ev
     for j in pipeline_jobs:
         pe = pe_by_job.get(j.id)
         if pe is not None:
             setattr(j, "pipeline_entry_id", pe.id)
             setattr(j, "has_interview_prep", bool((pe.interview_prep or "").strip()))
+            setattr(j, "has_applied_resume", bool((pe.applied_resume_markdown or "").strip()))
+            setattr(j, "applied_resume_markdown", pe.applied_resume_markdown or "")
+            setattr(j, "post_apply_substatus", pe.post_apply_substatus or "")
+            setattr(
+                j,
+                "post_apply_substatus_display",
+                pe.get_post_apply_substatus_display()
+                if hasattr(pe, "get_post_apply_substatus_display")
+                else (pe.post_apply_substatus or ""),
+            )
+            setattr(j, "next_interview_at", pe.next_interview_at)
+            latest_ev = latest_events.get(pe.id)
+            if latest_ev:
+                setattr(j, "latest_interview_event", latest_ev)
+                setattr(j, "interview_notes", latest_ev.notes or "")
+                setattr(j, "interview_names", latest_ev.interviewer_names or "")
+                setattr(j, "interview_location", latest_ev.location_or_link or "")
+                setattr(j, "interview_duration", latest_ev.duration_minutes or 45)
+                setattr(j, "interview_status", latest_ev.status or "scheduled")
             if pe.id in latest_by_entry:
                 setattr(j, "optimized_resume_id", latest_by_entry[pe.id])
 
@@ -198,8 +226,9 @@ def _save_success_message(board_stage: str, *, power_user: bool) -> str:
             )
         return "Job moved to Applying."
     if board_stage == "applying":
-        return "Marked as applied." if not power_user else "Job moved to Done."
+        return "Marked as applied (tagged as Liked)." if not power_user else "Job moved to Done (tagged as Liked)."
     return "Job saved to favourites."
+
 
 
 def pipeline_board_view(request, board_stage: str, template_name: str = "resume_app/pipeline_board.html"):
@@ -244,6 +273,17 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
     tracks_qs = Track.ensure_baseline(user)
     if is_cockpit:
         pipeline_track_tabs = saved_search_profile_tabs(user)
+        try:
+            counts_by_track = dict(
+                PipelineEntry.objects.filter(owner=user, removed_at__isnull=True)
+                .values("track")
+                .annotate(cnt=models.Count("id"))
+                .values_list("track", "cnt")
+            )
+            for t in pipeline_track_tabs:
+                t["count"] = counts_by_track.get(t["slug"], 0)
+        except Exception:
+            pass
         board_track_slugs = {t["slug"] for t in pipeline_track_tabs}
         available_slugs = set(board_track_slugs)
     else:
@@ -361,96 +401,182 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
             from .views import invalidate_preference_cache, invalidate_disliked_embeddings_cache
 
             preset_id_raw = (request.POST.get("preset_id") or request.POST.get("delete_profile_id") or "").strip()
-            profile = SearchProfile.objects.filter(owner=user, id=int(preset_id_raw) if preset_id_raw.isdigit() else 0).first()
+            slug_raw = (request.POST.get("delete_profile_slug") or request.POST.get("slug") or "").strip().lower()
+
+            profile = None
+            if preset_id_raw.isdigit():
+                profile = SearchProfile.objects.filter(owner=user, id=int(preset_id_raw)).first()
+            if not profile and slug_raw:
+                profile = SearchProfile.objects.filter(owner=user, slug=slug_raw).first()
+
             if not profile:
                 messages.error(request, "Search profile not found.")
-                return redirect(next_url)
-
-            if SearchProfile.objects.filter(owner=user).count() <= 1:
-                messages.error(request, "Cannot delete your only remaining search profile.")
                 return redirect(next_url)
 
             slug_val = profile.slug
             was_default = profile.is_default
             p_name = profile.name
+
+            # 1. Delete SearchProfile
             profile.delete()
 
-            UserResume.objects.filter(owner=user, is_library=True, track=slug_val).update(track="")
-            JobSearchTask.objects.filter(owner=user, track=slug_val).delete()
-            PipelineEntry.objects.filter(owner=user, track=slug_val).delete()
-            JobListingAction.objects.filter(owner=user).filter(models.Q(track__iexact=slug_val) | models.Q(track=slug_val)).delete()
-            JobListingEmbedding.objects.filter(owner=user).filter(models.Q(track__iexact=slug_val) | models.Q(track=slug_val)).delete()
+            # 2. Delete all associated configuration, metrics, tasks, pipeline jobs, and ML training data
+            UserResume.objects.filter(owner=user, is_library=True).filter(
+                models.Q(track__iexact=slug_val) | models.Q(track=slug_val)
+            ).update(track="")
+            JobSearchTask.objects.filter(owner=user).filter(
+                models.Q(track__iexact=slug_val) | models.Q(track=slug_val)
+            ).delete()
+            PipelineEntry.objects.filter(owner=user).filter(
+                models.Q(track__iexact=slug_val) | models.Q(track=slug_val)
+            ).delete()
+            JobListingAction.objects.filter(owner=user).filter(
+                models.Q(track__iexact=slug_val) | models.Q(track=slug_val)
+            ).delete()
+            JobListingEmbedding.objects.filter(owner=user).filter(
+                models.Q(track__iexact=slug_val) | models.Q(track=slug_val)
+            ).delete()
+            JobListingTrackMetrics.objects.filter(owner=user).filter(
+                models.Q(track__iexact=slug_val) | models.Q(track=slug_val)
+            ).delete()
+            Track.objects.filter(owner=user).filter(
+                models.Q(slug__iexact=slug_val) | models.Q(slug=slug_val)
+            ).delete()
 
+            # 3. Cache & Session Invalidation
             try:
                 invalidate_preference_cache(user, track=slug_val)
                 invalidate_disliked_embeddings_cache(user, track=slug_val)
             except Exception:
                 pass
 
-            if was_default:
-                first_p = SearchProfile.objects.filter(owner=user).first()
-                if first_p:
-                    first_p.is_default = True
-                    first_p.save(update_fields=["is_default"])
+            if request.session.get("job_search_track") == slug_val:
+                request.session.pop("job_search_track", None)
+            if request.session.get("job_search_profile_slug") == slug_val:
+                request.session.pop("job_search_profile_slug", None)
+            request.session.pop("job_search_cache", None)
+            request.session.modified = True
 
-            messages.success(request, f'Search profile "{p_name}" deleted.')
-            next_profile = SearchProfile.objects.filter(owner=user).first()
+            # 4. Ensure remaining profiles have a default, or baseline if none remain
+            remaining_profiles = SearchProfile.objects.filter(owner=user)
+            if not remaining_profiles.exists():
+                SearchProfile.ensure_baseline(user)
+                remaining_profiles = SearchProfile.objects.filter(owner=user)
+                messages.success(
+                    request,
+                    f'Search profile "{p_name}" and all associated data deleted. A default profile has been created.',
+                )
+            else:
+                if was_default or not remaining_profiles.filter(is_default=True).exists():
+                    first_p = remaining_profiles.first()
+                    if first_p:
+                        first_p.is_default = True
+                        first_p.save(update_fields=["is_default"])
+                messages.success(request, f'Search profile "{p_name}" and all associated data deleted.')
+
+            next_profile = remaining_profiles.filter(is_default=True).first() or remaining_profiles.first()
             next_track = next_profile.slug if next_profile else ""
+            request.session["job_search_track"] = next_track
+            request.session["job_search_profile_slug"] = next_track
+            request.session.modified = True
             return redirect(reverse("career_cockpit") + f"?track={next_track}&stage={board_stage}")
 
         elif action == "add_disqualifier":
             phrase = (request.POST.get("phrase") or "").strip().lower()
             if phrase:
                 UserDisqualifier.objects.get_or_create(owner=user, phrase=phrase)
-                messages.success(request, f'Added "{phrase}" to phrases to avoid.')
             return redirect(reverse("career_cockpit") + f"?track={raw_track}&stage={board_stage}")
 
         elif action == "remove_disqualifier":
             phrase = (request.POST.get("phrase") or "").strip().lower()
             if phrase:
                 UserDisqualifier.objects.filter(owner=user, phrase=phrase).delete()
-                messages.success(request, f'Removed "{phrase}" from phrases to avoid.')
             return redirect(reverse("career_cockpit") + f"?track={raw_track}&stage={board_stage}")
 
-        elif action == "update_pipeline_retention":
+        elif action in ("update_pipeline_retention", "update_pipeline_policies"):
+            cfg = AppAutomationSettings.get_for_user(user)
+            update_fields = ["updated_at"]
+
             raw_days = (request.POST.get("cleanup_pipeline_retention_days") or "").strip()
-            try:
-                days_val = int(raw_days)
-                if days_val in (3, 5, 7, 14, 30):
-                    cfg = AppAutomationSettings.get_for_user(user)
-                    cfg.cleanup_pipeline_retention_days = days_val
-                    cfg.cleanup_job_retention_days = days_val
-                    cfg.cleanup_vetting_retention_days = days_val
-                    cfg.cleanup_applying_retention_days = days_val
-                    cfg.cleanup_done_retention_days = 0
-                    cfg.save(update_fields=[
-                        "cleanup_pipeline_retention_days",
-                        "cleanup_job_retention_days",
-                        "cleanup_vetting_retention_days",
-                        "cleanup_applying_retention_days",
-                        "cleanup_done_retention_days",
-                        "updated_at",
-                    ])
-                    messages.success(request, f"Retention policy updated to {days_val} days for all pre-applied stages.")
+            if raw_days:
+                try:
+                    days_val = int(raw_days)
+                    if days_val in (3, 5, 7, 14, 30):
+                        cfg.cleanup_pipeline_retention_days = days_val
+                        cfg.cleanup_job_retention_days = days_val
+                        cfg.cleanup_vetting_retention_days = days_val
+                        cfg.cleanup_applying_retention_days = days_val
+                        cfg.cleanup_done_retention_days = 0
+                        update_fields.extend([
+                            "cleanup_pipeline_retention_days",
+                            "cleanup_job_retention_days",
+                            "cleanup_vetting_retention_days",
+                            "cleanup_applying_retention_days",
+                            "cleanup_done_retention_days",
+                        ])
+                except (ValueError, TypeError):
+                    pass
+
+            raw_purge_max = (request.POST.get("pipeline_purge_match_score_max") or "").strip()
+            if raw_purge_max:
+                try:
+                    purge_val = int(raw_purge_max)
+                    if 0 <= purge_val <= 100:
+                        cfg.pipeline_purge_match_score_max = purge_val
+                        update_fields.append("pipeline_purge_match_score_max")
+                except (ValueError, TypeError):
+                    pass
+
+            raw_promote_min = (request.POST.get("pipeline_match_score_min") or "").strip()
+            if raw_promote_min:
+                try:
+                    promote_val = int(raw_promote_min)
+                    if 0 <= promote_val <= 100:
+                        cfg.pipeline_match_score_min = promote_val
+                        update_fields.append("pipeline_match_score_min")
+                except (ValueError, TypeError):
+                    pass
+
+            raw_vetting_promote = (request.POST.get("vetting_interview_probability_min") or "").strip()
+            if raw_vetting_promote:
+                if raw_vetting_promote in ("disabled", "off", "0", "manual"):
+                    cfg.vetting_to_applying_enabled = False
+                    update_fields.append("vetting_to_applying_enabled")
                 else:
-                    messages.error(request, "Invalid retention period. Options: 3, 5, 7, 14, or 30 days.")
-            except (ValueError, TypeError):
-                messages.error(request, "Invalid retention period.")
+                    try:
+                        vip_val = int(raw_vetting_promote)
+                        if 0 <= vip_val <= 100:
+                            cfg.vetting_to_applying_enabled = True
+                            cfg.vetting_interview_probability_min = vip_val
+                            update_fields.extend(["vetting_to_applying_enabled", "vetting_interview_probability_min"])
+                    except (ValueError, TypeError):
+                        pass
+
+            if len(update_fields) > 1:
+                cfg.save(update_fields=list(set(update_fields)))
+                messages.success(request, "Pipeline thresholds & policies updated.")
             return redirect(next_url)
 
-        elif action == "purge_pipeline_retention_now":
-            from .tasks import apply_cleanup_retention_purge
+        elif action in ("pipeline_cleanup_policies", "purge_pipeline_retention_now"):
+            from .tasks import apply_pipeline_cleanup_policies
             cfg = AppAutomationSettings.get_for_user(user)
-            removed = apply_cleanup_retention_purge(cfg)
-            if removed > 0:
-                messages.success(request, f"Cleaned up {removed} expired role(s) older than {cfg.cleanup_pipeline_retention_days} days.")
+            res = apply_pipeline_cleanup_policies(user)
+            purged = res.get("purged", 0)
+            promoted = res.get("promoted", 0)
+            if purged > 0 and promoted > 0:
+                messages.success(request, f"Cleanup complete: {purged} low-scoring/expired role(s) retired, {promoted} qualified role(s) promoted. Applied roles preserved.")
+            elif purged > 0:
+                messages.success(request, f"Cleanup complete: {purged} role(s) retired (older than {cfg.cleanup_pipeline_retention_days} days or scored below {cfg.pipeline_purge_match_score_max}%). Applied roles preserved.")
+            elif promoted > 0:
+                messages.success(request, f"Cleanup complete: {promoted} qualified role(s) promoted across the pipeline.")
             else:
-                messages.info(request, f"Pipeline is already fresh. No roles older than {cfg.cleanup_pipeline_retention_days} days were found.")
+                messages.info(request, "Pipeline is already clean and compliant with your thresholds. Applied roles preserved.")
             return redirect(next_url)
 
         if action in {"bulk_delete", "bulk_like", "bulk_dislike", "bulk_promote"}:
             if not selected_ids:
-                messages.info(request, "Select at least one job before running a bulk action.")
+                if not is_cockpit:
+                    messages.info(request, "Select at least one job before running a bulk action.")
                 return redirect(next_url)
             success_count = 0
             if action == "bulk_promote":
@@ -461,14 +587,28 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
                         continue
                     entries = PipelineEntry.objects.for_user(user).filter(
                         job_listing_id=jid_int,
-                        track=track_from_form,
                         removed_at__isnull=True,
                     )
+                    if track_from_form and track_from_form != "*":
+                        entries = entries.filter(
+                            models.Q(track=track_from_form) | models.Q(track__iexact=track_from_form)
+                        )
                     for entry in entries:
+                        try:
+                            api_jobs_save(request, job_listing_id=jid_int, track=entry.track)
+                        except Exception:
+                            pass
                         _apply_save_action(entry, board_stage, request)
                         success_count += 1
-                if success_count:
-                    messages.success(request, f"Promoted {success_count} job(s) to the next stage.")
+                if success_count and not is_cockpit:
+                    if board_stage == "pipeline":
+                        messages.success(request, f"Shortlisted {success_count} job(s) and advanced to Review.")
+                    elif board_stage == "vetting":
+                        messages.success(request, f"Advanced {success_count} job(s) to Applying.")
+                    elif board_stage == "applying":
+                        messages.success(request, f"Marked {success_count} job(s) as Applied (tagged as Liked).")
+                    else:
+                        messages.success(request, f"Advanced {success_count} job(s) to the next stage.")
             elif action == "bulk_delete":
                 for jid in selected_ids:
                     try:
@@ -477,13 +617,16 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
                         continue
                     entries = PipelineEntry.objects.for_user(user).filter(
                         job_listing_id=jid_int,
-                        track=track_from_form,
                         removed_at__isnull=True,
                     )
+                    if track_from_form and track_from_form != "*":
+                        entries = entries.filter(
+                            models.Q(track=track_from_form) | models.Q(track__iexact=track_from_form)
+                        )
                     for entry in entries:
                         entry.mark_deleted(save=True)
                         success_count += 1
-                if success_count:
+                if success_count and not is_cockpit:
                     messages.success(request, _bulk_delete_msg(board_stage, success_count))
             elif action in {"bulk_like", "bulk_dislike"}:
                 request.session["job_search_track"] = track_from_form
@@ -507,7 +650,7 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
                         success_count += 1
                     except HttpError:
                         continue
-                if success_count:
+                if success_count and not is_cockpit:
                     if action == "bulk_like":
                         messages.success(request, f"Liked {success_count} job(s).")
                     else:
@@ -524,16 +667,16 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
                 )
                 for entry in entries:
                     entry.mark_deleted(save=True)
-                messages.success(request, _single_delete_msg(board_stage))
             except (ValueError, TypeError):
                 messages.error(request, "Invalid job id.")
-        elif action in ("like", "dislike", "save") and job_id:
+        elif action in ("like", "unlike", "dislike", "save") and job_id:
             request.session["job_search_track"] = track_from_form
             try:
                 jid_int = int(job_id)
                 if action == "like":
                     api_jobs_like(request, job_listing_id=jid_int, track=track_from_form)
-                    messages.success(request, "Job liked.")
+                elif action == "unlike":
+                    api_jobs_unlike(request, job_listing_id=jid_int, track=track_from_form)
                 elif action == "dislike":
                     api_jobs_dislike(request, job_listing_id=jid_int, track=track_from_form)
                     entries = PipelineEntry.objects.for_user(user).filter(
@@ -543,7 +686,6 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
                     )
                     for entry in entries:
                         entry.mark_deleted(save=True)
-                    messages.success(request, _single_dislike_msg(board_stage))
                 elif action == "save":
                     api_jobs_save(request, job_listing_id=jid_int, track=track_from_form)
                     entry = PipelineEntry.objects.for_user(user).filter(
@@ -552,7 +694,6 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
                         removed_at__isnull=True,
                     ).first()
                     _apply_save_action(entry, board_stage, request)
-                    messages.success(request, _save_success_message(board_stage, power_user=power_user))
             except (HttpError, ValueError, TypeError) as e:
                 messages.error(request, str(e))
         return redirect(next_url)
@@ -627,7 +768,7 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
 
     age_days_raw = (request.GET.get("age_days") or "").strip()
     raw_sort = (request.GET.get("sort_by") or request.GET.get("sort") or "latest").strip().lower()
-    sort_by = raw_sort if raw_sort in ("latest", "newest", "match", "focus", "interview", "preference", "oldest") else "latest"
+    sort_by = raw_sort if raw_sort in ("latest", "newest", "score", "match", "focus", "interview", "preference", "oldest") else "latest"
 
     pipeline_jobs = list(pipeline_jobs_full)
     if source_filter:
@@ -672,7 +813,7 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
         pipeline_jobs.sort(key=get_job_date, reverse=True)
     elif sort_by == "oldest":
         pipeline_jobs.sort(key=get_job_date)
-    elif sort_by in ("match", "focus"):
+    elif sort_by in ("score", "match", "focus"):
         def get_match_sort_key(j):
             val = j.focus_percent_after_penalty if j.focus_percent_after_penalty is not None else j.focus_percent
             has_val = val is not None
@@ -886,6 +1027,9 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
     active_search_profile = None
     scheduled_task = None
     last_task_run = None
+    task_cooldown_remaining_seconds = 0
+    is_task_running = False
+    task_frequency_display = ""
     if user.is_authenticated:
         disqualifiers = list(UserDisqualifier.objects.filter(owner=user).values_list("phrase", flat=True))
         bound_resume = UserResume.objects.filter(owner=user, is_library=True, track=raw_track).first() or UserResume.objects.filter(owner=user, is_library=True).first()
@@ -901,10 +1045,41 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
                 scheduled_task = None
             if not scheduled_task:
                 scheduled_task = JobSearchTask.objects.filter(owner=user, track=active_search_profile.slug).first()
+            if not scheduled_task and active_search_profile:
+                try:
+                    from .saved_search_schedule import sync_job_search_task_from_saved
+                    scheduled_task = JobSearchTask(
+                        owner=user,
+                        saved_search=active_search_profile,
+                        is_active=True,
+                        frequency="0 9 * * *",
+                    )
+                    sync_job_search_task_from_saved(active_search_profile, scheduled_task)
+                    scheduled_task.save()
+                except Exception as e:
+                    logger.warning("Could not auto-create scheduled_task for SearchProfile %s: %s", getattr(active_search_profile, "id", None), e)
+                    scheduled_task = None
+
             if scheduled_task:
                 last_task_run = scheduled_task.runs.first()
 
-        task_frequency_display = ""
+                from django.core.cache import cache
+                import time
+                from .tasks import get_job_search_task_lock_key
+                from .models import JobSearchTaskRun
+
+                is_pending = bool(cache.get(f"job_task_pending:{scheduled_task.id}"))
+                lock_key = get_job_search_task_lock_key(user.id)
+                if is_pending or cache.get(lock_key) or scheduled_task.runs.filter(status=JobSearchTaskRun.STATUS_RUNNING).exists():
+                    is_task_running = True
+
+                cooldown_expires = cache.get(f"job_task_manual_cooldown:{scheduled_task.id}")
+                if last_task_run and last_task_run.status == JobSearchTaskRun.STATUS_FAILED and not is_task_running:
+                    cache.delete(f"job_task_manual_cooldown:{scheduled_task.id}")
+                    task_cooldown_remaining_seconds = 0
+                elif cooldown_expires and cooldown_expires > time.time():
+                    task_cooldown_remaining_seconds = int(cooldown_expires - time.time())
+
         if scheduled_task and getattr(scheduled_task, "frequency", None):
             from .utils import format_cron_human_friendly
             task_frequency_display = format_cron_human_friendly(scheduled_task.frequency)
@@ -1051,11 +1226,36 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
             desc = getattr(job, "description", None) or getattr(job, "snippet", "") or ""
             ollama_cache_key = SkillRadarService.get_cache_key(getattr(user, "id", None), job.id, getattr(bound_resume, "id", None))
             cached_radar = cache.get(ollama_cache_key)
-            if cached_radar and isinstance(cached_radar, dict) and cached_radar.get("core_competencies") and cached_radar.get("source") != "error":
-                core = cached_radar.get("core_competencies") or []
-                stretch = cached_radar.get("stretch_skills") or []
-                calc_pct = cached_radar.get("match_score") or (getattr(job, "focus_percent", None) or 78)
-                fit_summary = cached_radar.get("fit_summary") or ""
+            job_core = getattr(job, "zero_llm_core_matches", None) or []
+            job_stretch = getattr(job, "zero_llm_stretch_skills", None) or []
+            if (
+                cached_radar
+                and isinstance(cached_radar, dict)
+                and cached_radar.get("source") != "error"
+                and (cached_radar.get("core_competencies") or cached_radar.get("match_score") is not None)
+            ):
+                core = cached_radar.get("core_competencies") or job_core
+                stretch = cached_radar.get("stretch_skills") or job_stretch
+                calc_pct = (
+                    cached_radar.get("match_score")
+                    or getattr(job, "vetting_match_score", None)
+                    or getattr(job, "focus_percent_after_penalty", None)
+                    or getattr(job, "focus_percent", None)
+                    or 78
+                )
+                fit_summary = cached_radar.get("fit_summary") or getattr(job, "interview_reasoning", "") or ""
+                source_radar = "ollama_local"
+            elif job_core or getattr(job, "vetting_match_score", None) is not None or getattr(job, "interview_probability", None) is not None:
+                core = job_core
+                stretch = job_stretch
+                if getattr(job, "vetting_match_score", None) is not None:
+                    calc_pct = job.vetting_match_score
+                elif core or stretch:
+                    tot = len(core) + len(stretch)
+                    calc_pct = round((len(core) / tot) * 100) if tot > 0 else (getattr(job, "focus_percent", None) or 75)
+                else:
+                    calc_pct = getattr(job, "focus_percent_after_penalty", None) or getattr(job, "focus_percent", None) or 75
+                fit_summary = getattr(job, "interview_reasoning", "") or ""
                 source_radar = "ollama_local"
             else:
                 core = []
@@ -1116,7 +1316,7 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
             setattr(job, "similar_jobs_json", json.dumps(pos_influences))
             setattr(job, "extracted_salary", extract_job_salary(job))
 
-        if sort_by in ("match", "focus"):
+        if sort_by in ("score", "match", "focus"):
             pipeline_jobs.sort(
                 key=lambda j: (
                     getattr(j, "zero_llm_match_pct", None) is not None,
@@ -1188,6 +1388,8 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
         "active_search_profile": active_search_profile,
         "scheduled_task": scheduled_task,
         "last_task_run": last_task_run,
+        "task_cooldown_remaining_seconds": task_cooldown_remaining_seconds,
+        "is_task_running": is_task_running,
         "task_frequency_display": task_frequency_display if template_name == "resume_app/career_cockpit.html" else "",
         "missing_liked_jobs": missing_liked_jobs,
         "missing_library_resume": missing_library_resume,
@@ -1201,7 +1403,7 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
         "pipeline_has_active_filters": pipeline_has_active_filters,
         "pipeline_source_options": pipeline_source_options,
         "pipeline_source_selected": source_filter,
-        "pipeline_sort_by": "latest" if sort_by in ("latest", "newest") else ("match" if sort_by in ("match", "focus") else sort_by),
+        "pipeline_sort_by": "latest" if sort_by in ("latest", "newest") else ("score" if sort_by in ("score", "match", "focus") else sort_by),
         "pipeline_pref_min": pref_min_raw,
         "pipeline_pref_max": pref_max_raw,
         "pipeline_tracks": pipeline_track_tabs,
@@ -1230,10 +1432,16 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
         "pipeline_resume_llm_configured": pipeline_resume_llm_configured,
         "vetting_jd_min_chars": VETTING_MATCHING_JD_MIN_CHARS,
     }
+    if is_cockpit:
+        from django.contrib.messages import get_messages
+        list(get_messages(request))
     return render(request, template_name, context)
 
 
 def career_cockpit_view(request):
+    from django.contrib.messages import get_messages
+    # Drain any queued messages in session so they do not build up or spill into other pages
+    list(get_messages(request))
     stage = (request.GET.get("stage") or "pipeline").strip().lower()
     if stage not in BOARD_STAGES:
         stage = "pipeline"
@@ -1298,6 +1506,17 @@ def cockpit_skill_radar_api(request):
         resume_id=resume_id,
         force_refresh=force_refresh,
     )
+    if res.get("source") != "error" and res.get("match_score") is not None:
+        entry = PipelineEntry.objects.filter(owner=request.user, job_listing=job).first()
+        if entry:
+            entry.record_vetting_interview_result(
+                probability=res.get("match_score"),
+                reasoning=res.get("fit_summary"),
+                resume_id=resume_id,
+                core_competencies=res.get("core_competencies"),
+                stretch_skills=res.get("stretch_skills"),
+                save=True,
+            )
     return JsonResponse({
         "status": "ok",
         "job_id": job.id,

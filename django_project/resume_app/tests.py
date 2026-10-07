@@ -2065,6 +2065,115 @@ class PipelineAutomationTestCase(TestCase):
         pe.refresh_from_db()
         self.assertEqual(pe.stage, PipelineEntry.Stage.VETTING)
 
+    @override_settings(HUEY_IMMEDIATE=True)
+    def test_vetting_matching_task_invokes_skill_radar_for_review_jobs(self):
+        from .tasks import evaluate_vetting_matching_task
+        from .skill_radar import SkillRadarService
+
+        job = JobListing.objects.create(
+            source="test",
+            external_id="vetting-radar-1",
+            title="Senior Backend Engineer",
+            company_name="Cloud Corp",
+            description="Required: Python, Django, Docker, Kubernetes, AWS. " * 50,
+        )
+        pe = PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=job,
+            track="ic",
+            stage=PipelineEntry.Stage.VETTING,
+        )
+        resume = UserResume.objects.create(
+            owner=self.user,
+            file="radar_resume.pdf",
+            is_library=True,
+            track="ic",
+        )
+
+        mock_radar_result = {
+            "match_score": 88,
+            "interview_probability": 82,
+            "core_competencies": ["Python", "Django", "Kubernetes"],
+            "stretch_skills": ["Rust"],
+            "fit_summary": "Strong backend fit with minor systems gap.",
+            "source": "ollama_local",
+        }
+
+        with patch("resume_app.tasks.local_llm_available", return_value=True), \
+            patch("resume_app.tasks.parse_pdf", return_value="Experienced Python and Django Developer with Kubernetes."), \
+            patch.object(SkillRadarService, "analyze", return_value=mock_radar_result) as mock_analyze:
+            result = evaluate_vetting_matching_task.call_local(
+                self.user.id,
+                [pe.id],
+            )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["updated"], 1)
+        mock_analyze.assert_called_once()
+        args, kwargs = mock_analyze.call_args
+        self.assertEqual(args[0], job)
+        self.assertIn("Experienced Python", args[1])
+        self.assertEqual(kwargs["user"], self.user)
+        self.assertEqual(kwargs["resume_id"], resume.id)
+
+        pe.refresh_from_db()
+        self.assertEqual(pe.vetting_match_score, 88)
+        self.assertEqual(pe.vetting_interview_probability, 82)
+        self.assertEqual(pe.vetting_interview_reasoning, "Strong backend fit with minor systems gap.")
+        self.assertEqual(pe.vetting_interview_resume_id, resume.id)
+        self.assertIsNotNone(pe.vetting_interview_scored_at)
+
+    @override_settings(HUEY_IMMEDIATE=True)
+    def test_vetting_matching_task_skips_pipeline_stage_jobs(self):
+        from .tasks import evaluate_vetting_matching_task
+
+        job = JobListing.objects.create(
+            source="test",
+            external_id="pipeline-stage-job",
+            title="Data Scientist",
+            company_name="DataCo",
+            description="Required: Python, PyTorch. " * 30,
+        )
+        pe = PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=job,
+            track="ic",
+            stage=PipelineEntry.Stage.PIPELINE,
+        )
+
+        result = evaluate_vetting_matching_task.call_local(
+            self.user.id,
+            [pe.id],
+        )
+
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["message"], "No entries in VETTING stage")
+        pe.refresh_from_db()
+        self.assertIsNone(pe.vetting_interview_probability)
+
+    def test_calibrate_interview_probability_differentiates_from_match_score(self):
+        from .skill_radar import calibrate_interview_probability
+
+        resume = "Principal Software Architect with 15 years experience leading distributed cloud systems."
+        
+        # Test 1: Principal role matches candidate seniority -> realistic ceiling applied
+        p_ip = calibrate_interview_probability(85, ["Java", "AWS"], ["Go"], job_title="Principal Engineer", resume_text=resume)
+        self.assertNotEqual(p_ip, 85)
+        self.assertLess(p_ip, 85)
+        self.assertGreaterEqual(p_ip, 70)
+
+        # Test 2: Executive role without executive title in resume -> seniority penalty
+        exec_ip = calibrate_interview_probability(80, ["Java", "AWS"], ["Go"], job_title="VP of Engineering", resume_text=resume)
+        self.assertLess(exec_ip, p_ip)
+
+        # Test 3: Junior role -> overqualification discount
+        jr_ip = calibrate_interview_probability(90, ["Java"], [], job_title="Junior Developer", resume_text=resume)
+        self.assertLess(jr_ip, 90)
+
+        # Test 4: Explicit distinct raw_interview_probability from LLM is preserved
+        raw_ip = calibrate_interview_probability(85, ["Java"], ["Go"], job_title="Engineer", resume_text=resume, raw_interview_probability=64)
+        self.assertEqual(raw_ip, 64)
+
 
 class FitPrefScoringTestCase(TestCase):
     """Scheduled search persists Fit/Pref; managers cover SP-only slugs."""
@@ -3836,6 +3945,134 @@ class ScheduledSearchLogsTestCase(TestCase):
         self.assertEqual(data["profile_name"], "Log Test Profile")
         self.assertEqual(len(data["details"]), 1)
         self.assertEqual(data["details"][0]["title"], "Senior Python Engineer")
+
+    def test_hidden_vs_disliked_distinction_and_cooldown(self):
+        from unittest.mock import patch
+        import datetime
+        from django.utils import timezone
+        from resume_app.models import JobListing, JobListingAction, JobSearchTaskRun
+        from resume_app.track_actions import (
+            disliked_listing_id_set,
+            hidden_listing_id_set,
+            excluded_listing_id_set,
+        )
+        from resume_app.job_search_core import run_job_search_core
+        from django.urls import reverse
+        from django.test import Client
+        import csv
+        import io
+
+        job_disliked = JobListing.objects.create(
+            title="Disliked Engineer",
+            company_name="Disliked Co",
+            source="indeed",
+            external_id="ext-disliked-1",
+            description="A job that candidate dislikes completely.",
+        )
+        job_hidden = JobListing.objects.create(
+            title="Hidden Engineer",
+            company_name="Hidden Co",
+            source="indeed",
+            external_id="ext-hidden-1",
+            description="A job that candidate hid from feed.",
+        )
+        job_fresh = JobListing.objects.create(
+            title="Fresh Engineer",
+            company_name="Fresh Co",
+            source="indeed",
+            external_id="ext-fresh-1",
+            description="A great job to apply to.",
+        )
+
+        act_disliked = JobListingAction.objects.create(
+            owner=self.user,
+            job_listing=job_disliked,
+            action=JobListingAction.ActionType.DISLIKED,
+            track="log-test",
+        )
+        act_hidden = JobListingAction.objects.create(
+            owner=self.user,
+            job_listing=job_hidden,
+            action=JobListingAction.ActionType.HIDDEN,
+            track="log-test",
+        )
+
+        # 1. Immediate state: both are separated in sets
+        self.assertIn(job_disliked.id, disliked_listing_id_set(self.user, "log-test"))
+        self.assertNotIn(job_hidden.id, disliked_listing_id_set(self.user, "log-test"))
+
+        self.assertIn(job_hidden.id, hidden_listing_id_set(self.user, "log-test"))
+        self.assertNotIn(job_disliked.id, hidden_listing_id_set(self.user, "log-test"))
+
+        self.assertEqual(
+            excluded_listing_id_set(self.user, "log-test"),
+            {job_disliked.id, job_hidden.id},
+        )
+
+        # 2. Check search core audit dispositions within cooldown
+        raw_mock = [
+            {"title": job_disliked.title, "company": job_disliked.company_name, "source": "indeed", "external_id": job_disliked.external_id, "description": job_disliked.description},
+            {"title": job_hidden.title, "company": job_hidden.company_name, "source": "indeed", "external_id": job_hidden.external_id, "description": job_hidden.description},
+            {"title": job_fresh.title, "company": job_fresh.company_name, "source": "indeed", "external_id": job_fresh.external_id, "description": job_fresh.description},
+        ]
+        with patch("resume_app.job_search_core.fetch_jobs", return_value=raw_mock):
+            _f, _a, _out, _r, audit_items = run_job_search_core(
+                user=self.user,
+                search_term="Engineer",
+                track="log-test",
+                return_audit_log=True,
+            )
+        audit_by_id = {item["job_id"]: item for item in audit_items}
+        self.assertEqual(audit_by_id[job_disliked.id]["disposition"], "eliminated_disliked")
+        self.assertIn("disliked jobs", audit_by_id[job_disliked.id]["reason"])
+        self.assertEqual(audit_by_id[job_hidden.id]["disposition"], "eliminated_hidden")
+        self.assertIn("14-day cooldown", audit_by_id[job_hidden.id]["reason"])
+        self.assertEqual(audit_by_id[job_fresh.id]["disposition"], "pending")
+
+        # 3. Simulate cooldown expiration (hide action created 20 days ago)
+        twenty_days_ago = timezone.now() - datetime.timedelta(days=20)
+        JobListingAction.objects.filter(id=act_hidden.id).update(created_at=twenty_days_ago)
+
+        # Hidden action is now expired; disliked is still active
+        self.assertNotIn(job_hidden.id, hidden_listing_id_set(self.user, "log-test"))
+        self.assertIn(job_disliked.id, disliked_listing_id_set(self.user, "log-test"))
+        self.assertEqual(excluded_listing_id_set(self.user, "log-test"), {job_disliked.id})
+
+        # 4. Search core now allows the expired hidden job through
+        with patch("resume_app.job_search_core.fetch_jobs", return_value=raw_mock):
+            _f, _a, _out, _r, audit_items_2 = run_job_search_core(
+                user=self.user,
+                search_term="Engineer",
+                track="log-test",
+                return_audit_log=True,
+            )
+        audit_by_id_2 = {item["job_id"]: item for item in audit_items_2}
+        self.assertEqual(audit_by_id_2[job_disliked.id]["disposition"], "eliminated_disliked")
+        self.assertEqual(audit_by_id_2[job_hidden.id]["disposition"], "pending")  # Not eliminated by hide!
+
+        # 5. CSV export properly formats eliminated_hidden
+        run = JobSearchTaskRun.objects.create(
+            task=self.task,
+            status=JobSearchTaskRun.STATUS_COMPLETED,
+            details=[
+                {
+                    "title": "Hidden Job",
+                    "company": "Hidden Corp",
+                    "location": "Plano, TX",
+                    "source": "indeed",
+                    "disposition": "eliminated_hidden",
+                    "reason": "Eliminated: Hidden from this profile",
+                    "date_posted": "2026-09-27",
+                    "url": "https://example.com/hidden",
+                }
+            ],
+        )
+        client = Client()
+        client.force_login(self.user)
+        resp = client.get(reverse("download_scheduled_run_csv", kwargs={"run_id": run.id}))
+        self.assertEqual(resp.status_code, 200)
+        reader = list(csv.reader(io.StringIO(resp.content.decode("utf-8"))))
+        self.assertEqual(reader[1][4], "Eliminated: Hidden")
 
 
 class PipelineFiltersAndActionsTestCase(TestCase):

@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.http import HttpResponse
 from django.urls import path, include
 from ninja import NinjaAPI
 from ninja.security import django_auth
@@ -15,6 +16,7 @@ from resume_app.api_keys import SessionOrApiKeyAuth
 api = NinjaAPI(auth=[django_auth, SessionOrApiKeyAuth()])
 api.add_router("/resume", resume_router)
 urlpatterns = [
+    path("favicon.ico", lambda r: HttpResponse(status=204)),
     path("accounts/login/", AppLoginView.as_view(), name="login"),
     path("accounts/logout/", AppLogoutView.as_view(), name="logout"),
     path("accounts/signup/", SignupView.as_view(), name="signup"),
@@ -89,6 +91,21 @@ urlpatterns = [
     ),
     path("jobs/applying/", resume_views.applying_view, name="applying"),
     path("jobs/done/", resume_views.done_view, name="done"),
+    path(
+        "jobs/pipeline/<int:entry_id>/applied-resume/",
+        resume_views.pipeline_applied_resume_json_view,
+        name="pipeline_applied_resume_json",
+    ),
+    path(
+        "jobs/pipeline/<int:entry_id>/export/pdf/",
+        resume_views.pipeline_export_pdf_view,
+        name="pipeline_export_pdf",
+    ),
+    path(
+        "jobs/pipeline/<int:entry_id>/export/docx/",
+        resume_views.pipeline_export_docx_view,
+        name="pipeline_export_docx",
+    ),
     path("jobs/tracks/", resume_views.track_list_view, name="track_list"),
     path("jobs/tracks/<slug:slug>/delete/", resume_views.track_delete_view, name="track_delete"),
     path(
@@ -131,6 +148,7 @@ urlpatterns = [
     path("jobs/tasks/new/", resume_views.job_task_create_view, name="job_task_create"),
     path("jobs/tasks/<int:task_id>/edit/", resume_views.job_task_edit_view, name="job_task_edit"),
     path("jobs/tasks/<int:task_id>/run/", resume_views.job_task_run_now_view, name="job_task_run_now"),
+    path("jobs/tasks/<int:task_id>/status/", resume_views.job_task_status_view, name="job_task_status"),
     path("jobs/tasks/<int:task_id>/toggle/", resume_views.job_task_toggle_active_view, name="job_task_toggle_active"),
     path("jobs/<int:job_listing_id>/focus-breakdown/", resume_views.focus_breakdown_view, name="focus_breakdown"),
     path(

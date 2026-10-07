@@ -108,23 +108,32 @@ class JDCleanserService:
         # 0. Compatibility with old behavior: if no obvious headers, find first role marker
         role_markers_pattern = r"(responsible for|you will|requirements?|qualifications?|the ideal candidate|about the role|what you'll do|key responsibilities)"
 
-        # 1. Section-based filtering
+        # 1. Section-based filtering: scan for role headers vs fluff headers
         lines = d.split('\n')
-
-        # Heuristic: if we don't see any lines that look like headers,
-        # try to skip leading fluff by finding the first role marker.
         header_pattern = re.compile(r"^(?:\*\*|##|###)?\s*([^*#:]+)(?:\*\*|:)?\s*$")
-        has_headers = False
-        for line in lines:
+        
+        # Check if the document contains explicit role section headers
+        has_role_header = False
+        first_role_header_idx = None
+        for idx, line in enumerate(lines):
             stripped = line.strip()
-            if stripped and header_pattern.match(stripped) and len(stripped.split()) < 6:
-                has_headers = True
-                break
+            if not stripped:
+                continue
+            match = header_pattern.match(stripped)
+            if match:
+                header_text = match.group(1).strip().lower()
+                if len(header_text.split()) < 7 and any(kw in header_text for kw in ROLE_HEADER_KEYWORDS):
+                    has_role_header = True
+                    first_role_header_idx = idx
+                    break
 
-        if not has_headers:
+        if has_role_header and first_role_header_idx is not None:
+            # Skip all leading company bio / history / fluff preceding the first role header
+            lines = lines[first_role_header_idx:]
+        else:
+            # Fallback for documents without explicit headers: find first role marker phrase
             m = re.search(role_markers_pattern, d, re.IGNORECASE)
             if m:
-                # Start from the line containing the marker
                 marker_pos = m.start()
                 pre_marker = d[:marker_pos]
                 last_newline = pre_marker.rfind('\n')

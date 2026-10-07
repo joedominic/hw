@@ -648,6 +648,14 @@ class AppAutomationSettings(models.Model):
         related_name="automation_settings",
     )
     pipeline_to_vetting_enabled = models.BooleanField(default=True)
+    pipeline_match_score_min = models.PositiveSmallIntegerField(
+        default=60,
+        help_text="Promote Pipeline → Vetting when Match Score (%) is >= this (0–100).",
+    )
+    pipeline_purge_match_score_max = models.PositiveSmallIntegerField(
+        default=25,
+        help_text="Cleanup Manager & Pipeline Manager: auto-dismiss New (Pipeline) jobs when Match Score (%) is strictly below this threshold (0-100; 0 to disable).",
+    )
     pipeline_preference_margin_min = models.IntegerField(
         default=0,
         help_text="Promote Pipeline → Vetting when Pref margin (same as pipeline badge) is >= this value.",
@@ -1311,8 +1319,11 @@ class PipelineEntry(models.Model):
 
     # Vetting stage: interview probability + short explanation derived from Matching prompt.
     # Persisted so the UI can show badges without waiting for a live LLM call.
+    vetting_match_score = models.IntegerField(null=True, blank=True)
     vetting_interview_probability = models.IntegerField(null=True, blank=True)
     vetting_interview_reasoning = models.TextField(null=True, blank=True)
+    vetting_core_competencies = models.JSONField(default=list, blank=True, null=True)
+    vetting_stretch_skills = models.JSONField(default=list, blank=True, null=True)
     vetting_interview_resume_id = models.IntegerField(null=True, blank=True)
     vetting_interview_scored_at = models.DateTimeField(null=True, blank=True)
     interview_prep = models.TextField(
@@ -1321,6 +1332,40 @@ class PipelineEntry(models.Model):
         help_text="On-demand generated interview prep (JSON or markdown) for Done-stage jobs.",
     )
     interview_prep_generated_at = models.DateTimeField(null=True, blank=True)
+
+    class PostApplySubstatus(models.TextChoices):
+        APPLIED_PENDING = "applied_pending", "Applied (Awaiting Response)"
+        RECRUITER_CALL = "recruiter_call", "Recruiter Screen / Call"
+        HIRING_MANAGER = "hiring_manager", "Hiring Manager Screen"
+        PANEL_INTERVIEW = "panel_interview", "Panel / Tech Deep Dive"
+        OFFER = "offer", "Offer Received"
+        ARCHIVED_REJECTED = "archived_rejected", "Not Moving Forward"
+        WITHDRAWN = "withdrawn", "Candidate Withdrawn"
+
+    post_apply_substatus = models.CharField(
+        max_length=32,
+        choices=PostApplySubstatus.choices,
+        default=PostApplySubstatus.APPLIED_PENDING,
+        blank=True,
+        db_index=True,
+        help_text="Detailed stage/milestone after applying (e.g. Recruiter Call, Hiring Manager, Panel, Offer).",
+    )
+    next_interview_at = models.DateTimeField(null=True, blank=True)
+    post_apply_updated_at = models.DateTimeField(null=True, blank=True)
+    applied_resume_markdown = models.TextField(
+        blank=True,
+        null=True,
+        default="",
+        help_text="Markdown snapshot of the tailored/applied resume when moved to Applied.",
+    )
+    applied_optimized_resume = models.ForeignKey(
+        "OptimizedResume",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="applied_pipeline_entries",
+        help_text="Optimized resume snapshot used when marked applied.",
+    )
 
     objects = OwnedManager()
 
@@ -1385,15 +1430,61 @@ class PipelineEntry(models.Model):
         if save:
             self.save(update_fields=["stage"])
 
-    def mark_done(self, save: bool = True):
+    def mark_done(self, save: bool = True, auto_like: bool = True):
         # Mark as fully applied.
         if not self.can_mark_done():
             return
         self.stage = self.Stage.DONE
         if self.applied_at is None:
             self.applied_at = timezone.now()
+
+        # Snapshot tailored resume markdown if one was generated
+        if not self.applied_resume_markdown:
+            if self.applied_optimized_resume and (self.applied_optimized_resume.optimized_content or "").strip():
+                self.applied_resume_markdown = self.applied_optimized_resume.optimized_content
+            else:
+                try:
+                    opt = (
+                        self.optimized_resumes.filter(status="completed")
+                        .exclude(optimized_content="")
+                        .order_by("-updated_at")
+                        .first()
+                    )
+                    if not opt:
+                        opt = (
+                            self.optimized_resumes.exclude(optimized_content="")
+                            .order_by("-updated_at")
+                            .first()
+                        )
+                    if opt and (opt.optimized_content or "").strip():
+                        self.applied_resume_markdown = opt.optimized_content
+                        self.applied_optimized_resume = opt
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "Failed to snapshot applied resume markdown for entry %s: %s", self.id, e
+                    )
+
+        if self.applied_resume_markdown:
+            from .utils import sanitize_resume_markdown
+            self.applied_resume_markdown = sanitize_resume_markdown(self.applied_resume_markdown)
+
         if save:
-            self.save(update_fields=["stage", "applied_at"])
+            update_fields = ["stage", "applied_at", "applied_resume_markdown", "applied_optimized_resume"]
+            self.save(update_fields=update_fields)
+        if auto_like and self.owner and self.job_listing:
+            try:
+                from .track_actions import record_job_liked
+                record_job_liked(
+                    user=self.owner,
+                    job=self.job_listing,
+                    track=self.track,
+                    search_profile=self.search_profile,
+                )
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning("Failed to auto-like applied job %s: %s", self.job_listing_id, e)
+
 
     def mark_deleted(self, save: bool = True):
         # Move to deleted stage and set removed_at so background tasks won't re-add.
@@ -1422,7 +1513,10 @@ class PipelineEntry(models.Model):
         probability: int | None,
         reasoning: str | None = None,
         resume_id: int | None = None,
+        core_competencies: list | None = None,
+        stretch_skills: list | None = None,
         scored_at=None,
+        match_score: int | None = None,
         save: bool = True,
     ) -> None:
         """Encapsulate recording of interview matching evaluation results."""
@@ -1433,20 +1527,45 @@ class PipelineEntry(models.Model):
             except (TypeError, ValueError):
                 norm_prob = None
 
+        norm_match = None
+        if match_score is not None:
+            try:
+                norm_match = max(0, min(100, int(match_score)))
+            except (TypeError, ValueError):
+                norm_match = None
+
         self.vetting_interview_probability = norm_prob
-        self.vetting_interview_reasoning = (reasoning or "").strip()[:2000] if reasoning else ""
+        if norm_match is not None:
+            self.vetting_match_score = norm_match
+        clean_reasoning = (reasoning or "").strip()
+        if norm_prob is not None and clean_reasoning:
+            import re
+            clean_reasoning = re.sub(
+                r"Interview probability:\s*\d+%",
+                f"Interview probability: {norm_prob}%",
+                clean_reasoning,
+                flags=re.IGNORECASE,
+            )
+        self.vetting_interview_reasoning = clean_reasoning[:2000] if clean_reasoning else ""
+        if core_competencies is not None:
+            self.vetting_core_competencies = core_competencies or []
+        if stretch_skills is not None:
+            self.vetting_stretch_skills = stretch_skills or []
         if resume_id is not None:
             self.vetting_interview_resume_id = resume_id
         self.vetting_interview_scored_at = scored_at or timezone.now()
         if save:
-            self.save(
-                update_fields=[
-                    "vetting_interview_probability",
-                    "vetting_interview_reasoning",
-                    "vetting_interview_resume_id",
-                    "vetting_interview_scored_at",
-                ]
-            )
+            update_fields = [
+                "vetting_interview_probability",
+                "vetting_interview_reasoning",
+                "vetting_core_competencies",
+                "vetting_stretch_skills",
+                "vetting_interview_resume_id",
+                "vetting_interview_scored_at",
+            ]
+            if norm_match is not None or self.vetting_match_score is not None:
+                update_fields.append("vetting_match_score")
+            self.save(update_fields=update_fields)
 
     def meets_vetting_promotion_threshold(self, settings=None) -> bool:
         """Domain rule: check if entry in Vetting satisfies threshold for auto-promotion to Applying."""
@@ -1459,24 +1578,92 @@ class PipelineEntry(models.Model):
             return False
         return self.vetting_interview_probability >= int(cfg.vetting_interview_probability_min)
 
-    def meets_pipeline_auto_promotion_threshold(self, preference_margin: int | None, settings=None) -> bool:
+    def meets_pipeline_auto_promotion_threshold(
+        self,
+        match_score: int | None = None,
+        preference_margin: int | None = None,
+        settings=None,
+    ) -> bool:
         """Domain rule: check if entry in Pipeline satisfies threshold for auto-promotion to Vetting."""
         if not self.is_in_pipeline_stage or not self.is_active:
-            return False
-        if preference_margin is None:
             return False
         cfg = settings or AppAutomationSettings.get_for_user(self.owner)
         if not cfg.pipeline_to_vetting_enabled:
             return False
-        return preference_margin >= int(cfg.pipeline_preference_margin_min)
+        # Disliked traits guardrail: do not auto-promote jobs with strong negative preference margin
+        if preference_margin is not None and preference_margin < -5:
+            return False
+        # Primary gating: V1 Match Score (focus_percent / focus_after_penalty)
+        if match_score is not None:
+            min_score = getattr(cfg, "pipeline_match_score_min", 60)
+            return match_score >= int(min_score)
+        # Fallback to preference_margin if match_score not computed
+        if preference_margin is not None:
+            return preference_margin >= int(cfg.pipeline_preference_margin_min)
+        return False
 
-    def is_fast_track_eligible(self, preference_margin: int | None, threshold: int = 50) -> bool:
-        """Domain rule: check if high-confidence preference score qualifies for fast-tracking directly to Applying."""
-        if not self.is_in_pipeline_stage or not self.is_active:
-            return False
-        if preference_margin is None:
-            return False
-        return preference_margin > threshold
+    def is_fast_track_eligible(self, preference_margin: int | None, settings=None) -> bool:
+        """Domain rule: check if entry has criteria to fast-track directly to Applying stage."""
+        return False
+
+    def update_post_apply_substatus(self, substatus: str, next_interview_at=None, save: bool = True):
+        """Update the post-application substatus and optional next interview time."""
+        self.post_apply_substatus = substatus
+        self.post_apply_updated_at = timezone.now()
+        if next_interview_at is not None:
+            self.next_interview_at = next_interview_at
+        if save:
+            fields = ["post_apply_substatus", "post_apply_updated_at"]
+            if next_interview_at is not None:
+                fields.append("next_interview_at")
+            self.save(update_fields=fields)
+
+
+class EmployerInterviewEvent(models.Model):
+    """Tracks post-application employer interactions, recruiter screens, and interview rounds."""
+
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="interview_events",
+    )
+    pipeline_entry = models.ForeignKey(
+        PipelineEntry,
+        on_delete=models.CASCADE,
+        related_name="interview_events",
+    )
+    round_type = models.CharField(
+        max_length=32,
+        choices=PipelineEntry.PostApplySubstatus.choices,
+        default=PipelineEntry.PostApplySubstatus.RECRUITER_CALL,
+    )
+
+    class Status(models.TextChoices):
+        SCHEDULED = "scheduled", "Scheduled"
+        COMPLETED = "completed", "Completed"
+        CANCELLED = "cancelled", "Cancelled"
+
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.SCHEDULED,
+        db_index=True,
+    )
+    scheduled_at = models.DateTimeField(null=True, blank=True)
+    duration_minutes = models.PositiveSmallIntegerField(default=45, help_text="Estimated meeting duration in minutes.")
+    interviewer_names = models.CharField(max_length=255, blank=True, default="", help_text="Names/titles of interviewers or recruiters.")
+    location_or_link = models.CharField(max_length=500, blank=True, default="", help_text="Meeting URL or physical office campus location.")
+    notes = models.TextField(blank=True, default="", help_text="Preparation notes, discussion topics, or follow-up items.")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = OwnedManager()
+
+    class Meta:
+        ordering = ["scheduled_at", "-created_at"]
+
+    def __str__(self):
+        return f"{self.get_round_type_display()} for {self.pipeline_entry_id} ({self.status})"
 
 
 class JobSearchTaskRun(models.Model):
@@ -1504,6 +1691,9 @@ class JobSearchTaskRun(models.Model):
         help_text="Itemized audit log of fetched jobs and their elimination/saved status for recent runs.",
     )
 
+    @property
+    def jobs_eliminated(self) -> int:
+        return max(0, self.jobs_fetched - self.jobs_after_filter)
 
     class Meta:
         ordering = ["-started_at"]

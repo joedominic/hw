@@ -121,3 +121,19 @@ class FitInspectorTestCase(TestCase):
         # 3. Preference vectors for SearchProfile must immediately reflect removal and not return cached stale job
         pv2 = get_preference_vectors(user=self.user, track="dir-plano")
         self.assertIsNone(pv2)
+
+    @patch("resume_app.embeddings.embed_full", return_value=[0.1] * 384)
+    def test_fit_inspector_get_with_job_id(self, mock_embed):
+        job = JobListing.objects.create(
+            title="Principal AI Architect",
+            company_name="InnovateAI",
+            description="Lead machine learning models and cloud architecture.",
+            source="test",
+            external_id="j_inspect_1",
+        )
+        resp = self.client.get(reverse("fit_inspector") + f"?job_id={job.id}&track=ic")
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Principal AI Architect")
+        self.assertContains(resp, "InnovateAI")
+        self.assertContains(resp, f"Job #{job.id}")
+

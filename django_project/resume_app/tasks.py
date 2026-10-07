@@ -686,6 +686,8 @@ def run_job_search_task(user_id, task_id):
             task_id,
             user_id,
         )
+        cache.delete(f"job_task_pending:{task_id}")
+        cache.delete(f"job_task_manual_cooldown:{task_id}")
         return {"status": "skipped", "message": "Another job search task is running for this user"}
     try:
         return _run_job_search_task_impl(user_id, task_id)
@@ -719,14 +721,19 @@ def _run_job_search_task_impl(user_id, task_id):
     try:
         task = JobSearchTask.objects.for_user(user).get(id=task_id)
     except JobSearchTask.DoesNotExist:
+        cache.delete(f"job_task_pending:{task_id}")
+        cache.delete(f"job_task_manual_cooldown:{task_id}")
         return {"status": "error", "message": "JobSearchTask not found"}
     if not task.is_active:
+        cache.delete(f"job_task_pending:{task_id}")
+        cache.delete(f"job_task_manual_cooldown:{task_id}")
         return {"status": "skipped", "message": "Task is inactive"}
 
     run = JobSearchTaskRun.objects.create(
         task=task,
         status=JobSearchTaskRun.STATUS_RUNNING,
     )
+    cache.delete(f"job_task_pending:{task.id}")
     try:
         jobs_fetched, jobs_after_filter, jobs_out, _refs, audit_items = run_job_search_core(
             user=user,
@@ -747,143 +754,161 @@ def _run_job_search_task_impl(user_id, task_id):
         run.details = []
         run.save()
         _prune_old_runs(task)
+        cache.delete(f"job_task_pending:{task_id}")
+        cache.delete(f"job_task_manual_cooldown:{task_id}")
         return {"status": "error", "message": str(e)}
 
-    audit_by_id = {item["job_id"]: item for item in audit_items}
-    jobs_added_to_pipeline = 0
-    from .search_profile_scope import upsert_pipeline_entry
+    try:
+        audit_by_id = {item["job_id"]: item for item in audit_items}
+        run.jobs_fetched = jobs_fetched
+        run.jobs_after_filter = jobs_after_filter
+        run.save(update_fields=["jobs_fetched", "jobs_after_filter"])
 
-    for payload in jobs_out:
-        job_id = payload.id
-        pe = PipelineEntry.objects.for_user(user).filter(job_listing_id=job_id, track=task.track).first()
-        audit_entry = audit_by_id.get(job_id)
-        if pe is None:
-            upsert_pipeline_entry(
-                user,
-                job_listing_id=job_id,
-                slug=task.track,
-                defaults={"stage": PipelineEntry.Stage.PIPELINE},
-            )
-            jobs_added_to_pipeline += 1
-            if audit_entry:
-                audit_entry["disposition"] = "saved_to_pipeline"
-                audit_entry["reason"] = "Saved to Pipeline (New)"
-        elif pe.removed_at is not None:
-            repost_cooldown_days = getattr(settings, "PIPELINE_DELETED_REPOST_COOLDOWN_DAYS", 14)
-            repost_cooldown = timedelta(days=repost_cooldown_days)
-            now = timezone.now()
+        jobs_added_to_pipeline = 0
+        from .search_profile_scope import upsert_pipeline_entry
 
-            is_reposted = False
-            is_expired_revival = pe.stage == PipelineEntry.Stage.EXPIRED
-            posted_at = getattr(payload, "posted_at", None)
-            if not posted_at:
-                listing = JobListing.objects.filter(id=job_id).first()
-                if listing and listing.posted_at:
-                    posted_at = listing.posted_at
-
-            if posted_at and pe.removed_at:
-                posted_at_dt = posted_at
-                if timezone.is_naive(posted_at_dt):
-                    posted_at_dt = timezone.make_aware(posted_at_dt)
-
-                if is_expired_revival:
-                    # Expired roles are aged out by policy (not disliked/rejected by user).
-                    # If reposted with a date after it was expired or within the fresh window:
-                    if posted_at_dt > pe.removed_at:
-                        is_reposted = True
-                else:
-                    if (now - pe.removed_at) >= repost_cooldown:
-                        if posted_at_dt > pe.removed_at:
-                            is_reposted = True
-
-            if is_reposted:
-                pe.removed_at = None
-                pe.stage = PipelineEntry.Stage.PIPELINE
-                pe.save(update_fields=["removed_at", "stage"])
-                PipelineEntry.objects.filter(pk=pe.pk).update(added_at=now)
-                # Reset fetched_at so the revived repost is fresh on the retention clock
-                JobListing.objects.filter(id=job_id).update(fetched_at=now)
+        for payload in jobs_out:
+            job_id = payload.id
+            pe = PipelineEntry.objects.for_user(user).filter(job_listing_id=job_id, track=task.track).first()
+            audit_entry = audit_by_id.get(job_id)
+            if pe is None:
+                upsert_pipeline_entry(
+                    user,
+                    job_listing_id=job_id,
+                    slug=task.track,
+                    defaults={"stage": PipelineEntry.Stage.PIPELINE},
+                )
                 jobs_added_to_pipeline += 1
                 if audit_entry:
-                    audit_entry["disposition"] = "reposted_to_pipeline"
-                    date_str = posted_at.strftime("%b %d, %Y") if hasattr(posted_at, "strftime") else str(posted_at)
+                    audit_entry["disposition"] = "saved_to_pipeline"
+                    audit_entry["reason"] = "Saved to Pipeline (New)"
+            elif pe.removed_at is not None:
+                repost_cooldown_days = getattr(settings, "PIPELINE_DELETED_REPOST_COOLDOWN_DAYS", 14)
+                repost_cooldown = timedelta(days=repost_cooldown_days)
+                now = timezone.now()
+
+                is_reposted = False
+                is_expired_revival = pe.stage == PipelineEntry.Stage.EXPIRED
+                posted_at = getattr(payload, "posted_at", None)
+                if not posted_at:
+                    listing = JobListing.objects.filter(id=job_id).first()
+                    if listing and listing.posted_at:
+                        posted_at = listing.posted_at
+
+                if posted_at and pe.removed_at:
+                    posted_at_dt = posted_at
+                    if timezone.is_naive(posted_at_dt):
+                        posted_at_dt = timezone.make_aware(posted_at_dt)
+
                     if is_expired_revival:
-                        audit_entry["reason"] = f"Re-admitted to Pipeline: Reposted on {date_str} (expired role revived)"
+                        # Expired roles are aged out by policy (not disliked/rejected by user).
+                        # If reposted with a date after it was expired or within the fresh window:
+                        if posted_at_dt > pe.removed_at:
+                            is_reposted = True
                     else:
-                        audit_entry["reason"] = (
-                            f"Re-admitted to Pipeline: Reposted on {date_str} (after {repost_cooldown_days}-day cooldown)"
-                        )
+                        if (now - pe.removed_at) >= repost_cooldown:
+                            if posted_at_dt > pe.removed_at:
+                                is_reposted = True
+
+                if is_reposted:
+                    pe.removed_at = None
+                    pe.stage = PipelineEntry.Stage.PIPELINE
+                    pe.save(update_fields=["removed_at", "stage"])
+                    PipelineEntry.objects.filter(pk=pe.pk).update(added_at=now)
+                    # Reset fetched_at so the revived repost is fresh on the retention clock
+                    JobListing.objects.filter(id=job_id).update(fetched_at=now)
+                    jobs_added_to_pipeline += 1
+                    if audit_entry:
+                        audit_entry["disposition"] = "reposted_to_pipeline"
+                        date_str = posted_at.strftime("%b %d, %Y") if hasattr(posted_at, "strftime") else str(posted_at)
+                        if is_expired_revival:
+                            audit_entry["reason"] = f"Re-admitted to Pipeline: Reposted on {date_str} (expired role revived)"
+                        else:
+                            audit_entry["reason"] = (
+                                f"Re-admitted to Pipeline: Reposted on {date_str} (after {repost_cooldown_days}-day cooldown)"
+                            )
+                else:
+                    if audit_entry:
+                        if is_expired_revival:
+                            audit_entry["disposition"] = "expired_not_reposted"
+                            audit_entry["reason"] = "Skipped: Role was expired by retention policy (not reposted since expiry)"
+                        else:
+                            audit_entry["disposition"] = "previously_removed"
+                            audit_entry["reason"] = "Skipped: Previously removed / archived from pipeline"
             else:
                 if audit_entry:
-                    if is_expired_revival:
-                        audit_entry["disposition"] = "expired_not_reposted"
-                        audit_entry["reason"] = "Skipped: Role was expired by retention policy (not reposted since expiry)"
-                    else:
-                        audit_entry["disposition"] = "previously_removed"
-                        audit_entry["reason"] = "Skipped: Previously removed / archived from pipeline"
-        else:
-            if audit_entry:
-                audit_entry["disposition"] = "already_in_pipeline"
-                stage_name = pe.get_stage_display() if hasattr(pe, "get_stage_display") else pe.stage
-                audit_entry["reason"] = f"Skipped: Already in pipeline (Stage: {stage_name})"
+                    audit_entry["disposition"] = "already_in_pipeline"
+                    stage_name = pe.get_stage_display() if hasattr(pe, "get_stage_display") else pe.stage
+                    audit_entry["reason"] = f"Skipped: Already in pipeline (Stage: {stage_name})"
 
-
-    try:
-        from .job_dedupe import dedupe_pipeline_entries
-
-        dedupe_result = dedupe_pipeline_entries(
-            user=user,
-            track_slug=task.track,
-            stage="pipeline",
-            include_done=False,
-        )
-        if dedupe_result.get("entries_removed"):
-            logger.info(
-                "[run_job_search_task] post-search dedupe track=%s removed=%s groups=%s",
-                task.track,
-                dedupe_result.get("entries_removed"),
-                dedupe_result.get("duplicate_groups"),
-            )
-    except Exception:
-        logger.exception("[run_job_search_task] post-search dedupe failed task_id=%s", task_id)
-
-    if jobs_out and task.track:
         try:
-            job_ids = [p.id for p in jobs_out]
-            jobs = list(JobListing.objects.filter(id__in=job_ids))
-            persist_preference_metrics_for_jobs(
+            from .job_dedupe import dedupe_pipeline_entries
+
+            dedupe_result = dedupe_pipeline_entries(
                 user=user,
-                track=task.track,
-                job_listings=jobs,
-                payloads=jobs_out,
+                track_slug=task.track,
+                stage="pipeline",
+                include_done=False,
             )
+            if dedupe_result.get("entries_removed"):
+                logger.info(
+                    "[run_job_search_task] post-search dedupe track=%s removed=%s groups=%s",
+                    task.track,
+                    dedupe_result.get("entries_removed"),
+                    dedupe_result.get("duplicate_groups"),
+                )
         except Exception:
-            logger.exception(
-                "[run_job_search_task] persist preference metrics failed task_id=%s",
-                task_id,
-            )
-        try:
-            apply_pipeline_auto_promotions(user)
-        except Exception:
-            logger.exception(
-                "[run_job_search_task] apply_pipeline_auto_promotions failed task_id=%s",
-                task_id,
-            )
+            logger.exception("[run_job_search_task] post-search dedupe failed task_id=%s", task_id)
 
-    run.jobs_fetched = jobs_fetched
-    run.jobs_after_filter = jobs_after_filter
-    run.jobs_added_to_pipeline = jobs_added_to_pipeline
-    run.status = JobSearchTaskRun.STATUS_COMPLETED
-    run.finished_at = timezone.now()
-    run.details = audit_items
-    run.save()
-    _prune_old_runs(task)
+        if jobs_out and task.track:
+            try:
+                job_ids = [p.id for p in jobs_out]
+                jobs = list(JobListing.objects.filter(id__in=job_ids))
+                persist_preference_metrics_for_jobs(
+                    user=user,
+                    track=task.track,
+                    job_listings=jobs,
+                    payloads=jobs_out,
+                )
+            except Exception:
+                logger.exception(
+                    "[run_job_search_task] persist preference metrics failed task_id=%s",
+                    task_id,
+                )
+            try:
+                apply_pipeline_auto_promotions(user)
+            except Exception:
+                logger.exception(
+                    "[run_job_search_task] apply_pipeline_auto_promotions failed task_id=%s",
+                    task_id,
+                )
 
-    logger.info(
-        "[run_job_search_task] task_id=%s done: fetched=%d after_filter=%d added=%d",
-        task_id, jobs_fetched, jobs_after_filter, jobs_added_to_pipeline,
-    )
-    return {"status": "success", "task_id": task_id}
+        run.jobs_fetched = jobs_fetched
+        run.jobs_after_filter = jobs_after_filter
+        run.jobs_added_to_pipeline = jobs_added_to_pipeline
+        run.status = JobSearchTaskRun.STATUS_COMPLETED
+        run.finished_at = timezone.now()
+        run.details = audit_items
+        run.save()
+        _prune_old_runs(task)
+
+        logger.info(
+            "[run_job_search_task] task_id=%s done: fetched=%d after_filter=%d added=%d",
+            task_id, jobs_fetched, jobs_after_filter, jobs_added_to_pipeline,
+        )
+        return {"status": "success", "task_id": task_id}
+    except Exception as e:
+        logger.exception("[run_job_search_task] task_id=%s post-search processing failed: %s", task_id, e)
+        run.status = JobSearchTaskRun.STATUS_FAILED
+        run.finished_at = timezone.now()
+        run.error_message = f"Post-search processing failed: {e}"
+        run.details = audit_items if "audit_items" in locals() else []
+        run.save()
+        _prune_old_runs(task)
+        return {"status": "error", "message": str(e)}
+    finally:
+        cache.delete(f"job_task_pending:{task_id}")
+        cache.delete(f"job_task_manual_cooldown:{task_id}")
 
 
 @db_task()
@@ -971,18 +996,19 @@ def evaluate_vetting_matching_task(
         resume_snippet_map: dict[str, tuple[UserResume, str]] = {}
 
         # Parse each track's resume once per task.
-        tracks = {e.track for e in entries if e.track}
+        tracks = {e.track for e in entries}
         latest_overall = UserResume.objects.for_user(user).filter(is_library=True).order_by("-uploaded_at").first()
         for track in tracks:
             latest = (
                 UserResume.objects.for_user(user).filter(is_library=True, track=track).order_by("-uploaded_at").first()
-                or latest_overall
-            )
+                if track
+                else latest_overall
+            ) or latest_overall
             if not latest or not latest.file:
                 continue
             try:
                 resume_text = parse_pdf(latest.file.path)
-                resume_snippet_map[track] = (latest, resume_text[:RESUME_MATCHING_SNIPPET_CHARS])
+                resume_snippet_map[track or ""] = (latest, resume_text)
             except Exception as e:
                 logger.exception(
                     "[evaluate_vetting_matching_task] Could not parse resume (track=%s, resume_id=%s): %s",
@@ -997,17 +1023,23 @@ def evaluate_vetting_matching_task(
         errors = []
         ms, mu, ml = resolve_prompt_parts(profile_for_llm(None), "matching")
         for entry in entries:
-            track = entry.track
-            resolved = resume_snippet_map.get(track)
+            track = entry.track or ""
+            resolved = (
+                resume_snippet_map.get(track)
+                or resume_snippet_map.get("")
+                or (list(resume_snippet_map.values())[0] if resume_snippet_map else None)
+            )
             if not resolved:
                 skipped += 1
                 continue
-            resume_obj, resume_snippet = resolved
+            resume_obj, full_resume_text = resolved
+            resume_snippet = full_resume_text[:RESUME_MATCHING_SNIPPET_CHARS]
 
-            # Skip if we already evaluated using the same resume.
+            # Skip if we already evaluated using the same resume and skills were extracted.
             if (
                 entry.vetting_interview_probability is not None
                 and entry.vetting_interview_resume_id == resume_obj.id
+                and entry.vetting_core_competencies
             ):
                 skipped += 1
                 continue
@@ -1020,52 +1052,108 @@ def evaluate_vetting_matching_task(
                 skipped += 1
                 continue
 
-            # Cleanse JD for vetting match to save tokens.
-            # Local Ollama cleanses the text; falls back to heuristics if unavailable to avoid cloud token usage.
-            jd = JDCleanserService.cleanse(raw_jd, title=entry.job_listing.title, use_llm=True, user=user, only_local=True)
+            # Cleanse JD for vetting match to strip boilerplate while keeping Ollama KV cache warm.
+            jd = JDCleanserService.cleanse(raw_jd, title=entry.job_listing.title, use_llm=False)
             jd = jd[:jd_max_chars]
 
             try:
-                # Retry a couple times: models sometimes omit interview_probability
-                # even when requested via schema.
-                result = None
-                for _attempt in range(3):
-                    if matching_prompt and str(matching_prompt).strip():
-                        result = run_matching(
-                            resume_snippet,
-                            jd,
-                            llm_override,
-                            user=user,
-                            prompt_template=matching_prompt,
-                            job_cache_key=f"vetting:{entry.id}",
-                            usage_query_kind=USAGE_QUERY_PIPELINE_VETTING,
-                        )
-                    else:
-                        result = run_matching(
-                            resume_snippet,
-                            jd,
-                            llm_override,
-                            user=user,
-                            prompt_system=ms,
-                            prompt_user=mu,
-                            prompt_legacy=ml or None,
-                            job_cache_key=f"vetting:{entry.id}",
-                            usage_query_kind=USAGE_QUERY_PIPELINE_VETTING,
-                        )
-                    if result.get("interview_probability") is not None:
-                        break
+                match_val = None
+                ip = None
+                reasoning = ""
+                core_skills = []
+                stretch_skills = []
 
-                ip = (result or {}).get("interview_probability")
-                reasoning = ((result or {}).get("reasoning") or "").strip()
+                # Default: Deep Analysis via consolidated SkillRadarService unless an explicit external llm_override is requested
+                if not llm_override:
+                    from .skill_radar import SkillRadarService, calibrate_interview_probability
+
+                    radar_res = SkillRadarService.analyze(
+                        entry.job_listing,
+                        full_resume_text,
+                        user=user,
+                        resume_id=resume_obj.id,
+                        job_description=jd,
+                        force_refresh=False,
+                    )
+                    if radar_res.get("source") != "error" and radar_res.get("match_score") is not None:
+                        match_val = radar_res.get("match_score")
+                        ip = radar_res.get("interview_probability")
+                        if ip is None:
+                            ip = calibrate_interview_probability(
+                                match_val,
+                                radar_res.get("core_competencies") or [],
+                                radar_res.get("stretch_skills") or [],
+                                job_title=entry.job_listing.title,
+                                resume_text=full_resume_text,
+                            )
+                        reasoning = (radar_res.get("fit_summary") or "").strip()
+                        core_skills = radar_res.get("core_competencies") or []
+                        stretch_skills = radar_res.get("stretch_skills") or []
+                    else:
+                        logger.warning(
+                            "[evaluate_vetting_matching_task] SkillRadarService error for entry %s: %s; falling back to run_matching",
+                            entry.id,
+                            radar_res.get("error"),
+                        )
+
+                if ip is None:
+                    # Fallback to run_matching
+                    result = None
+                    for _attempt in range(3):
+                        if matching_prompt and str(matching_prompt).strip():
+                            result = run_matching(
+                                resume_snippet,
+                                jd,
+                                llm_override,
+                                user=user,
+                                prompt_template=matching_prompt,
+                                job_cache_key=f"vetting:{entry.id}",
+                                job_id=entry.job_listing_id,
+                                resume_id=resume_obj.id,
+                                prefer_local=True,
+                                usage_query_kind=USAGE_QUERY_PIPELINE_VETTING,
+                            )
+                        else:
+                            result = run_matching(
+                                resume_snippet,
+                                jd,
+                                llm_override,
+                                user=user,
+                                prompt_system=ms,
+                                prompt_user=mu,
+                                prompt_legacy=ml or None,
+                                job_cache_key=f"vetting:{entry.id}",
+                                job_id=entry.job_listing_id,
+                                resume_id=resume_obj.id,
+                                prefer_local=True,
+                                usage_query_kind=USAGE_QUERY_PIPELINE_VETTING,
+                            )
+                        if result.get("interview_probability") is not None:
+                            break
+                    ip = (result or {}).get("interview_probability")
+                    match_val = (result or {}).get("score")
+                    reasoning = ((result or {}).get("reasoning") or "").strip()
+
                 entry.record_vetting_interview_result(
+                    match_score=match_val,
                     probability=ip,
                     reasoning=reasoning,
                     resume_id=resume_obj.id,
                     scored_at=now,
+                    core_competencies=core_skills,
+                    stretch_skills=stretch_skills,
                     save=True,
                 )
                 updated += 1
-                apply_vetting_to_applying_promotions(user, [entry.id])
+
+                # Check auto-purge threshold: if scored strictly below purge threshold, dismiss it from the pipeline
+                cfg = AppAutomationSettings.get_for_user(user)
+                purge_threshold = int(getattr(cfg, "pipeline_purge_match_score_max", 25) or 0)
+                if purge_threshold > 0 and ip is not None and ip < purge_threshold:
+                    _pipeline_entry_remove_for_cleanup(entry)
+                    logger.info("[evaluate_vetting_matching_task] Auto-purged low scoring entry %s (score=%s < %s)", entry.id, ip, purge_threshold)
+                else:
+                    apply_vetting_to_applying_promotions(user, [entry.id])
             except Exception as e:
                 tenant_label = getattr(user, "username", str(user_id))
                 uid = getattr(user, "id", user_id)
@@ -1213,6 +1301,9 @@ def try_vetting_match_debug(
                 user=user,
                 prompt_template=matching_prompt,
                 job_cache_key=f"vetting:debug:{entry.id}",
+                job_id=entry.job_listing_id,
+                resume_id=latest.id,
+                prefer_local=True,
                 usage_query_kind=USAGE_QUERY_PIPELINE_VETTING,
                 return_debug=True,
             )
@@ -1226,6 +1317,9 @@ def try_vetting_match_debug(
                 prompt_user=mu,
                 prompt_legacy=ml or None,
                 job_cache_key=f"vetting:debug:{entry.id}",
+                job_id=entry.job_listing_id,
+                resume_id=latest.id,
+                prefer_local=True,
                 usage_query_kind=USAGE_QUERY_PIPELINE_VETTING,
                 return_debug=True,
             )
@@ -1262,11 +1356,18 @@ def apply_pipeline_auto_promotions(user) -> int:
                 job_listing_id=entry.job_listing_id,
                 track=entry.track,
             )
-            .only("preference_margin")
+            .only("focus_percent", "focus_after_penalty", "preference_margin")
             .first()
         )
+        score = None
+        if m:
+            score = m.focus_after_penalty if m.focus_after_penalty is not None else m.focus_percent
         margin = m.preference_margin if m else None
-        if not entry.meets_pipeline_auto_promotion_threshold(margin, cfg):
+        if not entry.meets_pipeline_auto_promotion_threshold(
+            match_score=score,
+            preference_margin=margin,
+            settings=cfg,
+        ):
             continue
         entry.move_to_vetting(save=True)
         promoted.append(entry.id)
@@ -1281,7 +1382,8 @@ def apply_pipeline_auto_promotions(user) -> int:
         ).first()
         margin = m.preference_margin if m else None
 
-        if entry.is_fast_track_eligible(margin):
+        is_fast_track = getattr(entry, "is_fast_track_eligible", lambda m: False)(margin)
+        if is_fast_track:
             entry.move_to_applying(save=True)
             fast_tracked.append(entry_id)
         else:
@@ -1399,7 +1501,8 @@ def _cleanup_retention_stage_q(stage_key: str) -> models.Q:
 
 def apply_cleanup_retention_purge(cfg: AppAutomationSettings) -> int:
     """
-    Remove pipeline rows older than tenant retention policy (default 2 weeks / 14 days; configurable per tenant).
+    Remove pipeline rows older than tenant retention policy (default 7 days; configurable per tenant)
+    OR scoring strictly below pipeline_purge_match_score_max (default 25%).
     Excludes Applied (Done) stage jobs unless cleanup_done_retention_days is explicitly configured.
     Same removal policy: hard-delete unless liked/disliked (which are soft-deleted with mark_deleted).
     """
@@ -1407,39 +1510,92 @@ def apply_cleanup_retention_purge(cfg: AppAutomationSettings) -> int:
     user = cfg.owner
     from .search_profile_scope import profile_slugs_for_pipeline
 
-    track_slugs = profile_slugs_for_pipeline(user)
+    track_slugs = list(set(profile_slugs_for_pipeline(user) + list(PipelineEntry.objects.for_user(user).values_list("track", flat=True).distinct())))
     if not track_slugs:
         return 0
 
     retention_days = int(getattr(cfg, "cleanup_pipeline_retention_days", 7) or getattr(cfg, "cleanup_job_retention_days", 7) or 7)
-    if retention_days < 1:
-        return 0
-
-    cutoff = now - timedelta(days=retention_days)
+    cutoff = now - timedelta(days=retention_days) if retention_days > 0 else None
+    purge_threshold = int(getattr(cfg, "pipeline_purge_match_score_max", 25) or 0)
 
     # Purge applies to all pre-applied stages based on Sourced Date; Done is strictly protected.
     stages_to_purge = ["pipeline", "vetting", "applying"]
 
     removed = 0
     for tslug in track_slugs:
-        for stage_key in stages_to_purge:
-            try:
-                st_q = _cleanup_retention_stage_q(stage_key)
-            except ValueError:
-                continue
-            entries_to_purge = PipelineEntry.objects.for_user(user).filter(
-                track=tslug,
-                removed_at__isnull=True,
-                job_listing__fetched_at__lt=cutoff,
-            ).filter(st_q)
+        # 1. Retention age-based purge
+        if cutoff:
+            for stage_key in stages_to_purge:
+                try:
+                    st_q = _cleanup_retention_stage_q(stage_key)
+                except ValueError:
+                    continue
+                entries_to_purge = PipelineEntry.objects.for_user(user).filter(
+                    track=tslug,
+                    removed_at__isnull=True,
+                    job_listing__fetched_at__lt=cutoff,
+                ).filter(st_q)
 
-            for entry in entries_to_purge:
+                for entry in entries_to_purge:
+                    _pipeline_entry_remove_for_cleanup(entry)
+                    removed += 1
+
+        # 2. Score-based purge (< purge_threshold)
+        if purge_threshold > 0:
+            # Purge Vetting (Review) and Applying entries with interview probability strictly below threshold
+            low_scored_eval = PipelineEntry.objects.for_user(user).filter(
+                track=tslug,
+                stage__in=[PipelineEntry.Stage.VETTING, PipelineEntry.Stage.APPLYING],
+                removed_at__isnull=True,
+                vetting_interview_probability__isnull=False,
+                vetting_interview_probability__lt=purge_threshold,
+            )
+            for entry in low_scored_eval:
                 _pipeline_entry_remove_for_cleanup(entry)
                 removed += 1
+
+            # Purge Pipeline (New) entries with track focus score strictly below threshold
+            bad_job_ids = list(
+                JobListingTrackMetrics.objects.for_user(user).filter(
+                    track=tslug,
+                ).filter(
+                    models.Q(focus_after_penalty__isnull=False, focus_after_penalty__lt=purge_threshold)
+                    | models.Q(focus_after_penalty__isnull=True, focus_percent__isnull=False, focus_percent__lt=purge_threshold)
+                ).values_list("job_listing_id", flat=True)
+            )
+            if bad_job_ids:
+                low_scored_pipeline = PipelineEntry.objects.for_user(user).filter(
+                    track=tslug,
+                    stage=PipelineEntry.Stage.PIPELINE,
+                    removed_at__isnull=True,
+                    job_listing_id__in=bad_job_ids,
+                )
+                for entry in low_scored_pipeline:
+                    _pipeline_entry_remove_for_cleanup(entry)
+                    removed += 1
+
     if removed:
-        logger.info("[cleanup_manager] retention purge removed=%d row(s)", removed)
-        huey_logger.info("[cleanup_manager] retention purge removed=%d row(s)", removed)
+        logger.info("[cleanup_manager] retention & score purge removed=%d row(s)", removed)
+        huey_logger.info("[cleanup_manager] retention & score purge removed=%d row(s)", removed)
     return removed
+
+
+def apply_pipeline_cleanup_policies(user) -> dict:
+    """
+    Applies all user policies (purge thresholds, retention windows, and auto-promotions)
+    across the entire pipeline for all tracks, strictly protecting items in APPLIED (Done) stage.
+    """
+    cfg = AppAutomationSettings.get_for_user(user)
+    purged_count = apply_cleanup_retention_purge(cfg)
+    promoted_pipeline = apply_pipeline_auto_promotions(user)
+    promoted_vetting = apply_vetting_to_applying_promotions(user)
+    total_promoted = (promoted_pipeline or 0) + (promoted_vetting or 0)
+    return {
+        "purged": purged_count,
+        "promoted": total_promoted,
+        "promoted_pipeline": promoted_pipeline,
+        "promoted_vetting": promoted_vetting,
+    }
 
 
 def _iter_pipeline_stage_job_listing_ids(user, track: str) -> list[int]:
@@ -1553,11 +1709,22 @@ def _pipeline_manager_for_user(user):
                     job_listings=jobs,
                 )
 
+            cfg = AppAutomationSettings.get_for_user(user)
+            purge_threshold = int(getattr(cfg, "pipeline_purge_match_score_max", 25) or 0)
+
+            bad_q = models.Q()
+            if purge_threshold > 0:
+                # Auto-dismiss jobs scored strictly below the user threshold
+                bad_q |= models.Q(focus_after_penalty__isnull=False, focus_after_penalty__lt=purge_threshold)
+                bad_q |= models.Q(focus_after_penalty__isnull=True, focus_percent__isnull=False, focus_percent__lt=purge_threshold)
+
+            # Safeguard: strongly negative preference margin (jobs closely resembling disliked jobs)
+            bad_q |= models.Q(preference_margin__lt=-5)
+
             bad_ids = list(
                 JobListingTrackMetrics.objects.for_user(user).filter(
                     track=track,
-                    preference_margin__lt=PIPELINE_MANAGER_PURGE_MARGIN_MAX,
-                ).values_list("job_listing_id", flat=True)
+                ).filter(bad_q).values_list("job_listing_id", flat=True)
             )
             if bad_ids:
                 margin_entries = PipelineEntry.objects.for_user(user).filter(
@@ -1571,9 +1738,10 @@ def _pipeline_manager_for_user(user):
                     removed_n += 1
                 if removed_n:
                     logger.info(
-                        "[pipeline_manager] track=%s purged %d job(s) from pipeline (margin)",
+                        "[pipeline_manager] track=%s auto-dismissed %d low-match job(s) from pipeline (score < %d%% / margin)",
                         track,
                         removed_n,
+                        purge_threshold,
                     )
         except Exception as e:
             logger.exception("[pipeline_manager] track=%s failed: %s", track, e)
@@ -1635,6 +1803,10 @@ def mark_stale_job_search_runs_failed():
         status=JobSearchTaskRun.STATUS_RUNNING,
         started_at__lt=threshold,
     )
+    stale_task_ids = list(stale.values_list("task_id", flat=True).distinct())
+    for tid in stale_task_ids:
+        cache.delete(f"job_task_pending:{tid}")
+        cache.delete(f"job_task_manual_cooldown:{tid}")
     count = stale.update(
         status=JobSearchTaskRun.STATUS_FAILED,
         finished_at=timezone.now(),

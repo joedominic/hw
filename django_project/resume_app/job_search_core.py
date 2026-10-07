@@ -10,7 +10,14 @@ from django.conf import settings
 from django.utils import timezone
 
 from .models import JobListing, JobListingAction, JobListingTrackMetrics, PipelineEntry
-from .track_actions import excluded_listing_id_set, liked_listing_id_set, normalize_track_slug, saved_listing_id_set
+from .track_actions import (
+    disliked_listing_id_set,
+    excluded_listing_id_set,
+    hidden_listing_id_set,
+    liked_listing_id_set,
+    normalize_track_slug,
+    saved_listing_id_set,
+)
 from .job_sources import fetch_jobs, normalize_site_names, upsert_job_listing_from_fetch, _parse_date_posted
 from .schemas import JobPayload
 from .preference import (
@@ -212,7 +219,9 @@ def run_job_search_core(
         results_wanted = results_wanted or getattr(settings, "JOB_SEARCH_DEFAULT_RESULTS", 50)
         site_name = normalize_site_names(site_name)
         norm_track = normalize_track_slug(track, user)
-        disliked_listing_ids = excluded_listing_id_set(user, track)
+        repost_cooldown_days = getattr(settings, "PIPELINE_DELETED_REPOST_COOLDOWN_DAYS", 14)
+        disliked_listing_ids = disliked_listing_id_set(user, track)
+        hidden_listing_ids = hidden_listing_id_set(user, track, cooldown_days=repost_cooldown_days)
         from .models import UserDisqualifier
 
         disqualifier_pattern = build_disqualifier_pattern(
@@ -269,7 +278,12 @@ def run_job_search_core(
 
             if job.id in disliked_listing_ids:
                 audit_entry["disposition"] = "eliminated_disliked"
-                audit_entry["reason"] = "Eliminated: In user's disliked / hidden jobs"
+                audit_entry["reason"] = "Eliminated: In your disliked jobs (negative preference)"
+                continue
+
+            if job.id in hidden_listing_ids:
+                audit_entry["disposition"] = "eliminated_hidden"
+                audit_entry["reason"] = f"Eliminated: Hidden from this profile (within {repost_cooldown_days}-day cooldown)"
                 continue
 
             if disqualifier_pattern:
@@ -288,7 +302,14 @@ def run_job_search_core(
         jobs_after_filter = len(jobs_with_meta)
         logger.info("[job_search_core] After filter: %d jobs", jobs_after_filter)
 
-        jobs_out = rank_and_filter_jobs(jobs_with_meta, norm_track, user=user, sort=sort)
+        elimination_details: dict[int, dict] = {}
+        jobs_out = rank_and_filter_jobs(
+            jobs_with_meta,
+            norm_track,
+            user=user,
+            sort=sort,
+            elimination_details=elimination_details,
+        )
         annotate_saved_flags(user, norm_track, jobs_out)
 
         # Mark jobs that passed initial filter but were dropped during ranking / dedupe
@@ -297,12 +318,18 @@ def run_job_search_core(
             if job.id not in kept_job_ids:
                 entry = audit_by_job_id.get(job.id)
                 if entry and entry["disposition"] == "pending":
-                    entry["disposition"] = "eliminated_duplicate"
-                    entry["reason"] = "Eliminated: Duplicate posting or low preference threshold"
+                    det = elimination_details.get(job.id)
+                    if det:
+                        entry["disposition"] = det.get("disposition", "eliminated_low_preference")
+                        entry["reason"] = det.get("reason", "Eliminated: Below preference matching threshold")
+                    else:
+                        entry["disposition"] = "eliminated_low_preference"
+                        entry["reason"] = "Eliminated: Below preference matching threshold"
 
         if return_audit_log:
             return (jobs_fetched, jobs_after_filter, jobs_out, refs_for_cache, audit_items)
         return (jobs_fetched, jobs_after_filter, jobs_out, refs_for_cache)
+
     finally:
         if lock_key:
             cache.delete(lock_key)
@@ -445,30 +472,25 @@ def _rank_jobs_with_meta(
 
 
 def _apply_auto_dislike(
-    ranked: List[JobPayload], track: Optional[str], user
+    ranked: List[JobPayload],
+    track: Optional[str],
+    user,
+    dropped_details: Optional[dict] = None,
 ) -> List[JobPayload]:
-    """Apply auto-dislike for margin < -5; mutate DB and return filtered list (read-only ranking stays pure)."""
-    slug = normalize_track_slug(track, user)
+    """Filter out jobs with low preference margin (margin < -5); records drop details without mutating user action history."""
     out: List[JobPayload] = []
     for payload_obj in ranked:
         margin = getattr(payload_obj, "preference_margin_percent", None)
         if margin is not None and margin < -5:
-            try:
-                job_obj = JobListing.objects.filter(id=payload_obj.id).first()
-                if job_obj:
-                    JobListingAction.objects.get_or_create(
-                        owner=user,
-                        job_listing=job_obj,
-                        action=JobListingAction.ActionType.DISLIKED,
-                        track=slug,
-                    )
-                    invalidate_preference_cache(user)
-                    invalidate_disliked_embeddings_cache(user)
-            except Exception as e:
-                logger.warning("Auto-exclude (margin< -5) failed for job %s: %s", payload_obj.id, e)
+            if dropped_details is not None:
+                dropped_details[payload_obj.id] = {
+                    "disposition": "eliminated_low_preference",
+                    "reason": f"Eliminated: Low preference margin ({margin}%, below -5% guardrail)",
+                }
             continue
         out.append(payload_obj)
     return out
+
 
 
 def _apply_disliked_penalty_and_final_sort(
@@ -476,6 +498,7 @@ def _apply_disliked_penalty_and_final_sort(
     track: Optional[str],
     *,
     user,
+    dropped_details: Optional[dict] = None,
 ) -> List[JobPayload]:
     """Apply disliked-similarity penalty and final sort by preference_margin_percent."""
     try:
@@ -513,11 +536,17 @@ def _apply_disliked_penalty_and_final_sort(
                     disliked_sim = max(0.0, min(1.0, (disliked_sim + 1.0) / 2.0))
                     p.similar_to_disliked_percent = int(round(disliked_sim * 100))
                     if hide_threshold is not None and p.similar_to_disliked_percent >= hide_threshold:
+                        if dropped_details is not None:
+                            dropped_details[p.id] = {
+                                "disposition": "eliminated_disliked_similarity",
+                                "reason": f"Eliminated: High similarity to disliked jobs ({p.similar_to_disliked_percent}%)",
+                            }
                         continue
                     if disliked_sim < threshold:
                         penalty = 0.0
                     else:
                         penalty = penalty_weight * disliked_sim
+
                     base = p.focus_score if p.focus_score is not None else -1.0
                     sort_key = base - penalty
                     if penalty > 0 and p.focus_percent is not None:
@@ -611,14 +640,17 @@ def rank_and_filter_jobs(
     *,
     user,
     sort: str = "match",
+    elimination_details: Optional[dict] = None,
 ) -> List[JobPayload]:
     """
     Single entry point for preference ranking: score, auto-dislike margin < -5,
     apply disliked penalty, and final sort according to requested sort option.
     """
     ranked = _rank_jobs_with_meta(jobs_with_meta, track, user=user)
-    jobs_out = _apply_auto_dislike(ranked, track, user)
-    jobs_out = _apply_disliked_penalty_and_final_sort(jobs_out, track, user=user)
+    jobs_out = _apply_auto_dislike(ranked, track, user, dropped_details=elimination_details)
+    jobs_out = _apply_disliked_penalty_and_final_sort(
+        jobs_out, track, user=user, dropped_details=elimination_details
+    )
 
     # NEW: Apply Ollama Guard to top 10 results to reduce noise (e.g. seniority mismatch)
     from django.conf import settings
@@ -627,20 +659,29 @@ def rank_and_filter_jobs(
         try:
             from .services import run_ollama_guard_on_payloads
 
+            before_guard_ids = {p.id for p in jobs_out}
             jobs_out = run_ollama_guard_on_payloads(jobs_out[:10], track, user=user) + jobs_out[10:]
+            if elimination_details is not None:
+                after_guard_ids = {p.id for p in jobs_out}
+                for dropped_id in (before_guard_ids - after_guard_ids):
+                    elimination_details[dropped_id] = {
+                        "disposition": "eliminated_guard",
+                        "reason": "Eliminated: Filtered by Ollama Guard (seniority or role mismatch)",
+                    }
         except Exception as e:
             logger.warning("Ollama Guard failed, skipping: %s", e)
 
     from .job_dedupe import dedupe_payloads_by_title_company
 
     before = len(jobs_out)
-    jobs_out = dedupe_payloads_by_title_company(jobs_out)
+    jobs_out = dedupe_payloads_by_title_company(jobs_out, dropped_details=elimination_details)
     if len(jobs_out) < before:
         logger.info(
             "[job_search] title/company dedupe: %d → %d jobs",
             before,
             len(jobs_out),
         )
+
     return sort_job_payloads(jobs_out, sort_by=sort)
 
 
@@ -776,14 +817,15 @@ def pipeline_jobs_to_payloads(
 
     # Interview probability + reasoning (stored on PipelineEntry; persists across stages).
     entry_map: Dict[int, PipelineEntry] = {}
-    if track_slug and job_ids:
-        for e in PipelineEntry.objects.filter(
+    if job_ids:
+        entries_qs = PipelineEntry.objects.filter(
             owner=user,
-            track=track_slug,
             job_listing_id__in=job_ids,
             removed_at__isnull=True,
-        ):
-            entry_map[e.job_listing_id] = e
+        )
+        for e in entries_qs:
+            if e.job_listing_id not in entry_map or (track_slug and e.track == track_slug):
+                entry_map[e.job_listing_id] = e
 
     jobs_with_meta: List[Tuple[JobListing, JobPayload]] = []
     for job in job_listings:
@@ -797,8 +839,11 @@ def pipeline_jobs_to_payloads(
 
         interview_entry = entry_map.get(job.id)
         if interview_entry:
+            payload.vetting_match_score = getattr(interview_entry, "vetting_match_score", None)
             payload.interview_probability = interview_entry.vetting_interview_probability
             payload.interview_reasoning = interview_entry.vetting_interview_reasoning
+            payload.zero_llm_core_matches = interview_entry.vetting_core_competencies or []
+            payload.zero_llm_stretch_skills = interview_entry.vetting_stretch_skills or []
         payload.interview_status = resolve_interview_display_status(
             description=job.description or "",
             interview_probability=payload.interview_probability,

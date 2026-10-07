@@ -12,7 +12,7 @@ from resume_app.models import (
     PipelineEntry,
     Track,
 )
-from resume_app.tasks import apply_cleanup_retention_purge
+from resume_app.tasks import apply_cleanup_retention_purge, apply_pipeline_cleanup_policies
 
 User = get_user_model()
 
@@ -140,9 +140,9 @@ class CleanupManagerDedupeAndRetentionTests(TestCase):
             track="ic",
             stage=PipelineEntry.Stage.PIPELINE,
         )
-        # Backdate added_at to 20 days ago
-        PipelineEntry.objects.filter(id=old_entry.id).update(
-            added_at=timezone.now() - timedelta(days=20)
+        # Backdate fetched_at to 20 days ago (Sourced Date)
+        JobListing.objects.filter(id=job_old.id).update(
+            fetched_at=timezone.now() - timedelta(days=20)
         )
 
         recent_entry = PipelineEntry.objects.create(
@@ -151,18 +151,22 @@ class CleanupManagerDedupeAndRetentionTests(TestCase):
             track="ic",
             stage=PipelineEntry.Stage.PIPELINE,
         )
-        # Backdate added_at to 3 days ago
-        PipelineEntry.objects.filter(id=recent_entry.id).update(
-            added_at=timezone.now() - timedelta(days=3)
+        # Backdate fetched_at to 3 days ago
+        JobListing.objects.filter(id=job_recent.id).update(
+            fetched_at=timezone.now() - timedelta(days=3)
         )
 
         removed_count = apply_cleanup_retention_purge(self.cfg)
         self.assertEqual(removed_count, 1)
 
-        # Old entry was removed
-        self.assertFalse(PipelineEntry.objects.filter(id=old_entry.id).exists())
+        # Old entry was removed / expired from pipeline
+        old_entry.refresh_from_db()
+        self.assertEqual(old_entry.stage, PipelineEntry.Stage.EXPIRED)
+        self.assertIsNotNone(old_entry.removed_at)
         # Recent entry is preserved
-        self.assertTrue(PipelineEntry.objects.filter(id=recent_entry.id).exists())
+        recent_entry.refresh_from_db()
+        self.assertEqual(recent_entry.stage, PipelineEntry.Stage.PIPELINE)
+        self.assertIsNone(recent_entry.removed_at)
 
     def test_tenant_retention_purge_configurable_per_tenant(self):
         """Tenants can configure custom retention days (e.g. 30 days)."""
@@ -179,20 +183,22 @@ class CleanupManagerDedupeAndRetentionTests(TestCase):
             source="test_custom",
             external_id="job_custom_1",
         )
+        JobListing.objects.filter(id=job.id).update(
+            fetched_at=timezone.now() - timedelta(days=20)
+        )
         entry = PipelineEntry.objects.create(
             owner=self.user,
             job_listing=job,
             track="ic",
             stage=PipelineEntry.Stage.PIPELINE,
         )
-        PipelineEntry.objects.filter(id=entry.id).update(
-            added_at=timezone.now() - timedelta(days=20)
-        )
 
         # With 30 day retention, the 20-day-old job should NOT be removed
         removed_count = apply_cleanup_retention_purge(self.cfg)
         self.assertEqual(removed_count, 0)
-        self.assertTrue(PipelineEntry.objects.filter(id=entry.id).exists())
+        entry.refresh_from_db()
+        self.assertEqual(entry.stage, PipelineEntry.Stage.PIPELINE)
+        self.assertIsNone(entry.removed_at)
 
     def test_cross_board_deduplication_real_world_example(self):
         """
@@ -317,3 +323,89 @@ class CleanupManagerDedupeAndRetentionTests(TestCase):
         # Capital One posting remains active and untouched
         self.assertEqual(entry_capone.stage, PipelineEntry.Stage.PIPELINE)
         self.assertIsNone(entry_capone.removed_at)
+
+    def test_pipeline_cleanup_policies_applies_thresholds_and_preserves_applied_stage(self):
+        """Cleanup applies purge thresholds & retention to pre-applied stages, strictly preserving APPLIED (Done) stage."""
+        self.cfg.pipeline_purge_match_score_max = 25
+        self.cfg.cleanup_pipeline_retention_days = 7
+        self.cfg.save()
+
+        now = timezone.now()
+
+        # 1. Low scoring role in Review (15% < 25%) -> should be purged
+        job_low_review = JobListing.objects.create(title="Low Score Review Role", source="dice", external_id="dice-clean-1")
+        entry_low_review = PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=job_low_review,
+            track="ic",
+            stage=PipelineEntry.Stage.VETTING,
+            vetting_interview_probability=15,
+        )
+
+        # 2. Low scoring role in Applying (18% < 25%) -> should be purged
+        job_low_applying = JobListing.objects.create(title="Low Score Applying Role", source="dice", external_id="dice-clean-2")
+        entry_low_applying = PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=job_low_applying,
+            track="ic",
+            stage=PipelineEntry.Stage.APPLYING,
+            vetting_interview_probability=18,
+        )
+
+        # 3. Low scoring role in APPLIED (Done) stage (10% < 25%) -> MUST BE PRESERVED
+        job_done = JobListing.objects.create(title="Applied Low Score Role", source="dice", external_id="dice-clean-3")
+        entry_done = PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=job_done,
+            track="ic",
+            stage=PipelineEntry.Stage.DONE,
+            vetting_interview_probability=10,
+        )
+
+        # 4. Old role in Review older than retention (10 days > 7) -> should be purged
+        job_old = JobListing.objects.create(title="Old Role", source="dice", external_id="dice-clean-4")
+        JobListing.objects.filter(id=job_old.id).update(fetched_at=now - timedelta(days=10))
+        entry_old = PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=job_old,
+            track="ic",
+            stage=PipelineEntry.Stage.VETTING,
+            vetting_interview_probability=50,
+        )
+
+        # 5. Good fresh role in Review (75% >= 25%, fresh) -> MUST BE PRESERVED
+        job_good = JobListing.objects.create(title="Good Fresh Role", source="dice", external_id="dice-clean-5")
+        entry_good = PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=job_good,
+            track="ic",
+            stage=PipelineEntry.Stage.VETTING,
+            vetting_interview_probability=75,
+        )
+
+        res = apply_pipeline_cleanup_policies(self.user)
+        self.assertGreaterEqual(res["purged"], 3)
+
+        # Verify entry states
+        entry_low_review.refresh_from_db()
+        self.assertEqual(entry_low_review.stage, PipelineEntry.Stage.EXPIRED)
+        self.assertIsNotNone(entry_low_review.removed_at)
+
+        entry_low_applying.refresh_from_db()
+        self.assertEqual(entry_low_applying.stage, PipelineEntry.Stage.EXPIRED)
+        self.assertIsNotNone(entry_low_applying.removed_at)
+
+        entry_old.refresh_from_db()
+        self.assertEqual(entry_old.stage, PipelineEntry.Stage.EXPIRED)
+        self.assertIsNotNone(entry_old.removed_at)
+
+        # APPLIED (DONE) stage is strictly preserved despite 10% score
+        entry_done.refresh_from_db()
+        self.assertEqual(entry_done.stage, PipelineEntry.Stage.DONE)
+        self.assertIsNone(entry_done.removed_at)
+
+        # Good fresh role is preserved
+        entry_good.refresh_from_db()
+        self.assertEqual(entry_good.stage, PipelineEntry.Stage.VETTING)
+        self.assertIsNone(entry_good.removed_at)
+

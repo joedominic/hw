@@ -39,6 +39,101 @@ def is_valid_competency(skill: str) -> bool:
     return True
 
 
+def _extract_seniority_tier(text: str) -> str:
+    t = (text or "").lower()
+    if re.search(r"\b(vp|vice president|head of|director|chief|cto|cio)\b", t):
+        return "executive"
+    if re.search(r"\b(principal|distinguished|staff|fellow)\b", t):
+        return "staff_principal"
+    if re.search(r"\b(architect|solutions architect|enterprise architect)\b", t):
+        return "architect"
+    if re.search(r"\b(engineering manager|manager|lead|tech lead)\b", t):
+        return "lead_manager"
+    if re.search(r"\b(senior|sr\.?|iii|level 3)\b", t):
+        return "senior"
+    if re.search(r"\b(junior|jr\.?|associate|entry|intern|internship|level 1|level i|sde i\b|sde 1\b)\b", t):
+        return "junior"
+    return "mid"
+
+
+def _detect_candidate_seniority(resume_text: str) -> set[str]:
+    top_resume = (resume_text or "")[:3000].lower()
+    tiers = set()
+    if re.search(r"\b(director|vp|vice president|head of|cto|cio|chief)\b", top_resume):
+        tiers.add("executive")
+    if re.search(r"\b(principal|staff|distinguished)\b", top_resume):
+        tiers.add("staff_principal")
+    if re.search(r"\b(architect|enterprise architect|solutions architect)\b", top_resume):
+        tiers.add("architect")
+    if re.search(r"\b(manager|engineering manager|tech lead|lead)\b", top_resume):
+        tiers.add("lead_manager")
+    if re.search(r"\b(senior|sr\.)\b", top_resume):
+        tiers.add("senior")
+    return tiers or {"mid"}
+
+
+def calibrate_interview_probability(
+    match_score: int,
+    core_competencies: list[str],
+    stretch_skills: list[str],
+    job_title: str = "",
+    resume_text: str = "",
+    raw_interview_probability: int | None = None,
+) -> int:
+    """
+    Calibrate realistic screening interview callback probability (0-100) distinct from raw technical match.
+    
+    Factors considered:
+    1. Base technical requirements coverage (match_score).
+    2. Stretch gaps penalty: ratio of missing requirements dampens callback probability.
+    3. Seniority level alignment between job title and candidate career level in resume.
+    4. Realistic recruiting bounds (even great fits rarely exceed 85% in competitive tech hiring).
+    """
+    if raw_interview_probability is not None and raw_interview_probability != match_score and 0 <= raw_interview_probability <= 100:
+        return max(5, min(92, int(raw_interview_probability)))
+    if match_score <= 0:
+        return 0
+
+    job_tier = _extract_seniority_tier(job_title)
+    cand_tiers = _detect_candidate_seniority(resume_text)
+
+    sen_adj = 0
+    if job_tier == "executive":
+        if "executive" not in cand_tiers and "lead_manager" not in cand_tiers:
+            sen_adj = -25
+        elif "executive" not in cand_tiers:
+            sen_adj = -12
+    elif job_tier == "staff_principal":
+        if "staff_principal" not in cand_tiers and "architect" not in cand_tiers and "executive" not in cand_tiers:
+            sen_adj = -18
+    elif job_tier == "junior":
+        if "executive" in cand_tiers or "staff_principal" in cand_tiers or "architect" in cand_tiers:
+            sen_adj = -20
+        elif "senior" in cand_tiers:
+            sen_adj = -10
+
+    core_count = len(core_competencies)
+    stretch_count = len(stretch_skills)
+    total = core_count + stretch_count
+    gap_penalty = 0
+    if total > 0:
+        gap_ratio = stretch_count / total
+        if gap_ratio > 0.3:
+            gap_penalty = int((gap_ratio - 0.2) * 25)
+
+    base = match_score + sen_adj - gap_penalty
+    if match_score >= 80 and sen_adj == 0 and gap_penalty == 0:
+        calibrated = min(85, match_score - 8)
+    elif match_score < 40:
+        calibrated = min(base, int(match_score * 0.5))
+    else:
+        calibrated = base
+
+    if calibrated == match_score:
+        calibrated = max(5, match_score - 7)
+    return max(5, min(92, int(calibrated)))
+
+
 class SkillRadarService:
     """
     Fit Diagnostics & Skill Radar extraction service.
@@ -60,6 +155,7 @@ class SkillRadarService:
         *,
         user=None,
         resume_id: Any = None,
+        job_description: Optional[str] = None,
         force_refresh: bool = False,
     ) -> Dict[str, Any]:
         """
@@ -81,7 +177,12 @@ class SkillRadarService:
 
         if not force_refresh:
             cached = cache.get(cache_key)
-            if cached and isinstance(cached, dict) and cached.get("core_competencies"):
+            if (
+                cached
+                and isinstance(cached, dict)
+                and cached.get("source") != "error"
+                and (cached.get("core_competencies") or cached.get("match_score") is not None)
+            ):
                 cached_res = dict(cached)
                 cached_res["source"] = "cached"
                 return cached_res
@@ -96,7 +197,7 @@ class SkillRadarService:
                 sys_tmpl, usr_tmpl, leg_tmpl = resolve_prompt_parts(profile, "skill_radar")
 
                 title = getattr(job_listing, "title", "Role") or "Role"
-                desc = getattr(job_listing, "description", None) or getattr(job_listing, "snippet", "") or ""
+                desc = (job_description or getattr(job_listing, "description", None) or getattr(job_listing, "snippet", "") or "").strip()
                 # Keep prompt payload compact for fast local inference (~3-4k chars each)
                 desc_slice = desc[:4500].strip()
                 resume_slice = (resume_text or "")[:4000].strip()
@@ -123,8 +224,18 @@ class SkillRadarService:
                 raw_content = response.content if hasattr(response, "content") else str(response)
 
                 parsed = cls._parse_llm_response(raw_content)
-                if parsed and parsed.get("core_competencies"):
+                if parsed and (parsed.get("core_competencies") or parsed.get("match_score") is not None):
                     parsed["source"] = "ollama_local"
+                    ms = parsed.get("match_score", 0)
+                    calibrated_ip = calibrate_interview_probability(
+                        ms,
+                        parsed.get("core_competencies", []),
+                        parsed.get("stretch_skills", []),
+                        job_title=title,
+                        resume_text=resume_text,
+                        raw_interview_probability=parsed.get("interview_probability"),
+                    )
+                    parsed["interview_probability"] = calibrated_ip
                     cache.set(cache_key, parsed, CACHE_TTL_SECONDS)
                     return parsed
             except Exception as e:
@@ -135,6 +246,7 @@ class SkillRadarService:
                 )
                 return {
                     "match_score": 0,
+                    "interview_probability": None,
                     "core_competencies": [],
                     "stretch_skills": [],
                     "fit_summary": f"Ollama Local analysis failed: {str(e)}",
@@ -142,14 +254,9 @@ class SkillRadarService:
                     "error": str(e),
                 }
 
-        return {
-            "match_score": 0,
-            "core_competencies": [],
-            "stretch_skills": [],
-            "fit_summary": "Ollama Local is currently unavailable.",
-            "source": "error",
-            "error": "Ollama Local is unavailable",
-        }
+        fallback = cls._fallback_heuristic(job_listing, resume_text)
+        fallback["source"] = "heuristic"
+        return fallback
 
     @classmethod
     def _parse_llm_response(cls, text: str) -> Optional[Dict[str, Any]]:
@@ -178,6 +285,11 @@ class SkillRadarService:
         raw_core = data.get("core_competencies") or []
         raw_stretch = data.get("stretch_skills") or []
         match_score = data.get("match_score")
+        raw_ip = (
+            data.get("interview_probability")
+            or data.get("interviewProbability")
+            or data.get("interview_likelihood")
+        )
         summary = str(data.get("fit_summary") or "").strip()
 
         core_clean = []
@@ -194,7 +306,7 @@ class SkillRadarService:
                 if is_valid_competency(s_clean) and s_clean not in stretch_clean and s_clean not in core_clean:
                     stretch_clean.append(s_clean)
 
-        if not core_clean and not stretch_clean:
+        if not core_clean and not stretch_clean and match_score is None:
             return None
 
         try:
@@ -204,8 +316,16 @@ class SkillRadarService:
             total = len(core_clean) + len(stretch_clean)
             score_int = round((len(core_clean) / total) * 100) if total > 0 else 75
 
+        ip_int = None
+        if raw_ip is not None:
+            try:
+                ip_int = max(0, min(100, int(raw_ip)))
+            except (ValueError, TypeError):
+                ip_int = None
+
         return {
             "match_score": score_int,
+            "interview_probability": ip_int,
             "core_competencies": core_clean[:8],
             "stretch_skills": stretch_clean[:6],
             "fit_summary": summary,
@@ -239,9 +359,17 @@ class SkillRadarService:
 
         total = len(core) + len(stretch)
         calc_pct = round((len(core) / total) * 100) if total > 0 else (getattr(job_listing, "focus_percent", None) or 75)
+        calibrated_ip = calibrate_interview_probability(
+            calc_pct,
+            core[:8],
+            stretch[:6],
+            job_title=title,
+            resume_text=resume_text,
+        )
 
         return {
             "match_score": calc_pct,
+            "interview_probability": calibrated_ip,
             "core_competencies": core[:8],
             "stretch_skills": stretch[:6],
             "fit_summary": "Extracted via keyword matching; run Ollama Local for deep semantic diagnostics.",
@@ -251,6 +379,7 @@ class SkillRadarService:
     def _empty_result(cls) -> Dict[str, Any]:
         return {
             "match_score": 0,
+            "interview_probability": None,
             "core_competencies": [],
             "stretch_skills": [],
             "fit_summary": "",

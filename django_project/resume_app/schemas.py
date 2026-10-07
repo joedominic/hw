@@ -2,6 +2,7 @@ from datetime import datetime
 from typing import Any, List, Optional
 
 from ninja import Schema
+from pydantic import ConfigDict
 
 
 class JobSearchRequest(Schema):
@@ -17,6 +18,8 @@ class JobSearchRequest(Schema):
 
 
 class JobPayload(Schema):
+    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
+
     id: int
     title: str
     company_name: str
@@ -33,6 +36,7 @@ class JobPayload(Schema):
     focus_percent_after_penalty: Optional[int] = None
     preference_margin_percent: Optional[int] = None
     matching_score: Optional[int] = None
+    vetting_match_score: Optional[int] = None
     interview_probability: Optional[int] = None
     interview_reasoning: Optional[str] = None
     interview_status: Optional[str] = None  # "pending" | "short_jd" when no interview_probability
@@ -42,6 +46,16 @@ class JobPayload(Schema):
     optimizer_user_resume_id: Optional[int] = None  # UserResume id for "Open optimizer" prefill (Applying board)
     pipeline_entry_id: Optional[int] = None  # PipelineEntry id for Done-board interview prep
     has_interview_prep: Optional[bool] = None
+    has_applied_resume: Optional[bool] = None
+    applied_resume_markdown: Optional[str] = None
+    post_apply_substatus: Optional[str] = None
+    post_apply_substatus_display: Optional[str] = None
+    next_interview_at: Optional[datetime] = None
+    latest_interview_event: Optional[Any] = None
+    interview_notes: Optional[str] = None
+    interview_names: Optional[str] = None
+    interview_location: Optional[str] = None
+    interview_duration: Optional[int] = None
     is_saved: Optional[bool] = False
     is_liked: Optional[bool] = False
     zero_llm_core_matches: Optional[List[str]] = None
@@ -62,6 +76,8 @@ class JobPayload(Schema):
 
 
 class JobDetailPayload(Schema):
+    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
+
     id: int
     title: str
     company_name: str
@@ -263,5 +279,32 @@ class InterviewPrepResponse(Schema):
 class InterviewPrepSaveRequest(Schema):
     interview_prep: str
     interview_type: Optional[str] = None
+
+
+class LogInterviewEventRequest(Schema):
+    round_type: str = "recruiter_call"
+    status: str = "scheduled"
+    scheduled_at: Optional[str] = None
+    duration_minutes: Optional[int] = 45
+    interviewer_names: Optional[str] = ""
+    location_or_link: Optional[str] = ""
+    notes: Optional[str] = ""
+    generate_prep: bool = False
+
+
+class LogInterviewEventResponse(Schema):
+    ok: bool
+    event_id: Optional[int] = None
+    pipeline_entry_id: int
+    substatus: str
+    substatus_display: str
+    next_interview_at: Optional[str] = None
+    interviewer_names: Optional[str] = None
+    location_or_link: Optional[str] = None
+    notes: Optional[str] = None
+    duration_minutes: Optional[int] = None
+    status: Optional[str] = None
+    has_interview_prep: Optional[bool] = None
+
 
 

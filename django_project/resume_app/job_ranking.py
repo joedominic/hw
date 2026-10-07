@@ -1,6 +1,6 @@
-from typing import List, Optional, Sequence, Tuple
-
+from typing import List, Optional, Sequence, Tuple, Dict, Set
 import logging
+import re
 
 from django.conf import settings
 
@@ -54,10 +54,27 @@ def get_focus_breakdown(job_listing_id: int, *, user, track: Optional[str] = Non
     full_vec = embedding_module.embed_full(job.title or "", job.description or "")
     if tvec is None or full_vec is None:
         return None
-    # Overall similarity vs liked centroid: title and role both measured against like-centroid.
-    title_sim = embedding_module.cosine_similarity(tvec, pref_like_centroid)
-    role_sim = embedding_module.cosine_similarity(full_vec, pref_like_centroid)
-    combined = gated_combined_score(title_sim, role_sim, alpha)
+    # Compute V1 breakdown
+    target_terms: List[str] = []
+    if track:
+        from .track_actions import normalize_track_slug
+        slug = normalize_track_slug(track, user)
+        target_terms.append(slug)
+        from .models import SearchProfile
+        sp = SearchProfile.objects.filter(owner=user, slug=slug).first()
+        if sp:
+            if sp.search_term:
+                target_terms.append(sp.search_term)
+            if sp.name and sp.name not in target_terms:
+                target_terms.append(sp.name)
+    liked_titles = [ltitle for _, ltitle, _, _, _ in (liked_jobs or [])]
+    v1_res = compute_v1_job_score(
+        job,
+        target_terms=target_terms,
+        liked_titles=liked_titles,
+        liked_centroid=pref_like_centroid,
+    )
+
     by_liked = []
     for (lid, ltitle, lcompany, ltvec, lrole_vecs) in liked_jobs:
         # Title similarity: title-only vectors.
@@ -129,9 +146,9 @@ def get_focus_breakdown(job_listing_id: int, *, user, track: Optional[str] = Non
         "job": {"id": job.id, "title": job.title or "", "company_name": job.company_name or ""},
         "alpha": alpha,
         "overall": {
-            "title_percent": _sim_to_percent(title_sim),
-            "full_percent": _sim_to_percent(role_sim),
-            "combined_percent": _sim_to_percent(combined),
+            "title_percent": int(round(v1_res["title_textual_pct"])),
+            "full_percent": int(round(v1_res["desc_calibrated_pct"])),
+            "combined_percent": v1_res["final_pct"],
         },
         "by_liked": by_liked[:10],
         "by_disliked": by_disliked[:10],
@@ -140,131 +157,6 @@ def get_focus_breakdown(job_listing_id: int, *, user, track: Optional[str] = Non
             "dislike_percent": dislike_percent,
             "margin_percent": margin_percent,
         },
-    }
-
-
-def get_focus_sentence_alignment(job_listing_id: int, liked_job_id: int) -> Optional[dict]:
-    """
-    Sentence-level breakdown for one (job, liked_job) pair.
-    Shows, for each role sentence in the job, the best-matching sentence from the liked job
-    and whether it contributed to the top-k mean used for Role %.
-    """
-    job = JobListing.objects.filter(id=job_listing_id).first()
-    liked_job = JobListing.objects.filter(id=liked_job_id).first()
-    if not job or not liked_job:
-        return None
-
-    alpha = getattr(settings, "JOB_FOCUS_TITLE_WEIGHT", 0.55)
-    top_k = getattr(settings, "JOB_FOCUS_ROLE_TOP_K", 5)
-
-    t_job = embedding_module.embed_title_only(job.title or "", job.company_name or "")
-    t_liked = embedding_module.embed_title_only(liked_job.title or "", liked_job.company_name or "")
-    if t_job is None or t_liked is None:
-        return None
-    title_sim = embedding_module.cosine_similarity(t_job, t_liked)
-
-    job_sentences = embedding_module.get_role_sentences(job.title or "", job.description or "")
-    liked_sentences = embedding_module.get_role_sentences(liked_job.title or "", liked_job.description or "")
-    if not job_sentences or not liked_sentences:
-        return None
-
-    try:
-        job_vecs = embedding_module.embed_sentences_batch(job_sentences)
-        liked_vecs = embedding_module.embed_sentences_batch(liked_sentences)
-    except Exception:
-        return None
-
-    import numpy as np
-
-    j_texts: list[str] = []
-    j_vecs: list[np.ndarray] = []
-    for s, v in zip(job_sentences, job_vecs):
-        if v is not None:
-            j_texts.append(s)
-            j_vecs.append(np.array(v, dtype=float))
-    l_texts: list[str] = []
-    l_vecs: list[np.ndarray] = []
-    for s, v in zip(liked_sentences, liked_vecs):
-        if v is not None:
-            l_texts.append(s)
-            l_vecs.append(np.array(v, dtype=float))
-    if not j_texts or not l_vecs:
-        return None
-
-    l_mat = np.stack(l_vecs, axis=0)
-    l_norms = np.linalg.norm(l_mat, axis=1) + 1e-9
-
-    sims_per_job: List[np.ndarray] = []
-    max_sims: List[float] = []
-    for j_vec in j_vecs:
-        j_norm = float(np.linalg.norm(j_vec) + 1e-9)
-        sims = np.dot(l_mat, j_vec) / (l_norms * j_norm)
-        sims_per_job.append(sims)
-        max_sims.append(float(np.max(sims)))
-
-    if not max_sims:
-        return None
-
-    alignment_max_reuse = getattr(settings, "JOB_FOCUS_ALIGNMENT_LIKED_MAX_REUSE", 2)
-    alignment_min_sim = getattr(settings, "JOB_FOCUS_ALIGNMENT_MIN_SIM", 0.55)
-    liked_use_count = [0] * len(l_texts)
-    assigned = {}
-    for job_idx in sorted(range(len(j_texts)), key=lambda i: -max_sims[i]):
-        sims = sims_per_job[job_idx]
-        ranked = sorted(range(len(l_texts)), key=lambda l_idx: -float(sims[l_idx]))
-        chosen_l_idx, chosen_sim = None, -1.0
-        for l_idx in ranked:
-            if liked_use_count[l_idx] < alignment_max_reuse:
-                chosen_l_idx, chosen_sim = l_idx, float(sims[l_idx])
-                liked_use_count[l_idx] += 1
-                break
-        if chosen_l_idx is None:
-            chosen_l_idx, chosen_sim = int(np.argmax(sims)), float(np.max(sims))
-        assigned[job_idx] = (chosen_l_idx, chosen_sim)
-
-    per_sentence = []
-    for i, s_text in enumerate(j_texts):
-        l_idx, sim_val = assigned[i]
-        below_threshold = sim_val < alignment_min_sim
-        per_sentence.append(
-            {
-                "sentence": s_text,
-                "best_liked_sentence": l_texts[l_idx],
-                "similarity_percent": _sim_to_percent(sim_val),
-                "below_threshold": below_threshold,
-                "in_top_k": False,
-            }
-        )
-
-    sorted_sims = sorted(max_sims, reverse=True)
-    k = max(1, min(top_k, len(sorted_sims)))
-    cutoff = sorted_sims[k - 1]
-    for i, s_val in enumerate(max_sims):
-        if s_val >= cutoff:
-            per_sentence[i]["in_top_k"] = True
-
-    role_sim = float(np.mean(sorted_sims[:k]))
-    combined = gated_combined_score(title_sim, role_sim, alpha)
-
-    indices_sorted = sorted(range(len(max_sims)), key=lambda i: -max_sims[i])
-    rows_to_show = min(len(indices_sorted), max(10, k))
-    sentences_for_ui = [per_sentence[i] for i in indices_sorted[:rows_to_show]]
-
-    return {
-        "job": {"id": job.id, "title": job.title or "", "company_name": job.company_name or ""},
-        "liked_job": {
-            "id": liked_job.id,
-            "title": liked_job.title or "",
-            "company_name": liked_job.company_name or "",
-        },
-        "alpha": alpha,
-        "top_k": k,
-        "title_percent": _sim_to_percent(title_sim),
-        "role_percent": _sim_to_percent(role_sim),
-        "combined_percent": _sim_to_percent(combined),
-        "sentences": sentences_for_ui,
-        "min_similarity_percent": _sim_to_percent(alignment_min_sim),
-        "min_similarity_threshold": alignment_min_sim,
     }
 
 
@@ -306,17 +198,275 @@ def rank_jobs_by_preference(
         logger.warning("Preference embedding batch failed, returning None: %s", e)
         return None
 
+    target_terms: List[str] = []
+    if track:
+        from .track_actions import normalize_track_slug
+        slug = normalize_track_slug(track, user)
+        target_terms.append(slug)
+        from .models import SearchProfile
+        sp = SearchProfile.objects.filter(owner=user, slug=slug).first()
+        if sp:
+            if sp.search_term:
+                target_terms.append(sp.search_term)
+            if sp.name and sp.name not in target_terms:
+                target_terms.append(sp.name)
+
+    liked_jobs = (prefs[2] if len(prefs) > 2 else []) or get_liked_jobs_for_focus_reason(user=user, track=track)
+    liked_titles = [ltitle for _, ltitle, _, _, _ in (liked_jobs or [])]
+
+    alpha_title = getattr(settings, "JOB_FOCUS_V1_TITLE_WEIGHT", 0.35)
+    alpha_desc = getattr(settings, "JOB_FOCUS_V1_DESC_WEIGHT", 0.65)
+
     scores: List[float] = []
-    for tvec, fvec in zip(title_vecs, full_vecs):
+    for job, tvec, fvec in zip(jobs, title_vecs, full_vecs):
         if tvec is None or fvec is None:
             scores.append(-1.0)
             continue
         try:
-            title_sim = embedding_module.cosine_similarity(tvec, pref)
-            full_sim = embedding_module.cosine_similarity(fvec, pref)
-            score = gated_combined_score(title_sim, full_sim, alpha)
+            # 1. Title Textual Closeness
+            t_score, _ = compute_title_textual_closeness(job.title or "", target_terms, liked_titles)
+            # 2. Calibrated Description Semantic Closeness
+            raw_desc_sim = embedding_module.cosine_similarity(fvec, pref)
+            d_score = calibrate_desc_semantic_score(raw_desc_sim)
+            # 3. Base Hybrid
+            raw_hybrid = alpha_title * t_score + alpha_desc * d_score
+            # 4. Title Guardrail
+            if t_score < 0.15:
+                final_hybrid = min(raw_hybrid, t_score + 0.15)
+            elif t_score < 0.30:
+                final_hybrid = min(raw_hybrid, t_score + 0.35)
+            else:
+                final_hybrid = raw_hybrid
+            final_pct = int(round(final_hybrid * 100))
+            # Map [0, 100] percent to [-1.0, 1.0] float for downstream consistency
+            score = (final_pct / 50.0) - 1.0
         except Exception:
             score = -1.0
         scores.append(score)
 
     return scores, title_vecs, full_vecs
+
+
+# =====================================================================
+# V1 HYBRID SCORING IMPLEMENTATION
+# Lexical / Textual Closeness for Titles + Calibrated Semantic for Descs
+# =====================================================================
+
+TITLE_STOPWORDS: Set[str] = {
+    "and", "or", "the", "in", "at", "for", "of", "to", "a", "an", "with",
+    "on", "by", "as", "hybrid", "remote", "full", "time", "part", "location",
+    "us", "usa", "sr", "jr", "ii", "iii", "iv", "level", "team",
+}
+
+
+def normalize_title_token(t: str) -> str:
+    """
+    Lightweight, industry-agnostic English suffix normalizer.
+    Unifies word forms (e.g. architect/architecture, develop/developer/development,
+    engineer/engineering, intern/internship, manage/manager/management).
+    """
+    t = t.lower().strip()
+    suffixes = [
+        "ships", "ship", "ation", "ations", "ition", "itions",
+        "ing", "ings", "ment", "ments", "ance", "ence",
+        "ers", "er", "ors", "or", "ies", "es", "ed", "al", "ic", "s",
+    ]
+    for sfx in suffixes:
+        if len(t) > len(sfx) + 3 and t.endswith(sfx):
+            return t[:-len(sfx)]
+    return t
+
+
+def tokenize_title(text: str) -> Set[str]:
+    """Tokenize a title string into normalized, meaningful tokens."""
+    if not text:
+        return set()
+    raw_tokens = re.findall(r"[a-zA-Z0-9]+", text.lower())
+    tokens = set()
+    for tok in raw_tokens:
+        if tok not in TITLE_STOPWORDS and len(tok) > 1 and not tok.isdigit():
+            tokens.add(normalize_title_token(tok))
+    return tokens
+
+
+def compute_title_textual_closeness(
+    candidate_title: str,
+    target_terms: Sequence[str],
+    liked_titles: Sequence[str],
+) -> Tuple[float, dict]:
+    """
+    Computes lexical / textual closeness [0.0, 1.0] of a candidate title
+    against target search terms and user's liked titles.
+    Industry-agnostic: relies on keyword containment, token recall, and profile domain coverage.
+    """
+    cand_tokens = tokenize_title(candidate_title)
+    if not cand_tokens:
+        return 0.0, {"reason": "empty_candidate"}
+
+    # 1. Match against target search terms (e.g., 'software architect')
+    best_target_score = 0.0
+    for term in target_terms:
+        tgt_tokens = tokenize_title(term)
+        if not tgt_tokens:
+            continue
+        overlap = cand_tokens & tgt_tokens
+        if not overlap:
+            continue
+        recall = len(overlap) / len(tgt_tokens)
+        jaccard = len(overlap) / len(cand_tokens | tgt_tokens)
+        score = 0.70 * recall + 0.30 * jaccard
+        
+        # Check if head noun (last token of target phrase) is matched in multi-token targets
+        raw_words = [w for w in term.lower().split() if w]
+        if len(tgt_tokens) > 1 and raw_words:
+            head_tok = normalize_title_token(raw_words[-1])
+            if head_tok not in overlap:
+                score *= 0.50  # modifier-only overlap (e.g. 'software' without 'architect')
+        if score > best_target_score:
+            best_target_score = score
+
+    # 2. Match against user's liked job titles and profile vocabulary
+    best_liked_score = 0.0
+    best_liked_title = None
+    all_liked_tokens: Set[str] = set()
+    for lt in liked_titles:
+        lt_tokens = tokenize_title(lt)
+        if not lt_tokens:
+            continue
+        all_liked_tokens.update(lt_tokens)
+        overlap = cand_tokens & lt_tokens
+        if not overlap:
+            continue
+        recall = len(overlap) / len(lt_tokens)
+        jaccard = len(overlap) / len(cand_tokens | lt_tokens)
+        score = 0.65 * recall + 0.35 * jaccard
+        if score > best_liked_score:
+            best_liked_score = score
+            best_liked_title = lt
+
+    # Domain vocabulary coverage
+    domain_overlap = cand_tokens & all_liked_tokens
+    cand_coverage = len(domain_overlap) / len(cand_tokens) if cand_tokens else 0.0
+
+    liked_composite = 0.50 * best_liked_score + 0.50 * cand_coverage
+
+    if target_terms:
+        if best_target_score > 0.0:
+            raw_title_score = max(best_target_score, 0.60 * best_target_score + 0.40 * liked_composite)
+        else:
+            # Candidate missed search profile target completely
+            raw_title_score = 0.50 * liked_composite
+    else:
+        raw_title_score = liked_composite
+
+    details = {
+        "best_target_score": round(best_target_score, 3),
+        "best_liked_score": round(best_liked_score, 3),
+        "best_liked_title": best_liked_title,
+        "cand_coverage": round(cand_coverage, 3),
+    }
+    return round(raw_title_score, 4), details
+
+
+def calibrate_desc_semantic_score(raw_cosine: Optional[float]) -> float:
+    """
+    Calibrate raw cosine similarity to [0.0, 1.0].
+    Removes the linear 50% floor of (cosine + 1)/2.
+    Baseline unaligned English job text is ~0.25-0.30.
+    Strong semantic alignment is >= 0.75-0.80.
+    """
+    if raw_cosine is None:
+        return 0.0
+    calibrated = (raw_cosine - 0.25) / (0.80 - 0.25)
+    return max(0.0, min(1.0, calibrated))
+
+
+def compute_v1_job_score(
+    job: JobListing,
+    *,
+    target_terms: Sequence[str],
+    liked_titles: Sequence[str],
+    liked_centroid: List[float],
+    alpha_title: float = 0.35,
+    alpha_desc: float = 0.65,
+) -> dict:
+    """
+    Hybrid V1 Scoring for a single JobListing:
+    - Title: Textual closeness (Token recall + Jaccard + profile domain coverage)
+    - Description: Semantic closeness (Calibrated sentence embedding against liked centroid)
+    - Weights: 35% Title Textual, 65% Description Semantic
+    - Guardrail: Title Gate caps description inflation if title textual closeness is weak.
+    """
+    t_score, t_details = compute_title_textual_closeness(job.title or "", target_terms, liked_titles)
+
+    full_vec = embedding_module.embed_full(job.title or "", job.description or "")
+    if full_vec is not None and liked_centroid is not None:
+        raw_desc_sim = embedding_module.cosine_similarity(full_vec, liked_centroid)
+        d_score = calibrate_desc_semantic_score(raw_desc_sim)
+    else:
+        raw_desc_sim = 0.0
+        d_score = 0.0
+
+    raw_hybrid = alpha_title * t_score + alpha_desc * d_score
+
+    # Title Guardrail
+    if t_score < 0.15:
+        final_score = min(raw_hybrid, t_score + 0.15)
+    elif t_score < 0.30:
+        final_score = min(raw_hybrid, t_score + 0.35)
+    else:
+        final_score = raw_hybrid
+
+    final_pct = int(round(final_score * 100))
+    return {
+        "final_pct": final_pct,
+        "title_textual_pct": round(t_score * 100, 1),
+        "desc_calibrated_pct": round(d_score * 100, 1),
+        "raw_desc_sim": round(raw_desc_sim, 3),
+        "t_details": t_details,
+    }
+
+
+def rank_jobs_by_preference_v1(
+    jobs: Sequence[JobListing],
+    *,
+    user,
+    track: Optional[str] = None,
+    target_search_term: Optional[str] = None,
+    alpha_title: float = 0.35,
+    alpha_desc: float = 0.65,
+) -> Optional[Tuple[List[int], List[dict]]]:
+    """
+    Batch ranking using V1 Hybrid Scoring.
+    Returns (v1_percent_scores, detailed_results).
+    """
+    prefs = get_preference_vectors(user=user, track=track)
+    if not prefs or not jobs:
+        return None
+
+    liked_centroid = prefs[0]
+    liked_jobs = (prefs[2] if len(prefs) > 2 else []) or get_liked_jobs_for_focus_reason(user=user, track=track)
+    liked_titles = [ltitle for _, ltitle, _, _, _ in (liked_jobs or [])]
+
+    target_terms = []
+    if target_search_term:
+        target_terms.append(target_search_term)
+    if track:
+        target_terms.append(track)
+
+    results: List[dict] = []
+    scores: List[int] = []
+    for job in jobs:
+        res = compute_v1_job_score(
+            job,
+            target_terms=target_terms,
+            liked_titles=liked_titles,
+            liked_centroid=liked_centroid,
+            alpha_title=alpha_title,
+            alpha_desc=alpha_desc,
+        )
+        scores.append(res["final_pct"])
+        results.append(res)
+
+    return scores, results
+

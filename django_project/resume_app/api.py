@@ -1484,32 +1484,9 @@ def _parse_markdown_blocks(content: str):
 def _normalize_export_content(text: str) -> str:
     """Normalize common Unicode punctuation and whitespace for PDF/Word export."""
     if not text:
-        return text
-    import unicodedata
-
-    text = unicodedata.normalize("NFKC", text)
-    replacements = {
-        "\u2010": "-",
-        "\u2011": "-",
-        "\u2012": "-",
-        "\u2013": "-",
-        "\u2014": "-",
-        "\u2015": "-",
-        "\u2212": "-",
-        "\u00A0": " ",
-        "\u202F": " ",
-        "\u2007": " ",
-        "\u2009": " ",
-        "\u200B": "",
-        "\u200C": "",
-        "\u200D": "",
-        "\u2018": "'",
-        "\u2019": "'",
-        "\u201C": '"',
-        "\u201D": '"',
-        "\u2026": "...",
-    }
-    return text.translate(str.maketrans(replacements))
+        return text or ""
+    from .utils import sanitize_resume_markdown
+    return sanitize_resume_markdown(text)
 
 
 def _split_style_spans(text: str):

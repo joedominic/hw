@@ -41,7 +41,8 @@
 - User-scoped tenancy: every model with user data has `owner = ForeignKey(User)`
 - `get_or_404` helpers prevent cross-user reads in views
 - `SAAS_STAFF_BYPASS_QUOTAS` flag prevents staff-specific quota exploitation
-- 40+ models correctly scoped
+- 37 models correctly scoped
+- **Tenant-Scoped Redis Locks:** `job_search_task_running:u{user_id}` allows concurrent search tasks across different users while serializing overlapping runs per tenant
 
 ### What Is Missing / Incomplete ⚠️
 | Gap | Risk | Effort |
@@ -50,7 +51,6 @@
 | **`JobListing` is a global table** — all users share the same job rows; no private job boards | 🟡 Medium | 2–3 days refactor |
 | **`SystemPromptProfile` is global** — cannot have per-org prompt templates | 🟡 Medium | 1 day |
 | **No DB-level Row Level Security** — isolation is app-layer only; a developer mistake exposes all user data | 🔴 High (trust boundary) | Architecture change |
-| **Global Redis locks** — `JOB_SEARCH_TASK_LOCK_KEY` is not tenant-scoped; one user's search blocks others | 🔴 High | 1 day |
 | **Shared IP for scraping** — all users' job searches come from one host IP; one account getting blocked affects all | 🔴 High | Proxy rotation service |
 
 ---

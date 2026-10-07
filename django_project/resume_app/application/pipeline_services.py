@@ -71,11 +71,15 @@ class PipelineApplicationService:
     @staticmethod
     def mark_applied(user, entry_ids: list[int]) -> StageTransitionResult:
         """Use Case: Mark jobs as applied (Done stage)."""
+        from ..domain.event_bus import event_bus
+        from ..domain.events import JobMarkedApplied
+
         entries = PipelineEntry.objects.for_user(user).filter(id__in=entry_ids, removed_at__isnull=True)
         marked: list[int] = []
         for entry in entries:
             if entry.can_mark_done():
                 entry.mark_done(save=True)
+                event_bus.publish(JobMarkedApplied(user_id=user.id, entry_id=entry.id, track=entry.track))
                 marked.append(entry.id)
 
         return StageTransitionResult(
@@ -84,6 +88,7 @@ class PipelineApplicationService:
             entry_ids=marked,
             message=f"Marked {len(marked)} job(s) as Done.",
         )
+
 
     @staticmethod
     def dismiss_entries(user, entry_ids: list[int]) -> StageTransitionResult:
