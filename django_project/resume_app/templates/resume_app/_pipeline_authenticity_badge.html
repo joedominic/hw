@@ -1,0 +1,27 @@
+<span class="authenticity-badge-wrapper inline-flex items-center">
+{% if j.authenticity_verdict == "PERM_COMPLIANCE" %}
+<span class="inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-200/90 px-2.5 py-1 text-xs font-semibold text-amber-800 shrink-0"
+      title="PERM Labor Cert (Risk: {{ j.authenticity_score|default:40 }}/100): Statutory immigrant visa recruitment filing (DOL ETA-9089). High probability of pre-allocated candidate.&#10;Rationale: {{ j.authenticity_rationale }}">
+    <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+    <span>PERM Filing</span>
+</span>
+{% elif j.authenticity_verdict == "INTERNAL_PRESELECT" %}
+<span class="inline-flex items-center gap-1 rounded-full bg-rose-50 border border-rose-200/90 px-2.5 py-1 text-xs font-semibold text-rose-800 shrink-0"
+      title="Internal Pre-Select (Risk: {{ j.authenticity_score|default:40 }}/100): Hyper-specific constraints, locked salary or statutory minimum window indicate pre-wired candidate.&#10;Rationale: {{ j.authenticity_rationale }}">
+    <span class="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+    <span>Likely Internal</span>
+</span>
+{% elif j.authenticity_verdict == "PHANTOM_PIPELINE" %}
+<span class="inline-flex items-center gap-1 rounded-full bg-purple-50 border border-purple-200/90 px-2.5 py-1 text-xs font-semibold text-purple-800 shrink-0"
+      title="Phantom / Talent Pool (Risk: {{ j.authenticity_score|default:50 }}/100): Evergreen requisition or talent community with no immediate funded headcount.&#10;Rationale: {{ j.authenticity_rationale }}">
+    <span class="w-1.5 h-1.5 rounded-full bg-purple-500"></span>
+    <span>Talent Pool / Phantom</span>
+</span>
+{% elif j.authenticity_verdict == "GENUINE_EXTERNAL" %}
+<span class="inline-flex items-center gap-1 rounded-full bg-slate-100 border border-slate-200/80 px-2.5 py-1 text-xs font-semibold text-slate-700 shrink-0"
+      title="Verified External (Risk: {{ j.authenticity_score|default:0 }}/100): Standard open-market recruitment competition.&#10;Rationale: {{ j.authenticity_rationale }}">
+    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+    <span>External Hire</span>
+</span>
+{% endif %}
+</span>

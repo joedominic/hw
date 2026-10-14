@@ -3,7 +3,7 @@
 <div class="group relative mb-3 overflow-visible rounded-2xl border border-slate-200/90 bg-white shadow-sm transition hover:border-brand/25 hover:shadow-md" data-job-id="{{ j.id }}">
     <div class="absolute inset-y-0 left-0 w-1 bg-brand" aria-hidden="true"></div>
     <div class="flex gap-4 p-5 pl-6">
-        <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-brand-mist text-sm font-bold uppercase text-brand" aria-hidden="true">
+        <div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-brand-mist text-sm font-bold text-brand" aria-hidden="true">
             {{ j.company_name|default:"?"|slice:":1" }}
         </div>
         <div class="min-w-0 flex-1">
@@ -45,11 +45,12 @@
                         </span>
                     {% elif board_stage == "pipeline" %}
                         <span class="inline-flex items-center rounded-full bg-slate-50 border border-dashed border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-500"
-                              title="Preference Margin: Neutral. Like (👍) or Dislike (👎) jobs in this track to train automated promotion to Review.">
+                              title="Preference Margin: Neutral. Like or Dislike jobs in this track to train automated promotion to Review.">
                             Pref: Neutral
                         </span>
                     {% endif %}
                     {% if board_stage == "vetting" or board_stage == "applying" %}
+                        {% include "resume_app/_pipeline_authenticity_badge.html" with j=j %}
                         {% include "resume_app/_pipeline_interview_badge.html" with j=j vetting_jd_min_chars=vetting_jd_min_chars %}
                     {% endif %}
                     <form method="post" class="inline-flex items-center gap-0.5">
@@ -87,19 +88,32 @@
                 </div>
             </div>
 
-            <div class="mt-3 flex flex-wrap items-center gap-2">
-                {% if j.source_display or j.source %}
-                <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-medium text-slate-600" title="{{ j.source }}">{{ j.source_display|default:j.source }}</span>
-                {% endif %}
-                {% if j.posted_at %}
+            <div class="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                {% if j.is_fresh %}
+                <span class="inline-flex items-center gap-1.5 font-mono text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200/80 px-2 py-0.5 rounded-full shrink-0" title="{% if j.posted_at %}Posted: {{ j.posted_at|date:'M j, Y' }}{% endif %}{% if j.fetched_at %} • Sourced: {{ j.fetched_at|date:'M j, Y' }}{% endif %}">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span>New · {{ j.fresh_label }}</span>
+                </span>
+                {% elif j.dormant_date_display %}
+                <span class="text-[11px] text-slate-400 font-mono">{{ j.dormant_date_display }}</span>
+                {% elif j.posted_at %}
                 <span class="text-[11px] text-slate-400">Posted {{ j.posted_at|timesince }} ago</span>
                 {% elif j.fetched_at %}
                 <span class="text-[11px] text-slate-400">Added {{ j.fetched_at|timesince }} ago</span>
                 {% endif %}
+
+                {% if j.source_display or j.source %}
+                <span class="text-slate-300">·</span>
+                <span class="text-[11px] text-slate-500" title="{{ j.source }}">via {{ j.source_display|default:j.source }}</span>
+                {% endif %}
+
                 {% if j.url %}
+                <span class="text-slate-300">·</span>
                 <a href="{{ j.url }}" target="_blank" rel="noopener" class="text-[11px] font-semibold text-brand hover:underline">View Original</a>
                 {% endif %}
+
                 {% if match_pct is not None and request.user.is_staff %}
+                <span class="text-slate-300">·</span>
                 <a href="{% url 'focus_breakdown' j.id %}?track={{ pipeline_track }}"
                    class="text-[11px] font-medium text-slate-500 hover:text-brand hover:underline">Why this fit?</a>
                 {% endif %}
@@ -124,15 +138,15 @@
                     <input type="hidden" name="next" value="{{ request.get_full_path }}">
                     <button type="submit" name="action" value="save"
                             class="inline-flex items-center rounded-xl bg-brand px-3.5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
-                        {% if board_stage == "pipeline" %}Shortlist
-                        {% elif board_stage == "vetting" %}Ready to apply
-                        {% else %}Mark applied{% endif %}
+                        {% if board_stage == "pipeline" %}Move to Review
+                        {% elif board_stage == "vetting" %}Start Tailoring
+                        {% else %}Mark Submitted{% endif %}
                     </button>
                 </form>
                 {% endif %}
 
                 {% if board_stage == "vetting" or board_stage == "applying" %}
-                <a href="{% url 'resume_optimizer' %}?job_id={{ j.id }}&amp;track={{ pipeline_track|default:'dir-plano' }}{% if j.optimizer_user_resume_id %}&amp;resume_id={{ j.optimizer_user_resume_id }}{% endif %}"
+                <a href="{% url 'resume_optimizer' %}?job_id={{ j.id }}&amp;track={{ pipeline_track|default:'default' }}{% if j.optimizer_user_resume_id %}&amp;resume_id={{ j.optimizer_user_resume_id }}{% endif %}"
                    class="inline-flex items-center rounded-xl border border-brand/30 bg-white px-3.5 py-2 text-sm font-semibold text-brand hover:bg-brand-mist"
                    {% if board_stage == "applying" %}target="_blank" rel="noopener noreferrer"{% endif %}>
                     Tailor Resume
@@ -150,7 +164,7 @@
 
                 {% if board_stage == "applying" or board_stage == "done" %}
                     {% if j.optimized_resume_id %}
-                    <a href="{% url 'resume_optimizer' %}?opt_id={{ j.optimized_resume_id }}&amp;job_id={{ j.id }}&amp;track={{ pipeline_track|default:'dir-plano' }}"
+                    <a href="{% url 'resume_optimizer' %}?opt_id={{ j.optimized_resume_id }}&amp;job_id={{ j.id }}&amp;track={{ pipeline_track|default:'default' }}"
                        class="inline-flex items-center rounded-xl border border-brand/20 bg-brand-mist px-3.5 py-2 text-sm font-medium text-brand-ink hover:bg-brand-soft">
                         Tailored draft
                     </a>

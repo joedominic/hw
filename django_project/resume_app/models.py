@@ -230,6 +230,12 @@ class OptimizedResume(models.Model):
 
     objects = OwnedManager()
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["owner", "pipeline_entry", "-created_at"], name="opt_res_owner_entry_idx"),
+            models.Index(fields=["owner", "status"], name="opt_res_owner_status_idx"),
+        ]
+
 
 class AgentLog(models.Model):
     optimized_resume = models.ForeignKey(OptimizedResume, related_name='logs', on_delete=models.CASCADE)
@@ -335,6 +341,21 @@ class SystemPromptProfile(models.Model):
     skill_radar = models.TextField(blank=True)
     skill_radar_system = models.TextField(blank=True)
     skill_radar_user = models.TextField(blank=True)
+    career_profiler = models.TextField(blank=True)
+    career_profiler_system = models.TextField(blank=True)
+    career_profiler_user = models.TextField(blank=True)
+    job_authenticity = models.TextField(blank=True)
+    job_authenticity_system = models.TextField(blank=True)
+    job_authenticity_user = models.TextField(blank=True)
+    pipeline_skill_extract = models.TextField(blank=True)
+    pipeline_skill_extract_system = models.TextField(blank=True)
+    pipeline_skill_extract_user = models.TextField(blank=True)
+    fit_check = models.TextField(blank=True)
+    fit_check_system = models.TextField(blank=True)
+    fit_check_user = models.TextField(blank=True)
+    pipeline_resume_refine = models.TextField(blank=True)
+    pipeline_resume_refine_system = models.TextField(blank=True)
+    pipeline_resume_refine_user = models.TextField(blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -349,6 +370,36 @@ class SystemPromptProfile(models.Model):
         """Return the singleton row (pk=1), creating it if needed."""
         obj, _created = cls.objects.get_or_create(pk=1)
         return obj
+
+
+class PromptVersionHistory(models.Model):
+    """
+    Audit log / version snapshots of prompt edits made by staff.
+    Allows rollbacks (restore) and revision pruning (single delete or clear all).
+    """
+
+    prompt_key = models.CharField(max_length=64, db_index=True)
+    version_number = models.PositiveIntegerField(default=1)
+    system_prompt = models.TextField(blank=True)
+    user_prompt = models.TextField(blank=True)
+    legacy_combined = models.TextField(blank=True)
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="prompt_revisions",
+    )
+    change_summary = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-version_number", "-created_at"]
+        verbose_name = "Prompt version history"
+        verbose_name_plural = "Prompt version histories"
+
+    def __str__(self) -> str:
+        return f"{self.prompt_key} v{self.version_number} ({self.created_at:%Y-%m-%d %H:%M})"
 
 
 class UserPromptProfile(models.Model):
@@ -386,6 +437,9 @@ class UserPromptProfile(models.Model):
     interview_prep = models.TextField(blank=True)
     interview_prep_system = models.TextField(blank=True)
     interview_prep_user = models.TextField(blank=True)
+    career_profiler = models.TextField(blank=True)
+    career_profiler_system = models.TextField(blank=True)
+    career_profiler_user = models.TextField(blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -803,6 +857,47 @@ class JobListing(models.Model):
     # Cached preference metrics for pipeline/saved jobs (per track) live in JobListingTrackMetrics.
     pipeline_last_scored_at = models.DateTimeField(null=True, blank=True)
 
+    class AuthenticityVerdict(models.TextChoices):
+        GENUINE_EXTERNAL = "GENUINE_EXTERNAL", "Genuine External Hire"
+        PERM_COMPLIANCE = "PERM_COMPLIANCE", "PERM Labor Certification"
+        INTERNAL_PRESELECT = "INTERNAL_PRESELECT", "Internal Pre-Selection"
+        PHANTOM_PIPELINE = "PHANTOM_PIPELINE", "Phantom / Talent Pool"
+
+    authenticity_verdict = models.CharField(
+        max_length=32,
+        choices=AuthenticityVerdict.choices,
+        blank=True,
+        default="",
+        db_index=True,
+        help_text="Labor compliance & talent acquisition audit verdict (e.g. genuine hire vs PERM vs internal).",
+    )
+    authenticity_score = models.SmallIntegerField(
+        null=True,
+        blank=True,
+        help_text="Risk/compliance score (0-100) calculated from deterministic audit checks.",
+    )
+    authenticity_confidence = models.CharField(
+        max_length=16,
+        blank=True,
+        default="",
+        help_text="Audit confidence level (e.g. HIGH, MEDIUM, LOW).",
+    )
+    authenticity_rationale = models.TextField(
+        blank=True,
+        default="",
+        help_text="Primary executive rationale explaining the compliance classification.",
+    )
+    authenticity_audit_trail = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Full 7-check audit breakdown with evidence quotes and point scoring.",
+    )
+    authenticity_audited_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when the posting authenticity was evaluated by local LLM.",
+    )
+
     class Meta:
         unique_together = [("source", "external_id")]
         ordering = ["-fetched_at"]
@@ -845,7 +940,16 @@ class JobListingAction(models.Model):
     objects = OwnedManager()
 
     class Meta:
-        unique_together = [("owner", "job_listing", "action", "track")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["owner", "job_listing", "action", "track"],
+                name="unique_owner_job_action_track",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["owner", "action", "track"], name="job_act_owner_act_trk_idx"),
+            models.Index(fields=["owner", "job_listing"], name="job_act_owner_job_idx"),
+        ]
 
 
 class JobListingEmbedding(models.Model):
@@ -1027,7 +1131,15 @@ class JobMatchResult(models.Model):
     objects = OwnedManager()
 
     class Meta:
-        unique_together = [("owner", "job_listing", "resume")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["owner", "job_listing", "resume"],
+                name="unique_owner_job_resume",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["owner", "job_listing"], name="job_match_owner_job_idx"),
+        ]
         ordering = ["-analyzed_at"]
 
     def __str__(self):
@@ -1370,7 +1482,17 @@ class PipelineEntry(models.Model):
     objects = OwnedManager()
 
     class Meta:
-        unique_together = [("owner", "job_listing", "track")]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["owner", "job_listing", "track"],
+                name="unique_owner_job_track",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["owner", "stage", "removed_at", "-added_at"], name="pipe_owner_stg_rem_idx"),
+            models.Index(fields=["owner", "removed_at", "-added_at"], name="pipe_owner_rem_add_idx"),
+            models.Index(fields=["owner", "search_profile"], name="pipe_owner_profile_idx"),
+        ]
         ordering = ["-added_at"]
 
     def __str__(self):
@@ -1660,6 +1782,10 @@ class EmployerInterviewEvent(models.Model):
     objects = OwnedManager()
 
     class Meta:
+        indexes = [
+            models.Index(fields=["pipeline_entry", "-created_at"], name="emp_ev_entry_created_idx"),
+            models.Index(fields=["owner", "status"], name="emp_ev_owner_status_idx"),
+        ]
         ordering = ["scheduled_at", "-created_at"]
 
     def __str__(self):
@@ -1991,3 +2117,38 @@ class StripeWebhookEvent(models.Model):
 
     def __str__(self):
         return self.event_id
+
+
+class CareerProfileAnalysis(models.Model):
+    """
+    Stores on-demand AI career archetype analyses for a user's resume,
+    retaining archetypes, seniority evaluation, and fine-tuning criteria
+    across sessions without automatically re-running expensive LLM calls.
+    """
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="career_profiler_analyses",
+    )
+    resume = models.ForeignKey(
+        UserResume,
+        on_delete=models.CASCADE,
+        related_name="career_analyses",
+    )
+    analysis_data = models.JSONField(
+        help_text="Serialized archetypes, candidate summary, skills, etc."
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = OwnedManager()
+
+    class Meta:
+        ordering = ["-updated_at"]
+        indexes = [
+            models.Index(fields=["owner", "resume", "-updated_at"]),
+        ]
+
+    def __str__(self):
+        return f"CareerAnalysis for {self.owner_id} - Resume {self.resume_id} ({self.updated_at})"
+

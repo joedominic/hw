@@ -18,7 +18,13 @@ from .track_actions import (
     normalize_track_slug,
     saved_listing_id_set,
 )
-from .job_sources import fetch_jobs, normalize_site_names, upsert_job_listing_from_fetch, _parse_date_posted
+from .job_sources import (
+    fetch_jobs,
+    normalize_site_names,
+    upsert_job_listing_from_fetch,
+    bulk_upsert_job_listings,
+    _parse_date_posted,
+)
 from .schemas import JobPayload
 from .preference import (
     get_preference_vectors,
@@ -138,6 +144,12 @@ def _job_to_payload(job: JobListing, *, snippet: Optional[str] = None) -> JobPay
         source_display=format_job_source_label(src),
         posted_at=job.posted_at,
         fetched_at=job.fetched_at,
+        authenticity_verdict=job.authenticity_verdict or None,
+        authenticity_score=job.authenticity_score,
+        authenticity_confidence=job.authenticity_confidence or None,
+        authenticity_rationale=job.authenticity_rationale or None,
+        authenticity_audit_trail=job.authenticity_audit_trail or [],
+        authenticity_audited_at=job.authenticity_audited_at,
     )
 
 
@@ -218,10 +230,11 @@ def run_job_search_core(
 
         results_wanted = results_wanted or getattr(settings, "JOB_SEARCH_DEFAULT_RESULTS", 50)
         site_name = normalize_site_names(site_name)
-        norm_track = normalize_track_slug(track, user)
+        is_unbiased = not track or str(track).strip().lower() in ("none", "unbiased", "")
+        norm_track = None if is_unbiased else normalize_track_slug(track, user)
         repost_cooldown_days = getattr(settings, "PIPELINE_DELETED_REPOST_COOLDOWN_DAYS", 14)
-        disliked_listing_ids = disliked_listing_id_set(user, track)
-        hidden_listing_ids = hidden_listing_id_set(user, track, cooldown_days=repost_cooldown_days)
+        disliked_listing_ids = set() if is_unbiased else disliked_listing_id_set(user, norm_track)
+        hidden_listing_ids = set() if is_unbiased else hidden_listing_id_set(user, norm_track, cooldown_days=repost_cooldown_days)
         from .models import UserDisqualifier
 
         disqualifier_pattern = build_disqualifier_pattern(
@@ -258,8 +271,8 @@ def run_job_search_core(
         audit_items: List[dict] = []
         audit_by_job_id: dict[int, dict] = {}
 
-        for r in raw or []:
-            job, _ = upsert_job_listing_from_fetch(r)
+        persisted_jobs = bulk_upsert_job_listings(raw or [])
+        for job in persisted_jobs:
             refs_for_cache.append({"source": job.source, "external_id": job.external_id})
 
             audit_entry = {
@@ -342,6 +355,9 @@ def _rank_jobs_with_meta(
     user,
 ) -> List[JobPayload]:
     """Apply preference ranking and disliked penalty to (job, payload) list. Returns sorted list of JobPayload."""
+    if not track or str(track).strip().lower() in ("none", "unbiased", ""):
+        return [p for _, p in jobs_with_meta]
+
     prefs = get_preference_vectors(user=user, track=track)
     liked_jobs = (prefs[2] if prefs and len(prefs) > 2 else []) or []
     if prefs and not liked_jobs:
@@ -478,6 +494,9 @@ def _apply_auto_dislike(
     dropped_details: Optional[dict] = None,
 ) -> List[JobPayload]:
     """Filter out jobs with low preference margin (margin < -5); records drop details without mutating user action history."""
+    if not track or str(track).strip().lower() in ("none", "unbiased", ""):
+        return ranked
+
     out: List[JobPayload] = []
     for payload_obj in ranked:
         margin = getattr(payload_obj, "preference_margin_percent", None)
@@ -501,6 +520,9 @@ def _apply_disliked_penalty_and_final_sort(
     dropped_details: Optional[dict] = None,
 ) -> List[JobPayload]:
     """Apply disliked-similarity penalty and final sort by preference_margin_percent."""
+    if not track or str(track).strip().lower() in ("none", "unbiased", ""):
+        return jobs_out
+
     try:
         disliked_embeddings = get_disliked_embeddings(user=user, track=track)
     except Exception as e:
@@ -521,19 +543,12 @@ def _apply_disliked_penalty_and_final_sort(
                 full_batch = [(j.title or "", j.description or "") for j in ordered_jobs]
                 result_vecs = embedding_module.embed_full_batch(full_batch)
                 disliked_vecs = [emb for _, emb in disliked_embeddings]
+                max_disliked_sims = embedding_module.batch_max_similarity(result_vecs, disliked_vecs)
                 scored_with_penalty = []
                 for i, p in enumerate(jobs_out):
                     p.similar_to_disliked_percent = None
-                    vec = result_vecs[i] if i < len(result_vecs) else None
-                    if vec is None:
-                        disliked_sim = 0.0
-                    else:
-                        sims = [
-                            embedding_module.cosine_similarity(vec, d_emb)
-                            for d_emb in disliked_vecs
-                        ]
-                        disliked_sim = max(sims) if sims else 0.0
-                    disliked_sim = max(0.0, min(1.0, (disliked_sim + 1.0) / 2.0))
+                    raw_sim = max_disliked_sims[i] if i < len(max_disliked_sims) else 0.0
+                    disliked_sim = max(0.0, min(1.0, (raw_sim + 1.0) / 2.0))
                     p.similar_to_disliked_percent = int(round(disliked_sim * 100))
                     if hide_threshold is not None and p.similar_to_disliked_percent >= hide_threshold:
                         if dropped_details is not None:
@@ -646,21 +661,22 @@ def rank_and_filter_jobs(
     Single entry point for preference ranking: score, auto-dislike margin < -5,
     apply disliked penalty, and final sort according to requested sort option.
     """
-    ranked = _rank_jobs_with_meta(jobs_with_meta, track, user=user)
-    jobs_out = _apply_auto_dislike(ranked, track, user, dropped_details=elimination_details)
+    clean_track = None if (not track or str(track).strip().lower() in ("none", "unbiased", "")) else str(track).strip()
+    ranked = _rank_jobs_with_meta(jobs_with_meta, clean_track, user=user)
+    jobs_out = _apply_auto_dislike(ranked, clean_track, user, dropped_details=elimination_details)
     jobs_out = _apply_disliked_penalty_and_final_sort(
-        jobs_out, track, user=user, dropped_details=elimination_details
+        jobs_out, clean_track, user=user, dropped_details=elimination_details
     )
 
     # NEW: Apply Ollama Guard to top 10 results to reduce noise (e.g. seniority mismatch)
     from django.conf import settings
 
-    if getattr(settings, "OLLAMA_GUARD_ENABLED", False):
+    if getattr(settings, "OLLAMA_GUARD_ENABLED", False) and clean_track:
         try:
             from .services import run_ollama_guard_on_payloads
 
             before_guard_ids = {p.id for p in jobs_out}
-            jobs_out = run_ollama_guard_on_payloads(jobs_out[:10], track, user=user) + jobs_out[10:]
+            jobs_out = run_ollama_guard_on_payloads(jobs_out[:10], clean_track, user=user) + jobs_out[10:]
             if elimination_details is not None:
                 after_guard_ids = {p.id for p in jobs_out}
                 for dropped_id in (before_guard_ids - after_guard_ids):

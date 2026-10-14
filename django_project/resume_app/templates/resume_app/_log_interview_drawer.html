@@ -238,9 +238,17 @@
         const job = cachedAppliedJobs.find(j => String(j.pipeline_entry_id) === String(peId));
         if (!job) return;
 
-        // 1. Milestone stage (round_type)
-        const roundToSelect = (job.event && job.event.round_type) || (job.substatus && job.substatus !== 'applied_pending' ? job.substatus : 'recruiter_call');
-        const roundRadio = document.querySelector(`input[name="round_type"][value="${roundToSelect}"]`);
+        // 1. Milestone stage (suggest next logical round based on current stage)
+        const nextRoundProgression = {
+            'applied_pending': 'recruiter_call',
+            'recruiter_call': 'hiring_manager',
+            'hiring_manager': 'panel_interview',
+            'panel_interview': 'offer',
+            'offer': 'offer',
+        };
+        const currentSubstatus = (job.event && job.event.round_type) || job.substatus || 'applied_pending';
+        const suggestedNextRound = nextRoundProgression[currentSubstatus] || 'recruiter_call';
+        const roundRadio = document.querySelector(`input[name="round_type"][value="${suggestedNextRound}"]`);
         if (roundRadio) {
             roundRadio.checked = true;
         } else {

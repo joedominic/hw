@@ -1,6 +1,6 @@
 # Data Model
 
-The data layer is defined primarily in `django_project/resume_app/models.py`. It consists of 37 Django models partitioned into a shared global job catalog and tenant-owned entities scoped to individual users.
+The data layer is defined primarily in `django_project/resume_app/models.py`. It consists of Django domain models partitioned into a shared global job catalog and tenant-owned entities scoped to individual users.
 
 ---
 
@@ -18,6 +18,7 @@ Tenant isolation is enforced via the `resume_app.tenancy` helpers:
 ```mermaid
 erDiagram
     User ||--o{ UserResume : owns
+    User ||--o{ CareerProfileAnalysis : owns
     User ||--o{ OptimizedResume : owns
     User ||--o{ SearchProfile : owns
     User ||--o{ JobSearchTask : owns
@@ -25,8 +26,10 @@ erDiagram
     User ||--o{ EmployerInterviewEvent : owns
     User ||--o{ Subscription : has
     User ||--o{ CustomerApiKey : owns
+    User ||--o{ PromptVersionHistory : owns
 
     UserResume ||--o{ ResumeChunk : contains
+    UserResume ||--o{ CareerProfileAnalysis : analyzes
     OptimizedResume ||--o{ AgentLog : logs
     JobSearchTask ||--o{ JobSearchTaskRun : executes
     SearchProfile ||--o{ JobSearchTask : configures
@@ -37,9 +40,16 @@ erDiagram
 ```
 
 ### 2.1 Shared Global Models (No Tenant Owner)
-- **`JobListing`**: Deduplicated catalog of external job postings aggregated across JobSpy (Indeed, LinkedIn), Greenhouse, BuiltIn, Levels.fyi, and Dice.
+- **`JobListing`**: Deduplicated catalog of external job postings aggregated across JobSpy (Indeed, LinkedIn), Greenhouse, BuiltIn, Levels.fyi, and Dice. Contains posting title, company, location, salary, description, and labor compliance audit fields:
+  - `posted_at`: Datetime stamp of original job publication; used by `JobAuthenticityService.extract_window_and_deadline` to calculate active application lifespan and detect artificial $\le 4$-calendar-day compliance windows.
+  - `authenticity_verdict`: Text choice (`GENUINE_EXTERNAL`, `INTERNAL_PRESELECT`, `PHANTOM_PIPELINE`, `PERM_COMPLIANCE`). Evaluated deterministically to filter out fake/placeholder listings, evergreen talent pools, internal promotion place-markers, and DOL ETA-9089 immigrant labor certification filings.
+  - `authenticity_score`: Small integer risk/compliance score clamped to [0, 100].
+  - `authenticity_confidence`: Assessment confidence level (`HIGH`, `MEDIUM`, `LOW`).
+  - `authenticity_rationale`: Concise assessment rationale string summarizing the classification verdict.
+  - `authenticity_audit_trail`: JSON list of 10 deterministic compliance check evaluations (`perm_legal_phrasing`, `phantom_pipeline_or_talent_pool`, `short_lifespan_or_compliance_window`, `generic_jfa_template_only`, `senior_promotion_or_scope_mismatch`, `bespoke_contractor_conversion_stack`, `hyper_specific_okrs`, `rigid_degree_equation`, `flat_salary_range`, `flexible_general_req`). Kept confidential on candidate-facing UI surfaces.
+  - `authenticity_audited_at`: Datetime stamp of the last completed compliance audit.
 - **`JobDescription`**: Reusable job description text for optimizer runs.
-- **`SystemPromptProfile`**: Singleton admin-managed prompt templates (empty fields fall back to `prompts.py` defaults).
+- **`SystemPromptProfile`**: Singleton admin-managed prompt templates (empty fields fall back to `prompts.py` defaults). Templates support safe interpolation via `inject_variables_into_template` (e.g. `job_authenticity_user` binds `{title}`, `{company}`, `{location}`, `{posted_date}`, `{application_window}`, `{job_description}`).
 - **`AtsJudgeProfile`**: Reusable ATS scoring prompt templates (`owner = null` for global presets).
 
 ---
@@ -47,6 +57,7 @@ erDiagram
 ### 2.2 Resumes & AI Optimization
 - **`UserResume`**: User-uploaded source resume PDFs, parsed text, and optional default `SearchProfile` association.
 - **`ResumeChunk`**: Chunked text and vector embeddings generated from `UserResume` for dense retrieval (RAG).
+- **`CareerProfileAnalysis`**: Output of the AI Resume Profiler (`/jobs/profiler/`). Stores executive positioning, core competencies, target job titles, market salary bands, and raw LLM extraction JSON linked to a `UserResume`.
 - **`OptimizedResume`**: Core output of the resume optimizer. Stores generated markdown/text, ATS fit score, recruiter fit score, token usage, cover letter, and `optimizer_context_snapshot` (char budgets for writer/judge JD and resume inputs).
 - **`AgentLog`**: Execution trace logging intermediate outputs from Writer, ATS Judge, and Recruiter Judge nodes.
 - **`OptimizerWorkflow`**: Configurable multi-step optimization workflows (system-wide when `owner = null`).
@@ -55,6 +66,7 @@ erDiagram
 
 ### 2.3 Job Discovery, Search Profiles & Automation
 - **`SearchProfile`**: Primary user-facing job search context. Combines search query (`search_term`), target location, enabled boards (`site_names`), target resume, and scheduling parameters.
+  - *Note on Model Aliasing:* `SavedJobSearch` is defined directly in `models.py` as `SavedJobSearch = SearchProfile` for backward compatibility during Phase 1 consolidation.
 - **`Track`**: Legacy track bucket model (`ic`, `mgmt`, `general`), currently retained and dual-written alongside `SearchProfile` during Phase 1 consolidation.
 - **`JobSearchTask`**: Scheduled search automation task. Stores execution schedule (`daily`, `weekdays`, `weekly`, `custom` cron), start time, and active toggle.
 - **`JobSearchTaskRun`**: Execution record of a search task. Stores run timestamps, completion status (`running`, `completed`, `failed`), `jobs_fetched`, `jobs_added_to_pipeline`, and `details` JSON (categorized disposition breakdown).
@@ -76,18 +88,24 @@ erDiagram
 
 ---
 
-### 2.5 LLM Configuration & Usage Tracking
+### 2.5 LLM Configuration, Governance & Prompts
 - **`LLMProviderConfig`**: Stores user-encrypted API keys (Fernet) and default model choices for OpenAI, Anthropic, Groq, Google, and Ollama.
 - **`LLMProviderPreference`**: Ordered list of fallback models and optional RPM/TPM limits.
-- **`TenantPromptModelPreference`**: Per-tenant model assignments for specific prompts.
+- **`TenantPromptModelPreference`**: Per-tenant model assignments for specific prompts (e.g. assigning local `ollama::qwen2.5:7b` to `job_authenticity` or `matching`).
+- **`SystemPromptProfile`**: Global singleton storing customizable system, user, and legacy combined prompts across all 14 platform prompts:
+  - *Optimization Pipeline:* `writer` (Resume Writer), `ats_judge` (ATS Gatekeeper), `recruiter_judge` (Recruiter Judge), `pipeline_resume_refine` (Pipeline Resume Refine).
+  - *Evaluation & Vetting:* `matching` (Job Matching Scorer), `insights` (Batch Job Insights), `jd_cleanse` (JD Cleanser & Parser), `job_authenticity` (DOL ETA-9089 PERM labor compliance and internal promotion auditor), `fit_check` (Fit Check Quick Scorer).
+  - *Candidate & Career Tools:* `career_profiler` (Universal Career Profiler), `skill_radar` (Skill Radar Analyzer), `pipeline_skill_extract` (Pipeline LLM Skill Extractor), `cover_letter` (Cover Letter Architect), `interview_prep` (Interview Prep Coach).
+- **`AtsJudgeProfile`**: Customizable ATS evaluation rule profiles with custom scoring weights and system/user prompts.
+- **`PromptVersionHistory`**: Version control audit log for prompt modifications made in Prompt Studio (`/resume/prompts/`). Stores `prompt_key`, `version_number`, `system_prompt`, `user_prompt`, `legacy_combined`, and `change_summary`.
 - **`LLMAppUsageTotals`**: Lifetime token and request count rollups per user.
 - **`LLMUsageByModel`**: Token consumption aggregated by provider and model.
-- **`LLMUsageByQuery`**: Token consumption aggregated by functional query type (e.g. `optimizer_writer`, `job_vetting`).
+- **`LLMUsageByQuery`**: Token consumption aggregated by functional query type (e.g. `optimizer_writer`, `job_authenticity`, `job_vetting`).
 - **`LLMDailyUsageBreakdown`**: Daily token ledger segmented by date and model.
 
 ---
 
-### 2.6 SaaS, Billing, Identity & Governance
+### 2.6 SaaS, Billing, Identity & Removed Features
 - **`Plan`**: Commercial subscription tiers (`free`, `pro`, `unlimited`) defining daily quotas (`llm_tokens_per_day`, `llm_requests_per_day`, `job_searches_per_day`, `storage_mb`, `api_access`).
 - **`Subscription`**: Tenant plan binding, Stripe customer ID, subscription ID, and billing status (`active`, `past_due`, `canceled`).
 - **`UsageCounter`**: Durable per-day metric ledger tracking daily quota consumption.
@@ -96,18 +114,28 @@ erDiagram
 - **`ImpersonationAuditLog`**: Audit ledger recording staff impersonation sessions via `django-hijack`.
 - **`UserExperienceSettings`**: Controls UI mode (`normal` vs `power`), onboarding completion, and email verification status.
 - **`AppAutomationSettings`**: Per-user automation toggles and the global `stop_llm_requests` emergency kill-switch.
+  - *Apply-Agent Status:* Autonomous form-filling application attempts and browser agent fields (`apply_agent_enabled`, `apply_automation_mode`, `apply_browser_show_window`, etc.) were **permanently removed in migration `0038`**. Applications now terminate at candidate approval ("Approve & Mark Applied"), followed by post-application tracking via `EmployerInterviewEvent`.
 - **`ApplicantProfile`**: General applicant contact details and demographic information.
 - **`UserPromptProfile`**: Legacy model retained for schema compatibility (unused at runtime).
 
 ---
 
-## 3. Pipeline Stages & Transitions
+## 3. Pipeline Stages & Stage Transitions
 
-`PipelineEntry.stage` values:
-1. `pipeline`: Fresh jobs ingested via scheduled or manual search runs.
-2. `vetting`: Jobs awaiting deeper review or shortlisted by the user.
-3. `applying`: Jobs selected for application tailoring and resume generation.
-4. `done`: Applications submitted, interviews in progress, or archived.
+The candidate journey transitions rows in `PipelineEntry` across 4 explicit stages:
+
+| Trigger / Action | Origin Stage | Destination Stage | DB Fields Written & Side Effects |
+|------------------|--------------|-------------------|-----------------------------------|
+| **Automated Sourcing Run** (Huey worker `run_job_search_task`) | *None (New Job)* | `pipeline` (New) | Creates `PipelineEntry(owner, job, track, stage='pipeline', focus_score, focus_percent)`. |
+| **Sandbox `+ Add to Review`** (`POST /api/resume/jobs/{id}/save?track={slug}`) | *None* or External | `vetting` (Review) | Creates/updates `PipelineEntry(stage='vetting', is_saved=True, saved_at=now())`; writes `JobListingAction(action_type='save')`. |
+| **Shortlist / Advance from New** (`action="shortlist"` or `E` hotkey on New card) | `pipeline` | `vetting` (Review) | Updates `PipelineEntry.stage = 'vetting'`, sets `shortlisted_at = now()`. |
+| **Advance from Review** (`action="ready"` or `E` hotkey on Review card) | `vetting` | `applying` (Applying) | Updates `PipelineEntry.stage = 'applying'`. |
+| **Save Draft (Optimizer)** (`action="save_draft"` or `Ctrl+S`) | `applying` | `applying` (stays) | Persists edited draft markdown to `OptimizedResume.optimized_markdown` and `PipelineEntry.applied_resume_markdown`. Keeps card in Applying for user review and PDF/DOCX downloads. |
+| **I Submitted This / Mark Applied** (`action="approve_and_mark_applied"` or `Ctrl+Enter` in Optimizer, or `mark-applied` API) | `applying` (or `vetting`) | `done` (Applied) | Updates `PipelineEntry.stage = 'done'`, sets `is_applied = True`, `applied_at = now()`, associates `optimized_resume_id`; writes `JobListingAction(action_type='applied')`. |
+| **Like / Unlike** (`POST /api/resume/jobs/{id}/like` or `L` hotkey) | Any stage | *No stage change* | Writes `JobListingAction(action_type='like')`; recalculates `JobListingTrackMetrics.centroid_embedding`. |
+| **Dislike / Exclude** (`POST /api/resume/jobs/{id}/dislike` or `X` hotkey) | `pipeline` / `vetting` | *Removed from Pipeline* | Deletes `PipelineEntry`; writes `JobListingAction(action_type='dislike')`; updates preference centroid. |
+| **Hide** (`POST /api/resume/jobs/{id}/hide`) | Search / Sandbox | *Hidden from view* | Writes `JobListingAction(action_type='hide')` without updating preference centroid. |
+| **Unsave** (`POST /api/resume/jobs/{id}/unsave`) | Any stage | *Removed from Pipeline* | Deletes `PipelineEntry`; deletes `JobListingAction(action_type='save')`. |
 
 ---
 
@@ -116,4 +144,7 @@ erDiagram
 1. **Email Uniqueness:** Migration `0025_user_email_unique` enforces a unique index on non-blank `auth_user.email` values.
 2. **Multi-Tenant Ownership:** Migration `0014_multi_tenant_owner` established the baseline tenant model across domain entities.
 3. **Search Profile Consolidation:** Migration `0020_search_profile_phase1` introduced `SearchProfile` and dual-writing alongside legacy `Track` rows.
-4. **Adding New Entities:** When introducing new models, always explicitly declare whether the entity is shared globally, directly owner-scoped (`owner = ForeignKey(User)`), or indirectly owner-scoped through a parent entity.
+4. **Apply-Agent Deprecation:** Migration `0038_remove_applicationattemptstep_attempt_and_more` removed all headless browser apply-agent models and settings.
+5. **Posting Authenticity & Compliance:** Migration `0055_joblisting_authenticity_audit_trail_and_more` added structured labor compliance audit fields and audit trail JSON to `JobListing`.
+6. **Prompt Studio & Library Migration:** Migrations `0054_promptversionhistory` and `0056_systempromptprofile_fit_check_and_more` added revision history and extended `SystemPromptProfile` across all 14 platform prompts.
+7. **Adding New Entities:** When introducing new models, always explicitly declare whether the entity is shared globally, directly owner-scoped (`owner = ForeignKey(User)`), or indirectly owner-scoped through a parent entity.

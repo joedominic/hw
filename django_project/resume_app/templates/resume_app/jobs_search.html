@@ -399,10 +399,15 @@
     if (btnNone) btnNone.addEventListener('click', function() { siteBoxes().forEach(function(cb) { cb.checked = false; }); });
 
     function showSearchLoading(title, subtitle) {
+        var trackSelect = document.getElementById('track-select');
+        var hasTrack = trackSelect && trackSelect.value && trackSelect.value.trim() !== '';
+        var defaultSubtitle = hasTrack
+            ? 'Calculating AI vector match scores and preference filtering for selected profile. This search will take longer to load…'
+            : 'This can take a little while. Please wait — do not click Search again.';
         if (typeof window.showJobSearchOverlay === 'function') {
             window.showJobSearchOverlay(
                 title || 'Searching job boards…',
-                subtitle || 'This can take a little while. Please wait — do not click Search again.'
+                subtitle || defaultSubtitle
             );
         }
         if (submitBtn) submitBtn.disabled = true;
@@ -411,6 +416,19 @@
         document.querySelectorAll('a[href*="jobs/search"]').forEach(function(a) {
             a.style.pointerEvents = 'none';
             a.setAttribute('aria-disabled', 'true');
+        });
+    }
+
+    var trackSelect = document.getElementById('track-select');
+    var warnBox = document.getElementById('profile-calc-warning');
+    if (trackSelect && warnBox) {
+        trackSelect.addEventListener('change', function() {
+            var val = (trackSelect.value || '').trim();
+            if (val && val.toLowerCase() !== 'none' && val.toLowerCase() !== 'unbiased') {
+                warnBox.classList.remove('hidden');
+            } else {
+                warnBox.classList.add('hidden');
+            }
         });
     }
 
@@ -560,15 +578,22 @@
     function setSaveButtonState(btn, saved) {
         btn.dataset.saved = saved ? '1' : '0';
         btn.setAttribute('aria-pressed', saved ? 'true' : 'false');
-        btn.setAttribute('aria-label', saved ? 'Unsave' : 'Save');
-        btn.title = saved ? 'Remove from favourites' : 'Save to favourites';
-        btn.classList.toggle('bg-brand-ink', saved);
+        btn.setAttribute('aria-label', saved ? 'Remove from Review' : 'Add to Review');
+        btn.title = saved ? 'Remove from Review queue in Cockpit' : 'Add directly to Review queue in Cockpit';
+        btn.classList.toggle('bg-emerald-600', saved);
+        btn.classList.toggle('hover:bg-emerald-700', saved);
         btn.classList.toggle('bg-brand', !saved);
-        btn.classList.toggle('hover:bg-brand', saved);
         btn.classList.toggle('hover:bg-brand-hover', !saved);
-        setIconFilled(btn.querySelector('.job-save-icon'), saved);
+        var icon = btn.querySelector('.job-save-icon');
+        if (icon) {
+            if (saved) {
+                icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>';
+            } else {
+                icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/>';
+            }
+        }
         var label = btn.querySelector('.job-save-label');
-        if (label) label.textContent = saved ? 'Saved' : 'Save Job';
+        if (label) label.textContent = saved ? 'In Review' : '+ Add to Review';
     }
     function setLikeButtonState(btn, liked) {
         btn.dataset.liked = liked ? '1' : '0';
@@ -846,20 +871,7 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 </script>
 
-<script>
-(function() {
-    var resumeSelect = document.getElementById('resume-select');
-    var trackSelect = document.getElementById('track-select');
-    if (!resumeSelect || !trackSelect) return;
-    function syncTrackFromResume() {
-        var opt = resumeSelect.options[resumeSelect.selectedIndex];
-        var t = opt && opt.getAttribute('data-track') ? opt.getAttribute('data-track') : '';
-        if (t && trackSelect.value !== t) trackSelect.value = t;
-    }
-    resumeSelect.addEventListener('change', syncTrackFromResume);
-    syncTrackFromResume();
-})();
-</script>
+
 
 <script>
 (function() {

@@ -78,12 +78,20 @@ USAGE_QUERY_PIPELINE_VETTING = "pipeline_vetting_matching"
 USAGE_QUERY_PIPELINE_RESUME_REFINE = "pipeline_resume_refine"
 USAGE_QUERY_PIPELINE_SKILL_EXTRACT = "pipeline_skill_extract"
 USAGE_QUERY_JD_CLEANSE = "jd_cleanse"
+USAGE_QUERY_JOB_AUTHENTICITY = "job_authenticity"
+USAGE_QUERY_SKILL_RADAR = "skill_radar"
+USAGE_QUERY_CAREER_PROFILER = "career_profiler"
+USAGE_QUERY_PROMPT_STUDIO = "prompt_studio"
 USAGE_QUERY_API_LLM_COMPLETE = "api_llm_complete"
 USAGE_QUERY_API_RESUME_FIT = "api_resume_fit"
 USAGE_QUERY_UNSPECIFIED = "unspecified"
 
 USAGE_QUERY_LABELS: dict[str, str] = {
     USAGE_QUERY_UNSPECIFIED: "Other / not labeled",
+    USAGE_QUERY_PROMPT_STUDIO: "Prompt Studio — test playground",
+    USAGE_QUERY_CAREER_PROFILER: "Career profiler — archetype mapping",
+    USAGE_QUERY_JOB_AUTHENTICITY: "Pipeline — job authenticity & compliance",
+    USAGE_QUERY_SKILL_RADAR: "Pipeline — skill radar & deep fit",
     USAGE_QUERY_FIT_CHECK: "Fit check",
     USAGE_QUERY_MATCHING: "Job matching",
     USAGE_QUERY_OPTIMIZER_WRITER: "Resume optimizer — writer",
@@ -106,49 +114,75 @@ USAGE_QUERY_LABELS: dict[str, str] = {
 # System default fallback models when a tenant has no BYOK keys configured
 # or when all tenant candidate preferences are on cooldown.
 SYSTEM_DEFAULT_MODELS: dict[str, list[dict]] = {
+    USAGE_QUERY_CAREER_PROFILER: [
+        {"provider": "Google AI Studio", "model": "gemini-2.0-flash"},
+        {"provider": "Google AI Studio", "model": "gemini-1.5-flash"},
+        {"provider": "OpenAI", "model": "gpt-4o-mini"},
+        {"provider": "Anthropic", "model": "claude-3-5-haiku-latest"},
+        {"provider": "Groq", "model": "llama-3.3-70b-versatile"},
+        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
+    ],
+    USAGE_QUERY_PROMPT_STUDIO: [
+        {"provider": "Groq", "model": "llama-3.3-70b-versatile"},
+        {"provider": "Google AI Studio", "model": "gemini-2.0-flash"},
+        {"provider": "OpenAI", "model": "gpt-4o-mini"},
+        {"provider": "Anthropic", "model": "claude-3-5-haiku-latest"},
+        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
+    ],
     # 1. Parsing & Cleansing
     USAGE_QUERY_JD_CLEANSE: [
-        {"provider": "Ollama Local", "model": "nemotron-mini"},
+        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
         {"provider": "Anthropic", "model": "claude-3-5-haiku-latest"},
         {"provider": "Google AI Studio", "model": "gemini-1.5-flash"},
     ],
     USAGE_QUERY_PIPELINE_SKILL_EXTRACT: [
-        {"provider": "Ollama Local", "model": "nemotron-mini"},
+        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
         {"provider": "Anthropic", "model": "claude-3-5-haiku-latest"},
         {"provider": "Google AI Studio", "model": "gemini-1.5-flash"},
     ],
     # 2. Search & Vetting
+    USAGE_QUERY_JOB_AUTHENTICITY: [
+        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
+        {"provider": "Groq", "model": "llama-3.3-70b-versatile"},
+        {"provider": "Google AI Studio", "model": "gemini-2.0-flash"},
+        {"provider": "OpenAI", "model": "gpt-4o-mini"},
+    ],
+    USAGE_QUERY_SKILL_RADAR: [
+        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
+        {"provider": "OpenAI", "model": "gpt-4o-mini"},
+        {"provider": "Google AI Studio", "model": "gemini-1.5-flash"},
+    ],
     USAGE_QUERY_MATCHING: [
-        {"provider": "Ollama Local", "model": "nemotron-3-nano"},
+        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
         {"provider": "Google AI Studio", "model": "gemini-1.5-flash"},
     ],
     USAGE_QUERY_FIT_CHECK: [
-        {"provider": "Ollama Local", "model": "nemotron-3-nano"},
+        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
         {"provider": "Google AI Studio", "model": "gemini-1.5-flash"},
     ],
     USAGE_QUERY_PIPELINE_VETTING: [
-        {"provider": "Ollama Local", "model": "nemotron-3-nano"},
+        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
         {"provider": "Google AI Studio", "model": "gemini-1.5-flash"},
     ],
     USAGE_QUERY_JOBS_AI_MATCH: [
-        {"provider": "Ollama Local", "model": "nemotron-3-nano"},
+        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
     ],
     USAGE_QUERY_KEYWORD_SEARCH_FIT: [
-        {"provider": "Ollama Local", "model": "nemotron-3-nano"},
+        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
     ],
     USAGE_QUERY_JOBS_MATCH_API: [
-        {"provider": "Ollama Local", "model": "nemotron-3-nano"},
+        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
     ],
     USAGE_QUERY_JOB_INSIGHTS: [
-        {"provider": "Ollama Local", "model": "nemotron-3-nano"},
+        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
     ],
     # 3. Resume Writer
@@ -163,13 +197,13 @@ SYSTEM_DEFAULT_MODELS: dict[str, list[dict]] = {
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
         {"provider": "Anthropic", "model": "claude-3-5-haiku-latest"},
         {"provider": "Google AI Studio", "model": "gemini-1.5-flash"},
-        {"provider": "Ollama Local", "model": "nemotron-mini"},
+        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
     ],
     USAGE_QUERY_OPTIMIZER_RECRUITER_JUDGE: [
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
         {"provider": "Anthropic", "model": "claude-3-5-haiku-latest"},
         {"provider": "Google AI Studio", "model": "gemini-1.5-flash"},
-        {"provider": "Ollama Local", "model": "nemotron-mini"},
+        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
     ],
     # 5. Career Prep
     USAGE_QUERY_COVER_LETTER: [
@@ -196,7 +230,7 @@ SYSTEM_DEFAULT_MODELS: dict[str, list[dict]] = {
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
         {"provider": "Anthropic", "model": "claude-3-5-haiku-latest"},
         {"provider": "Google AI Studio", "model": "gemini-1.5-flash"},
-        {"provider": "Ollama Local", "model": "nemotron-mini"},
+        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
         {"provider": "Groq", "model": "llama-3.3-70b-versatile"},
     ],
 }
@@ -472,6 +506,32 @@ def _system_default_candidates(
         if is_llm_on_cooldown(prov, model, user=user):
             continue
 
+        cand_key = None
+        cand_cfg = None
+        if prov == "Ollama Local":
+            if user:
+                try:
+                    from ..models import LLMProviderConfig
+                    from ..crypto import decrypt_api_key
+
+                    cand_cfg = (
+                        LLMProviderConfig.objects.for_user(user)
+                        .filter(provider="Ollama Local")
+                        .first()
+                    )
+                    if cand_cfg and cand_cfg.encrypted_api_key:
+                        cand_key = decrypt_api_key(cand_cfg.encrypted_api_key)
+                except Exception:
+                    pass
+            if not cand_key:
+                from django.conf import settings
+
+                cand_key = (
+                    getattr(settings, "OLLAMA_LOCAL_HOST", None)
+                    or getattr(settings, "OLLAMA_HOST", None)
+                    or "http://127.0.0.1:11434"
+                )
+
         out.append(
             {
                 "provider": prov,
@@ -480,8 +540,9 @@ def _system_default_candidates(
                 "priority": 999,
                 "is_local": is_loc,
                 "preference_id": None,
-                "config": None,
-                "api_key": None,
+                "config": cand_cfg,
+                "api_key": cand_key,
+                "user": user,
                 "is_system_default": True,
             }
         )
@@ -639,6 +700,7 @@ def _ordered_eligible_candidates(
                     USAGE_QUERY_JOBS_AI_MATCH,
                     USAGE_QUERY_KEYWORD_SEARCH_FIT,
                     USAGE_QUERY_JOBS_MATCH_API,
+                    USAGE_QUERY_SKILL_RADAR,
                 ):
                     target_pref = TenantPromptModelPreference.objects.for_user(user).filter(
                         query_kind=USAGE_QUERY_MATCHING, is_active=True
@@ -723,7 +785,8 @@ def _ordered_eligible_candidates(
 
 
 def _build_llm_callable(cand: dict):
-    return get_llm(cand["provider"], cand["api_key"], cand["model_get_llm"])
+    user = cand.get("user") or (getattr(cand.get("config"), "owner", None) if cand.get("config") else None)
+    return get_llm(cand["provider"], cand["api_key"], cand["model_get_llm"], user=user)
 
 
 def _finalize_usage(
@@ -818,6 +881,7 @@ def invoke_llm_messages(
         USAGE_QUERY_KEYWORD_SEARCH_FIT,
         USAGE_QUERY_JOBS_MATCH_API,
         USAGE_QUERY_PIPELINE_SKILL_EXTRACT,
+        USAGE_QUERY_SKILL_RADAR,
     ):
         prefer_local = True
 

@@ -912,6 +912,77 @@ def _run_job_search_task_impl(user_id, task_id):
 
 
 @db_task()
+def job_search_async_task(
+    task_id: str,
+    user_id: int,
+    search_term: str,
+    location: str | None = None,
+    track: str | None = None,
+    results_wanted: int = 50,
+    site_name: list[str] | None = None,
+    sort: str = "match",
+):
+    """
+    Execute job search in Huey worker process.
+    Stores progress, errors, and serialized results in Django cache under `job_search_task:{task_id}`.
+    Frees web workers from synchronous JobSpy network latency.
+    """
+    from django.contrib.auth import get_user_model
+    from .jobs_api import annotate_saved_flags, normalize_track_slug
+    import logging
+
+    logger = logging.getLogger(__name__)
+    status_key = f"job_search_task:{task_id}"
+    cache.set(status_key, {"status": "running", "progress": 25}, timeout=1800)
+
+    User = get_user_model()
+    try:
+        user = User.objects.get(pk=user_id)
+    except User.DoesNotExist:
+        cache.set(status_key, {"status": "failed", "error": "User not found"}, timeout=1800)
+        return
+
+    try:
+        _jobs_fetched, _jobs_after_filter, jobs_out_from_core, refs_for_cache = run_job_search_core(
+            user=user,
+            search_term=search_term,
+            location=location,
+            track=track,
+            results_wanted=results_wanted,
+            site_name=site_name,
+            sort=sort,
+        )
+        is_unbiased = not track or str(track).strip().lower() in ("none", "unbiased", "")
+        search_track = None if is_unbiased else normalize_track_slug(track, user)
+        display_limit = getattr(settings, "JOB_SEARCH_DISPLAY_LIMIT", 50)
+        if results_wanted is not None and results_wanted > 0:
+            display_limit = min(display_limit, results_wanted)
+        jobs_out = jobs_out_from_core[:display_limit]
+        annotate_saved_flags(user, search_track, jobs_out)
+
+        jobs_serialized = [
+            j.model_dump() if hasattr(j, "model_dump") else j.dict()
+            for j in jobs_out
+        ]
+
+        cache.set(
+            status_key,
+            {
+                "status": "completed",
+                "progress": 100,
+                "total": len(jobs_serialized),
+                "jobs": jobs_serialized,
+                "refs": refs_for_cache,
+            },
+            timeout=1800,
+        )
+        logger.info("[job_search_async_task] task_id=%s completed with %d jobs", task_id, len(jobs_serialized))
+    except Exception as exc:
+        logger.exception("[job_search_async_task] task_id=%s failed: %s", task_id, exc)
+        cache.set(status_key, {"status": "failed", "error": str(exc)}, timeout=1800)
+
+
+@db_task()
 def evaluate_vetting_matching_task(
     user_id,
     pipeline_entry_ids: list[int],
@@ -1018,6 +1089,28 @@ def evaluate_vetting_matching_task(
                 )
                 continue
 
+        # PASS 1: Sequential Labor Compliance & Authenticity Audit
+        # Evaluates all un-audited job postings in batch under the static Compliance Prompt to maximize local Ollama KV-cache prefix hits.
+        from .authenticity import JobAuthenticityService
+
+        unique_jobs_to_audit = {}
+        for entry in entries:
+            job = entry.job_listing
+            if job and (not job.authenticity_audited_at or not job.authenticity_verdict):
+                if job.id not in unique_jobs_to_audit:
+                    unique_jobs_to_audit[job.id] = job
+
+        for j_id, job_obj in unique_jobs_to_audit.items():
+            try:
+                JobAuthenticityService.audit(job_obj, user=user, force_refresh=False)
+            except Exception as e:
+                logger.warning(
+                    "[evaluate_vetting_matching_task] Authenticity audit failed for job %s: %s",
+                    j_id,
+                    e,
+                )
+
+        # PASS 2: Candidate Resume Fit & Skill Radar
         updated = 0
         skipped = 0
         errors = []
@@ -1872,23 +1965,24 @@ def purge_inactive_pipeline_entries_task(limit: int = 400):
 def cleanup_manager():
     """
     Once daily (01:30): Fan out user-scoped cross-profile dedupe and 14-day retention purges across
-    Huey workers for scalability.
+    Huey workers for scalability. Uses streaming chunked iteration to avoid memory spikes.
     """
     started_at = timezone.now()
     User = get_user_model()
-    active_user_ids = list(User.objects.filter(is_active=True).values_list("id", flat=True))
-    for uid in active_user_ids:
+    count = 0
+    for uid in User.objects.filter(is_active=True).values_list("id", flat=True).iterator(chunk_size=200):
         process_user_cleanup_task(uid)
+        count += 1
 
     payload = {
         "status": "dispatched",
         "started_at": started_at,
         "finished_at": timezone.now(),
-        "users_dispatched": len(active_user_ids),
+        "users_dispatched": count,
     }
     cache.set(CLEANUP_STATUS_CACHE_KEY, payload, CLEANUP_STATUS_CACHE_TTL_SECONDS)
-    logger.info("[cleanup_manager] Dispatched daily cleanup for %d active user(s)", len(active_user_ids))
-    return {"status": "dispatched", "users_dispatched": len(active_user_ids)}
+    logger.info("[cleanup_manager] Dispatched daily cleanup for %d active user(s)", count)
+    return {"status": "dispatched", "users_dispatched": count}
 
 
 @db_task()
@@ -1913,10 +2007,11 @@ def process_user_purge_generated_resumes_task(user_id: int):
 def purge_generated_resumes_periodic():
     """Every 6 hours: fan-out removal of old optimizer ephemeral UserResume PDFs per user."""
     User = get_user_model()
-    active_user_ids = list(User.objects.filter(is_active=True).values_list("id", flat=True))
-    for uid in active_user_ids:
+    count = 0
+    for uid in User.objects.filter(is_active=True).values_list("id", flat=True).iterator(chunk_size=200):
         process_user_purge_generated_resumes_task(uid)
-    return {"status": "dispatched", "users_count": len(active_user_ids)}
+        count += 1
+    return {"status": "dispatched", "users_count": count}
 
 
 # Backward-compatible alias (imports, docs, manual enqueue).

@@ -409,3 +409,19 @@ class SavedJobSearchViewTests(TestCase):
             resp.content.decode(),
             r'<details[^>]*id="job-search-options"[^>]*\sopen',
         )
+
+    def test_sandbox_default_is_unbiased(self):
+        resp = self.client.get(reverse("jobs_search"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.context["job_search_track"], "")
+        self.assertEqual(resp.context["job_search_track_label"], "None (Unbiased)")
+        self.assertContains(resp, "Unbiased")
+        self.assertContains(resp, 'id="profile-calc-warning" class="mt-3 hidden')
+
+    def test_sandbox_with_selected_profile_shows_warning(self):
+        resp = self.client.get(reverse("jobs_search") + "?track=general")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.context["job_search_track"], "general")
+        self.assertContains(resp, "Profile calculations enabled")
+        self.assertNotContains(resp, 'id="profile-calc-warning" class="mt-3 hidden')
+

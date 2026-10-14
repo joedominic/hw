@@ -73,6 +73,12 @@ class JobPayload(Schema):
     combined_age: Optional[str] = None
     zero_llm_fit_summary: Optional[str] = None
     skill_radar_source: Optional[str] = None
+    authenticity_verdict: Optional[str] = None
+    authenticity_score: Optional[int] = None
+    authenticity_confidence: Optional[str] = None
+    authenticity_rationale: Optional[str] = None
+    authenticity_audit_trail: Optional[List[dict]] = None
+    authenticity_audited_at: Optional[datetime] = None
 
 
 class JobDetailPayload(Schema):
@@ -110,6 +116,19 @@ class FetchJobDescriptionResponse(Schema):
 class JobSearchResponse(Schema):
     jobs: List[JobPayload]
     total: int
+
+
+class JobSearchAsyncTaskResponse(Schema):
+    task_id: str
+    status: str
+
+
+class JobSearchAsyncStatusResponse(Schema):
+    status: str
+    progress: Optional[int] = None
+    error: Optional[str] = None
+    total: Optional[int] = None
+    jobs: Optional[List[JobPayload]] = None
 
 
 class MatchRequest(Schema):

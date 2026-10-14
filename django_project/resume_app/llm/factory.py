@@ -163,13 +163,37 @@ class _OllamaLocalChatModel(BaseChatModel):
             raise
         elapsed = time.monotonic() - t0
         content = (response.get("message") or {}).get("content") or ""
-        logger.info(
-            "[ollama_local] client.chat ok in %.2fs response_chars=%s eval_count=%r prompt_eval=%r",
+
+        # Extract Ollama timing and token evaluation telemetry
+        prompt_eval_count = int(response.get("prompt_eval_count") or 0)
+        prompt_eval_ns = int(response.get("prompt_eval_duration") or 0)
+        prompt_eval_ms = prompt_eval_ns / 1_000_000.0 if prompt_eval_ns > 0 else 0.0
+
+        eval_count = int(response.get("eval_count") or 0)
+        eval_ns = int(response.get("eval_duration") or 0)
+        eval_ms = eval_ns / 1_000_000.0 if eval_ns > 0 else 0.0
+
+        prefill_tps = (prompt_eval_count / (prompt_eval_ms / 1000.0)) if prompt_eval_ms > 0 else 0.0
+        gen_tps = (eval_count / (eval_ms / 1000.0)) if eval_ms > 0 else 0.0
+
+        # High-throughput prompt evaluation (> 85 t/s or < 650ms on large prompts) confirms KV prefix cache reuse
+        is_kv_hit = (prefill_tps > 85.0) or (prompt_eval_count > 100 and prompt_eval_ms < 650.0)
+        kv_tag = " [KV CACHE HIT]" if is_kv_hit else " [COLD PREFILL]"
+
+        logger.warning(
+            "[ollama_local] %s/%s ok in %.2fs | prompt_eval=%d tok in %.0fms (%.0f t/s)%s | gen=%d tok in %.0fms (%.1f t/s)",
+            self.host,
+            self.model,
             elapsed,
-            len(content),
-            response.get("eval_count"),
-            response.get("prompt_eval_count"),
+            prompt_eval_count,
+            prompt_eval_ms,
+            prefill_tps,
+            kv_tag,
+            eval_count,
+            eval_ms,
+            gen_tps,
         )
+
         prompt_eval = response.get("prompt_eval_count")
         eval_count = response.get("eval_count")
         usage_metadata = None
@@ -228,12 +252,29 @@ def get_llm(provider: str, api_key: str = None, model: str = None, user=None):
         elif provider == "Ollama Cloud":
             key = getattr(settings, "OLLAMA_API_KEY", None)
         elif provider == "Ollama Local":
-            key = getattr(settings, "OLLAMA_LOCAL_HOST", None) or getattr(
-                settings, "OLLAMA_HOST", None
-            )
+            if user:
+                try:
+                    from ..models import LLMProviderConfig
+                    from ..crypto import decrypt_api_key
+
+                    cfg = (
+                        LLMProviderConfig.objects.for_user(user)
+                        .filter(provider="Ollama Local")
+                        .first()
+                    )
+                    if cfg and cfg.encrypted_api_key:
+                        key = decrypt_api_key(cfg.encrypted_api_key)
+                except Exception:
+                    pass
+            if not key:
+                key = (
+                    getattr(settings, "OLLAMA_LOCAL_HOST", None)
+                    or getattr(settings, "OLLAMA_HOST", None)
+                    or "http://127.0.0.1:11434"
+                )
         elif provider == "OpenRouter":
             key = getattr(settings, "OPENROUTER_API_KEY", None)
-        if not key:
+        if not key and provider != "Ollama Local":
             raise ValueError(
                 f"API key required for {provider}. Set in request or in env (e.g. OPENAI_API_KEY)."
             )

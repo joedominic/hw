@@ -87,9 +87,9 @@
                     <div class="flex items-center justify-between px-1">
                         <div class="flex items-center gap-1.5">
                             <span class="material-symbols-outlined text-[15px] text-brand">target</span>
-                            <span class="font-mono text-[10px] text-slate-800 uppercase tracking-wider font-extrabold">Profile Workspace</span>
+                            <span class="text-xs text-slate-800 font-bold">Profile Workspace</span>
                         </div>
-                        <span class="text-[9px] font-mono font-bold uppercase tracking-tight text-emerald-800 bg-emerald-100/90 border border-emerald-300/70 px-1.5 py-0.2 rounded" title="All items in this section switch when you select a profile">
+                        <span class="text-[10px] font-mono font-semibold text-emerald-800 bg-emerald-100/90 border border-emerald-300/70 px-1.5 py-0.5 rounded" title="All items in this section switch when you select a profile">
                             Profile-Scoped
                         </span>
                     </div>
@@ -97,13 +97,13 @@
                     <!-- Primary Switcher: Target Search Profiles Card -->
                     <div class="bg-white p-2.5 rounded-xl border border-slate-200/90 shadow-2xs space-y-2">
                         <div class="flex items-center justify-between px-0.5">
-                            <span class="font-mono text-[10px] text-slate-700 uppercase tracking-wider font-bold">Target Profiles</span>
+                            <span class="text-xs text-slate-700 font-bold">Target Profiles</span>
                             <div class="flex items-center gap-1">
-                                <button type="button" onclick="openNewProfileDrawer()" class="inline-flex items-center gap-0.5 text-[10px] font-bold text-brand bg-brand-mist hover:bg-brand-soft/40 px-1.5 py-0.5 rounded border border-brand/20 transition cursor-pointer" title="Create new search profile">
+                                <button type="button" onclick="openNewProfileDrawer()" class="inline-flex items-center gap-0.5 text-[10px] font-bold text-brand bg-brand-mist hover:bg-brand-soft/40 px-1.5 py-0.5 rounded border border-brand/20 transition-all duration-100 active:scale-[0.98] cursor-pointer" title="Create new search profile">
                                     <span class="material-symbols-outlined text-[13px]">add</span>
                                     <span>New</span>
                                 </button>
-                                <button type="button" onclick="openEditProfileDrawer('{{ pipeline_track }}')" class="text-slate-400 hover:text-brand p-1 rounded hover:bg-slate-100 transition cursor-pointer" title="Configure current profile">
+                                <button type="button" onclick="openEditProfileDrawer('{{ pipeline_track }}')" class="text-slate-400 hover:text-brand p-1 rounded hover:bg-slate-100 transition-all duration-100 active:scale-[0.98] cursor-pointer" title="Configure current profile">
                                     <span class="material-symbols-outlined text-[15px]">settings</span>
                                 </button>
                             </div>
@@ -135,12 +135,12 @@
 
                                     <div class="flex items-center gap-1.5 shrink-0 pl-1.5">
                                         {% if t.count is not None %}
-                                        <span class="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded {% if t.slug == pipeline_track %}bg-brand text-white shadow-2xs{% else %}bg-slate-200/80 text-slate-600 group-hover:bg-slate-300/80{% endif %}">
+                                        <span class="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded {% if t.slug == pipeline_track %}bg-brand text-white shadow-2xs{% else %}bg-slate-200/80 text-slate-600 group-hover:bg-slate-300/80{% endif %}" title="{{ t.count }} active opportunities in Review & Apply">
                                             {{ t.count }}
                                         </span>
                                         {% endif %}
                                         {% if t.slug == pipeline_track %}
-                                        <span class="text-[9px] font-mono font-extrabold uppercase text-emerald-800 bg-emerald-100/90 border border-emerald-300/70 px-1 py-0.2 rounded tracking-tight shrink-0">
+                                        <span class="text-[9px] font-mono font-extrabold text-emerald-800 bg-emerald-100/90 border border-emerald-300/70 px-1 py-0.2 rounded tracking-tight shrink-0">
                                             Active
                                         </span>
                                         {% endif %}
@@ -166,9 +166,9 @@
                     </div>
 
                     <!-- Active Profile Specification Container -->
-                    <div class="bg-white rounded-xl border border-emerald-300/60 shadow-2xs overflow-hidden ring-1 ring-emerald-500/10 space-y-0">
+                    <div class="bg-white rounded-xl border border-slate-200/90 shadow-2xs overflow-hidden space-y-0">
                         <!-- Subheader showing current active profile context -->
-                        <div class="px-2.5 py-2 bg-gradient-to-r from-emerald-50/90 to-slate-50/90 border-b border-emerald-200/60 flex items-center justify-between">
+                        <div class="px-2.5 py-2 bg-slate-50 border-b border-slate-200/80 flex items-center justify-between">
                             <div class="flex items-center gap-1.5 min-w-0">
                                 <span class="material-symbols-outlined text-[15px] text-brand shrink-0">tune</span>
                                 <div class="min-w-0">
@@ -179,7 +179,7 @@
                                 </div>
                             </div>
                             <div class="flex items-center gap-1 shrink-0">
-                                <button type="button" onclick="openEditProfileDrawer('{{ active_search_profile.slug|default:pipeline_track }}')" class="inline-flex items-center gap-0.5 text-[10px] font-bold text-brand hover:text-brand-dark bg-white hover:bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 shadow-2xs transition cursor-pointer shrink-0" title="Edit this profile's resume, search query, location, and schedule">
+                                <button type="button" onclick="openEditProfileDrawer('{{ active_search_profile.slug|default:pipeline_track }}')" class="inline-flex items-center gap-0.5 text-[10px] font-bold text-brand hover:text-brand-dark bg-white hover:bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 shadow-2xs transition-all duration-100 active:scale-[0.98] cursor-pointer shrink-0" title="Edit this profile's resume, search query, location, and schedule">
                                     <span>Edit</span>
                                     <span class="material-symbols-outlined text-[12px]">edit</span>
                                 </button>
@@ -189,7 +189,7 @@
                         <div class="p-2.5 space-y-2.5 text-xs divide-y divide-slate-100">
                             <!-- 1. Bound Resume (Profile-Scoped) -->
                             <div class="space-y-1">
-                                <div class="flex items-center justify-between text-[10px] font-mono text-slate-500 uppercase font-bold">
+                                <div class="flex items-center justify-between text-[11px] font-semibold text-slate-600">
                                     <span class="flex items-center gap-1">
                                         <span class="material-symbols-outlined text-[13px] text-brand">description</span>
                                         <span>Bound Resume</span>
@@ -204,7 +204,7 @@
 
                             <!-- 2. Search Criteria (Query, Location, Boards) -->
                             <div class="space-y-1.5 pt-2">
-                                <div class="text-[10px] font-mono text-slate-500 uppercase font-bold flex items-center justify-between">
+                                <div class="text-[11px] font-semibold text-slate-600 flex items-center justify-between">
                                     <span class="flex items-center gap-1">
                                         <span class="material-symbols-outlined text-[13px] text-brand">manage_search</span>
                                         <span>Search Criteria</span>
@@ -213,7 +213,7 @@
                                 
                                 <!-- Query -->
                                 <div class="space-y-0.5">
-                                    <div class="text-[9px] font-mono text-slate-400 uppercase font-semibold">Query:</div>
+                                    <div class="text-[10px] font-mono text-slate-500 font-medium">Query:</div>
                                     <div class="text-[11px] font-bold text-slate-800 flex items-center gap-1 truncate bg-slate-50/80 px-1.5 py-1 rounded border border-slate-200/70" title="{{ active_search_profile.search_term|default:'No query configured' }}">
                                         <span class="material-symbols-outlined text-[13px] text-brand shrink-0">search</span>
                                         <span class="truncate">{{ active_search_profile.search_term|default:"No query configured" }}</span>
@@ -222,7 +222,7 @@
 
                                 <!-- Location -->
                                 <div class="flex items-center justify-between text-[11px] pt-0.5">
-                                    <span class="text-slate-400 font-mono text-[9px] uppercase font-semibold">Location:</span>
+                                    <span class="text-slate-500 font-mono text-[10px] font-medium">Location:</span>
                                     <span class="font-semibold text-slate-700 truncate max-w-[140px] flex items-center gap-0.5">
                                         <span class="material-symbols-outlined text-[12px] text-emerald-600">location_on</span>
                                         {{ active_search_profile.location|default:"Any / Remote" }}
@@ -231,7 +231,7 @@
 
                                 <!-- Job Boards -->
                                 <div class="pt-0.5">
-                                    <div class="text-[9px] font-mono text-slate-400 uppercase font-semibold mb-1">Boards:</div>
+                                    <div class="text-[10px] font-mono text-slate-500 font-medium mb-1">Boards:</div>
                                     <div class="flex flex-wrap gap-1">
                                         {% for b in active_search_profile.site_names %}
                                         <span class="font-mono text-[9px] font-bold bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded border border-slate-200/80 capitalize">
@@ -246,7 +246,7 @@
 
                             <!-- 3. Automated Scraper & Schedule Execution -->
                             <div class="space-y-2 pt-2">
-                                <div class="flex items-center justify-between text-[10px] font-mono font-bold uppercase">
+                                <div class="flex items-center justify-between text-[11px] font-semibold text-slate-600">
                                     <span class="flex items-center gap-1 text-slate-500">
                                         <span class="material-symbols-outlined text-[13px] text-brand">schedule</span>
                                         <span>Search Schedule</span>
@@ -264,7 +264,7 @@
                                 </div>
 
                                 <div class="text-[11px] text-slate-700 flex items-center justify-between">
-                                    <span class="text-slate-400 text-[10px] font-mono uppercase font-semibold">Frequency:</span>
+                                    <span class="text-slate-500 text-[10px] font-mono font-medium">Frequency:</span>
                                     <span class="font-semibold text-slate-800 text-[11px]">
                                         {% if task_frequency_display %}
                                             {{ task_frequency_display }}
@@ -359,7 +359,7 @@
                                     </button>
                                     <p id="cockpitRunSearchHint" class="mt-1 text-[10px] text-slate-400 text-center font-mono">
                                         {% if task_cooldown_remaining_seconds > 0 %}
-                                            Cooldown active (60m limit)
+                                            Cooldown active (3m limit)
                                         {% elif is_task_running %}
                                             Scraping & evaluating fresh jobs...
                                         {% else %}
@@ -380,9 +380,9 @@
                     <div class="flex items-center justify-between px-1">
                         <div class="flex items-center gap-1.5">
                             <span class="material-symbols-outlined text-[15px] text-slate-700">shield</span>
-                            <span class="font-mono text-[10px] text-slate-800 uppercase tracking-wider font-extrabold">Global Pipeline Rules</span>
+                            <span class="text-xs text-slate-800 font-bold">Global Pipeline Rules</span>
                         </div>
-                        <span class="text-[9px] font-mono font-bold uppercase tracking-tight text-slate-600 bg-slate-200/90 border border-slate-300 px-1.5 py-0.2 rounded" title="Applies globally across all search profiles and opportunities in your account">
+                        <span class="text-[10px] font-mono font-semibold text-slate-600 bg-slate-200/90 border border-slate-300 px-1.5 py-0.5 rounded" title="Applies globally across all search profiles and opportunities in your account">
                             Account-Wide
                         </span>
                     </div>
@@ -394,7 +394,7 @@
                     <div class="bg-white p-2.5 rounded-lg border border-cockpit-border space-y-1.5">
                         <div class="flex items-center justify-between">
                             <div class="flex items-center gap-1">
-                                <span class="font-mono text-[10px] text-cockpit-textMuted uppercase font-bold">Phrases To Avoid</span>
+                                <span class="text-xs font-semibold text-slate-600">Phrases To Avoid</span>
                                 <span class="text-[9px] font-mono text-slate-400 font-semibold">(Global)</span>
                             </div>
                             <button type="button" onclick="toggleAddPhraseInput()" class="text-[10px] text-brand hover:underline font-semibold">+ Add</button>
@@ -427,111 +427,47 @@
                         </div>
                     </div>
 
-                    <!-- Pipeline Thresholds & Cleanup Policy (User / Account Level) -->
-                    <div class="bg-amber-50/60 p-2.5 rounded-lg border border-amber-200/90 shadow-2xs space-y-2.5">
+                    <!-- Pipeline Thresholds & Cleanup Policy (Compact Summary Card with Drawer Trigger) -->
+                    <div class="bg-amber-50/70 p-2.5 rounded-lg border border-amber-200/90 shadow-2xs space-y-2">
                         <div class="flex items-center justify-between">
                             <div class="flex items-center gap-1.5">
                                 <span class="material-symbols-outlined text-[15px] text-amber-700">tune</span>
-                                <span class="font-mono text-[10px] text-amber-950 uppercase font-bold tracking-tight">Thresholds &amp; Cleanup</span>
+                                <span class="text-xs font-semibold text-amber-950">Pipeline Policies</span>
                             </div>
-                            <span class="inline-flex items-center text-[9px] font-bold text-amber-800 bg-amber-100/90 px-1.5 py-0.5 rounded border border-amber-300/80" title="Applied across all search profiles for your account">
-                                Account Policy
-                            </span>
+                            <button type="button" onclick="openAutomationDrawer()" class="inline-flex items-center gap-1 text-[10px] font-bold text-amber-900 bg-amber-200/80 hover:bg-amber-300 px-2 py-0.5 rounded transition shadow-2xs cursor-pointer active:scale-95">
+                                <span class="material-symbols-outlined text-[13px]">settings</span>
+                                <span>Configure</span>
+                            </button>
                         </div>
 
-                        <!-- Thresholds Form (Stacked full-width controls prevent narrow screen clipping) -->
-                        <form action="" method="post" class="space-y-2">
-                            {% csrf_token %}
-                            <input type="hidden" name="action" value="update_pipeline_retention">
-
-                            <!-- Auto-purge low score threshold -->
-                            <div class="space-y-1">
-                                <div class="flex items-center justify-between text-[11px]">
-                                    <label for="pipeline-purge-select" class="font-medium text-slate-700 truncate" title="Roles in New or Review scoring below this will be auto-dismissed">
-                                        Purge roles below
-                                    </label>
-                                    <span class="font-mono text-[10px] font-bold text-amber-900 bg-amber-100 px-1.5 py-0.5 rounded shrink-0">
-                                        {{ automation_settings.pipeline_purge_match_score_max|default:25 }}%
-                                    </span>
-                                </div>
-                                <select id="pipeline-purge-select" name="pipeline_purge_match_score_max" onchange="this.form.submit()" class="w-full text-xs font-semibold text-slate-800 bg-white border border-amber-300 rounded px-2 py-1 shadow-2xs focus:outline-none focus:ring-1 focus:ring-amber-500 cursor-pointer">
-                                    <option value="15" {% if automation_settings.pipeline_purge_match_score_max == 15 %}selected{% endif %}>15% Score (Strict)</option>
-                                    <option value="20" {% if automation_settings.pipeline_purge_match_score_max == 20 %}selected{% endif %}>20% Score</option>
-                                    <option value="25" {% if automation_settings.pipeline_purge_match_score_max == 25 or not automation_settings.pipeline_purge_match_score_max %}selected{% endif %}>25% Score (Default)</option>
-                                    <option value="30" {% if automation_settings.pipeline_purge_match_score_max == 30 %}selected{% endif %}>30% Score</option>
-                                    <option value="40" {% if automation_settings.pipeline_purge_match_score_max == 40 %}selected{% endif %}>40% Score</option>
-                                    <option value="50" {% if automation_settings.pipeline_purge_match_score_max == 50 %}selected{% endif %}>50% Score</option>
-                                    <option value="0" {% if automation_settings.pipeline_purge_match_score_max == 0 %}selected{% endif %}>Disabled (Keep all)</option>
-                                </select>
+                        <!-- Live Policy Telemetry Summary -->
+                        <div class="bg-white/90 rounded border border-amber-200/70 p-2 text-[11px] space-y-1 font-sans">
+                            <div class="flex items-center justify-between">
+                                <span class="text-slate-600">Auto-purge below:</span>
+                                <span class="font-mono font-bold text-amber-900 bg-amber-100/80 px-1.5 py-0.2 rounded text-[10px]">{{ automation_settings.pipeline_purge_match_score_max|default:25 }}%</span>
                             </div>
-
-                            <!-- Auto-promote threshold -->
-                            <div class="space-y-1">
-                                <div class="flex items-center justify-between text-[11px]">
-                                    <label for="pipeline-promote-select" class="font-medium text-slate-700 truncate" title="Roles in New scoring at or above this match will auto-promote to Review">
-                                        Promote New → Review
-                                    </label>
-                                    <span class="font-mono text-[10px] font-bold text-amber-900 bg-amber-100 px-1.5 py-0.5 rounded shrink-0">
-                                        ≥{{ automation_settings.pipeline_match_score_min|default:60 }}%
-                                    </span>
-                                </div>
-                                <select id="pipeline-promote-select" name="pipeline_match_score_min" onchange="this.form.submit()" class="w-full text-xs font-semibold text-slate-800 bg-white border border-amber-300 rounded px-2 py-1 shadow-2xs focus:outline-none focus:ring-1 focus:ring-amber-500 cursor-pointer">
-                                    <option value="40" {% if automation_settings.pipeline_match_score_min == 40 %}selected{% endif %}>≥ 40% Match</option>
-                                    <option value="50" {% if automation_settings.pipeline_match_score_min == 50 %}selected{% endif %}>≥ 50% Match</option>
-                                    <option value="60" {% if automation_settings.pipeline_match_score_min == 60 or not automation_settings.pipeline_match_score_min %}selected{% endif %}>≥ 60% Match (Default)</option>
-                                    <option value="70" {% if automation_settings.pipeline_match_score_min == 70 %}selected{% endif %}>≥ 70% Match</option>
-                                    <option value="80" {% if automation_settings.pipeline_match_score_min == 80 %}selected{% endif %}>≥ 80% Match</option>
-                                </select>
+                            <div class="flex items-center justify-between">
+                                <span class="text-slate-600">Promote to Review:</span>
+                                <span class="font-mono font-bold text-emerald-800 bg-emerald-100/80 px-1.5 py-0.2 rounded text-[10px]">≥ {{ automation_settings.pipeline_match_score_min|default:60 }}%</span>
                             </div>
-
-                            <!-- Auto-promote Review → Applying threshold -->
-                            <div class="space-y-1">
-                                <div class="flex items-center justify-between text-[11px]">
-                                    <label for="vetting-promote-select" class="font-medium text-slate-700 truncate" title="Roles in Review with interview probability at or above this will auto-promote to Applying">
-                                        Promote Review → Queue
-                                    </label>
-                                    <span class="font-mono text-[10px] font-bold text-amber-900 bg-amber-100 px-1.5 py-0.5 rounded shrink-0">
-                                        {% if automation_settings.vetting_to_applying_enabled %}≥{{ automation_settings.vetting_interview_probability_min|default:70 }}%{% else %}Manual{% endif %}
-                                    </span>
-                                </div>
-                                <select id="vetting-promote-select" name="vetting_interview_probability_min" onchange="this.form.submit()" class="w-full text-xs font-semibold text-slate-800 bg-white border border-amber-300 rounded px-2 py-1 shadow-2xs focus:outline-none focus:ring-1 focus:ring-amber-500 cursor-pointer">
-                                    <option value="disabled" {% if not automation_settings.vetting_to_applying_enabled %}selected{% endif %}>Manual Only (Off)</option>
-                                    <option value="50" {% if automation_settings.vetting_to_applying_enabled and automation_settings.vetting_interview_probability_min == 50 %}selected{% endif %}>≥ 50% Interview</option>
-                                    <option value="60" {% if automation_settings.vetting_to_applying_enabled and automation_settings.vetting_interview_probability_min == 60 %}selected{% endif %}>≥ 60% Interview</option>
-                                    <option value="70" {% if automation_settings.vetting_to_applying_enabled and automation_settings.vetting_interview_probability_min == 70 %}selected{% endif %}>≥ 70% Interview (Default)</option>
-                                    <option value="80" {% if automation_settings.vetting_to_applying_enabled and automation_settings.vetting_interview_probability_min == 80 %}selected{% endif %}>≥ 80% Interview</option>
-                                    <option value="85" {% if automation_settings.vetting_to_applying_enabled and automation_settings.vetting_interview_probability_min == 85 %}selected{% endif %}>≥ 85% Interview (Strict)</option>
-                                </select>
+                            <div class="flex items-center justify-between">
+                                <span class="text-slate-600">Promote to Queue:</span>
+                                <span class="font-mono font-bold text-emerald-800 bg-emerald-100/80 px-1.5 py-0.2 rounded text-[10px]">{% if automation_settings.vetting_to_applying_enabled %}≥ {{ automation_settings.vetting_interview_probability_min|default:70 }}%{% else %}Manual{% endif %}</span>
                             </div>
-
-                            <!-- Retention window -->
-                            <div class="space-y-1">
-                                <div class="flex items-center justify-between text-[11px]">
-                                    <label for="cleanup-retention-select" class="font-medium text-slate-700 truncate" title="Roles older than this retention window based on Sourced Date are retired">
-                                        Drop pre-applied
-                                    </label>
-                                    <span class="font-mono text-[10px] font-bold text-amber-900 bg-amber-100 px-1.5 py-0.5 rounded shrink-0">
-                                        {{ pipeline_retention_days|default:7 }}d
-                                    </span>
-                                </div>
-                                <select id="cleanup-retention-select" name="cleanup_pipeline_retention_days" onchange="this.form.submit()" class="w-full text-xs font-semibold text-slate-800 bg-white border border-amber-300 rounded px-2 py-1 shadow-2xs focus:outline-none focus:ring-1 focus:ring-amber-500 cursor-pointer">
-                                    <option value="3" {% if pipeline_retention_days == 3 %}selected{% endif %}>3 Days</option>
-                                    <option value="5" {% if pipeline_retention_days == 5 %}selected{% endif %}>5 Days</option>
-                                    <option value="7" {% if pipeline_retention_days == 7 or not pipeline_retention_days %}selected{% endif %}>7 Days (1 Week)</option>
-                                    <option value="14" {% if pipeline_retention_days == 14 %}selected{% endif %}>14 Days (2 Weeks)</option>
-                                    <option value="30" {% if pipeline_retention_days == 30 %}selected{% endif %}>30 Days (Maximum)</option>
-                                </select>
+                            <div class="flex items-center justify-between">
+                                <span class="text-slate-600">Drop pre-applied:</span>
+                                <span class="font-mono font-bold text-slate-800 bg-slate-100 px-1.5 py-0.2 rounded text-[10px]">{{ pipeline_retention_days|default:7 }}d</span>
                             </div>
-                        </form>
+                        </div>
 
-                        <div class="pt-2 border-t border-amber-200/70 flex items-center justify-between">
+                        <div class="pt-1.5 border-t border-amber-200/70 flex items-center justify-between">
                             <span class="text-[10px] text-amber-800/80 font-mono">
                                 Applied <strong class="text-amber-950 font-semibold">protected</strong>
                             </span>
                             <form action="" method="post" class="inline m-0 p-0">
                                 {% csrf_token %}
                                 <input type="hidden" name="action" value="pipeline_cleanup_policies">
-                                <button type="submit" class="inline-flex items-center gap-1 text-[10px] font-bold text-amber-900 bg-amber-200/80 hover:bg-amber-300 px-2 py-1 rounded transition shadow-2xs cursor-pointer active:scale-95" title="Apply all threshold, retention, and auto-promotion policies across the pipeline. Applied roles are strictly preserved.">
+                                <button type="submit" class="inline-flex items-center gap-1 text-[10px] font-bold text-amber-900 bg-amber-200/80 hover:bg-amber-300 px-2 py-0.5 rounded transition shadow-2xs cursor-pointer active:scale-95" title="Apply all threshold, retention, and auto-promotion policies across the pipeline. Applied roles are strictly preserved.">
                                     <span class="material-symbols-outlined text-[13px]">cleaning_services</span>
                                     <span>Cleanup</span>
                                 </button>
@@ -559,9 +495,25 @@
                             <span class="material-symbols-outlined text-[13px] text-slate-400">tune</span>
                         </button>
                     </div>
-                    <span class="text-[11px] text-slate-400 font-mono hidden sm:inline-block">
-                        Toggle profile in left rail
-                    </span>
+                    {% if weekly_gap > 0 %}
+                    <div class="flex items-center gap-1.5 text-[11px]">
+                        <span class="text-slate-500 font-medium hidden sm:inline">Weekly Goal:</span>
+                        <span class="font-bold text-slate-800 font-mono">{{ done_this_week }}/{{ weekly_target }}</span>
+                        {% if oldest_applying_id %}
+                        <a href="?track={{ pipeline_track }}&stage=applying#job-{{ oldest_applying_id }}" class="inline-flex items-center gap-1 font-semibold text-brand hover:underline bg-brand-mist px-2 py-0.5 rounded text-[10px]" title="Jump to oldest role in Applying to reach your weekly goal">
+                            <span>{{ weekly_gap }} needed · Apply next</span>
+                            <span class="material-symbols-outlined text-[12px]">arrow_forward</span>
+                        </a>
+                        {% else %}
+                        <span class="text-slate-400 font-mono text-[10px]">({{ weekly_gap }} needed)</span>
+                        {% endif %}
+                    </div>
+                    {% else %}
+                    <div class="flex items-center gap-1 text-[11px] text-emerald-700 font-semibold">
+                        <span class="material-symbols-outlined text-[14px]">check_circle</span>
+                        <span>Goal reached ({{ done_this_week }}/{{ weekly_target }})</span>
+                    </div>
+                    {% endif %}
                 </div>
 
                 <div class="flex items-center justify-between gap-2">
@@ -601,7 +553,7 @@
                             <a href="?track={{ pipeline_track }}&stage=pipeline{% if pipeline_sort_by %}&sort_by={{ pipeline_sort_by }}{% endif %}"
                                class="flex-1 relative flex flex-col justify-between p-2.5 rounded-lg transition-all {% if board_stage == 'pipeline' %}bg-brand text-white shadow-md ring-2 ring-brand/30{% else %}bg-white text-slate-800 hover:bg-slate-50 border border-slate-200/80 hover:border-slate-300 shadow-xs{% endif %}">
                                 <div class="flex items-center justify-between">
-                                    <span class="text-[11px] font-bold tracking-wider uppercase {% if board_stage == 'pipeline' %}text-emerald-200{% else %}text-slate-500{% endif %}">New</span>
+                                    <span class="text-xs font-bold {% if board_stage == 'pipeline' %}text-emerald-200{% else %}text-slate-500{% endif %}">New</span>
                                     {% if board_stage == 'pipeline' %}
                                         <span class="inline-flex items-center gap-1 text-[9px] font-semibold bg-emerald-500/20 text-emerald-100 px-1.5 py-0.5 rounded-full">
                                             <span class="w-1.5 h-1.5 rounded-full bg-emerald-300 animate-pulse"></span>
@@ -632,7 +584,7 @@
                             <a href="?track={{ pipeline_track }}&stage=vetting{% if pipeline_sort_by %}&sort_by={{ pipeline_sort_by }}{% endif %}"
                                class="flex-1 relative flex flex-col justify-between p-2.5 rounded-lg transition-all {% if board_stage == 'vetting' %}bg-brand text-white shadow-md ring-2 ring-brand/30{% else %}bg-white text-slate-800 hover:bg-slate-50 border border-slate-200/80 hover:border-slate-300 shadow-xs{% endif %}">
                                 <div class="flex items-center justify-between">
-                                    <span class="text-[11px] font-bold tracking-wider uppercase {% if board_stage == 'vetting' %}text-emerald-200{% else %}text-slate-500{% endif %}">Review</span>
+                                    <span class="text-xs font-bold {% if board_stage == 'vetting' %}text-emerald-200{% else %}text-slate-500{% endif %}">Review</span>
                                     {% if board_stage == 'vetting' %}
                                         <span class="inline-flex items-center gap-1 text-[9px] font-semibold bg-emerald-500/20 text-emerald-100 px-1.5 py-0.5 rounded-full">
                                             <span class="w-1.5 h-1.5 rounded-full bg-emerald-300 animate-pulse"></span>
@@ -663,7 +615,7 @@
                             <a href="?track={{ pipeline_track }}&stage=applying{% if pipeline_sort_by %}&sort_by={{ pipeline_sort_by }}{% endif %}"
                                class="flex-1 relative flex flex-col justify-between p-2.5 rounded-lg transition-all {% if board_stage == 'applying' %}bg-brand text-white shadow-md ring-2 ring-brand/30{% else %}bg-white text-slate-800 hover:bg-slate-50 border border-slate-200/80 hover:border-slate-300 shadow-xs{% endif %}">
                                 <div class="flex items-center justify-between">
-                                    <span class="text-[11px] font-bold tracking-wider uppercase {% if board_stage == 'applying' %}text-emerald-200{% else %}text-slate-500{% endif %}">Applying</span>
+                                    <span class="text-xs font-bold {% if board_stage == 'applying' %}text-emerald-200{% else %}text-slate-500{% endif %}">Applying</span>
                                     {% if board_stage == 'applying' %}
                                         <span class="inline-flex items-center gap-1 text-[9px] font-semibold bg-emerald-500/20 text-emerald-100 px-1.5 py-0.5 rounded-full">
                                             <span class="w-1.5 h-1.5 rounded-full bg-emerald-300 animate-pulse"></span>
@@ -694,7 +646,7 @@
                             <a href="?track={{ pipeline_track }}&stage=done{% if pipeline_sort_by %}&sort_by={{ pipeline_sort_by }}{% endif %}"
                                class="flex-1 relative flex flex-col justify-between p-2.5 rounded-lg transition-all {% if board_stage == 'done' %}bg-brand text-white shadow-md ring-2 ring-brand/30{% else %}bg-white text-slate-800 hover:bg-slate-50 border border-slate-200/80 hover:border-slate-300 shadow-xs{% endif %}">
                                 <div class="flex items-center justify-between">
-                                    <span class="text-[11px] font-bold tracking-wider uppercase {% if board_stage == 'done' %}text-emerald-200{% else %}text-slate-500{% endif %}">Applied</span>
+                                    <span class="text-xs font-bold {% if board_stage == 'done' %}text-emerald-200{% else %}text-slate-500{% endif %}">Applied</span>
                                     {% if board_stage == 'done' %}
                                         <span class="inline-flex items-center gap-1 text-[9px] font-semibold bg-emerald-500/20 text-emerald-100 px-1.5 py-0.5 rounded-full">
                                             <span class="w-1.5 h-1.5 rounded-full bg-emerald-300 animate-pulse"></span>
@@ -732,7 +684,7 @@
                             </span>
                             <div class="truncate text-[11px] text-slate-700">
                                 {% if board_stage == 'pipeline' %}
-                                    <strong class="text-brand font-semibold">Intake Funnel:</strong> Screen new matching opportunities. Shortlist to <span class="font-semibold text-slate-900">Review</span> with <kbd class="bg-white px-1 py-0.2 rounded border border-slate-300 font-mono text-[10px] text-brand">E</kbd>, like with <kbd class="bg-white px-1 py-0.2 rounded border border-slate-300 font-mono text-[10px] text-brand">L</kbd>, or remove with <kbd class="bg-white px-1 py-0.2 rounded border border-slate-300 font-mono text-[10px] text-rose-600">X</kbd>.
+                                    <strong class="text-brand font-semibold">Intake Funnel:</strong> Screen new matching opportunities. Move to <span class="font-semibold text-slate-900">Review</span> with <kbd class="bg-white px-1 py-0.2 rounded border border-slate-300 font-mono text-[10px] text-brand">E</kbd>, like with <kbd class="bg-white px-1 py-0.2 rounded border border-slate-300 font-mono text-[10px] text-brand">L</kbd>, or remove with <kbd class="bg-white px-1 py-0.2 rounded border border-slate-300 font-mono text-[10px] text-rose-600">X</kbd>.
                                 {% elif board_stage == 'vetting' %}
                                     <strong class="text-brand font-semibold">Deep Vetting:</strong> Audit skill match and role requirements. Advance to <span class="font-semibold text-slate-900">Applying</span> with <kbd class="bg-white px-1 py-0.2 rounded border border-slate-300 font-mono text-[10px] text-brand">E</kbd>, like with <kbd class="bg-white px-1 py-0.2 rounded border border-slate-300 font-mono text-[10px] text-brand">L</kbd>, or remove with <kbd class="bg-white px-1 py-0.2 rounded border border-slate-300 font-mono text-[10px] text-rose-600">X</kbd>.
                                 {% elif board_stage == 'applying' %}
@@ -826,7 +778,7 @@
                      data-company="{{ job.company_name }}"
                      data-location="{{ job.location }}"
                      data-url="{{ job.url }}"
-                     data-match-score="{{ job.zero_llm_match_pct|default:job.focus_percent|default:'78' }}"
+                     data-match-score="{{ job.zero_llm_match_pct|default:job.focus_percent|default:'0' }}"
                      data-pref-score="{{ job.preference_margin_percent|default:'0' }}"
                      data-interview-probability="{{ job.interview_probability|default:'-1' }}"
                      data-interview-reasoning="{{ job.interview_reasoning|default:'' }}"
@@ -842,6 +794,10 @@
                      data-age="{{ job.combined_age|default:'Recently' }}"
                      data-salary="{{ job.extracted_salary|default:'' }}"
                      data-is-liked="{% if job.is_liked %}1{% else %}0{% endif %}"
+                     data-authenticity-verdict="{{ job.authenticity_verdict|default:'' }}"
+                     data-authenticity-score="{{ job.authenticity_score|default:'0' }}"
+                     data-authenticity-confidence="{{ job.authenticity_confidence|default:'' }}"
+                     data-authenticity-rationale="{{ job.authenticity_rationale|default:'' }}"
                      data-description="{{ job.description|default:job.snippet }}">
                     
                     <!-- Selection Indicator Accent Stripe -->
@@ -890,7 +846,7 @@
                             <!-- Match Pill Badge -->
                             <div class="opportunity-match-pill flex items-center rounded border overflow-hidden shrink-0 font-mono text-xs {% if job.skill_radar_source == 'ollama_local' and job.zero_llm_core_matches %}border-emerald-300 bg-emerald-50{% else %}border-slate-200 bg-slate-50{% endif %}" title="Role Match Score (title & role alignment)">
                                 <span class="{% if job.skill_radar_source == 'ollama_local' and job.zero_llm_core_matches %}bg-brand text-white{% else %}bg-slate-700 text-white{% endif %} text-[11px] px-2 py-0.5 font-bold">
-                                    {{ job.zero_llm_match_pct|default:job.focus_percent|default:"75" }}%
+                                    {% if job.zero_llm_match_pct is not None %}{{ job.zero_llm_match_pct }}%{% elif job.focus_percent is not None %}{{ job.focus_percent }}%{% else %}Unscored{% endif %}
                                 </span>
                                 {% if job.skill_radar_source == 'ollama_local' and job.zero_llm_core_matches %}
                                 <span class="text-emerald-800 text-[10px] px-1.5 py-0.5 font-semibold">
@@ -903,8 +859,22 @@
                                 {% endif %}
                             </div>
 
-                            <!-- Interview Probability Badge for Review & Applying Stages -->
-                            {% if board_stage == 'vetting' or board_stage == 'applying' or job.interview_probability is not None %}
+                            <!-- Stage Metric / Interview Milestone Badge -->
+                            {% if board_stage == 'done' %}
+                                {% if job.post_apply_substatus and job.post_apply_substatus != 'applied_pending' %}
+                                <div class="opportunity-interview-pill flex items-center rounded border border-emerald-300 bg-emerald-50 text-emerald-900 overflow-hidden shrink-0 font-mono text-xs" title="Current Milestone: {{ job.post_apply_substatus_display }}">
+                                    <span class="bg-emerald-700 text-white text-[10px] px-1.5 py-0.5 font-bold flex items-center gap-1">
+                                        <span class="material-symbols-outlined text-[12px]">record_voice_over</span>
+                                        <span>{{ job.post_apply_substatus_display }}</span>
+                                    </span>
+                                </div>
+                                {% else %}
+                                <div class="opportunity-interview-pill flex items-center rounded border border-slate-200 bg-slate-50 text-slate-600 overflow-hidden shrink-0 font-mono text-[10px] px-2 py-0.5" title="Awaiting initial employer callback">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-slate-400 mr-1.5 inline-block"></span>
+                                    <span>Applied · Awaiting Response</span>
+                                </div>
+                                {% endif %}
+                            {% elif board_stage == 'vetting' or board_stage == 'applying' or job.interview_probability is not None %}
                                 {% if job.interview_probability is not None %}
                                 <div class="opportunity-interview-pill flex items-center rounded border overflow-hidden shrink-0 font-mono text-xs {% if job.interview_probability >= 70 %}border-emerald-300 bg-emerald-50 text-emerald-900{% elif job.interview_probability >= 50 %}border-amber-300 bg-amber-50 text-amber-900{% else %}border-rose-200 bg-rose-50 text-rose-800{% endif %}" title="Interview Probability: estimated callback odds based on your active resume">
                                     <span class="{% if job.interview_probability >= 70 %}bg-emerald-600{% elif job.interview_probability >= 50 %}bg-amber-600{% else %}bg-rose-600{% endif %} text-white text-[10px] px-1.5 py-0.5 font-bold flex items-center gap-0.5">
@@ -928,35 +898,31 @@
                         </div>
                     </div>
 
-                    <!-- Meta Tags Strip -->
-                    <div class="mt-2.5 flex items-center justify-between text-xs pl-1">
-                        <div class="flex items-center gap-2">
+                    <!-- Unified Metadata & Freshness Row (De-slopped & Consolidated) -->
+                    <div class="mt-2.5 flex flex-wrap items-center justify-between gap-y-1.5 text-xs pl-1">
+                        <div class="flex flex-wrap items-center gap-2 min-w-0">
+                            {% if job.is_fresh %}
+                            <!-- High-Signal Freshness Pill (<= 48h) -->
+                            <span class="inline-flex items-center gap-1.5 font-mono text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200/80 px-2 py-0.5 rounded-full shrink-0" title="Sourced: {{ job.fetched_at|date:'M j, Y' }}{% if job.posted_at %} • Posted: {{ job.posted_at|date:'M j, Y' }}{% endif %}">
+                                <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                                <span>New · {{ job.fresh_label }}</span>
+                            </span>
+                            {% else %}
+                            <!-- Quiet Typographic Date for Established Roles (> 2d) -->
+                            <span class="inline-flex items-center gap-1 font-mono text-[10px] text-slate-400 shrink-0" title="Sourced: {{ job.fetched_at|date:'M j, Y' }}{% if job.posted_at %} • Posted: {{ job.posted_at|date:'M j, Y' }}{% endif %}">
+                                <span class="material-symbols-outlined text-[12px] text-slate-400">schedule</span>
+                                <span>{{ job.dormant_date_display }}</span>
+                            </span>
+                            {% endif %}
+
                             {% if job.extracted_salary %}
-                            <span class="font-bold text-slate-800 font-mono text-[11px]">{{ job.extracted_salary }}</span>
-                            <span class="text-slate-300">•</span>
+                            <span class="text-slate-300">·</span>
+                            <span class="font-semibold text-slate-700 font-mono text-[11px]">{{ job.extracted_salary }}</span>
                             {% endif %}
-                            <span class="text-[10px] text-slate-400 font-mono">Full-time</span>
-                        </div>
-                        <div class="flex items-center gap-2">
-                            {% if job.has_date_diff and job.sourced_age and job.posted_age %}
-                            <span class="inline-flex items-center gap-1 font-mono text-[10px] text-slate-600 bg-slate-100 border border-slate-200/80 px-2 py-0.5 rounded font-medium" title="Sourced: {{ job.fetched_at|date:'M j, Y' }} • Posted: {{ job.posted_at|date:'M j, Y' }}">
-                                <span class="material-symbols-outlined text-[12px] text-slate-500">schedule</span>
-                                <span>{{ job.sourced_age }}</span>
-                                <span class="text-slate-400 font-normal">• {{ job.posted_age }}</span>
-                            </span>
-                            {% elif job.sourced_age %}
-                            <span class="inline-flex items-center gap-1 font-mono text-[10px] text-slate-600 bg-slate-100 border border-slate-200/80 px-2 py-0.5 rounded font-medium" title="Sourced: {{ job.fetched_at|date:'M j, Y' }}">
-                                <span class="material-symbols-outlined text-[12px] text-slate-500">schedule</span>
-                                <span>{{ job.sourced_age }}</span>
-                            </span>
-                            {% elif job.posted_age %}
-                            <span class="inline-flex items-center gap-1 font-mono text-[10px] text-slate-600 bg-slate-100 border border-slate-200/80 px-2 py-0.5 rounded font-medium" title="Posted: {{ job.posted_at|date:'M j, Y' }}">
-                                <span class="material-symbols-outlined text-[12px] text-slate-500">schedule</span>
-                                <span>{{ job.posted_age }}</span>
-                            </span>
-                            {% endif %}
-                            <span class="font-mono text-[10px] text-slate-500 bg-slate-100 px-2 py-0.5 rounded font-medium">
-                                {{ job.source_display|default:job.source|default:"Direct Ingest" }}
+
+                            <span class="text-slate-300">·</span>
+                            <span class="font-mono text-[10px] text-slate-500">
+                                via {{ job.source_display|default:job.source|default:"Direct Ingest" }}
                             </span>
                         </div>
                     </div>
@@ -973,7 +939,7 @@
                                 <input type="hidden" name="next" value="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage=pipeline"/>
                                 <button type="submit" class="shortlist-btn h-7 px-2.5 rounded bg-brand text-white text-xs font-semibold flex items-center gap-1 hover:bg-brand/90 transition">
                                     <span class="material-symbols-outlined text-[14px]">bookmark_add</span>
-                                    <span>Shortlist</span>
+                                    <span>Move to Review</span>
                                 </button>
                             </form>
                             {% elif board_stage == 'vetting' %}
@@ -985,7 +951,7 @@
                                 <input type="hidden" name="next" value="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage=vetting"/>
                                 <button type="submit" class="shortlist-btn h-7 px-2.5 rounded bg-brand text-white text-xs font-semibold flex items-center gap-1 hover:bg-brand/90 transition">
                                     <span class="material-symbols-outlined text-[14px]">send</span>
-                                    <span>Ready to Apply</span>
+                                    <span>Start Tailoring</span>
                                 </button>
                             </form>
                             {% elif board_stage == 'applying' %}
@@ -997,16 +963,16 @@
                                 <input type="hidden" name="next" value="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage=applying"/>
                                 <button type="submit" class="shortlist-btn h-7 px-2.5 rounded bg-brand text-white text-xs font-semibold flex items-center gap-1 hover:bg-brand/90 transition">
                                     <span class="material-symbols-outlined text-[14px]">check_circle</span>
-                                    <span>Mark Done</span>
+                                    <span>Mark Submitted</span>
                                 </button>
                             </form>
                             {% elif board_stage == 'done' %}
                             <button type="button"
                                     onclick="event.stopPropagation(); openLogInterviewDrawer('{{ job.pipeline_entry_id }}');"
                                     class="h-7 px-2.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-semibold flex items-center gap-1 hover:bg-emerald-100 transition cursor-pointer"
-                                    title="Log employer response or interview screen">
+                                    title="Log what happened or record next interview round">
                                 <span class="material-symbols-outlined text-[14px]">event</span>
-                                <span>Log Response</span>
+                                <span>Log Next Step</span>
                             </button>
                             {% endif %}
 
@@ -1063,11 +1029,81 @@
                     </div>
                 </div>
                 {% empty %}
+                {% if total_pipeline_jobs == 0 %}
+                <div class="p-6 sm:p-8 bg-white rounded-2xl border border-slate-200/90 shadow-sm">
+                    <div class="max-w-md mx-auto text-center">
+                        <div class="w-12 h-12 mx-auto rounded-2xl bg-brand-soft flex items-center justify-center text-brand mb-3">
+                            <span class="material-symbols-outlined text-2xl text-brand">rocket_launch</span>
+                        </div>
+                        <h3 class="text-base font-bold text-slate-900">Get Started in 3 Simple Steps</h3>
+                        <p class="text-xs text-slate-500 mt-1">Your review queue is currently empty. Follow these steps to kick off your job search momentum:</p>
+                    </div>
+
+                    <div class="mt-6 max-w-lg mx-auto space-y-3">
+                        <!-- Step 1 -->
+                        <div class="flex items-start gap-3 p-3.5 rounded-xl border border-slate-100 bg-slate-50/70 hover:bg-white hover:border-brand/30 transition">
+                            <div class="w-6 h-6 rounded-full bg-brand text-white text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">1</div>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center justify-between gap-2">
+                                    <h4 class="text-xs font-bold text-slate-900">Define Target &amp; Profile</h4>
+                                    <a href="{% url 'career_profiler' %}" class="text-[11px] font-bold text-brand hover:underline inline-flex items-center gap-0.5">
+                                        Profiler <span class="material-symbols-outlined text-[13px]">arrow_forward</span>
+                                    </a>
+                                </div>
+                                <p class="text-[11px] text-slate-500 mt-0.5">Analyze your resume, calibrate target titles, and set salary baselines.</p>
+                            </div>
+                        </div>
+
+                        <!-- Step 2 -->
+                        <div class="flex items-start gap-3 p-3.5 rounded-xl border border-slate-100 bg-slate-50/70 hover:bg-white hover:border-brand/30 transition">
+                            <div class="w-6 h-6 rounded-full bg-brand text-white text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">2</div>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center justify-between gap-2">
+                                    <h4 class="text-xs font-bold text-slate-900">Discover &amp; Ingest Roles</h4>
+                                    <a href="{% url 'jobs_search' %}" class="text-[11px] font-bold text-brand hover:underline inline-flex items-center gap-0.5">
+                                        Sandbox <span class="material-symbols-outlined text-[13px]">arrow_forward</span>
+                                    </a>
+                                </div>
+                                <p class="text-[11px] text-slate-500 mt-0.5">Run queries across boards and 1-click &ldquo;+ Add to Review&rdquo;, or schedule automated query feeds.</p>
+                            </div>
+                        </div>
+
+                        <!-- Step 3 -->
+                        <div class="flex items-start gap-3 p-3.5 rounded-xl border border-slate-100 bg-slate-50/70 hover:bg-white hover:border-brand/30 transition">
+                            <div class="w-6 h-6 rounded-full bg-slate-200 text-slate-700 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">3</div>
+                            <div class="flex-1 min-w-0">
+                                <h4 class="text-xs font-bold text-slate-900">Triage, Tailor &amp; Track</h4>
+                                <p class="text-[11px] text-slate-500 mt-0.5">Review high-signal matches, tailor resumes with AI persona judges, and track outcomes.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mt-6 flex flex-wrap items-center justify-center gap-3">
+                        <a href="{% url 'career_profiler' %}" class="inline-flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-3.5 py-2.5 rounded-xl transition">
+                            <span class="material-symbols-outlined text-[16px] text-slate-600">psychology</span>
+                            <span>Open AI Profiler</span>
+                        </a>
+                        <a href="{% url 'jobs_search' %}" class="inline-flex items-center gap-1.5 bg-brand hover:bg-brand-hover text-white text-xs font-bold px-4 py-2.5 rounded-xl shadow-xs transition">
+                            <span class="material-symbols-outlined text-[16px]">travel_explore</span>
+                            <span>Find Jobs in Sandbox</span>
+                        </a>
+                    </div>
+                </div>
+                {% else %}
                 <div class="p-8 text-center bg-white rounded-xl border border-dashed border-slate-300">
                     <span class="material-symbols-outlined text-4xl text-slate-300">inbox</span>
-                    <p class="mt-2 text-sm text-slate-600 font-semibold">No opportunities in this pipeline stage</p>
-                    <a href="{% url 'jobs_search' %}" class="mt-3 inline-block bg-brand text-white px-4 py-2 rounded text-xs font-bold">Find Jobs to Ingest</a>
+                    <p class="mt-2 text-sm text-slate-600 font-semibold">No opportunities in {{ board_stage_display|default:board_stage|title }} stage</p>
+                    <p class="text-xs text-slate-400 mt-1">Advance roles from earlier stages or discover new opportunities in the sandbox.</p>
+                    <div class="mt-4 flex items-center justify-center gap-2">
+                        <a href="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage=pipeline" class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg text-xs font-semibold">
+                            Go to New Stage
+                        </a>
+                        <a href="{% url 'jobs_search' %}" class="bg-brand text-white hover:bg-brand-hover px-3 py-1.5 rounded-lg text-xs font-semibold">
+                            Find Jobs
+                        </a>
+                    </div>
                 </div>
+                {% endif %}
                 {% endfor %}
             </div>
 
@@ -1094,7 +1130,7 @@
                 <div class="flex items-start justify-between gap-3">
                     <div class="min-w-0 flex-1">
                         <div class="flex items-center gap-2">
-                            <span class="font-mono text-[10px] text-brand-ink bg-brand-soft px-2 py-0.5 rounded font-bold uppercase tracking-wider">
+                            <span class="text-xs font-semibold text-brand-ink bg-brand-soft px-2 py-0.5 rounded">
                                 Inspection Target
                             </span>
                             <span id="inspect-job-id" class="font-mono text-[10px] text-slate-400">ID: #0</span>
@@ -1103,22 +1139,22 @@
                                 <span id="inspect-substatus-label"></span>
                             </span>
                         </div>
-                        <div class="flex items-center gap-2 mt-1.5 min-w-0">
-                            <h1 id="inspect-job-title" class="font-display text-lg sm:text-xl font-extrabold text-cockpit-textMain leading-snug truncate select-text">
+                        <div class="flex items-start gap-2 mt-1.5 min-w-0">
+                            <h1 id="inspect-job-title" class="font-display text-lg sm:text-xl font-extrabold text-cockpit-textMain leading-snug break-words select-text flex-1">
                                 Select an opportunity
                             </h1>
                             <button type="button"
                                     id="inspect-copy-job-btn"
-                                    class="text-slate-400 hover:text-slate-700 p-1 rounded hover:bg-slate-200/70 transition shrink-0 inline-flex items-center justify-center cursor-pointer"
+                                    class="text-slate-400 hover:text-slate-700 p-1 rounded hover:bg-slate-200/70 transition shrink-0 inline-flex items-center justify-center cursor-pointer mt-0.5"
                                     title="Copy title, company & location to clipboard"
                                     aria-label="Copy job details">
                                 <span class="material-symbols-outlined text-[18px] pointer-events-none">content_copy</span>
                             </button>
                         </div>
                         <div class="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 text-xs text-slate-600 select-text">
-                            <span id="inspect-job-company" class="font-bold text-brand truncate max-w-[180px]"></span>
+                            <span id="inspect-job-company" class="font-bold text-brand"></span>
                             <span class="text-slate-300">•</span>
-                            <span id="inspect-job-location" class="truncate max-w-[140px]"></span>
+                            <span id="inspect-job-location"></span>
                             <span class="text-slate-300">•</span>
                             <span id="inspect-job-age-badge" class="inline-flex items-center gap-1 font-mono text-[11px] text-slate-700 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded font-semibold shrink-0">
                                 <span class="material-symbols-outlined text-[13px] text-slate-500">schedule</span>
@@ -1143,46 +1179,53 @@
                 </div>
 
                 <!-- Primary Action Toolbar -->
-                <div class="mt-3 sm:mt-4 flex flex-wrap items-center gap-2 pt-3 border-t border-slate-200">
-                    {% if board_stage != 'done' %}
-                    <button type="button" id="trigger-tailor-btn" class="h-9 px-3 rounded bg-brand text-white font-bold text-xs flex items-center gap-1.5 hover:bg-brand/90 transition shadow-sm">
-                        <span class="material-symbols-outlined text-[16px] text-brand-soft">auto_fix_high</span>
-                        <span>Tailor Resume</span>
-                    </button>
-                    {% else %}
-                    <button type="button" id="trigger-prep-kit-btn" onclick="scrollToInterviewPrep()" class="h-9 px-3 rounded bg-brand text-white font-bold text-xs flex items-center gap-1.5 hover:bg-brand/90 transition shadow-sm" title="Jump to Interview Prep Kit">
-                        <span class="material-symbols-outlined text-[16px] text-brand-soft">psychology</span>
-                        <span>Interview Prep Kit</span>
-                    </button>
-                    {% endif %}
-                    <button type="button" id="inspector-action-btn" class="h-9 px-3 rounded bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs flex items-center gap-1.5 transition shadow-sm">
-                        <span id="inspector-action-icon" class="material-symbols-outlined text-[16px]">
-                            {% if board_stage == 'pipeline' %}bookmark_add
-                            {% elif board_stage == 'vetting' %}send
-                            {% elif board_stage == 'applying' %}check_circle
-                            {% elif board_stage == 'done' %}event
-                            {% else %}star{% endif %}
-                        </span>
-                        <span id="inspector-action-label">
-                            {% if board_stage == 'pipeline' %}Shortlist to Review
-                            {% elif board_stage == 'vetting' %}Ready to Apply
-                            {% elif board_stage == 'applying' %}Mark Done
-                            {% elif board_stage == 'done' %}Log Response
-                            {% else %}Saved{% endif %}
-                        </span>
-                    </button>
-                    <button type="button" id="inspector-like-btn" class="h-9 px-2.5 rounded border border-slate-200 bg-white text-slate-600 hover:text-brand hover:border-brand/40 font-bold text-xs flex items-center gap-1 transition" title="Like (L) — train positive AI preference">
-                        <span id="inspector-like-icon" class="material-symbols-outlined text-[16px]">thumb_up</span>
-                        <span id="inspector-like-label">Like</span>
-                    </button>
-                    <button type="button" id="inspector-pass-btn" class="h-9 px-2.5 rounded border border-slate-200 bg-white text-slate-600 hover:text-amber-600 hover:border-amber-300 font-bold text-xs flex items-center gap-1 transition" title="Dislike — avoid similar jobs">
-                        <span class="material-symbols-outlined text-[16px]">thumb_down</span>
-                        <span>Dislike</span>
-                    </button>
-                    <button type="button" id="inspector-delete-btn" class="h-9 px-2.5 rounded border border-slate-200 bg-white text-slate-500 hover:text-rose-600 hover:border-rose-300 hover:bg-rose-50 font-bold text-xs flex items-center gap-1 transition" title="Remove (X) — delete from board">
-                        <span class="material-symbols-outlined text-[16px]">close</span>
-                        <span>Remove</span>
-                    </button>
+                <div class="mt-3 sm:mt-4 pt-3 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                    <!-- Workflow Primary Actions -->
+                    <div class="flex items-center gap-2 flex-1 min-w-[240px]">
+                        {% if board_stage != 'done' %}
+                        <button type="button" id="trigger-tailor-btn" class="flex-1 sm:flex-initial h-9 px-3.5 rounded bg-brand text-white font-bold text-xs flex items-center justify-center gap-1.5 hover:bg-brand/90 transition-all duration-100 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700 shadow-sm cursor-pointer">
+                            <span class="material-symbols-outlined text-[16px] text-brand-soft">auto_fix_high</span>
+                            <span>Tailor Resume</span>
+                        </button>
+                        {% else %}
+                        <button type="button" id="trigger-prep-kit-btn" onclick="scrollToInterviewPrep()" class="flex-1 sm:flex-initial h-9 px-3.5 rounded bg-brand text-white font-bold text-xs flex items-center justify-center gap-1.5 hover:bg-brand/90 transition shadow-sm cursor-pointer" title="Jump to Interview Prep Kit">
+                            <span class="material-symbols-outlined text-[16px] text-brand-soft">psychology</span>
+                            <span>Interview Prep Kit</span>
+                        </button>
+                        {% endif %}
+                        <button type="button" id="inspector-action-btn" class="flex-1 sm:flex-initial h-9 px-3.5 rounded bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-all duration-100 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700 shadow-sm cursor-pointer">
+                            <span id="inspector-action-icon" class="material-symbols-outlined text-[16px]">
+                                {% if board_stage == 'pipeline' %}bookmark_add
+                                {% elif board_stage == 'vetting' %}send
+                                {% elif board_stage == 'applying' %}check_circle
+                                {% elif board_stage == 'done' %}event
+                                {% else %}star{% endif %}
+                            </span>
+                            <span id="inspector-action-label">
+                                {% if board_stage == 'pipeline' %}Move to Review
+                                {% elif board_stage == 'vetting' %}Start Tailoring
+                                {% elif board_stage == 'applying' %}Mark Submitted
+                                {% elif board_stage == 'done' %}Log Next Step
+                                {% else %}Saved{% endif %}
+                            </span>
+                        </button>
+                    </div>
+
+                    <!-- Triage & Moderation Controls -->
+                    <div class="flex items-center gap-1.5 shrink-0">
+                        <button type="button" id="inspector-like-btn" class="h-9 px-2.5 rounded border border-slate-200 bg-white text-slate-600 hover:text-brand hover:border-brand/40 font-bold text-xs flex items-center gap-1 transition-all duration-100 active:scale-[0.98] cursor-pointer" title="Like (L) — train positive AI preference">
+                            <span id="inspector-like-icon" class="material-symbols-outlined text-[16px]">thumb_up</span>
+                            <span id="inspector-like-label">Like</span>
+                        </button>
+                        <button type="button" id="inspector-pass-btn" class="h-9 px-2.5 rounded border border-slate-200 bg-white text-slate-600 hover:text-amber-600 hover:border-amber-300 font-bold text-xs flex items-center gap-1 transition-all duration-100 active:scale-[0.98] cursor-pointer" title="Dislike — avoid similar jobs">
+                            <span class="material-symbols-outlined text-[16px]">thumb_down</span>
+                            <span>Dislike</span>
+                        </button>
+                        <button type="button" id="inspector-delete-btn" class="h-9 px-2.5 rounded border border-slate-200 bg-white text-slate-500 hover:text-rose-600 hover:border-rose-300 hover:bg-rose-50 font-bold text-xs flex items-center gap-1 transition-all duration-100 active:scale-[0.98] cursor-pointer" title="Remove (X) — delete from board">
+                            <span class="material-symbols-outlined text-[16px]">close</span>
+                            <span>Remove</span>
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -1229,7 +1272,7 @@ Select an opportunity to read the full job description.
                     <div id="inspect-response-active-container" class="space-y-3 hidden">
                         <div class="flex flex-wrap items-center justify-between gap-2 p-3 rounded-lg bg-emerald-50/60 border border-emerald-200">
                             <div>
-                                <span class="text-[10px] font-bold uppercase tracking-wider text-emerald-800 block">Current Milestone</span>
+                                <span class="text-xs font-bold text-emerald-800 block">Current Milestone</span>
                                 <span id="inspect-response-milestone-title" class="text-sm font-bold text-emerald-950 flex items-center gap-1.5 mt-0.5">
                                     <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
                                     <span id="inspect-response-milestone-text">Recruiter Screen</span>
@@ -1242,13 +1285,13 @@ Select an opportunity to read the full job description.
 
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
                             <div id="inspect-response-time-box" class="p-2.5 rounded-lg bg-slate-50 border border-slate-200 hidden">
-                                <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                                <span class="text-xs font-semibold text-slate-500 flex items-center gap-1">
                                     <span class="material-symbols-outlined text-[13px]">schedule</span> Scheduled Time
                                 </span>
                                 <span id="inspect-response-time-val" class="font-medium text-slate-800 block mt-0.5"></span>
                             </div>
                             <div id="inspect-response-interviewers-box" class="p-2.5 rounded-lg bg-slate-50 border border-slate-200 hidden">
-                                <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                                <span class="text-xs font-semibold text-slate-500 flex items-center gap-1">
                                     <span class="material-symbols-outlined text-[13px]">person</span> Contacts / Interviewers
                                 </span>
                                 <span id="inspect-response-interviewers-val" class="font-medium text-slate-800 block mt-0.5"></span>
@@ -1256,14 +1299,14 @@ Select an opportunity to read the full job description.
                         </div>
 
                         <div id="inspect-response-location-box" class="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-xs hidden">
-                            <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                            <span class="text-xs font-semibold text-slate-500 flex items-center gap-1">
                                 <span class="material-symbols-outlined text-[13px]">link</span> Meeting Link / Location
                             </span>
                             <div id="inspect-response-location-val" class="mt-0.5 font-medium text-slate-800"></div>
                         </div>
 
                         <div id="inspect-response-notes-box" class="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-xs hidden">
-                            <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                            <span class="text-xs font-semibold text-slate-500 flex items-center gap-1">
                                 <span class="material-symbols-outlined text-[13px]">notes</span> Strategic Notes &amp; Topics
                             </span>
                             <p id="inspect-response-notes-val" class="text-slate-700 whitespace-pre-wrap mt-0.5 leading-relaxed font-sans"></p>
@@ -1420,44 +1463,44 @@ Select an opportunity to read the full job description.
                 <!-- 3. Interview Fit & Skill Diagnostics Bento -->
                 <div class="bg-slate-50/90 rounded-xl p-3.5 sm:p-4 border border-cockpit-border space-y-3">
                     
-                    <!-- Header: Icon, Title, and Badges (Responsive: Never wraps title word-by-word) -->
-                    <div class="flex items-start justify-between gap-3">
-                        <div class="flex items-center gap-2.5 min-w-0">
-                            <div class="w-8 h-8 rounded-lg bg-emerald-100 text-brand flex items-center justify-center shrink-0">
-                                <span class="material-symbols-outlined text-[18px]">psychology</span>
-                            </div>
-                            <div class="min-w-0">
-                                <h3 class="font-display text-xs sm:text-sm font-bold text-cockpit-textMain leading-tight">
-                                    Interview Fit &amp; Skill Diagnostics
-                                </h3>
-                                <p class="text-[10px] sm:text-[11px] text-slate-500 mt-0.5 truncate">
-                                    Semantic ATS diagnostics, role gaps &amp; interview callback odds
-                                </p>
-                            </div>
+                    <!-- Header: Icon, Full-Width Title & Subtitle -->
+                    <div class="flex items-start gap-2.5">
+                        <div class="w-8 h-8 rounded-lg bg-emerald-100 text-brand flex items-center justify-center shrink-0 mt-0.5">
+                            <span class="material-symbols-outlined text-[18px]">psychology</span>
                         </div>
+                        <div class="min-w-0 flex-1">
+                            <h3 class="font-display text-sm font-bold text-cockpit-textMain leading-snug">
+                                Interview Fit &amp; Skill Diagnostics
+                            </h3>
+                            <p class="text-[11px] text-slate-500 mt-0.5">
+                                Semantic ATS diagnostics, role gaps &amp; interview callback odds
+                            </p>
+                        </div>
+                    </div>
 
-                        <!-- Match & Interview Pill Badges (Top-Right) -->
-                        <div id="radar-match-score-container" class="shrink-0 flex items-center gap-1.5">
-                            <span id="inspect-interview-badge" class="font-mono text-xs font-bold px-2 py-0.5 rounded shadow-xs hidden">
-                            </span>
+                    <!-- Metadata Bar: Score Badges on top row, Source Status & Re-Analyze CTA on bottom row -->
+                    <div class="pt-2 border-t border-slate-200/80 space-y-2">
+                        <!-- Score Badges Row (Callback Probability & Match Score) -->
+                        <div id="radar-match-score-container" class="flex flex-wrap items-center gap-1.5">
+                            <span id="inspect-interview-badge" class="font-mono text-xs font-bold px-2 py-0.5 rounded shadow-xs hidden"></span>
                             <span id="inspect-match-badge" class="font-mono text-xs font-bold text-emerald-800 bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded shadow-xs hidden">
                                 85% Match
                             </span>
                         </div>
-                    </div>
 
-                    <!-- Toolbar Subrow: Source Badge and Re-Analyze Button (hidden when unanalyzed) -->
-                    <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/80">
-                        <div class="flex items-center gap-1.5 shrink-0">
-                            <span id="radar-source-badge" class="font-mono text-[10px] px-2 py-0.5 rounded font-semibold bg-slate-100 text-slate-600 border border-slate-200">
-                                Unanalyzed
-                            </span>
+                        <!-- Source Status & Re-Analyze Action Sub-bar (Re-Analyze safely contained on the right) -->
+                        <div class="flex items-center justify-between gap-2 pt-1 border-t border-slate-200/40">
+                            <div class="flex items-center gap-1.5 min-w-0">
+                                <span id="radar-source-badge" class="font-mono text-[10px] px-2 py-0.5 rounded font-semibold bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
+                                    Unanalyzed
+                                </span>
+                            </div>
+
+                            <button type="button" id="trigger-ollama-radar-btn" onclick="promptDeepAnalysisConfirmation()" class="h-6 sm:h-7 px-2.5 sm:px-3 text-[11px] font-bold bg-brand text-white rounded-md hover:bg-brand-dark flex items-center gap-1.5 transition shadow-xs cursor-pointer shrink-0 hidden" title="Re-run deep skill diagnosis via local AI">
+                                <span class="material-symbols-outlined text-[13px]">refresh</span>
+                                <span id="deep-analyze-btn-text">Re-Analyze</span>
+                            </button>
                         </div>
-
-                        <button type="button" id="trigger-ollama-radar-btn" onclick="promptDeepAnalysisConfirmation()" class="h-6 sm:h-7 px-2.5 sm:px-3 text-[11px] font-bold bg-brand text-white rounded-md hover:bg-brand-dark flex items-center gap-1.5 transition shadow-xs cursor-pointer shrink-0 hidden" title="Re-run deep skill diagnosis via local AI">
-                            <span class="material-symbols-outlined text-[13px]">refresh</span>
-                            <span id="deep-analyze-btn-text">Re-Analyze</span>
-                        </button>
                     </div>
 
                     <!-- STATE 1: UNANALYZED PLACEHOLDER (Single clear primary CTA) -->
@@ -1468,7 +1511,7 @@ Select an opportunity to read the full job description.
                         <div class="space-y-1">
                             <h4 class="text-xs font-bold text-slate-900">Deep Analysis Not Yet Run</h4>
                             <p class="text-[11px] text-slate-500 max-w-sm mx-auto leading-relaxed">
-                                Extract verified core competencies, evaluate role gaps against your active resume (<strong class="text-slate-700 font-mono">{{ bound_resume.original_filename|default:"resume.pdf" }}</strong>), and generate an executive diagnosis using local AI.
+                                Evaluate role gaps and stretch skills against your active resume (<strong class="text-slate-700 font-mono">{{ bound_resume.original_filename|default:"resume.pdf" }}</strong>), and generate an executive diagnosis using local AI.
                             </p>
                         </div>
                         <div class="pt-1">
@@ -1509,25 +1552,17 @@ Select an opportunity to read the full job description.
                         <div id="inspect-fit-summary-box" class="p-3 bg-emerald-50/90 border border-emerald-200/90 rounded-lg text-xs text-emerald-950 leading-relaxed font-sans flex items-start gap-2.5">
                             <span class="material-symbols-outlined text-[18px] text-emerald-700 shrink-0 mt-0.5">psychology</span>
                             <div class="flex-1 min-w-0">
-                                <span class="font-bold text-emerald-900 block text-[11px] uppercase tracking-wide font-mono">Executive Interview &amp; Fit Diagnosis:</span>
+                                <span class="font-bold text-emerald-900 block text-xs">Executive Interview &amp; Fit Diagnosis:</span>
                                 <span id="inspect-fit-summary-text" class="text-xs text-emerald-950 font-normal leading-relaxed mt-0.5 block"></span>
                             </div>
                         </div>
 
-                        <!-- Core Matched Competencies vs Stretch -->
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                        <!-- Stretch Skills (Role Gaps) -->
+                        <div class="pt-1">
                             <div class="bg-white p-3 rounded-lg border border-slate-200 space-y-2">
-                                <div class="text-[10px] font-mono uppercase font-bold flex items-center gap-1 text-emerald-800">
-                                    <span class="material-symbols-outlined text-[14px] text-emerald-600">verified</span>
-                                    Core Competencies (Verified)
-                                </div>
-                                <div id="inspect-core-competencies" class="flex flex-wrap gap-1.5 min-h-[32px]"></div>
-                            </div>
-
-                            <div class="bg-white p-3 rounded-lg border border-slate-200 space-y-2">
-                                <div class="text-[10px] font-mono uppercase font-bold flex items-center gap-1 text-amber-800">
-                                    <span class="material-symbols-outlined text-[14px] text-amber-600">warning</span>
-                                    Stretch Skills (Role Gaps)
+                                <div class="text-xs font-bold flex items-center gap-1.5 text-amber-800">
+                                    <span class="material-symbols-outlined text-[15px] text-amber-600">warning</span>
+                                    <span>Stretch Skills (Role Gaps)</span>
                                 </div>
                                 <div id="inspect-stretch-skills" class="flex flex-wrap gap-1.5 min-h-[32px]"></div>
                             </div>
@@ -1539,12 +1574,69 @@ Select an opportunity to read the full job description.
                     </p>
                 </div>
 
-                <!-- 3. Ranking Influences & Preference Memory (THIRD) -->
+                <!-- 4. Posting Authenticity & Labor Audit Bento -->
+                <div id="inspect-authenticity-card" class="bg-slate-50/90 rounded-xl p-3.5 sm:p-4 border border-cockpit-border space-y-3">
+                    <!-- Header: Icon, Full-Width Title & Subtitle -->
+                    <div class="flex items-start gap-2.5">
+                        <div class="w-8 h-8 rounded-lg bg-blue-100 text-blue-900 flex items-center justify-center shrink-0 mt-0.5">
+                            <span class="material-symbols-outlined text-[18px]">verified_user</span>
+                        </div>
+                        <div class="min-w-0 flex-1">
+                            <h3 class="font-display text-sm font-bold text-cockpit-textMain leading-snug">
+                                Posting Authenticity &amp; Labor Audit
+                            </h3>
+                            <p class="text-[11px] text-slate-500 mt-0.5">
+                                DOL ETA-9089 PERM detection &amp; internal pre-selection risk
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Verdict & Risk Badges Subrow -->
+                    <div id="authenticity-badge-container" class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/80">
+                        <div class="flex flex-wrap items-center gap-1.5">
+                            <span id="inspect-authenticity-verdict-pill" class="font-mono text-xs font-bold px-2.5 py-0.5 rounded shadow-xs hidden"></span>
+                            <span id="inspect-authenticity-score-pill" class="font-mono text-xs font-bold px-2 py-0.5 rounded shadow-xs hidden"></span>
+                        </div>
+                    </div>
+
+                    <!-- State 1: Active Audit Results -->
+                    <div id="authenticity-results-container" class="space-y-3 hidden">
+                        <!-- Primary Rationale Narrative (Audit Assessment from Prompt Output) -->
+                        <div id="inspect-authenticity-rationale-box" class="p-3.5 bg-white border border-slate-200 rounded-xl text-xs leading-relaxed font-sans shadow-2xs space-y-1.5 transition-colors">
+                            <div class="flex items-center gap-1.5">
+                                <span id="inspect-authenticity-rationale-icon" class="material-symbols-outlined text-[16px] text-blue-600 shrink-0">gavel</span>
+                                <span class="font-bold text-slate-900 text-xs">Audit Assessment:</span>
+                            </div>
+                            <p id="inspect-authenticity-rationale-text" class="text-xs text-slate-700 font-normal leading-relaxed pl-5"></p>
+                        </div>
+                    </div>
+
+                    <!-- State 2: Unanalyzed / Pending -->
+                    <div id="authenticity-pending-container" class="bg-white rounded-lg border border-dashed border-slate-200 p-4 text-center space-y-2">
+                        <span class="material-symbols-outlined text-[20px] text-slate-400">gavel</span>
+                        <div class="text-xs font-semibold text-slate-700">Compliance Audit Pending</div>
+                        <p class="text-[11px] text-slate-500 max-w-sm mx-auto leading-relaxed">
+                            Evaluates statutory PERM labor phrasing (DOL ETA-9089), degree equations, salary spread, and internal promotion markers.
+                        </p>
+                        <div class="pt-1">
+                            <button type="button" id="trigger-audit-btn" onclick="runOnDemandAuthenticityAudit()" class="inline-flex items-center gap-1 px-3 py-1.5 rounded bg-brand text-white text-xs font-bold hover:bg-brand/90 transition cursor-pointer shadow-2xs">
+                                <span class="material-symbols-outlined text-[14px]">play_arrow</span>
+                                <span id="trigger-audit-btn-label">Run Audit Now</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <p class="text-[10px] text-slate-400 leading-tight">
+                        Evaluated with 100% deterministic local compliance heuristics &amp; local AI. No cloud API tokens consumed.
+                    </p>
+                </div>
+
+                <!-- 5. Ranking Influences & Preference Memory -->
                 <div class="bg-white rounded-xl p-4 border border-cockpit-border space-y-3">
                     <div class="flex items-center justify-between">
                         <div class="flex items-center gap-2">
                             <span class="material-symbols-outlined text-brand text-[18px]">psychology</span>
-                            <span class="font-display text-xs font-bold text-cockpit-textMain uppercase tracking-wider">Ranking Influences & Model Memory</span>
+                            <span class="font-display text-xs font-bold text-cockpit-textMain">Ranking Influences & Model Memory</span>
                         </div>
                         <span class="text-[10px] font-mono text-slate-400">Explainable AI</span>
                     </div>
@@ -1955,7 +2047,7 @@ Select an opportunity to read the full job description.
                 // Render Top-Right Interview Badge
                 if (interviewBadge) {
                     if (!isNaN(interviewProb) && interviewProb >= 0) {
-                        interviewBadge.textContent = `🎯 ${interviewProb}% Interview Prob`;
+                        interviewBadge.textContent = `${interviewProb}% Callback Probability`;
                         if (interviewProb >= 70) {
                             interviewBadge.className = 'font-mono text-xs font-bold text-emerald-900 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded shadow-xs';
                         } else if (interviewProb >= 50) {
@@ -2271,9 +2363,193 @@ Select an opportunity to read the full job description.
                     loadInterviewPrepForEntry(entryId);
                 }
 
+                // Update Authenticity & Labor Audit Card
+                updateAuthenticityInspector(row);
+
                 row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
             }
             window.selectJob = selectJob;
+
+            const CHECK_TITLES = {
+                'perm_legal_phrasing': 'Statutory DOL ETA-9089 PERM Phrasing (+40)',
+                'rigid_degree_equation': 'Inflexible Degree Equation (+20)',
+                'flat_salary_range': 'Flat / Rigid Single Salary Band (+15)',
+                'statutory_minimum_window_clause': 'Statutory Minimum Window Clause (+25)',
+                'hyper_specific_okrs': 'Hyper-Specific OKRs / Internal Codename (+25)',
+                'title_scope_mismatch': 'Director Title with Enterprise Scope (+20)',
+                'flexible_general_req': 'Broad Interchangeable Requirements (-30)'
+            };
+
+            function updateAuthenticityInspector(row) {
+                const card = document.getElementById('inspect-authenticity-card');
+                if (!card) return;
+
+                const verdictPill = document.getElementById('inspect-authenticity-verdict-pill');
+                const scorePill = document.getElementById('inspect-authenticity-score-pill');
+                const resultsBox = document.getElementById('authenticity-results-container');
+                const pendingBox = document.getElementById('authenticity-pending-container');
+                const rationaleBox = document.getElementById('inspect-authenticity-rationale-box');
+                const rationaleIcon = document.getElementById('inspect-authenticity-rationale-icon');
+                const rationaleText = document.getElementById('inspect-authenticity-rationale-text');
+                const btnLabel = document.getElementById('trigger-audit-btn-label');
+
+                if (btnLabel) btnLabel.textContent = 'Run Audit Now';
+
+                const authVerdict = row.dataset.authenticityVerdict || '';
+                const authScore = parseInt(row.dataset.authenticityScore || '0', 10);
+                const authRationale = decodeUnicodeEscapes(row.dataset.authenticityRationale || '');
+
+                if (authVerdict) {
+                    if (pendingBox) pendingBox.classList.add('hidden');
+                    if (resultsBox) resultsBox.classList.remove('hidden');
+
+                    if (verdictPill) {
+                        verdictPill.classList.remove('hidden');
+                        if (authVerdict === 'PERM_COMPLIANCE') {
+                            verdictPill.textContent = 'PERM Compliance Filing';
+                            verdictPill.className = 'font-mono text-xs font-bold px-2.5 py-1 rounded-md shadow-xs bg-amber-100 text-amber-900 border border-amber-300';
+                        } else if (authVerdict === 'INTERNAL_PRESELECT') {
+                            verdictPill.textContent = 'Internal Placeholder Risk';
+                            verdictPill.className = 'font-mono text-xs font-bold px-2.5 py-1 rounded-md shadow-xs bg-rose-100 text-rose-900 border border-rose-300';
+                        } else if (authVerdict === 'PHANTOM_PIPELINE') {
+                            verdictPill.textContent = 'Phantom / Talent Pool';
+                            verdictPill.className = 'font-mono text-xs font-bold px-2.5 py-1 rounded-md shadow-xs bg-purple-100 text-purple-900 border border-purple-300';
+                        } else if (authVerdict === 'GENUINE_EXTERNAL') {
+                            verdictPill.textContent = 'Genuine External Opening';
+                            verdictPill.className = 'font-mono text-xs font-bold px-2.5 py-1 rounded-md shadow-xs bg-emerald-100 text-emerald-900 border border-emerald-300';
+                        } else {
+                            verdictPill.textContent = authVerdict;
+                            verdictPill.className = 'font-mono text-xs font-bold px-2.5 py-1 rounded-md shadow-xs bg-slate-100 text-slate-800 border border-slate-300';
+                        }
+                    }
+
+                    if (scorePill) {
+                        scorePill.classList.remove('hidden');
+                        scorePill.textContent = `Risk Score: ${authScore}/100`;
+                        if (authScore >= 40) {
+                            scorePill.className = 'font-mono text-xs font-bold px-2 py-0.5 rounded shadow-xs bg-rose-50 text-rose-800 border border-rose-200';
+                        } else if (authScore > 0) {
+                            scorePill.className = 'font-mono text-xs font-bold px-2 py-0.5 rounded shadow-xs bg-amber-50 text-amber-800 border border-amber-200';
+                        } else {
+                            scorePill.className = 'font-mono text-xs font-bold px-2 py-0.5 rounded shadow-xs bg-slate-100 text-slate-700 border border-slate-200';
+                        }
+                    }
+
+                    // Display prompt narrative in Audit Assessment container with thematic accent
+                    if (rationaleText) {
+                        rationaleText.textContent = authRationale || 'Deterministic compliance checks passed with no statutory DOL or internal placeholder markers detected.';
+                    }
+
+                    if (rationaleBox && rationaleIcon) {
+                        if (authVerdict === 'PERM_COMPLIANCE') {
+                            rationaleBox.className = 'p-3.5 bg-amber-50/70 border border-amber-200 rounded-xl text-xs leading-relaxed font-sans shadow-2xs space-y-1.5 transition-colors';
+                            rationaleIcon.className = 'material-symbols-outlined text-[16px] text-amber-600 shrink-0';
+                            rationaleIcon.textContent = 'gavel';
+                        } else if (authVerdict === 'INTERNAL_PRESELECT') {
+                            rationaleBox.className = 'p-3.5 bg-rose-50/70 border border-rose-200 rounded-xl text-xs leading-relaxed font-sans shadow-2xs space-y-1.5 transition-colors';
+                            rationaleIcon.className = 'material-symbols-outlined text-[16px] text-rose-600 shrink-0';
+                            rationaleIcon.textContent = 'warning';
+                        } else if (authVerdict === 'PHANTOM_PIPELINE') {
+                            rationaleBox.className = 'p-3.5 bg-purple-50/70 border border-purple-200 rounded-xl text-xs leading-relaxed font-sans shadow-2xs space-y-1.5 transition-colors';
+                            rationaleIcon.className = 'material-symbols-outlined text-[16px] text-purple-600 shrink-0';
+                            rationaleIcon.textContent = 'group_off';
+                        } else {
+                            rationaleBox.className = 'p-3.5 bg-white border border-emerald-200/80 rounded-xl text-xs leading-relaxed font-sans shadow-2xs space-y-1.5 transition-colors';
+                            rationaleIcon.className = 'material-symbols-outlined text-[16px] text-emerald-600 shrink-0';
+                            rationaleIcon.textContent = 'verified';
+                        }
+                    }
+                } else {
+                    if (pendingBox) pendingBox.classList.remove('hidden');
+                    if (resultsBox) resultsBox.classList.add('hidden');
+                    if (verdictPill) verdictPill.classList.add('hidden');
+                    if (scorePill) scorePill.classList.add('hidden');
+                }
+            }
+
+            function runOnDemandAuthenticityAudit() {
+                const activeRow = rows[activeIndex];
+                if (!activeRow) return;
+                const jobId = activeRow.dataset.jobId;
+                if (!jobId) return;
+
+                const btn = document.getElementById('trigger-audit-btn');
+                const btnLabel = document.getElementById('trigger-audit-btn-label');
+                if (btn) btn.disabled = true;
+                if (btnLabel) btnLabel.textContent = 'Auditing Compliance...';
+
+                fetch(`/api/resume/jobs/${jobId}/audit-authenticity`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCookie('csrftoken') || ''
+                    }
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (btn) btn.disabled = false;
+                    if (btnLabel) btnLabel.textContent = 'Run Audit Now';
+
+                    if (data.success && data.authenticity) {
+                        const auth = data.authenticity;
+                        activeRow.dataset.authenticityVerdict = auth.authenticity_verdict || '';
+                        activeRow.dataset.authenticityScore = auth.authenticity_score ?? '0';
+                        activeRow.dataset.authenticityConfidence = auth.authenticity_confidence || '';
+                        activeRow.dataset.authenticityRationale = auth.authenticity_rationale || '';
+
+                        const badgeWrapper = activeRow.querySelector('.authenticity-badge-wrapper');
+                        if (badgeWrapper) {
+                            if (auth.authenticity_verdict === 'PERM_COMPLIANCE') {
+                                badgeWrapper.innerHTML = `
+                                    <span class="inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-200/90 px-2.5 py-1 text-xs font-semibold text-amber-800 shrink-0"
+                                          title="PERM Labor Cert (Risk: ${auth.authenticity_score}/100): Statutory immigrant visa recruitment filing (DOL ETA-9089).">
+                                        <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                                        <span>PERM Filing</span>
+                                    </span>
+                                `;
+                            } else if (auth.authenticity_verdict === 'INTERNAL_PRESELECT') {
+                                badgeWrapper.innerHTML = `
+                                    <span class="inline-flex items-center gap-1 rounded-full bg-rose-50 border border-rose-200/90 px-2.5 py-1 text-xs font-semibold text-rose-800 shrink-0"
+                                          title="Internal Pre-Select (Risk: ${auth.authenticity_score}/100): Hyper-specific constraints or locked salary indicate pre-wired candidate.">
+                                        <span class="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                                        <span>Likely Internal</span>
+                                    </span>
+                                `;
+                            } else if (auth.authenticity_verdict === 'PHANTOM_PIPELINE') {
+                                badgeWrapper.innerHTML = `
+                                    <span class="inline-flex items-center gap-1 rounded-full bg-purple-50 border border-purple-200/90 px-2.5 py-1 text-xs font-semibold text-purple-800 shrink-0"
+                                          title="Phantom Requisition: Evergreen talent community or pipeline without active open headcount.">
+                                        <span class="w-1.5 h-1.5 rounded-full bg-purple-500"></span>
+                                        <span>Phantom / Talent Pool</span>
+                                    </span>
+                                `;
+                            } else if (auth.authenticity_verdict === 'GENUINE_EXTERNAL') {
+                                badgeWrapper.innerHTML = `
+                                    <span class="inline-flex items-center gap-1 rounded-full bg-slate-100 border border-slate-200/80 px-2.5 py-1 text-xs font-semibold text-slate-700 shrink-0"
+                                          title="Verified External (Risk: ${auth.authenticity_score}/100): Standard open-market recruitment competition.">
+                                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                                        <span>External Hire</span>
+                                    </span>
+                                `;
+                            }
+                        }
+
+                        updateAuthenticityInspector(activeRow);
+                        if (typeof showToast === 'function') {
+                            showToast('Compliance & authenticity audit complete.');
+                        }
+                    } else {
+                        alert(data.error || 'Authenticity audit failed to complete.');
+                    }
+                })
+                .catch(err => {
+                    console.error('Authenticity audit request failed:', err);
+                    if (btn) btn.disabled = false;
+                    if (btnLabel) btnLabel.textContent = 'Run Audit Now';
+                    alert('Network error while requesting authenticity audit.');
+                });
+            }
+            window.runOnDemandAuthenticityAudit = runOnDemandAuthenticityAudit;
 
             // AI Interview Prep Kit Engine
             const PREP_ROUND_META = {
@@ -2684,6 +2960,8 @@ Select an opportunity to read the full job description.
 
                 if (e.key === 'Escape') {
                     closeInspector();
+                    if (typeof closeProfileDrawer === 'function') closeProfileDrawer();
+                    if (typeof closeAutomationDrawer === 'function') closeAutomationDrawer();
                     return;
                 }
 
@@ -3433,6 +3711,26 @@ Select an opportunity to read the full job description.
             const form = document.getElementById('add-phrase-form');
             if (form) form.classList.toggle('hidden');
         }
+
+        function openAutomationDrawer() {
+            const backdrop = document.getElementById('automation-drawer-backdrop');
+            const panel = document.getElementById('automation-drawer-panel');
+            if (!backdrop || !panel) return;
+            backdrop.classList.remove('hidden');
+            setTimeout(() => {
+                panel.classList.remove('translate-x-full');
+            }, 10);
+        }
+
+        function closeAutomationDrawer() {
+            const backdrop = document.getElementById('automation-drawer-backdrop');
+            const panel = document.getElementById('automation-drawer-panel');
+            if (!backdrop || !panel) return;
+            panel.classList.add('translate-x-full');
+            setTimeout(() => {
+                backdrop.classList.add('hidden');
+            }, 200);
+        }
     </script>
 
     <!-- ========================================== -->
@@ -3468,14 +3766,14 @@ Select an opportunity to read the full job description.
                     <!-- Row 1: Profile Name & Bound Resume (2 cols) -->
                     <div class="grid grid-cols-2 gap-3">
                         <div>
-                            <label class="block text-[10px] font-mono font-bold uppercase text-slate-500 mb-1">
+                            <label class="block text-xs font-semibold text-slate-700 mb-1">
                                 Profile Name <span class="text-rose-500">*</span>
                             </label>
                             <input type="text" id="drawer-name" name="name" required placeholder="e.g. Dallas Director"
                                    class="w-full h-8 text-xs px-2.5 rounded-md border border-slate-300 focus:outline-none focus:ring-1 focus:ring-[#0F382A] focus:border-[#0F382A]">
                         </div>
                         <div>
-                            <label class="block text-[10px] font-mono font-bold uppercase text-slate-500 mb-1">
+                            <label class="block text-xs font-semibold text-slate-700 mb-1">
                                 Bound Resume
                             </label>
                             <select id="drawer-resume" name="resume_id" 
@@ -3491,7 +3789,7 @@ Select an opportunity to read the full job description.
                     <!-- Row 2: Search Query (Full width plain query input) -->
                     <div>
                         <div class="flex items-center justify-between mb-1">
-                            <label class="block text-[10px] font-mono font-bold uppercase text-slate-500">
+                            <label class="block text-xs font-semibold text-slate-700">
                                 Search Query <span class="text-rose-500">*</span>
                             </label>
                             <span class="text-[9px] text-slate-400 font-mono">Job title or plain query</span>
@@ -3506,7 +3804,7 @@ Select an opportunity to read the full job description.
                     <!-- Row 3: Location & Automation Schedule (2 cols) -->
                     <div class="grid grid-cols-2 gap-3">
                         <div>
-                            <label class="block text-[10px] font-mono font-bold uppercase text-slate-500 mb-1">
+                            <label class="block text-xs font-semibold text-slate-700 mb-1">
                                 Location
                             </label>
                             <div class="relative">
@@ -3516,7 +3814,7 @@ Select an opportunity to read the full job description.
                             </div>
                         </div>
                         <div>
-                            <label class="block text-[10px] font-mono font-bold uppercase text-slate-500 mb-1">
+                            <label class="block text-xs font-semibold text-slate-700 mb-1">
                                 Automated Run
                             </label>
                             <div class="flex items-center gap-1.5">
@@ -3535,7 +3833,7 @@ Select an opportunity to read the full job description.
 
                     <!-- Row 4: Job Boards (Compact pill checkboxes) -->
                     <div>
-                        <label class="block text-[10px] font-mono font-bold uppercase text-slate-500 mb-1.5">
+                        <label class="block text-xs font-semibold text-slate-700 mb-1.5">
                             Job Boards
                         </label>
                         <div class="grid grid-cols-4 gap-2">
@@ -3600,6 +3898,135 @@ Select an opportunity to read the full job description.
                 <input type="hidden" name="action" value="delete_search_profile">
                 <input type="hidden" name="delete_profile_id" id="delete-profile-id" value="">
                 <input type="hidden" name="delete_profile_slug" id="delete-profile-slug" value="">
+            </form>
+        </div>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- PIPELINE AUTOMATION POLICIES SLIDE-OVER DRAWER -->
+    <!-- ========================================== -->
+    <div id="automation-drawer-backdrop" class="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 hidden transition-opacity duration-200">
+        <div class="fixed inset-y-0 right-0 w-full max-w-md bg-white shadow-2xl border-l border-slate-200 flex flex-col transform translate-x-full transition-transform duration-200 ease-in-out" id="automation-drawer-panel">
+            
+            <!-- Drawer Header (Compact ~48px) -->
+            <div class="px-5 py-3 border-b border-slate-200 flex items-center justify-between bg-amber-50/70 shrink-0">
+                <div class="flex items-center gap-2">
+                    <div class="w-7 h-7 rounded-lg bg-amber-700 text-white flex items-center justify-center">
+                        <span class="material-symbols-outlined text-[17px]">tune</span>
+                    </div>
+                    <div>
+                        <h2 class="text-xs font-bold text-slate-900 leading-tight">Pipeline Automation Policies</h2>
+                        <span class="font-mono text-[10px] text-amber-800">Thresholds, Auto-Promotion &amp; Retention</span>
+                    </div>
+                </div>
+                <button type="button" onclick="closeAutomationDrawer()" class="text-slate-400 hover:text-slate-700 p-1 rounded-lg hover:bg-slate-200 transition">
+                    <span class="material-symbols-outlined text-[20px]">close</span>
+                </button>
+            </div>
+
+            <!-- Drawer Form -->
+            <form action="" method="post" class="flex-1 flex flex-col justify-between overflow-y-auto">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="update_pipeline_retention">
+
+                <div class="p-4 sm:p-5 space-y-4">
+                    <p class="text-xs text-slate-600 leading-relaxed">
+                        These automated rules run across all search profiles to keep your Kanban pipeline focused on high-match roles. Roles in <strong>Applied</strong> are always strictly preserved.
+                    </p>
+
+                    <!-- Auto-purge low score threshold -->
+                    <div class="p-3 rounded-lg border border-slate-200 bg-slate-50/50 space-y-1.5">
+                        <div class="flex items-center justify-between text-xs">
+                            <label for="drawer-pipeline-purge-select" class="font-bold text-slate-800">
+                                Auto-Purge Low Match Roles
+                            </label>
+                            <span class="font-mono text-[11px] font-bold text-amber-900 bg-amber-100 px-1.5 py-0.5 rounded">
+                                &lt; {{ automation_settings.pipeline_purge_match_score_max|default:25 }}%
+                            </span>
+                        </div>
+                        <p class="text-[11px] text-slate-500">Roles in New or Review scoring below this threshold are automatically dismissed.</p>
+                        <select id="drawer-pipeline-purge-select" name="pipeline_purge_match_score_max" class="w-full text-xs font-semibold text-slate-800 bg-white border border-slate-300 rounded-md px-2.5 py-1.5 focus:ring-1 focus:ring-amber-500 cursor-pointer">
+                            <option value="15" {% if automation_settings.pipeline_purge_match_score_max == 15 %}selected{% endif %}>15% Score (Strict - keeps more)</option>
+                            <option value="20" {% if automation_settings.pipeline_purge_match_score_max == 20 %}selected{% endif %}>20% Score</option>
+                            <option value="25" {% if automation_settings.pipeline_purge_match_score_max == 25 or not automation_settings.pipeline_purge_match_score_max %}selected{% endif %}>25% Score (Default)</option>
+                            <option value="30" {% if automation_settings.pipeline_purge_match_score_max == 30 %}selected{% endif %}>30% Score</option>
+                            <option value="40" {% if automation_settings.pipeline_purge_match_score_max == 40 %}selected{% endif %}>40% Score</option>
+                            <option value="50" {% if automation_settings.pipeline_purge_match_score_max == 50 %}selected{% endif %}>50% Score (Aggressive)</option>
+                            <option value="0" {% if automation_settings.pipeline_purge_match_score_max == 0 %}selected{% endif %}>Disabled (Keep all)</option>
+                        </select>
+                    </div>
+
+                    <!-- Auto-promote threshold -->
+                    <div class="p-3 rounded-lg border border-slate-200 bg-slate-50/50 space-y-1.5">
+                        <div class="flex items-center justify-between text-xs">
+                            <label for="drawer-pipeline-promote-select" class="font-bold text-slate-800">
+                                Auto-Promote New → Review
+                            </label>
+                            <span class="font-mono text-[11px] font-bold text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded">
+                                ≥ {{ automation_settings.pipeline_match_score_min|default:60 }}%
+                            </span>
+                        </div>
+                        <p class="text-[11px] text-slate-500">Newly scraped roles meeting this match score automatically advance to Review.</p>
+                        <select id="drawer-pipeline-promote-select" name="pipeline_match_score_min" class="w-full text-xs font-semibold text-slate-800 bg-white border border-slate-300 rounded-md px-2.5 py-1.5 focus:ring-1 focus:ring-amber-500 cursor-pointer">
+                            <option value="40" {% if automation_settings.pipeline_match_score_min == 40 %}selected{% endif %}>≥ 40% Match</option>
+                            <option value="50" {% if automation_settings.pipeline_match_score_min == 50 %}selected{% endif %}>≥ 50% Match</option>
+                            <option value="60" {% if automation_settings.pipeline_match_score_min == 60 or not automation_settings.pipeline_match_score_min %}selected{% endif %}>≥ 60% Match (Default)</option>
+                            <option value="70" {% if automation_settings.pipeline_match_score_min == 70 %}selected{% endif %}>≥ 70% Match</option>
+                            <option value="80" {% if automation_settings.pipeline_match_score_min == 80 %}selected{% endif %}>≥ 80% Match (High fit only)</option>
+                        </select>
+                    </div>
+
+                    <!-- Auto-promote Review → Applying threshold -->
+                    <div class="p-3 rounded-lg border border-slate-200 bg-slate-50/50 space-y-1.5">
+                        <div class="flex items-center justify-between text-xs">
+                            <label for="drawer-vetting-promote-select" class="font-bold text-slate-800">
+                                Auto-Promote Review → Queue
+                            </label>
+                            <span class="font-mono text-[11px] font-bold text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded">
+                                {% if automation_settings.vetting_to_applying_enabled %}≥ {{ automation_settings.vetting_interview_probability_min|default:70 }}%{% else %}Manual{% endif %}
+                            </span>
+                        </div>
+                        <p class="text-[11px] text-slate-500">Roles in Review meeting this interview probability auto-advance into Applying.</p>
+                        <select id="drawer-vetting-promote-select" name="vetting_interview_probability_min" class="w-full text-xs font-semibold text-slate-800 bg-white border border-slate-300 rounded-md px-2.5 py-1.5 focus:ring-1 focus:ring-amber-500 cursor-pointer">
+                            <option value="disabled" {% if not automation_settings.vetting_to_applying_enabled %}selected{% endif %}>Manual Only (Off)</option>
+                            <option value="50" {% if automation_settings.vetting_to_applying_enabled and automation_settings.vetting_interview_probability_min == 50 %}selected{% endif %}>≥ 50% Interview</option>
+                            <option value="60" {% if automation_settings.vetting_to_applying_enabled and automation_settings.vetting_interview_probability_min == 60 %}selected{% endif %}>≥ 60% Interview</option>
+                            <option value="70" {% if automation_settings.vetting_to_applying_enabled and automation_settings.vetting_interview_probability_min == 70 %}selected{% endif %}>≥ 70% Interview (Default)</option>
+                            <option value="80" {% if automation_settings.vetting_to_applying_enabled and automation_settings.vetting_interview_probability_min == 80 %}selected{% endif %}>≥ 80% Interview</option>
+                            <option value="85" {% if automation_settings.vetting_to_applying_enabled and automation_settings.vetting_interview_probability_min == 85 %}selected{% endif %}>≥ 85% Interview (Strict)</option>
+                        </select>
+                    </div>
+
+                    <!-- Retention window -->
+                    <div class="p-3 rounded-lg border border-slate-200 bg-slate-50/50 space-y-1.5">
+                        <div class="flex items-center justify-between text-xs">
+                            <label for="drawer-cleanup-retention-select" class="font-bold text-slate-800">
+                                Pre-Applied Retention Window
+                            </label>
+                            <span class="font-mono text-[11px] font-bold text-amber-900 bg-amber-100 px-1.5 py-0.5 rounded">
+                                {{ pipeline_retention_days|default:7 }} Days
+                            </span>
+                        </div>
+                        <p class="text-[11px] text-slate-500">Roles older than this window without being applied are retired to keep the feed fresh.</p>
+                        <select id="drawer-cleanup-retention-select" name="cleanup_pipeline_retention_days" class="w-full text-xs font-semibold text-slate-800 bg-white border border-slate-300 rounded-md px-2.5 py-1.5 focus:ring-1 focus:ring-amber-500 cursor-pointer">
+                            <option value="3" {% if pipeline_retention_days == 3 %}selected{% endif %}>3 Days</option>
+                            <option value="5" {% if pipeline_retention_days == 5 %}selected{% endif %}>5 Days</option>
+                            <option value="7" {% if pipeline_retention_days == 7 or not pipeline_retention_days %}selected{% endif %}>7 Days (1 Week - Default)</option>
+                            <option value="14" {% if pipeline_retention_days == 14 %}selected{% endif %}>14 Days (2 Weeks)</option>
+                            <option value="30" {% if pipeline_retention_days == 30 %}selected{% endif %}>30 Days (Maximum)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Drawer Footer -->
+                <div class="p-3 sm:px-5 border-t border-slate-200 bg-slate-50 flex items-center justify-end gap-2 shrink-0">
+                    <button type="button" onclick="closeAutomationDrawer()" class="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-200 rounded font-medium transition cursor-pointer">
+                        Cancel
+                    </button>
+                    <button type="submit" class="px-4 py-1.5 text-xs text-white bg-[#0F382A] hover:bg-[#164e3b] rounded-lg font-bold shadow-sm transition cursor-pointer">
+                        Save Policies
+                    </button>
+                </div>
             </form>
         </div>
     </div>
@@ -3842,10 +4269,10 @@ Select an opportunity to read the full job description.
                     const data = await res.json();
                     if (data.is_running) {
                         if (data.is_pending) {
-                            if (labelEl) labelEl.textContent = 'Queued in Worker...';
-                            if (hintEl) hintEl.textContent = 'Waiting for worker process to begin scraping...';
+                            if (labelEl) labelEl.textContent = 'Searching job boards...';
+                            if (hintEl) hintEl.textContent = 'Connecting to sources & scraping...';
                         } else {
-                            if (labelEl) labelEl.textContent = 'Searching Now...';
+                            if (labelEl) labelEl.textContent = 'Searching job boards...';
                             if (hintEl) hintEl.textContent = 'Scraping & evaluating fresh jobs...';
                         }
                         return;
@@ -3857,7 +4284,9 @@ Select an opportunity to read the full job description.
                     if (data.last_run) {
                         updateLastRunStats(data.last_run);
                         if (data.last_run.status === 'completed') {
-                            toast(`Search complete: ${data.last_run.jobs_fetched} fetched, +${data.last_run.jobs_added} added to pipeline`);
+                            const added = data.last_run.jobs_added || 0;
+                            const addedText = added === 1 ? '1 new opportunity added' : `${added} new opportunities added`;
+                            toast(`Search complete: ${addedText}`);
                         } else if (data.last_run.status === 'failed') {
                             toast(`Search failed or timed out: ${data.last_run.error || 'Check logs'}`);
                         }

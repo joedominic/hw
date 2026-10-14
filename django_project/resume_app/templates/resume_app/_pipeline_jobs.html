@@ -164,15 +164,26 @@
                                       title="Preference Margin: difference between liked vs disliked job signals.">Pref {% if j.preference_margin_percent > 0 %}+{% endif %}{{ j.preference_margin_percent }}%</span>
                             {% elif stage_label == "pipeline" %}
                                 <span class="rounded-full bg-slate-50 border border-dashed border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-500"
-                                      title="Preference Margin: Neutral. Like (👍) or Dislike (👎) jobs in this track to train automated promotion to Review.">Pref: Neutral</span>
+                                      title="Preference Margin: Neutral. Like or Dislike jobs in this track to train automated promotion to Review.">Pref: Neutral</span>
                             {% endif %}
                             {% if j.source_display or j.source %}
                                 <span class="rounded-full border border-brand/20 bg-brand-mist px-2 py-0.5 text-xs font-medium text-brand-ink" title="{{ j.source }}">{{ j.source_display|default:j.source }}</span>
                             {% endif %}
                         </div>
                         <p class="mt-1 text-xs text-slate-500">{{ j.company_name }} · {{ j.location|default:"—" }}</p>
-                        {% if j.posted_at or j.fetched_at %}
-                            <p class="text-xs text-slate-400">
+                        {% if j.is_fresh %}
+                            <p class="mt-1 text-xs">
+                                <span class="inline-flex items-center gap-1 font-mono text-[10px] font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200/80 px-2 py-0.5 rounded-full">
+                                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                                    <span>New · {{ j.fresh_label }}</span>
+                                </span>
+                            </p>
+                        {% elif j.dormant_date_display %}
+                            <p class="mt-1 text-xs text-slate-400 font-mono">
+                                {{ j.dormant_date_display }}
+                            </p>
+                        {% elif j.posted_at or j.fetched_at %}
+                            <p class="mt-1 text-xs text-slate-400">
                                 {% if j.posted_at %}Posted {{ j.posted_at|date:"M j, Y" }}{% endif %}
                                 {% if j.posted_at and j.fetched_at %} · {% endif %}
                                 {% if j.fetched_at %}Added {{ j.fetched_at|date:"M j, Y" }}{% endif %}
@@ -205,7 +216,7 @@
                                 <a href="{% url 'resume_optimizer' %}?opt_id={{ j.optimized_resume_id }}" class="inline-flex items-center rounded-concierge border border-brand/20 bg-brand-mist px-2 py-1 text-xs font-medium text-brand-ink hover:bg-brand-soft" title="Open scores, judge feedback, and tailored draft">Results</a>
                             {% endif %}
                             {% if stage_label == "applying" %}
-                            <a href="{% url 'resume_optimizer' %}?job_id={{ j.id }}{% if j.optimizer_user_resume_id %}&amp;resume_id={{ j.optimizer_user_resume_id }}{% endif %}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center rounded-concierge border border-brand/20 bg-white px-2 py-1 text-xs font-medium text-brand-ink hover:bg-brand-mist" title="Open resume optimizer with this job and your track resume prefilled">Open optimizer</a>
+                            <a href="{% url 'resume_optimizer' %}?job_id={{ j.id }}{% if j.optimizer_user_resume_id %}&amp;resume_id={{ j.optimizer_user_resume_id }}{% endif %}{% if pipeline_track %}&amp;track={{ pipeline_track }}{% endif %}" class="inline-flex items-center rounded-concierge border border-brand/20 bg-white px-2 py-1 text-xs font-medium text-brand-ink hover:bg-brand-mist" title="Open resume optimizer with this job and your track resume prefilled">Open optimizer</a>
                             {% endif %}
                             {% if stage_label == "done" and j.pipeline_entry_id %}
                             <button type="button" class="pipeline-interview-prep-btn inline-flex items-center rounded-concierge border border-brand/30 bg-brand-mist px-2 py-1 text-xs font-medium text-brand-ink hover:bg-brand-soft" data-entry-id="{{ j.pipeline_entry_id }}" data-job-title="{{ j.title|escape }}" title="Generate expected interview questions (uses resume you applied with + job description)">
@@ -250,9 +261,9 @@
                 <p class="mb-2 rounded-concierge border border-sky-100 bg-sky-50/80 px-2 py-1.5 text-xs text-sky-950">
                     The database stores the full <strong>description</strong> below. The Resume summary miner uses only a <strong>role-focused slice</strong> of that text for keywords—not the whole file for every algorithm step.
                 </p>
-                <h3 class="mb-1 mt-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Description (JobListing.description)</h3>
+                <h3 class="mb-1 mt-3 text-xs font-semibold font-semibold text-slate-500">Description (JobListing.description)</h3>
                 <pre id="local-desc-body" class="mb-4 max-h-[min(40vh,20rem)] overflow-auto whitespace-pre-wrap rounded-concierge border border-slate-200 bg-slate-50 p-3 text-xs text-slate-800"></pre>
-                <h3 class="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">raw_json (JobSpy / source payload, if saved)</h3>
+                <h3 class="mb-1 text-xs font-semibold font-semibold text-slate-500">raw_json (JobSpy / source payload, if saved)</h3>
                 <pre id="local-desc-raw" class="max-h-[min(35vh,16rem)] overflow-auto whitespace-pre-wrap rounded-concierge border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] text-slate-800"></pre>
             </div>
         </div>

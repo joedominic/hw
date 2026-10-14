@@ -8,32 +8,30 @@ This document covers operational procedures, local setup, environment configurat
 
 Always use the project's virtual environment (`env/`). Do not run Django management commands with a global or system Python interpreter.
 
-From the repository root (`D:\Workshop\JobApp-Main`):
+From the repository root:
 
 ```powershell
 # Verify Python virtualenv
-& "D:\Workshop\JobApp-Main\env\Scripts\python.exe" -c "import sys; print(sys.prefix)"
+.\env\Scripts\python.exe -c "import sys; print(sys.prefix)"
 
 # Install dependencies if necessary
-& "D:\Workshop\JobApp-Main\env\Scripts\pip.exe" install -r requirements.txt
-& "D:\Workshop\JobApp-Main\env\Scripts\pip.exe" install --no-deps -r requirements-jobspy.txt
+.\env\Scripts\pip.exe install -r requirements.txt
+.\env\Scripts\pip.exe install --no-deps -r requirements-jobspy.txt
 ```
 
 ### Running the Services
 
 Full functionality requires two concurrent processes: the Django web server and the Huey task worker.
 
-**Process 1: Web Server**
+**Process 1: Web Server (run from `django_project/`)**
 ```powershell
-cd D:\Workshop\JobApp-Main\django_project
-& "D:\Workshop\JobApp-Main\env\Scripts\python.exe" manage.py migrate
-& "D:\Workshop\JobApp-Main\env\Scripts\python.exe" manage.py runserver
+..\env\Scripts\python.exe manage.py migrate
+..\env\Scripts\python.exe manage.py runserver
 ```
 
-**Process 2: Huey Task Worker**
+**Process 2: Huey Task Worker (run from `django_project/`)**
 ```powershell
-cd D:\Workshop\JobApp-Main\django_project
-& "D:\Workshop\JobApp-Main\env\Scripts\python.exe" manage.py run_huey
+..\env\Scripts\python.exe manage.py run_huey
 ```
 
 > [!NOTE]
@@ -65,9 +63,9 @@ HireEdge reads environment variables from the `.env` file in the repository root
 - `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_HOST`, `MYSQL_PORT`: Configures MySQL/MariaDB connection (PyMySQL). If `MYSQL_DATABASE` is empty, the app defaults to SQLite at `django_project/db.sqlite3`.
 - `MYSQL_CONN_HEALTH_CHECKS`: Enables persistent connection validation.
 
-### 3.2 Redis & Huey Queue
-- `HUEY_REDIS_HOST`: Redis host IP (e.g. `127.0.0.1` or LAN host `192.168.2.174`).
-- `HUEY_REDIS_PORT`: Redis port (default instance uses `6380`).
+### 3.2 Redis & Huey Queue (Configured in `.env` / `.env.example`)
+- `HUEY_REDIS_HOST`: Redis host IP (default in `.env.example` is `127.0.0.1`, or `host.docker.internal` for Docker setups).
+- `HUEY_REDIS_PORT`: Redis port (default in `.env.example` is `6380` to keep HireEdge isolated from default 6379 services).
 - `HUEY_REDIS_DB`: Redis database index (default `0`).
 - `REDIS_PASSWORD`: Shared authentication password for Redis.
 - `REDIS_USE_TLS`: Enable SSL/TLS encryption for Redis transport.
@@ -106,18 +104,21 @@ The Huey worker process (`manage.py run_huey`) consumes background tasks and exe
 
 ## 5. Automated Test Suites
 
-Run Django unit and integration tests using the virtualenv from `django_project/`:
+Run Django unit and integration tests using the repo-relative virtualenv from `django_project/`:
 
 ```powershell
 # Run the entire test suite
-& "D:\Workshop\JobApp-Main\env\Scripts\python.exe" manage.py test resume_app
+..\env\Scripts\python.exe manage.py test resume_app
 
-# Run specific functional suites
-& "D:\Workshop\JobApp-Main\env\Scripts\python.exe" manage.py test resume_app.test_job_automation_cockpit
-& "D:\Workshop\JobApp-Main\env\Scripts\python.exe" manage.py test resume_app.test_employer_responses
-& "D:\Workshop\JobApp-Main\env\Scripts\python.exe" manage.py test resume_app.test_multi_tenant
-& "D:\Workshop\JobApp-Main\env\Scripts\python.exe" manage.py test resume_app.test_saved_searches
-& "D:\Workshop\JobApp-Main\env\Scripts\python.exe" manage.py test resume_app.test_llm_gateway_routing
+# Run specific functional & tenant journey suites
+..\env\Scripts\python.exe manage.py test resume_app.test_career_profiler
+..\env\Scripts\python.exe manage.py test resume_app.test_prompt_studio
+..\env\Scripts\python.exe manage.py test resume_app.test_tenant_journey_e2e
+..\env\Scripts\python.exe manage.py test resume_app.test_job_automation_cockpit
+..\env\Scripts\python.exe manage.py test resume_app.test_employer_responses
+..\env\Scripts\python.exe manage.py test resume_app.test_multi_tenant
+..\env\Scripts\python.exe manage.py test resume_app.test_saved_searches
+..\env\Scripts\python.exe manage.py test resume_app.test_llm_gateway_routing
 ```
 
 ---
@@ -130,7 +131,7 @@ Run Django unit and integration tests using the virtualenv from `django_project/
 2. **Premature Cooldown Timer:**
    - The status endpoint `/jobs/tasks/<id>/status/` relies on `job_task_pending:{task_id}` to bridge task dispatch and worker pickup. If the worker is dead, the task remains pending for 180 seconds, alerting the UI.
 3. **Automatic Cooldown Reset on Failure:**
-   - If a search fails, `tasks.py` and `views.py` automatically clear `job_task_manual_cooldown:{task_id}`, resetting remaining cooldown to 0. Users can click "Run Search Now" immediately without waiting 60 minutes.
+   - If a search fails, `tasks.py` and `views.py` automatically clear `job_task_manual_cooldown:{task_id}`, resetting remaining cooldown to 0. Users can click "Run Search Now" immediately without waiting 3 minutes (180s limit).
 4. **Redis Port & Password:**
    - The default Redis instance runs on port `6380` with password protection. Using default unauthenticated `6379` will fail or connect to unrelated services.
 5. **Staff Access & Impersonation:**

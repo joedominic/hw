@@ -1,304 +1,1240 @@
 {% extends "resume_app/base.html" %}
 
-{% block title %}Prompt library — HireEdge{% endblock %}
+{% block title %}Prompt Studio — HireEdge{% endblock %}
+
+{% block main_content_class %}flex-1 w-full p-0 flex flex-col bg-[#F8FAFC]{% endblock %}
 
 {% block content %}
-<div class="mx-auto max-w-6xl">
-    <div class="mb-8">
-        <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Prompt library</h1>
-        <p class="mt-1 text-sm text-slate-600">
-            System-wide templates for all users — optimizer, matching, insights, cover letter, interview prep, and JD cleansing.
-            Changes here apply to every account.
-        </p>
-        <p class="mt-3 rounded-2xl border border-brand/15 bg-brand-mist/70 px-4 py-3 text-xs leading-relaxed text-brand-ink">
-            <strong>Caching tip:</strong> Put stable rules in <strong>System</strong> and variable resume/JD data in <strong>User</strong>.
-            Avoid timestamps in System. On Groq, similar prefixes can reuse cached tokens (see
-            <a href="https://console.groq.com/docs/prompt-caching" class="font-semibold underline" target="_blank" rel="noopener">prompt caching</a>).
-            <strong>Combined (legacy)</strong> is used only when both System and User are empty.
-        </p>
-    </div>
+<div class="flex flex-col h-[calc(100vh-65px)] overflow-hidden font-sans text-slate-800">
+    <!-- Top Studio Action Header -->
+    <header class="h-14 border-b border-slate-200 bg-white px-4 lg:px-6 flex items-center justify-between shrink-0 z-20">
+        <div class="flex items-center space-x-3">
+            <!-- Mobile Sidebar Toggle (< lg) -->
+            <button type="button" id="mobile-sidebar-toggle"
+                    class="lg:hidden p-1.5 -ml-1 text-slate-600 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition"
+                    title="Toggle Prompt Library">
+                <span class="material-symbols-outlined text-xl">menu</span>
+            </button>
 
-    {% include "resume_app/_concierge_messages.html" %}
+            <div class="flex items-center space-x-2">
+                <span class="material-symbols-outlined text-brand text-xl">terminal</span>
+                <span class="font-bold text-base tracking-tight text-slate-900">Prompt Studio</span>
+            </div>
+            <span class="text-slate-300">/</span>
+            <div class="flex items-center space-x-2 text-xs truncate max-w-[200px] sm:max-w-none">
+                <span id="active-category-crumb" class="text-slate-500 font-medium">Optimization Pipeline</span>
+                <span class="text-slate-300">&gt;</span>
+                <span id="active-title-crumb" class="font-semibold text-slate-800">Resume Writer</span>
+                <span id="active-key-badge" class="font-mono bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded text-[11px]">writer</span>
+            </div>
+        </div>
 
-    <div class="rounded-2xl border border-slate-200 bg-white shadow-card">
-        <div class="border-b border-slate-100 px-6 py-3 text-sm font-semibold text-concierge-slate">Prompt templates</div>
-        <div class="p-6">
-            <form method="post" id="prompt-library-form">
-                {% csrf_token %}
-                <input type="hidden" name="action" value="save_prompts">
-                <div class="mb-4">
-                    <label class="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500">Select prompt</label>
-                    <div class="flex flex-wrap gap-1 border-b border-slate-200" id="prompt-tabs" role="tablist">
-                        <button type="button" role="tab" aria-selected="true" aria-controls="prompt-writer-pane" id="prompt-writer-tab" data-prompt-pane="prompt-writer-pane"
-                                class="prompt-tab-btn -mb-px rounded-t border border-b-0 border-brand/30 bg-white px-3 py-2 text-sm font-medium text-brand">Writer</button>
-                        <button type="button" role="tab" aria-selected="false" aria-controls="prompt-recruiter-pane" id="prompt-recruiter-tab" data-prompt-pane="prompt-recruiter-pane"
-                                class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">Recruiter Judge</button>
-                        <button type="button" role="tab" aria-selected="false" aria-controls="prompt-matching-pane" id="prompt-matching-tab" data-prompt-pane="prompt-matching-pane"
-                                class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">Matching</button>
-                        <button type="button" role="tab" aria-selected="false" aria-controls="prompt-insights-pane" id="prompt-insights-tab" data-prompt-pane="prompt-insights-pane"
-                                class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">Insights</button>
-                        <button type="button" role="tab" aria-selected="false" aria-controls="prompt-jd-cleanse-pane" id="prompt-jd-cleanse-tab" data-prompt-pane="prompt-jd-cleanse-pane"
-                                class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">JD cleanse</button>
-                        <button type="button" role="tab" aria-selected="false" aria-controls="prompt-cover-letter-pane" id="prompt-cover-letter-tab" data-prompt-pane="prompt-cover-letter-pane"
-                                class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">Cover letter</button>
-                        <button type="button" role="tab" aria-selected="false" aria-controls="prompt-interview-prep-pane" id="prompt-interview-prep-tab" data-prompt-pane="prompt-interview-prep-pane"
-                                class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">Interview prep</button>
-                        <button type="button" role="tab" aria-selected="false" aria-controls="prompt-skill-radar-pane" id="prompt-skill-radar-tab" data-prompt-pane="prompt-skill-radar-pane"
-                                class="prompt-tab-btn -mb-px rounded-t border border-transparent border-b-0 bg-transparent px-3 py-2 text-sm font-medium text-slate-500 hover:border-slate-200 hover:text-slate-700">Skill Radar</button>
-                    </div>
-                    <div class="rounded-b border border-t-0 border-slate-200 bg-slate-50/30 p-4" id="prompt-tab-content">
-                        <div id="prompt-writer-pane" role="tabpanel" aria-labelledby="prompt-writer-tab">
-                            <p class="mb-2 text-xs font-medium text-slate-600">System — role, output format, rules (keep stable across runs)</p>
-                            <label class="sr-only" for="prompt-writer-system">Writer system prompt</label>
-                            <textarea id="prompt-writer-system" name="prompt_writer_system" rows="8"
-                                      class="mb-3 w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-                                      placeholder="System instructions">{{ prompts.writer_system }}</textarea>
-                            <p class="mb-2 text-xs font-medium text-slate-600">User — resume/JD/feedback placeholders (dynamic per run)</p>
-                            <label class="sr-only" for="prompt-writer-user">Writer user prompt</label>
-                            <textarea id="prompt-writer-user" name="prompt_writer_user" rows="12"
-                                      class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-                                      placeholder="User prompt with placeholders">{{ prompts.writer_user }}</textarea>
-                            <p class="mt-2 text-xs text-slate-500">
-                                Writer <strong>System</strong>, <strong>User</strong>, or <strong>Combined</strong> may include:
-                                <code class="rounded bg-slate-100 px-1">{source_resume_text}</code> (original PDF text),
-                                <code class="rounded bg-slate-100 px-1">{resume_text}</code> (draft this step),
-                                <code class="rounded bg-slate-100 px-1">{optimized_resume}</code> (current draft),
-                                <code class="rounded bg-slate-100 px-1">{job_description}</code> (role slice for Writer),
-                                <code class="rounded bg-slate-100 px-1">{full_job_description}</code>,
-                                <code class="rounded bg-slate-100 px-1">{feedback}</code>,
-                                <code class="rounded bg-slate-100 px-1">{optimization_notes}</code>,
-                                <code class="rounded bg-slate-100 px-1">{pipeline_skills_json}</code>,
-                                <code class="rounded bg-slate-100 px-1">{job_highlights}</code>,
-                                <code class="rounded bg-slate-100 px-1">{retrieval_context}</code>
-                                (<span class="text-slate-600">supporting fields show <code class="rounded bg-slate-100 px-0.5">(none)</code> when empty; retrieval is not populated yet</span>).
-                            </p>
-                            <p class="mt-3 text-xs font-medium text-slate-600">Combined (legacy, optional — clears split for Writer when non-empty)</p>
-                            <textarea name="prompt_writer_combined" rows="3"
-                                      class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs text-slate-600"
-                                      placeholder="Leave empty to use System + User above">{{ prompts.writer_legacy_combined }}</textarea>
-                        </div>
-                        <div id="prompt-recruiter-pane" role="tabpanel" aria-labelledby="prompt-recruiter-tab" class="hidden">
-                            <p class="mb-2 text-xs font-medium text-slate-600">System</p>
-                            <textarea name="prompt_recruiter_system" rows="6"
-                                      class="mb-3 w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-                                      placeholder="Recruiter judge system">{{ prompts.recruiter_judge_system }}</textarea>
-                            <p class="mb-2 text-xs font-medium text-slate-600">User</p>
-                            <textarea name="prompt_recruiter_user" rows="12"
-                                      class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-                                      placeholder="Recruiter judge user">{{ prompts.recruiter_judge_user }}</textarea>
-                            <p class="mt-2 text-xs text-slate-500">Placeholders: <code class="rounded bg-slate-100 px-1">{optimized_resume}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code></p>
-                            <p class="mt-3 text-xs font-medium text-slate-600">Combined (legacy, optional)</p>
-                            <textarea name="prompt_recruiter_combined" rows="3"
-                                      class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs"
-                                      placeholder="Optional single template">{{ prompts.recruiter_judge_legacy_combined }}</textarea>
-                        </div>
-                        <div id="prompt-matching-pane" role="tabpanel" aria-labelledby="prompt-matching-tab" class="hidden">
-                            <p class="mb-2 text-xs font-medium text-slate-600">System (JSON schema — keep identical across calls for cache hits)</p>
-                            <textarea name="prompt_matching_system" rows="14"
-                                      class="mb-3 w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-                                      placeholder="Matching system">{{ prompts.matching_system }}</textarea>
-                            <p class="mb-2 text-xs font-medium text-slate-600">User</p>
-                            <textarea name="prompt_matching_user" rows="6"
-                                      class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-                                      placeholder="Matching user">{{ prompts.matching_user }}</textarea>
-                            <p class="mt-2 text-xs text-slate-500"><code class="rounded bg-slate-100 px-1">{resume_text}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code></p>
-                            <p class="mt-3 text-xs font-medium text-slate-600">Combined (legacy, optional)</p>
-                            <textarea name="prompt_matching_combined" rows="3"
-                                      class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs"
-                                      placeholder="Optional single template">{{ prompts.matching_legacy_combined }}</textarea>
-                        </div>
-                        <div id="prompt-insights-pane" role="tabpanel" aria-labelledby="prompt-insights-tab" class="hidden">
-                            <p class="mb-2 text-xs font-medium text-slate-600">System</p>
-                            <textarea name="prompt_insights_system" rows="6"
-                                      class="mb-3 w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-                                      placeholder="Insights system">{{ prompts.insights_system }}</textarea>
-                            <p class="mb-2 text-xs font-medium text-slate-600">User</p>
-                            <textarea name="prompt_insights_user" rows="10"
-                                      class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-                                      placeholder="Insights user">{{ prompts.insights_user }}</textarea>
-                            <p class="mt-2 text-xs text-slate-500">Placeholder: <code class="rounded bg-slate-100 px-1">{job_descriptions}</code></p>
-                            <p class="mt-3 text-xs font-medium text-slate-600">Combined (legacy, optional)</p>
-                            <textarea name="prompt_insights_combined" rows="3"
-                                      class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs"
-                                      placeholder="Optional single template">{{ prompts.insights_legacy_combined }}</textarea>
-                        </div>
-                        <div id="prompt-jd-cleanse-pane" role="tabpanel" aria-labelledby="prompt-jd-cleanse-tab" class="hidden">
-                            <p class="mb-2 text-xs text-slate-600">Used when stripping boilerplate from job postings before vetting match scores and Applying resume optimization. Invoked on <strong>Ollama Local</strong> only (see LLM settings).</p>
-                            <p class="mb-2 text-xs font-medium text-slate-600">System</p>
-                            <textarea name="prompt_jd_cleanse_system" rows="5"
-                                      class="mb-3 w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-                                      placeholder="JD cleanse system">{{ prompts.jd_cleanse_system }}</textarea>
-                            <p class="mb-2 text-xs font-medium text-slate-600">User</p>
-                            <textarea name="prompt_jd_cleanse_user" rows="12"
-                                      class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-                                      placeholder="JD cleanse user">{{ prompts.jd_cleanse_user }}</textarea>
-                            <p class="mt-2 text-xs text-slate-500">Placeholders: <code class="rounded bg-slate-100 px-1">{title}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code> (description is truncated to 8000 characters before substitution).</p>
-                            <p class="mt-3 text-xs font-medium text-slate-600">Combined (legacy, optional)</p>
-                            <textarea name="prompt_jd_cleanse_combined" rows="3"
-                                      class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs"
-                                      placeholder="Optional single template">{{ prompts.jd_cleanse_legacy_combined }}</textarea>
-                        </div>
-                        <div id="prompt-cover-letter-pane" role="tabpanel" aria-labelledby="prompt-cover-letter-tab" class="hidden">
-                            <p class="mb-2 text-xs text-slate-600">Used when you click <strong>Generate cover letter</strong> on optimizer Results (external LLM). Requires a completed tailored resume.</p>
-                            <p class="mb-2 text-xs font-medium text-slate-600">System</p>
-                            <textarea name="prompt_cover_letter_system" rows="8"
-                                      class="mb-3 w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-                                      placeholder="Cover letter system">{{ prompts.cover_letter_system }}</textarea>
-                            <p class="mb-2 text-xs font-medium text-slate-600">User</p>
-                            <textarea name="prompt_cover_letter_user" rows="12"
-                                      class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-                                      placeholder="Cover letter user">{{ prompts.cover_letter_user }}</textarea>
-                            <p class="mt-2 text-xs text-slate-500">Placeholders: <code class="rounded bg-slate-100 px-1">{optimized_resume}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code>, <code class="rounded bg-slate-100 px-1">{company_name}</code>, <code class="rounded bg-slate-100 px-1">{job_title}</code></p>
-                            <p class="mt-3 text-xs font-medium text-slate-600">Combined (legacy, optional)</p>
-                            <textarea name="prompt_cover_letter_combined" rows="3"
-                                      class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs"
-                                      placeholder="Optional single template">{{ prompts.cover_letter_legacy_combined }}</textarea>
-                        </div>
-                        <div id="prompt-interview-prep-pane" role="tabpanel" aria-labelledby="prompt-interview-prep-tab" class="hidden">
-                            <p class="mb-2 text-xs text-slate-600">Used when you click <strong>Interview prep</strong> on the Done board (external LLM). Expects JSON output with likely questions and suggested answers.</p>
-                            <p class="mb-2 text-xs font-medium text-slate-600">System</p>
-                            <textarea name="prompt_interview_prep_system" rows="12"
-                                      class="mb-3 w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-                                      placeholder="Interview prep system">{{ prompts.interview_prep_system }}</textarea>
-                            <p class="mb-2 text-xs font-medium text-slate-600">User</p>
-                            <textarea name="prompt_interview_prep_user" rows="10"
-                                      class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-                                      placeholder="Interview prep user">{{ prompts.interview_prep_user }}</textarea>
-                            <p class="mt-2 text-xs text-slate-500">Placeholders: <code class="rounded bg-slate-100 px-1">{resume_text}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code>, <code class="rounded bg-slate-100 px-1">{company_name}</code>, <code class="rounded bg-slate-100 px-1">{job_title}</code>, <code class="rounded bg-slate-100 px-1">{job_url}</code></p>
-                            <p class="mt-3 text-xs font-medium text-slate-600">Combined (legacy, optional)</p>
-                            <textarea name="prompt_interview_prep_combined" rows="3"
-                                      class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs"
-                                      placeholder="Optional single template">{{ prompts.interview_prep_legacy_combined }}</textarea>
-                        </div>
-                        <div id="prompt-skill-radar-pane" role="tabpanel" aria-labelledby="prompt-skill-radar-tab" class="hidden">
-                            <p class="mb-2 text-xs text-slate-600">Used for <strong>Fit Diagnostics &amp; Skill Radar</strong> extraction in the Career Cockpit. Invoked locally on <strong>Ollama Local</strong> to extract verified competencies, role gaps, and match scores without cloud token costs.</p>
-                            <p class="mb-2 text-xs font-medium text-slate-600">System (Instructions &amp; strict anti-vague rules)</p>
-                            <textarea name="prompt_skill_radar_system" rows="14"
-                                      class="mb-3 w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-                                      placeholder="Skill radar system instructions">{{ prompts.skill_radar_system }}</textarea>
-                            <p class="mb-2 text-xs font-medium text-slate-600">User (Dynamic inputs)</p>
-                            <textarea name="prompt_skill_radar_user" rows="8"
-                                      class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-                                      placeholder="Skill radar user prompt">{{ prompts.skill_radar_user }}</textarea>
-                            <p class="mt-2 text-xs text-slate-500">Placeholders: <code class="rounded bg-slate-100 px-1">{resume_text}</code>, <code class="rounded bg-slate-100 px-1">{job_title}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code></p>
-                            <p class="mt-3 text-xs font-medium text-slate-600">Combined (legacy, optional)</p>
-                            <textarea name="prompt_skill_radar_combined" rows="3"
-                                      class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs"
-                                      placeholder="Optional single template">{{ prompts.skill_radar_legacy_combined }}</textarea>
-                        </div>
-                    </div>
+        <div class="flex items-center space-x-3">
+            <button type="button" id="open-history-btn"
+                    class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium transition shadow-sm">
+                <span class="material-symbols-outlined text-sm text-slate-500">history</span>
+                <span>Revisions</span>
+                <span id="history-counter-badge" class="ml-1 bg-slate-100 text-slate-700 text-[10px] font-bold px-1.5 py-0.2 rounded-full">{{ version_count }}</span>
+            </button>
+
+            <button type="button" id="discard-changes-btn"
+                    class="px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 text-xs font-medium transition">
+                Reset
+            </button>
+
+            <button type="button" id="save-prompt-btn"
+                    class="inline-flex items-center space-x-1.5 px-4 py-1.5 rounded-lg bg-brand hover:bg-brand-deep text-white text-xs font-semibold shadow-sm transition">
+                <span class="material-symbols-outlined text-sm">save</span>
+                <span id="save-prompt-text">Save Template</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- 3-Pane Body Workstation -->
+    <div class="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
+        <!-- Backdrop for mobile slide-over drawer (< lg) -->
+        <div id="sidebar-mobile-backdrop" class="fixed inset-0 bg-slate-900/30 backdrop-blur-xs z-30 lg:hidden hidden transition-opacity"></div>
+
+        <!-- ==================================================================== -->
+        <!-- PANE 1: Directory Tree & Prompts Navigation (~280px)                 -->
+        <!-- ==================================================================== -->
+        <aside id="prompt-sidebar"
+               class="fixed inset-y-0 left-0 z-40 w-72 lg:static lg:z-auto lg:w-64 xl:w-72 shrink-0 border-r border-slate-200 bg-[#FBFCFD] flex flex-col h-full overflow-hidden transform -translate-x-full lg:translate-x-0 transition-transform duration-200 ease-in-out shadow-xl lg:shadow-none">
+            <!-- Directory Filter Bar -->
+            <div class="p-3 border-b border-slate-200 bg-white flex items-center justify-between gap-2 shrink-0">
+                <div class="relative flex-1">
+                    <span class="material-symbols-outlined absolute left-2.5 top-2 text-slate-400 text-sm">search</span>
+                    <input type="text" id="prompt-search-input" placeholder="Filter prompts or variables..."
+                           class="w-full pl-8 pr-7 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:border-brand focus:ring-1 focus:ring-brand focus:outline-none transition">
+                    <button type="button" id="prompt-search-clear-btn" class="hidden absolute right-2 top-2 text-slate-400 hover:text-slate-600" title="Clear filter">
+                        <span class="material-symbols-outlined text-sm">close</span>
+                    </button>
                 </div>
-                <div class="flex flex-wrap items-center justify-between gap-3">
-                    <div class="flex flex-wrap items-center gap-3">
-                        <button type="submit" class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">Save prompts</button>
-                        <a href="{% url 'resume_optimizer' %}" class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50">Optimizer</a>
-                    </div>
-                </div>
-            </form>
-            <form method="post" class="mt-6 border-t border-slate-100 pt-4 flex items-center justify-between" onsubmit="return confirm('Reset all prompt templates to built-in code defaults? This will discard all custom prompt edits.');">
-                {% csrf_token %}
-                <input type="hidden" name="action" value="reset_prompts">
-                <span class="text-xs text-slate-500">Need to restore original prompt instructions?</span>
-                <button type="submit" class="rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-red-700">
-                    Reset to server defaults
+                <!-- Close mobile sidebar btn -->
+                <button type="button" id="mobile-sidebar-close" class="lg:hidden p-1 text-slate-400 hover:text-slate-700 rounded" title="Close menu">
+                    <span class="material-symbols-outlined text-base">close</span>
                 </button>
-            </form>
+            </div>
+
+            <!-- Scrollable Tree -->
+            <div class="flex-1 overflow-y-auto p-3 space-y-4" id="directory-tree-container">
+                {% for cat, defs in grouped_definitions.items %}
+                <div class="prompt-category-group">
+                    <div class="px-2 mb-1.5 text-[11px] font-semibold text-slate-500 uppercase tracking-wider flex items-center justify-between">
+                        <span>{{ cat }}</span>
+                        <span class="text-[10px] text-slate-400 font-mono">{{ defs|length }}</span>
+                    </div>
+                    <div class="space-y-0.5">
+                        {% for def in defs %}
+                        <button type="button" class="prompt-select-btn w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium transition flex items-center justify-between group"
+                                data-key="{{ def.key }}" data-category="{{ def.category }}" data-name="{{ def.name }}" title="{{ def.description }}">
+                            <div class="flex items-center space-x-2 truncate min-w-0 mr-1.5">
+                                <span class="material-symbols-outlined text-sm text-slate-400 group-hover:text-brand shrink-0">{{ def.icon|default:"terminal" }}</span>
+                                <span class="truncate">{{ def.name }}</span>
+                            </div>
+                            <span class="prompt-model-badge shrink-0 px-1.5 py-0.5 text-[10px] {% if def.assigned_model %}bg-brand/10 text-brand font-semibold{% else %}bg-slate-100 text-slate-600{% endif %} rounded font-mono truncate max-w-[80px]" data-badge-for="{{ def.key }}">{{ def.assigned_model_short|default:"Default" }}</span>
+                        </button>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endfor %}
+
+                <!-- ATS Judge Profiles -->
+                <div class="prompt-category-group">
+                    <div class="px-2 mb-1.5 text-[11px] font-semibold text-slate-500 uppercase tracking-wider flex items-center justify-between">
+                        <span>ATS Profiles</span>
+                        <div class="flex items-center space-x-1.5">
+                            <span class="text-[10px] text-slate-400 font-mono">{{ ats_profiles|length }}</span>
+                            <form method="post" class="inline" id="new-ats-form">
+                                {% csrf_token %}
+                                <input type="hidden" name="action" value="new_ats_profile">
+                                <button type="submit" title="Add new ATS profile" class="text-brand hover:text-brand-deep text-[11px] font-bold flex items-center">
+                                    + New
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                    <div class="space-y-0.5">
+                        {% for prof in ats_profiles %}
+                        <button type="button" class="prompt-select-btn w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium transition flex items-center justify-between group"
+                                data-key="ats_profile_{{ prof.pk }}" data-category="ATS Profiles" data-name="{{ prof.name }}">
+                            <div class="flex items-center space-x-2 truncate min-w-0 mr-1.5">
+                                <span class="material-symbols-outlined text-sm text-slate-400 group-hover:text-brand shrink-0">rule</span>
+                                <span class="truncate">{{ prof.name }}</span>
+                            </div>
+                            <div class="flex items-center space-x-1 shrink-0">
+                                {% if prof.is_default %}
+                                <span class="px-1 py-0.2 text-[9px] bg-amber-50 text-amber-700 font-semibold rounded">Default</span>
+                                {% endif %}
+                                <span class="prompt-model-badge px-1.5 py-0.5 text-[10px] {% if prof.assigned_model %}bg-brand/10 text-brand font-semibold{% else %}bg-slate-100 text-slate-600{% endif %} rounded font-mono truncate max-w-[80px]" data-badge-for="ats_profile_{{ prof.pk }}">{{ prof.assigned_model_short|default:"Default" }}</span>
+                            </div>
+                        </button>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Footer: Reset to Code Defaults -->
+            <div class="p-3 border-t border-slate-200 bg-white shrink-0">
+                <form method="post" id="reset-prompts-form" onsubmit="return confirm('Reset all system prompts to original code defaults?');">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="reset_prompts">
+                    <button type="submit" class="w-full py-1.5 px-3 rounded text-[11px] font-medium text-slate-500 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 transition">
+                        Reset All Prompts to Defaults
+                    </button>
+                </form>
+            </div>
+        </aside>
+
+        <!-- Right Workstation: Pane 2 + Pane 3 Container -->
+        <!-- On vertical / portrait displays (< 2xl): stacks Editor (top) and Test Playground (bottom) cleanly -->
+        <!-- On wide displays (>= 2xl): side-by-side columns -->
+        <div class="flex-1 flex flex-col 2xl:flex-row min-w-0 h-full overflow-hidden">
+
+        <!-- ==================================================================== -->
+        <!-- PANE 2: Prompt Editor Canvas (Center, Flex-1)                        -->
+        <!-- ==================================================================== -->
+        <main class="flex-1 border-b 2xl:border-b-0 2xl:border-r border-slate-200 bg-white flex flex-col min-w-0 min-h-[380px] 2xl:min-h-0 h-3/5 2xl:h-full overflow-hidden">
+            <!-- Editor Top Tabs & Metadata -->
+            <div class="h-12 border-b border-slate-200 px-4 flex items-center justify-between bg-slate-50/50 shrink-0">
+                <div class="flex items-center space-x-1" role="tablist">
+                    <button type="button" id="tab-system-btn"
+                            class="editor-tab-btn px-3 py-1.5 rounded-md text-xs font-semibold text-brand bg-white shadow-sm border border-slate-200/80">
+                        System Prompt
+                    </button>
+                    <button type="button" id="tab-user-btn"
+                            class="editor-tab-btn px-3 py-1.5 rounded-md text-xs font-medium text-slate-500 hover:text-slate-800 hover:bg-slate-100/60">
+                        User Prompt
+                    </button>
+                    <button type="button" id="tab-legacy-btn"
+                            class="editor-tab-btn px-3 py-1.5 rounded-md text-xs font-medium text-slate-400 hover:text-slate-700 hover:bg-slate-100/60">
+                        Combined (Legacy)
+                    </button>
+                </div>
+
+                <div class="flex items-center space-x-3 text-[11px] text-slate-500">
+                    <span id="char-counter">0 chars</span>
+                    <span class="text-slate-300">•</span>
+                    <span id="token-counter">~0 tokens</span>
+                </div>
+            </div>
+
+            <!-- Model Routing Sub-Bar -->
+            <div class="px-4 py-2 border-b border-slate-200 bg-slate-50/70 flex items-center justify-between gap-3 text-xs shrink-0">
+                <div class="flex items-center space-x-2 min-w-0">
+                    <span class="material-symbols-outlined text-slate-500 text-sm">alt_route</span>
+                    <span class="font-semibold text-slate-700 whitespace-nowrap">Production Model:</span>
+                    <select id="prompt-assigned-model-select"
+                            class="text-xs font-medium bg-white border border-slate-200 rounded-lg px-2.5 py-1 text-slate-800 focus:outline-none focus:border-brand shadow-sm truncate max-w-xs">
+                        <option value="">⚡ Platform Default Gateway</option>
+                        {% if available_model_options %}
+                        <optgroup label="Configured LLM Models">
+                            {% for opt in available_model_options %}
+                            <option value="{{ opt.value }}">{{ opt.label }}{% if opt.is_local %} [Local]{% endif %}</option>
+                            {% endfor %}
+                        </optgroup>
+                        {% endif %}
+                    </select>
+                    <span id="model-saved-indicator" class="hidden text-[11px] text-emerald-600 font-semibold items-center space-x-1">
+                        <span class="material-symbols-outlined text-xs">check_circle</span>
+                        <span>Saved</span>
+                    </span>
+                </div>
+                <div class="text-[11px] text-slate-500 hidden sm:block">
+                    Routed across optimizer, matching, and extraction pipelines.
+                </div>
+            </div>
+
+            <!-- Editor Work Area -->
+            <div class="flex-1 relative flex flex-col overflow-hidden bg-white">
+                <!-- System Prompt Pane -->
+                <div id="pane-system-editor" class="flex-1 flex flex-col p-4 overflow-hidden">
+                    <div class="text-[11px] font-medium text-slate-500 mb-1.5 flex items-center justify-between">
+                        <span>Role, output schema, constraints (remains static for prefix cache hits).</span>
+                        <span class="text-slate-400 font-mono">SystemMessage</span>
+                    </div>
+                    <textarea id="editor-system-textarea" spellcheck="false"
+                              placeholder="Define role instructions, constraints, and JSON schema output..."
+                              class="flex-1 w-full p-3 font-mono text-xs leading-relaxed text-slate-800 bg-slate-50/40 border border-slate-200 rounded-lg focus:bg-white focus:border-brand focus:ring-1 focus:ring-brand focus:outline-none resize-none transition"></textarea>
+                </div>
+
+                <!-- User Prompt Pane (hidden by default) -->
+                <div id="pane-user-editor" class="flex-1 flex flex-col p-4 overflow-hidden hidden">
+                    <div class="text-[11px] font-medium text-slate-500 mb-1.5 flex items-center justify-between">
+                        <span>Dynamic payload containing placeholders like {resume_text}, {job_description}.</span>
+                        <span class="text-slate-400 font-mono">HumanMessage</span>
+                    </div>
+                    <textarea id="editor-user-textarea" spellcheck="false"
+                              placeholder="Provide runtime placeholders and per-request instructions..."
+                              class="flex-1 w-full p-3 font-mono text-xs leading-relaxed text-slate-800 bg-slate-50/40 border border-slate-200 rounded-lg focus:bg-white focus:border-brand focus:ring-1 focus:ring-brand focus:outline-none resize-none transition"></textarea>
+                </div>
+
+                <!-- Legacy Combined Pane (hidden by default) -->
+                <div id="pane-legacy-editor" class="flex-1 flex flex-col p-4 overflow-hidden hidden">
+                    <div class="text-[11px] font-medium text-amber-700 bg-amber-50 p-2 rounded mb-2 border border-amber-200">
+                        Combined legacy mode is active ONLY if text is entered here. When set, System + User splits are bypassed.
+                    </div>
+                    <textarea id="editor-legacy-textarea" spellcheck="false"
+                              placeholder="Leave blank to use System + User split above..."
+                              class="flex-1 w-full p-3 font-mono text-xs leading-relaxed text-slate-700 bg-slate-50/60 border border-dashed border-slate-300 rounded-lg focus:bg-white focus:border-brand focus:outline-none resize-none transition"></textarea>
+                </div>
+            </div>
+
+            <!-- Detected Variables Bar (Bottom of Editor) -->
+            <div class="border-t border-slate-200 bg-slate-50/70 px-4 py-2.5 flex items-center justify-between shrink-0">
+                <div class="flex items-center space-x-2 overflow-x-auto py-0.5">
+                    <span class="text-[11px] font-semibold text-slate-500 uppercase tracking-wide shrink-0">Variables:</span>
+                    <div id="detected-variables-pills" class="flex items-center space-x-1.5 flex-wrap gap-y-1">
+                        <!-- Injected dynamically via JS -->
+                    </div>
+                </div>
+                <div class="text-[11px] text-slate-500 shrink-0 hidden md:block">
+                    Click variable to insert in cursor
+                </div>
+            </div>
+        </main>
+
+        <!-- ==================================================================== -->
+        <!-- PANE 3: In-Authoring Test Bench (~460px)                             -->
+        <!-- ==================================================================== -->
+        <aside class="w-full 2xl:w-[460px] 3xl:w-[500px] shrink-0 bg-slate-50 border-t 2xl:border-t-0 flex flex-col h-2/5 2xl:h-full overflow-hidden">
+            <!-- Test Bench Header -->
+            <div class="h-12 border-b border-slate-200 px-4 flex items-center justify-between bg-white shrink-0">
+                <div class="flex items-center space-x-2">
+                    <span class="material-symbols-outlined text-slate-600 text-sm">play_circle</span>
+                    <span class="font-semibold text-xs text-slate-800">Test Playground</span>
+                </div>
+
+                <div class="flex items-center space-x-2">
+                    <!-- Engine Selector -->
+                    <select id="test-engine-select"
+                            class="text-xs bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-slate-700 font-medium focus:outline-none focus:border-brand max-w-[210px] truncate">
+                        <option value="assigned" id="test-engine-assigned-opt">⚡ Assigned Model (Default)</option>
+                        {% if available_model_options %}
+                        <optgroup label="Configured LLMs">
+                            {% for opt in available_model_options %}
+                            <option value="{{ opt.value }}">{{ opt.label }}{% if opt.is_local %} [Local]{% endif %}</option>
+                            {% endfor %}
+                        </optgroup>
+                        {% endif %}
+                        <optgroup label="Fallback Defaults">
+                            <option value="cloud">Cloud (Default Gateway)</option>
+                            <option value="local">Local (Ollama Default)</option>
+                        </optgroup>
+                    </select>
+
+                    <button type="button" id="run-test-btn"
+                            class="inline-flex items-center space-x-1 px-3 py-1 rounded-lg bg-slate-900 hover:bg-black text-white text-xs font-semibold shadow-sm transition">
+                        <span class="material-symbols-outlined text-sm" id="run-test-icon">play_arrow</span>
+                        <span id="run-test-label">Run Test</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Test Content (Scrollable) -->
+            <div class="flex-1 overflow-y-auto p-4 space-y-4">
+                <!-- Variable Injection Harness Card -->
+                <div class="bg-white border border-slate-200 rounded-xl p-3.5 shadow-sm space-y-3">
+                    <div class="flex items-center justify-between border-b border-slate-100 pb-2">
+                        <span class="text-xs font-bold text-slate-800 uppercase tracking-wide">Variable Injection</span>
+                        <span class="text-[11px] text-slate-500">In-memory substitution</span>
+                    </div>
+
+                    <p class="text-[11px] text-slate-500 leading-normal">
+                        Values entered below are safely injected into the template at test runtime. They will never contaminate or overwrite your prompt code.
+                    </p>
+
+                    <!-- Dynamically generated variable cards container -->
+                    <div id="variable-cards-container" class="space-y-3">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+
+                <!-- Execution Output Inspector Card -->
+                <div class="bg-white border border-slate-200 rounded-xl p-3.5 shadow-sm space-y-3 flex flex-col min-h-[220px]">
+                    <div class="flex items-center justify-between border-b border-slate-100 pb-2">
+                        <div class="flex items-center space-x-2">
+                            <span class="text-xs font-bold text-slate-800 uppercase tracking-wide">Output Inspector</span>
+                            <span id="test-status-pill" class="hidden text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700">200 OK</span>
+                        </div>
+                        <div class="flex items-center space-x-2 text-[11px] text-slate-500 font-mono">
+                            <span id="test-model-used-label" class="text-slate-600 font-medium truncate max-w-[130px]" title="Model used"></span>
+                            <span id="test-model-dot" class="hidden">•</span>
+                            <span id="test-latency-label">-- ms</span>
+                            <span>•</span>
+                            <span id="test-tokens-label">-- tokens</span>
+                            <button type="button" id="copy-output-btn" title="Copy output to clipboard" class="text-slate-400 hover:text-slate-700 ml-1">
+                                <span class="material-symbols-outlined text-sm">content_copy</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Output Box -->
+                    <div id="test-output-box" class="flex-1 font-mono text-xs leading-relaxed p-3 bg-slate-900 text-slate-100 rounded-lg overflow-y-auto max-h-72 whitespace-pre-wrap select-text">
+Click "Run Test" above to evaluate this prompt with injected variables.
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        </div> <!-- close right workstation (2xl:flex-row) -->
+
+    </div> <!-- close 3-pane body workstation -->
+
+    <!-- ==================================================================== -->
+    <!-- SLIDE-OVER DRAWER: Revision History                                  -->
+    <!-- ==================================================================== -->
+    <div id="history-drawer-backdrop" class="fixed inset-0 bg-slate-900/30 backdrop-blur-xs z-50 hidden transition-opacity">
+        <div id="history-drawer-panel"
+             class="absolute right-0 top-0 bottom-0 w-full max-w-md bg-white shadow-2xl flex flex-col transform translate-x-full transition-transform duration-200 ease-in-out">
+            <div class="h-14 border-b border-slate-200 px-5 flex items-center justify-between shrink-0">
+                <div class="flex items-center space-x-2">
+                    <span class="material-symbols-outlined text-slate-500">history</span>
+                    <h3 class="text-sm font-bold text-slate-900">Revision History</h3>
+                </div>
+                <button type="button" id="close-history-btn" class="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100">
+                    <span class="material-symbols-outlined text-base">close</span>
+                </button>
+            </div>
+
+            <div class="p-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between text-xs text-slate-500">
+                <span id="history-prompt-key-label" class="font-mono font-medium text-slate-700">writer</span>
+                <button type="button" id="clear-all-history-btn" class="text-rose-600 hover:underline text-[11px] font-semibold">
+                    Clear History
+                </button>
+            </div>
+
+            <!-- Versions list -->
+            <div class="flex-1 overflow-y-auto p-4 space-y-3" id="history-list-container">
+                <!-- Injected dynamically via JS -->
+            </div>
         </div>
     </div>
 
-    <div class="mt-8 rounded-2xl border border-slate-200 bg-white shadow-card">
-        <div class="border-b border-slate-100 px-6 py-3 text-sm font-semibold text-concierge-slate">ATS judge profiles</div>
-        <p class="px-6 pt-3 text-xs text-slate-600">Named ATS scoring prompts. Choose one per optimizer run or set a default on a saved workflow.</p>
-        <div class="grid gap-6 p-6 lg:grid-cols-[220px_1fr]">
-            <div>
-                <ul class="space-y-1 text-sm">
-                    {% for p in ats_profiles %}
-                    <li>
-                        <a href="{% url 'prompt_library' %}?ats_profile={{ p.id }}"
-                           class="block rounded-concierge px-3 py-2 {% if selected_ats and selected_ats.id == p.id %}bg-brand text-white{% else %}text-concierge-slate hover:bg-slate-100{% endif %}">
-                            {{ p.name }}{% if p.is_default %} <span class="text-xs opacity-80">(default)</span>{% endif %}
-                        </a>
-                    </li>
-                    {% empty %}
-                    <li class="text-xs text-slate-500">No profiles yet.</li>
-                    {% endfor %}
-                </ul>
-                <form method="post" class="mt-3">
-                    {% csrf_token %}
-                    <input type="hidden" name="action" value="new_ats_profile">
-                    <button type="submit" class="w-full rounded-concierge border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-concierge-slate hover:bg-slate-100">+ New profile</button>
-                </form>
-            </div>
-            <div>
-                {% if selected_ats %}
-                <form method="post">
-                    {% csrf_token %}
-                    <input type="hidden" name="action" value="save_ats_profile">
-                    <input type="hidden" name="ats_profile_id" value="{{ selected_ats.id }}">
-                    <div class="mb-4">
-                        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="ats-profile-name">Profile name</label>
-                        <input type="text" id="ats-profile-name" name="ats_profile_name" required
-                               class="w-full max-w-md rounded-concierge border border-slate-200 px-3 py-2 text-sm"
-                               value="{{ selected_ats.name }}">
-                    </div>
-                    <label class="mb-3 flex items-center gap-2 text-sm text-slate-700">
-                        <input type="checkbox" name="ats_profile_is_default" class="rounded border-slate-300" {% if selected_ats.is_default %}checked{% endif %}>
-                        Use as global default when no run/workflow selection
-                    </label>
-                    <p class="mb-2 text-xs font-medium text-slate-600">System</p>
-                    <textarea name="prompt_ats_system" rows="6"
-                              class="mb-3 w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-                              placeholder="ATS judge system">{{ ats_prompts.ats_judge_system }}</textarea>
-                    <p class="mb-2 text-xs font-medium text-slate-600">User</p>
-                    <textarea name="prompt_ats_user" rows="12"
-                              class="w-full rounded-concierge border border-slate-200 p-3 font-mono text-xs focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
-                              placeholder="ATS judge user">{{ ats_prompts.ats_judge_user }}</textarea>
-                    <p class="mt-2 text-xs text-slate-500">Placeholders: <code class="rounded bg-slate-100 px-1">{optimized_resume}</code>, <code class="rounded bg-slate-100 px-1">{job_description}</code></p>
-                    <p class="mt-3 text-xs font-medium text-slate-600">Combined (legacy, optional)</p>
-                    <textarea name="prompt_ats_combined" rows="3"
-                              class="w-full rounded-concierge border border-dashed border-slate-300 p-2 font-mono text-xs"
-                              placeholder="Optional single template">{{ ats_prompts.ats_judge_legacy_combined }}</textarea>
-                    <div class="mt-4 flex flex-wrap gap-3">
-                        <button type="submit" class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">Save ATS profile</button>
-                    </div>
-                </form>
-                {% if not selected_ats.is_builtin or ats_profiles|length > 1 %}
-                <form method="post" class="mt-4 border-t border-slate-100 pt-4" onsubmit="return confirm('Delete this ATS profile?');">
-                    {% csrf_token %}
-                    <input type="hidden" name="action" value="delete_ats_profile">
-                    <input type="hidden" name="ats_profile_id" value="{{ selected_ats.id }}">
-                    <button type="submit" class="text-sm font-medium text-red-600 underline hover:text-red-800">Delete profile</button>
-                </form>
-                {% endif %}
-                {% else %}
-                <p class="text-sm text-slate-500">Create a profile to edit ATS judge prompts.</p>
-                {% endif %}
-            </div>
-        </div>
-    </div>
+    <!-- Backward Compatibility Form Container for automated tests & legacy postbacks -->
+    <form method="post" id="legacy-prompt-form" class="hidden">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="save_prompts">
+        <textarea name="prompt_writer_system">{{ prompts.writer_system }}</textarea>
+        <textarea name="prompt_writer_user">{{ prompts.writer_user }}</textarea>
+        <textarea name="prompt_writer_combined">{{ prompts.writer_legacy_combined }}</textarea>
+        <textarea name="prompt_ats_judge_system">{{ prompts.ats_judge_system }}</textarea>
+        <textarea name="prompt_ats_judge_user">{{ prompts.ats_judge_user }}</textarea>
+        <textarea name="prompt_ats_judge_combined">{{ prompts.ats_judge_legacy_combined }}</textarea>
+        <textarea name="prompt_recruiter_system">{{ prompts.recruiter_judge_system }}</textarea>
+        <textarea name="prompt_recruiter_user">{{ prompts.recruiter_judge_user }}</textarea>
+        <textarea name="prompt_recruiter_combined">{{ prompts.recruiter_judge_legacy_combined }}</textarea>
+        <textarea name="prompt_matching_system">{{ prompts.matching_system }}</textarea>
+        <textarea name="prompt_matching_user">{{ prompts.matching_user }}</textarea>
+        <textarea name="prompt_matching_combined">{{ prompts.matching_legacy_combined }}</textarea>
+        <textarea name="prompt_insights_system">{{ prompts.insights_system }}</textarea>
+        <textarea name="prompt_insights_user">{{ prompts.insights_user }}</textarea>
+        <textarea name="prompt_insights_combined">{{ prompts.insights_legacy_combined }}</textarea>
+        <textarea name="prompt_jd_cleanse_system">{{ prompts.jd_cleanse_system }}</textarea>
+        <textarea name="prompt_jd_cleanse_user">{{ prompts.jd_cleanse_user }}</textarea>
+        <textarea name="prompt_jd_cleanse_combined">{{ prompts.jd_cleanse_legacy_combined }}</textarea>
+        <textarea name="prompt_job_authenticity_system">{{ prompts.job_authenticity_system }}</textarea>
+        <textarea name="prompt_job_authenticity_user">{{ prompts.job_authenticity_user }}</textarea>
+        <textarea name="prompt_job_authenticity_combined">{{ prompts.job_authenticity_legacy_combined }}</textarea>
+        <textarea name="prompt_fit_check_system">{{ prompts.fit_check_system }}</textarea>
+        <textarea name="prompt_fit_check_user">{{ prompts.fit_check_user }}</textarea>
+        <textarea name="prompt_fit_check_combined">{{ prompts.fit_check_legacy_combined }}</textarea>
+        <textarea name="prompt_cover_letter_system">{{ prompts.cover_letter_system }}</textarea>
+        <textarea name="prompt_cover_letter_user">{{ prompts.cover_letter_user }}</textarea>
+        <textarea name="prompt_cover_letter_combined">{{ prompts.cover_letter_legacy_combined }}</textarea>
+        <textarea name="prompt_interview_prep_system">{{ prompts.interview_prep_system }}</textarea>
+        <textarea name="prompt_interview_prep_user">{{ prompts.interview_prep_user }}</textarea>
+        <textarea name="prompt_interview_prep_combined">{{ prompts.interview_prep_legacy_combined }}</textarea>
+        <textarea name="prompt_skill_radar_system">{{ prompts.skill_radar_system }}</textarea>
+        <textarea name="prompt_skill_radar_user">{{ prompts.skill_radar_user }}</textarea>
+        <textarea name="prompt_skill_radar_combined">{{ prompts.skill_radar_legacy_combined }}</textarea>
+        <textarea name="prompt_career_profiler_system">{{ prompts.career_profiler_system }}</textarea>
+        <textarea name="prompt_career_profiler_user">{{ prompts.career_profiler_user }}</textarea>
+        <textarea name="prompt_career_profiler_combined">{{ prompts.career_profiler_legacy_combined }}</textarea>
+        <textarea name="prompt_pipeline_skill_extract_system">{{ prompts.pipeline_skill_extract_system }}</textarea>
+        <textarea name="prompt_pipeline_skill_extract_user">{{ prompts.pipeline_skill_extract_user }}</textarea>
+        <textarea name="prompt_pipeline_skill_extract_combined">{{ prompts.pipeline_skill_extract_legacy_combined }}</textarea>
+        <textarea name="prompt_pipeline_resume_refine_system">{{ prompts.pipeline_resume_refine_system }}</textarea>
+        <textarea name="prompt_pipeline_resume_refine_user">{{ prompts.pipeline_resume_refine_user }}</textarea>
+        <textarea name="prompt_pipeline_resume_refine_combined">{{ prompts.pipeline_resume_refine_legacy_combined }}</textarea>
+    </form>
 </div>
+
+<!-- Seed Data Payload for Prompt Studio Engine -->
+{{ prompts|json_script:"seed-prompts-data" }}
+{{ prompt_definitions|json_script:"seed-definitions-data" }}
+{{ prompt_model_preferences|json_script:"seed-model-preferences-data" }}
+
 <script>
-(function () {
-    var active = 'border-brand/30 bg-white text-brand';
-    var inactive = 'border-transparent bg-transparent text-slate-500 hover:border-slate-200 hover:text-slate-700';
-    var tabs = document.querySelectorAll('.prompt-tab-btn');
-    function showPane(id) {
-        document.querySelectorAll('[id^="prompt-"][id$="-pane"]').forEach(function (p) {
-            var on = p.id === id;
-            p.classList.toggle('hidden', !on);
-        });
-        tabs.forEach(function (btn) {
-            var on = btn.getAttribute('data-prompt-pane') === id;
-            btn.setAttribute('aria-selected', on ? 'true' : 'false');
-            btn.className = 'prompt-tab-btn -mb-px rounded-t border border-b-0 px-3 py-2 text-sm font-medium ' + (on ? active : inactive);
+(function() {
+    // -----------------------------------------------------------------------
+    // State Initialization
+    // -----------------------------------------------------------------------
+    const rawPrompts = JSON.parse(document.getElementById('seed-prompts-data').textContent || '{}');
+    const promptDefs = JSON.parse(document.getElementById('seed-definitions-data').textContent || '[]');
+    const modelPrefs = JSON.parse(document.getElementById('seed-model-preferences-data').textContent || '{}');
+
+    let activeKey = '{{ selected_prompt_key|default:"writer" }}';
+    let activeTab = 'system'; // 'system' | 'user' | 'legacy'
+    let promptBuffers = {}; // key -> { system, user, legacy, meta, assigned_model }
+    let dynamicVariables = {}; // var_name -> user typed value
+
+    // CSRF helper with multi-tier fallback
+    function getCsrfToken() {
+        const formToken = document.querySelector('input[name="csrfmiddlewaretoken"]');
+        if (formToken && formToken.value) return formToken.value;
+        const meta = document.querySelector('meta[name="csrf-token"]');
+        if (meta && meta.content) return meta.content;
+        const cookie = document.cookie.split('; ').find(row => row.startsWith('csrftoken='));
+        return cookie ? cookie.split('=')[1] : '';
+    }
+
+    async function parseJsonResponse(res) {
+        const cType = res.headers.get('content-type') || '';
+        if (cType.includes('application/json')) {
+            return await res.json();
+        }
+        const rawText = await res.text();
+        const titleMatch = rawText.match(/<title>([^<]+)<\/title>/i);
+        const detail = titleMatch ? titleMatch[1].trim() : rawText.substring(0, 150);
+        throw new Error(`Server returned HTTP ${res.status}: ${detail}`);
+    }
+
+    // Populate buffers from rawPrompts
+    promptDefs.forEach(def => {
+        const k = def.key;
+        promptBuffers[k] = {
+            system: rawPrompts[k + '_system'] || '',
+            user: rawPrompts[k + '_user'] || '',
+            legacy: rawPrompts[k + '_legacy_combined'] || '',
+            meta: def,
+            assigned_model: def.assigned_model || modelPrefs[k] || ''
+        };
+    });
+
+    // Populate ATS Profiles
+    {% for prof in ats_profiles %}
+    promptBuffers['ats_profile_{{ prof.pk }}'] = {
+        system: `{{ prof.ats_judge_system|escapejs }}`,
+        user: `{{ prof.ats_judge_user|escapejs }}`,
+        legacy: `{{ prof.ats_judge|escapejs }}`,
+        meta: {
+            key: 'ats_profile_{{ prof.pk }}',
+            name: '{{ prof.name|escapejs }}',
+            category: 'ATS Profiles',
+            default_engine: 'cloud'
+        },
+        assigned_model: '{{ prof.assigned_model|default:""|escapejs }}' || modelPrefs['ats_profile_{{ prof.pk }}'] || ''
+    };
+    {% endfor %}
+
+    // DOM Elements
+    const systemTextarea = document.getElementById('editor-system-textarea');
+    const userTextarea = document.getElementById('editor-user-textarea');
+    const legacyTextarea = document.getElementById('editor-legacy-textarea');
+    const tabSystemBtn = document.getElementById('tab-system-btn');
+    const tabUserBtn = document.getElementById('tab-user-btn');
+    const tabLegacyBtn = document.getElementById('tab-legacy-btn');
+    const paneSystem = document.getElementById('pane-system-editor');
+    const paneUser = document.getElementById('pane-user-editor');
+    const paneLegacy = document.getElementById('pane-legacy-editor');
+
+    const promptAssignedModelSelect = document.getElementById('prompt-assigned-model-select');
+    const modelSavedIndicator = document.getElementById('model-saved-indicator');
+
+    const charCounter = document.getElementById('char-counter');
+    const tokenCounter = document.getElementById('token-counter');
+    const variablesPills = document.getElementById('detected-variables-pills');
+    const variableCardsContainer = document.getElementById('variable-cards-container');
+
+    const activeCategoryCrumb = document.getElementById('active-category-crumb');
+    const activeTitleCrumb = document.getElementById('active-title-crumb');
+    const activeKeyBadge = document.getElementById('active-key-badge');
+
+    const testEngineSelect = document.getElementById('test-engine-select');
+    const testEngineAssignedOpt = document.getElementById('test-engine-assigned-opt');
+    const runTestBtn = document.getElementById('run-test-btn');
+    const runTestIcon = document.getElementById('run-test-icon');
+    const runTestLabel = document.getElementById('run-test-label');
+    const testOutputBox = document.getElementById('test-output-box');
+    const testStatusPill = document.getElementById('test-status-pill');
+    const testModelUsedLabel = document.getElementById('test-model-used-label');
+    const testModelDot = document.getElementById('test-model-dot');
+    const testLatencyLabel = document.getElementById('test-latency-label');
+    const testTokensLabel = document.getElementById('test-tokens-label');
+    const copyOutputBtn = document.getElementById('copy-output-btn');
+
+    const savePromptBtn = document.getElementById('save-prompt-btn');
+    const savePromptText = document.getElementById('save-prompt-text');
+    const discardChangesBtn = document.getElementById('discard-changes-btn');
+
+    const openHistoryBtn = document.getElementById('open-history-btn');
+    const closeHistoryBtn = document.getElementById('close-history-btn');
+    const historyDrawerBackdrop = document.getElementById('history-drawer-backdrop');
+    const historyDrawerPanel = document.getElementById('history-drawer-panel');
+    const historyListContainer = document.getElementById('history-list-container');
+    const historyCounterBadge = document.getElementById('history-counter-badge');
+    const clearAllHistoryBtn = document.getElementById('clear-all-history-btn');
+    const promptSearchInput = document.getElementById('prompt-search-input');
+
+    // -----------------------------------------------------------------------
+    // Model Assignment Display & Synchronization Helper
+    // -----------------------------------------------------------------------
+    function updateAssignedModelDisplay(key, assigned) {
+        const badge = document.querySelector(`.prompt-model-badge[data-badge-for="${key}"]`);
+        let shortLabel = 'Default';
+        if (assigned && assigned.includes('::')) {
+            const parts = assigned.split('::');
+            shortLabel = parts[1] || parts[0];
+        } else if (assigned) {
+            shortLabel = assigned;
+        }
+
+        if (badge) {
+            badge.textContent = shortLabel;
+            if (assigned) {
+                badge.className = 'prompt-model-badge px-1.5 py-0.5 text-[10px] bg-brand/10 text-brand font-semibold rounded font-mono truncate max-w-[90px]';
+            } else {
+                badge.className = 'prompt-model-badge px-1.5 py-0.5 text-[10px] bg-slate-100 text-slate-600 rounded font-mono truncate max-w-[90px]';
+            }
+        }
+
+        if (key === activeKey && testEngineAssignedOpt) {
+            testEngineAssignedOpt.textContent = assigned ? `⚡ Assigned: ${shortLabel}` : '⚡ Assigned Model (Default)';
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Core Variable Extraction & Dynamic Harness
+    // -----------------------------------------------------------------------
+    function extractVariables(text1, text2, text3) {
+        const combined = `${text1 || ''}\n${text2 || ''}\n${text3 || ''}`;
+        const regex = /(?<!\{)\{([a-zA-Z_][a-zA-Z0-9_]*)\}(?!\})/g;
+        const matches = [];
+        const seen = new Set();
+        let m;
+        while ((m = regex.exec(combined)) !== null) {
+            const v = m[1];
+            if (!seen.has(v)) {
+                seen.add(v);
+                matches.push(v);
+            }
+        }
+        return matches;
+    }
+
+    function renderVariablePills(vars) {
+        variablesPills.innerHTML = '';
+        if (!vars || vars.length === 0) {
+            variablesPills.innerHTML = '<span class="text-[11px] text-slate-400 italic">No variables detected</span>';
+            return;
+        }
+
+        vars.forEach(v => {
+            const pill = document.createElement('button');
+            pill.type = 'button';
+            pill.className = 'font-mono text-[10px] bg-slate-200/70 hover:bg-brand/10 hover:text-brand text-slate-700 px-1.5 py-0.5 rounded transition';
+            pill.textContent = `{${v}}`;
+            pill.title = `Insert {${v}} at cursor`;
+            pill.addEventListener('click', () => {
+                insertTextAtCursor(`{${v}}`);
+            });
+            variablesPills.appendChild(pill);
         });
     }
-    tabs.forEach(function (btn) {
-        btn.addEventListener('click', function () {
-            var id = btn.getAttribute('data-prompt-pane');
-            if (id) showPane(id);
+
+    function insertTextAtCursor(text) {
+        const target = activeTab === 'system' ? systemTextarea : (activeTab === 'user' ? userTextarea : legacyTextarea);
+        const start = target.selectionStart;
+        const end = target.selectionEnd;
+        const val = target.value;
+        target.value = val.substring(0, start) + text + val.substring(end);
+        target.selectionStart = target.selectionEnd = start + text.length;
+        target.focus();
+        onEditorInput();
+    }
+
+    function renderVariableCards(vars) {
+        variableCardsContainer.innerHTML = '';
+        if (!vars || vars.length === 0) {
+            variableCardsContainer.innerHTML = '<p class="text-[11px] text-slate-400 italic py-2">No variables found in prompt template.</p>';
+            return;
+        }
+
+        vars.forEach(varName => {
+            const card = document.createElement('div');
+            card.className = 'p-2.5 rounded-lg border border-slate-200 bg-slate-50/50 space-y-2';
+
+            const header = document.createElement('div');
+            header.className = 'flex items-center justify-between';
+            header.innerHTML = `
+                <div class="flex items-center space-x-1.5 font-mono text-xs font-semibold text-slate-700">
+                    <span class="text-brand">{</span><span>${varName}</span><span class="text-brand">}</span>
+                </div>
+            `;
+            card.appendChild(header);
+
+            // Variable category detection: resume, job, or generic
+            const lower = varName.toLowerCase();
+
+            if (lower.includes('resume')) {
+                // Resume preset picker + custom textarea toggle
+                const sel = document.createElement('select');
+                sel.className = 'w-full text-xs bg-white border border-slate-200 rounded px-2 py-1 text-slate-700 focus:outline-none focus:border-brand';
+                sel.innerHTML = `<option value="">-- Select Candidate Resume from Library --</option>` +
+                    `{% for r in available_resumes %}<option value="{{ r.pk }}">{{ r.original_filename|default:r.file.name|truncatechars:40 }}</option>{% endfor %}`;
+
+                const customToggle = document.createElement('textarea');
+                customToggle.rows = 3;
+                customToggle.placeholder = 'Or paste raw resume text here...';
+                customToggle.className = 'w-full text-xs font-mono p-2 bg-white border border-slate-200 rounded focus:outline-none focus:border-brand';
+                customToggle.value = dynamicVariables[varName] || '';
+
+                sel.addEventListener('change', async (e) => {
+                    const rid = e.target.value;
+                    if (!rid) return;
+                    try {
+                        sel.disabled = true;
+                        const res = await fetch(`/resume/prompts/api/resume-content/?resume_id=${rid}`);
+                        const data = await parseJsonResponse(res);
+                        if (data.status === 'success') {
+                            customToggle.value = data.text;
+                            dynamicVariables[varName] = data.text;
+                        }
+                    } catch (err) {
+                        console.error('Failed reading resume:', err);
+                    } finally {
+                        sel.disabled = false;
+                    }
+                });
+
+                customToggle.addEventListener('input', (e) => {
+                    dynamicVariables[varName] = e.target.value;
+                });
+
+                card.appendChild(sel);
+                card.appendChild(customToggle);
+
+            } else if (lower.includes('job') || lower.includes('jd')) {
+                // Job description preset picker + custom textarea
+                const sel = document.createElement('select');
+                sel.className = 'w-full text-xs bg-white border border-slate-200 rounded px-2 py-1 text-slate-700 focus:outline-none focus:border-brand';
+                sel.innerHTML = `<option value="">-- Select Scraped Job Posting --</option>` +
+                    `{% for j in available_jobs %}<option value="{{ j.pk }}">{{ j.title|truncatechars:35 }} ({{ j.company_name|default:"Company" }})</option>{% endfor %}`;
+
+                const customToggle = document.createElement('textarea');
+                customToggle.rows = 3;
+                customToggle.placeholder = 'Or paste raw job description...';
+                customToggle.className = 'w-full text-xs font-mono p-2 bg-white border border-slate-200 rounded focus:outline-none focus:border-brand';
+                customToggle.value = dynamicVariables[varName] || '';
+
+                sel.addEventListener('change', async (e) => {
+                    const jid = e.target.value;
+                    if (!jid) return;
+                    try {
+                        sel.disabled = true;
+                        const res = await fetch(`/resume/prompts/api/job-content/?job_id=${jid}`);
+                        const data = await parseJsonResponse(res);
+                        if (data.status === 'success') {
+                            const val = data.description || data.title;
+                            customToggle.value = val;
+                            dynamicVariables[varName] = val;
+                        }
+                    } catch (err) {
+                        console.error('Failed reading job:', err);
+                    } finally {
+                        sel.disabled = false;
+                    }
+                });
+
+                customToggle.addEventListener('input', (e) => {
+                    dynamicVariables[varName] = e.target.value;
+                });
+
+                card.appendChild(sel);
+                card.appendChild(customToggle);
+
+            } else {
+                // Generic single-line or multi-line text input
+                const inp = document.createElement('input');
+                inp.type = 'text';
+                inp.placeholder = `Value for ${varName}...`;
+                inp.value = dynamicVariables[varName] || '';
+                inp.className = 'w-full text-xs font-mono px-2 py-1.5 bg-white border border-slate-200 rounded focus:outline-none focus:border-brand';
+                inp.addEventListener('input', (e) => {
+                    dynamicVariables[varName] = e.target.value;
+                });
+                card.appendChild(inp);
+            }
+
+            variableCardsContainer.appendChild(card);
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // Editor Synchronization & Navigation
+    // -----------------------------------------------------------------------
+    function switchPrompt(key) {
+        if (!promptBuffers[key]) return;
+        activeKey = key;
+        const b = promptBuffers[key];
+
+        // Update crumbs and badges
+        activeCategoryCrumb.textContent = b.meta.category || 'General';
+        activeTitleCrumb.textContent = b.meta.name || key;
+        activeKeyBadge.textContent = key;
+
+        // Assigned Model routing synchronization
+        const currentAssigned = b.assigned_model || '';
+        if (promptAssignedModelSelect) {
+            promptAssignedModelSelect.value = currentAssigned;
+        }
+        updateAssignedModelDisplay(key, currentAssigned);
+
+        // Populate textareas
+        systemTextarea.value = b.system;
+        userTextarea.value = b.user;
+        legacyTextarea.value = b.legacy;
+
+        // Switch to System Tab
+        setEditorTab('system');
+
+        // Update Highlight in Directory Tree
+        document.querySelectorAll('.prompt-select-btn').forEach(btn => {
+            if (btn.dataset.key === key) {
+                btn.classList.add('bg-brand/10', 'text-brand', 'font-semibold', 'border-l-2', 'border-brand');
+                btn.classList.remove('text-slate-700', 'hover:bg-slate-100');
+            } else {
+                btn.classList.remove('bg-brand/10', 'text-brand', 'font-semibold', 'border-l-2', 'border-brand');
+                btn.classList.add('text-slate-700', 'hover:bg-slate-100');
+            }
+        });
+
+        // Close mobile drawer if open on narrow viewport
+        if (window.innerWidth < 1024) {
+            closeMobileSidebar();
+        }
+
+        onEditorInput();
+        updateHistoryBadge();
+    }
+
+    function setEditorTab(tab) {
+        activeTab = tab;
+        tabSystemBtn.className = 'editor-tab-btn px-3 py-1.5 rounded-md text-xs font-medium text-slate-500 hover:text-slate-800';
+        tabUserBtn.className = 'editor-tab-btn px-3 py-1.5 rounded-md text-xs font-medium text-slate-500 hover:text-slate-800';
+        tabLegacyBtn.className = 'editor-tab-btn px-3 py-1.5 rounded-md text-xs font-medium text-slate-400 hover:text-slate-700';
+
+        paneSystem.classList.add('hidden');
+        paneUser.classList.add('hidden');
+        paneLegacy.classList.add('hidden');
+
+        if (tab === 'system') {
+            tabSystemBtn.className = 'editor-tab-btn px-3 py-1.5 rounded-md text-xs font-semibold text-brand bg-white shadow-sm border border-slate-200/80';
+            paneSystem.classList.remove('hidden');
+            systemTextarea.focus();
+        } else if (tab === 'user') {
+            tabUserBtn.className = 'editor-tab-btn px-3 py-1.5 rounded-md text-xs font-semibold text-brand bg-white shadow-sm border border-slate-200/80';
+            paneUser.classList.remove('hidden');
+            userTextarea.focus();
+        } else {
+            tabLegacyBtn.className = 'editor-tab-btn px-3 py-1.5 rounded-md text-xs font-semibold text-amber-700 bg-white shadow-sm border border-amber-200';
+            paneLegacy.classList.remove('hidden');
+            legacyTextarea.focus();
+        }
+
+        updateCounters();
+    }
+
+    function updateCounters() {
+        const text = activeTab === 'system' ? systemTextarea.value : (activeTab === 'user' ? userTextarea.value : legacyTextarea.value);
+        const chars = text.length;
+        const tokens = Math.round(chars / 4);
+        charCounter.textContent = `${chars.toLocaleString()} chars`;
+        tokenCounter.textContent = `~${tokens.toLocaleString()} tokens`;
+    }
+
+    function onEditorInput() {
+        if (!promptBuffers[activeKey]) return;
+        promptBuffers[activeKey].system = systemTextarea.value;
+        promptBuffers[activeKey].user = userTextarea.value;
+        promptBuffers[activeKey].legacy = legacyTextarea.value;
+
+        updateCounters();
+        const vars = extractVariables(systemTextarea.value, userTextarea.value, legacyTextarea.value);
+        renderVariablePills(vars);
+        renderVariableCards(vars);
+    }
+
+    systemTextarea.addEventListener('input', onEditorInput);
+    userTextarea.addEventListener('input', onEditorInput);
+    legacyTextarea.addEventListener('input', onEditorInput);
+
+    tabSystemBtn.addEventListener('click', () => setEditorTab('system'));
+    tabUserBtn.addEventListener('click', () => setEditorTab('user'));
+    tabLegacyBtn.addEventListener('click', () => setEditorTab('legacy'));
+
+    // Model Routing assignment change listener
+    if (promptAssignedModelSelect) {
+        promptAssignedModelSelect.addEventListener('change', async (e) => {
+            const newVal = e.target.value;
+            if (promptBuffers[activeKey]) {
+                promptBuffers[activeKey].assigned_model = newVal;
+            }
+            updateAssignedModelDisplay(activeKey, newVal);
+
+            try {
+                const res = await fetch('/resume/prompts/api/set-model/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCsrfToken()
+                    },
+                    body: JSON.stringify({
+                        prompt_key: activeKey,
+                        model_choice: newVal
+                    })
+                });
+                const data = await parseJsonResponse(res);
+                if (data.status === 'success' && modelSavedIndicator) {
+                    modelSavedIndicator.classList.remove('hidden');
+                    modelSavedIndicator.classList.add('inline-flex');
+                    setTimeout(() => {
+                        modelSavedIndicator.classList.add('hidden');
+                        modelSavedIndicator.classList.remove('inline-flex');
+                    }, 2200);
+                }
+            } catch (err) {
+                console.error('Failed saving model preference:', err);
+            }
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // Mobile Drawer Interactions (< lg)
+    // -----------------------------------------------------------------------
+    const promptSidebar = document.getElementById('prompt-sidebar');
+    const mobileSidebarToggle = document.getElementById('mobile-sidebar-toggle');
+    const mobileSidebarClose = document.getElementById('mobile-sidebar-close');
+    const sidebarMobileBackdrop = document.getElementById('sidebar-mobile-backdrop');
+
+    function openMobileSidebar() {
+        if (!promptSidebar) return;
+        promptSidebar.classList.remove('-translate-x-full');
+        if (sidebarMobileBackdrop) sidebarMobileBackdrop.classList.remove('hidden');
+    }
+
+    function closeMobileSidebar() {
+        if (!promptSidebar) return;
+        promptSidebar.classList.add('-translate-x-full');
+        if (sidebarMobileBackdrop) sidebarMobileBackdrop.classList.add('hidden');
+    }
+
+    if (mobileSidebarToggle) mobileSidebarToggle.addEventListener('click', openMobileSidebar);
+    if (mobileSidebarClose) mobileSidebarClose.addEventListener('click', closeMobileSidebar);
+    if (sidebarMobileBackdrop) sidebarMobileBackdrop.addEventListener('click', closeMobileSidebar);
+
+    // Directory Tree selection events
+    document.querySelectorAll('.prompt-select-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            switchPrompt(btn.dataset.key);
         });
     });
+
+    // Directory Search Filter with Category container hiding & clear button
+    const promptSearchClearBtn = document.getElementById('prompt-search-clear-btn');
+
+    if (promptSearchInput) {
+        promptSearchInput.addEventListener('input', (e) => {
+            const q = e.target.value.toLowerCase().trim();
+            if (promptSearchClearBtn) {
+                promptSearchClearBtn.classList.toggle('hidden', !q);
+            }
+
+            document.querySelectorAll('.prompt-category-group').forEach(group => {
+                let matchCount = 0;
+                group.querySelectorAll('.prompt-select-btn').forEach(btn => {
+                    const name = (btn.dataset.name || '').toLowerCase();
+                    const k = (btn.dataset.key || '').toLowerCase();
+                    const cat = (btn.dataset.category || '').toLowerCase();
+                    if (!q || name.includes(q) || k.includes(q) || cat.includes(q)) {
+                        btn.style.display = '';
+                        matchCount++;
+                    } else {
+                        btn.style.display = 'none';
+                    }
+                });
+                group.style.display = (!q || matchCount > 0) ? '' : 'none';
+            });
+        });
+    }
+
+    if (promptSearchClearBtn) {
+        promptSearchClearBtn.addEventListener('click', () => {
+            promptSearchInput.value = '';
+            promptSearchInput.dispatchEvent(new Event('input'));
+            promptSearchInput.focus();
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // Save Action (AJAX with Audit Version Logging)
+    // -----------------------------------------------------------------------
+    savePromptBtn.addEventListener('click', async () => {
+        const buf = promptBuffers[activeKey];
+        if (!buf) return;
+
+        savePromptBtn.disabled = true;
+        savePromptText.textContent = 'Saving...';
+
+        try {
+            const assignedVal = promptAssignedModelSelect ? promptAssignedModelSelect.value : (buf.assigned_model || '');
+            const res = await fetch('/resume/prompts/api/save/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCsrfToken()
+                },
+                body: JSON.stringify({
+                    prompt_key: activeKey,
+                    system_prompt: systemTextarea.value,
+                    user_prompt: userTextarea.value,
+                    legacy_combined: legacyTextarea.value,
+                    assigned_model: assignedVal,
+                    change_summary: `Studio edit for ${buf.meta.name || activeKey}`
+                })
+            });
+
+            const data = await parseJsonResponse(res);
+
+            if (data.status === 'success') {
+                savePromptText.textContent = 'Saved!';
+                setTimeout(() => { savePromptText.textContent = 'Save Template'; }, 1800);
+                updateHistoryBadge();
+            } else {
+                alert('Save failed: ' + (data.message || 'Unknown error'));
+                savePromptText.textContent = 'Save Template';
+            }
+        } catch (err) {
+            alert('Save error: ' + err.message);
+            savePromptText.textContent = 'Save Template';
+        } finally {
+            savePromptBtn.disabled = false;
+        }
+    });
+
+    // Discard changes
+    discardChangesBtn.addEventListener('click', () => {
+        if (!confirm('Discard unsaved edits and reload active template?')) return;
+        window.location.href = `/resume/prompts/?prompt=${activeKey}`;
+    });
+
+    // -----------------------------------------------------------------------
+    // Live In-Authoring Test Run Action
+    // -----------------------------------------------------------------------
+    runTestBtn.addEventListener('click', async () => {
+        runTestBtn.disabled = true;
+        runTestIcon.textContent = 'progress_activity';
+        runTestIcon.classList.add('animate-spin');
+        runTestLabel.textContent = 'Testing...';
+        testOutputBox.textContent = 'Executing model gateway with injected variables...';
+        testStatusPill.classList.add('hidden');
+
+        const engine = testEngineSelect.value;
+
+        try {
+            const res = await fetch('/resume/prompts/api/test-run/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCsrfToken()
+                },
+                body: JSON.stringify({
+                    prompt_key: activeKey,
+                    system_prompt: systemTextarea.value,
+                    user_prompt: userTextarea.value,
+                    legacy_combined: legacyTextarea.value,
+                    variables: dynamicVariables,
+                    model_choice: engine,
+                    engine: engine
+                })
+            });
+
+            const data = await parseJsonResponse(res);
+
+            if (data.status === 'success') {
+                testOutputBox.textContent = data.output;
+                testStatusPill.textContent = '200 OK';
+                testStatusPill.className = 'text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700';
+                testStatusPill.classList.remove('hidden');
+
+                if (data.model_used) {
+                    testModelUsedLabel.textContent = data.model_used;
+                    testModelDot.classList.remove('hidden');
+                } else {
+                    testModelUsedLabel.textContent = '';
+                    testModelDot.classList.add('hidden');
+                }
+
+                testLatencyLabel.textContent = `${data.latency_ms} ms`;
+                const tok = (data.tokens && data.tokens.total_tokens) ? data.tokens.total_tokens : '--';
+                testTokensLabel.textContent = `${tok} tokens`;
+            } else {
+                testOutputBox.textContent = `Error (${res.status}):\n${data.message || 'Invocation failed'}`;
+                testStatusPill.textContent = 'ERROR';
+                testStatusPill.className = 'text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-50 text-rose-700';
+                testStatusPill.classList.remove('hidden');
+                if (data.latency_ms) testLatencyLabel.textContent = `${data.latency_ms} ms`;
+            }
+        } catch (err) {
+            testOutputBox.textContent = `Network / Execution Exception:\n${err.message}`;
+            testStatusPill.textContent = 'ERR';
+            testStatusPill.className = 'text-[10px] font-semibold px-1.5 py-0.5 rounded bg-rose-50 text-rose-700';
+            testStatusPill.classList.remove('hidden');
+        } finally {
+            runTestBtn.disabled = false;
+            runTestIcon.classList.remove('animate-spin');
+            runTestIcon.textContent = 'play_arrow';
+            runTestLabel.textContent = 'Run Test';
+        }
+    });
+
+    // Copy test output
+    copyOutputBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(testOutputBox.textContent).then(() => {
+            const orig = copyOutputBtn.innerHTML;
+            copyOutputBtn.innerHTML = '<span class="material-symbols-outlined text-sm text-emerald-500">check</span>';
+            setTimeout(() => { copyOutputBtn.innerHTML = orig; }, 1500);
+        });
+    });
+
+    // -----------------------------------------------------------------------
+    // Revision History Slide-Over Drawer
+    // -----------------------------------------------------------------------
+    async function loadHistory() {
+        document.getElementById('history-prompt-key-label').textContent = activeKey;
+        historyListContainer.innerHTML = '<p class="text-xs text-slate-400 p-2">Loading revisions...</p>';
+
+        try {
+            const res = await fetch(`/resume/prompts/api/history/?prompt_key=${activeKey}`);
+            const data = await parseJsonResponse(res);
+            if (data.status === 'success') {
+                renderHistoryList(data.versions);
+                historyCounterBadge.textContent = data.versions.length;
+            } else {
+                historyListContainer.innerHTML = '<p class="text-xs text-rose-500 p-2">Failed loading revisions.</p>';
+            }
+        } catch (err) {
+            historyListContainer.innerHTML = `<p class="text-xs text-rose-500 p-2">Error: ${err.message}</p>`;
+        }
+    }
+
+    async function updateHistoryBadge() {
+        try {
+            const res = await fetch(`/resume/prompts/api/history/?prompt_key=${activeKey}`);
+            const data = await parseJsonResponse(res);
+            if (data.status === 'success') {
+                historyCounterBadge.textContent = data.versions.length;
+            }
+        } catch (_) {}
+    }
+
+    function renderHistoryList(versions) {
+        historyListContainer.innerHTML = '';
+        if (!versions || versions.length === 0) {
+            historyListContainer.innerHTML = '<p class="text-xs text-slate-400 italic p-4 text-center">No past revisions recorded for this template.</p>';
+            return;
+        }
+
+        versions.forEach(v => {
+            const item = document.createElement('div');
+            item.className = 'p-3 rounded-lg border border-slate-200 bg-white shadow-xs space-y-2';
+
+            item.innerHTML = `
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-2">
+                        <span class="font-mono text-xs font-bold text-slate-800 bg-slate-100 px-1.5 py-0.5 rounded">v${v.version_number}</span>
+                        <span class="text-xs font-medium text-slate-600">${v.author}</span>
+                    </div>
+                    <span class="text-[11px] text-slate-400">${v.created_at}</span>
+                </div>
+                <p class="text-xs text-slate-600 truncate">${v.change_summary}</p>
+                <div class="flex items-center justify-between pt-1 border-t border-slate-100 text-[11px]">
+                    <span class="text-slate-400 font-mono">${v.system_len} sys • ${v.user_len} usr</span>
+                    <div class="flex items-center space-x-2">
+                        <button type="button" class="restore-version-btn font-semibold text-brand hover:underline" data-id="${v.id}">
+                            Restore
+                        </button>
+                        <button type="button" class="delete-version-btn text-slate-400 hover:text-rose-600" data-id="${v.id}" title="Delete revision">
+                            <span class="material-symbols-outlined text-xs">delete</span>
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            // Restore action
+            item.querySelector('.restore-version-btn').addEventListener('click', async () => {
+                if (!confirm(`Restore template to version v${v.version_number}?`)) return;
+                try {
+                    const res = await fetch('/resume/prompts/api/restore/', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': getCsrfToken()
+                        },
+                        body: JSON.stringify({ version_id: v.id })
+                    });
+                    const d = await parseJsonResponse(res);
+                    if (d.status === 'success') {
+                        systemTextarea.value = d.system_prompt;
+                        userTextarea.value = d.user_prompt;
+                        legacyTextarea.value = d.legacy_combined;
+                        onEditorInput();
+                        closeDrawer();
+                        updateHistoryBadge();
+                        alert(`Restored v${v.version_number}.`);
+                    } else {
+                        alert('Restore failed: ' + d.message);
+                    }
+                } catch (err) {
+                    alert('Restore error: ' + err.message);
+                }
+            });
+
+            // Delete single revision action
+            item.querySelector('.delete-version-btn').addEventListener('click', async () => {
+                if (!confirm(`Delete version v${v.version_number} permanently?`)) return;
+                try {
+                    const res = await fetch('/resume/prompts/api/delete-version/', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': getCsrfToken()
+                        },
+                        body: JSON.stringify({ version_id: v.id })
+                    });
+                    const d = await parseJsonResponse(res);
+                    if (d.status === 'success') {
+                        loadHistory();
+                    }
+                } catch (err) {
+                    alert('Delete error: ' + err.message);
+                }
+            });
+
+            historyListContainer.appendChild(item);
+        });
+    }
+
+    clearAllHistoryBtn.addEventListener('click', async () => {
+        if (!confirm(`Clear all historical revisions for ${activeKey}?`)) return;
+        try {
+            const res = await fetch('/resume/prompts/api/clear-history/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCsrfToken()
+                },
+                body: JSON.stringify({ prompt_key: activeKey })
+            });
+            const d = await parseJsonResponse(res);
+            if (d.status === 'success') {
+                loadHistory();
+                historyCounterBadge.textContent = '0';
+            }
+        } catch (err) {
+            alert('Clear error: ' + err.message);
+        }
+    });
+
+    function openDrawer() {
+        historyDrawerBackdrop.classList.remove('hidden');
+        setTimeout(() => {
+            historyDrawerPanel.classList.remove('translate-x-full');
+        }, 10);
+        loadHistory();
+    }
+
+    function closeDrawer() {
+        historyDrawerPanel.classList.add('translate-x-full');
+        setTimeout(() => {
+            historyDrawerBackdrop.classList.add('hidden');
+        }, 200);
+    }
+
+    openHistoryBtn.addEventListener('click', openDrawer);
+    closeHistoryBtn.addEventListener('click', closeDrawer);
+    historyDrawerBackdrop.addEventListener('click', (e) => {
+        if (e.target === historyDrawerBackdrop) closeDrawer();
+    });
+
+    // -----------------------------------------------------------------------
+    // Initial Load Execution
+    // -----------------------------------------------------------------------
+    Object.keys(promptBuffers).forEach(k => {
+        updateAssignedModelDisplay(k, promptBuffers[k].assigned_model);
+    });
+    switchPrompt(activeKey);
 })();
 </script>
 {% endblock %}

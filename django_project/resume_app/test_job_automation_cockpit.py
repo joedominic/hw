@@ -83,7 +83,7 @@ class JobAutomationCockpitTests(TestCase):
         self.assertEqual(res1.status_code, 200)
         data1 = res1.json()
         self.assertEqual(data1["status"], "queued")
-        self.assertEqual(data1["cooldown_remaining_seconds"], 3600)
+        self.assertEqual(data1["cooldown_remaining_seconds"], 180)
         mock_run_task.assert_called_once_with(self.user.id, self.task.id)
 
         # 2. Immediate second trigger is throttled with 429
@@ -92,7 +92,7 @@ class JobAutomationCockpitTests(TestCase):
         self.assertEqual(res2.status_code, 429)
         data2 = res2.json()
         self.assertEqual(data2["status"], "cooldown")
-        self.assertTrue(data2["cooldown_remaining_seconds"] > 3500)
+        self.assertTrue(data2["cooldown_remaining_seconds"] > 150)
         mock_run_task.assert_not_called()
 
     @patch("resume_app.views.run_job_search_task")
@@ -414,5 +414,27 @@ class JobAutomationCockpitTests(TestCase):
         res_done = self.client.get(reverse("career_cockpit") + "?track=senior-python&stage=done")
         self.assertEqual(res_done.status_code, 200)
         self.assertContains(res_done, "Submitted Resume")
+
+    def test_cockpit_profile_count_sums_review_and_apply_ignoring_new_and_applied(self):
+        """Profile count next to search profile must equal sum of Review (vetting) + Apply (applying), ignoring New (pipeline) and Applied (done)."""
+        jl_new = JobListing.objects.create(source="test", external_id="ext-new", title="Role 1", company_name="C1")
+        jl_review = JobListing.objects.create(source="test", external_id="ext-review", title="Role 2", company_name="C2")
+        jl_apply = JobListing.objects.create(source="test", external_id="ext-apply", title="Role 3", company_name="C3")
+        jl_done = JobListing.objects.create(source="test", external_id="ext-done", title="Role 4", company_name="C4")
+
+        # 1 in New (pipeline), 1 in Review (vetting), 1 in Apply (applying), 1 in Applied (done)
+        PipelineEntry.objects.create(owner=self.user, job_listing=jl_new, track="senior-python", stage=PipelineEntry.Stage.PIPELINE)
+        PipelineEntry.objects.create(owner=self.user, job_listing=jl_review, track="senior-python", stage=PipelineEntry.Stage.VETTING)
+        PipelineEntry.objects.create(owner=self.user, job_listing=jl_apply, track="senior-python", stage=PipelineEntry.Stage.APPLYING)
+        PipelineEntry.objects.create(owner=self.user, job_listing=jl_done, track="senior-python", stage=PipelineEntry.Stage.DONE)
+
+        res = self.client.get(reverse("career_cockpit") + "?track=senior-python")
+        self.assertEqual(res.status_code, 200)
+
+        # Profile count must be 2 (1 vetting + 1 applying), ignoring new and done
+        pipeline_tracks = res.context["pipeline_tracks"]
+        target_track = next((t for t in pipeline_tracks if t["slug"] == "senior-python"), None)
+        self.assertIsNotNone(target_track)
+        self.assertEqual(target_track["count"], 2)
 
 

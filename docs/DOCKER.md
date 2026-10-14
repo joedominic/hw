@@ -7,7 +7,7 @@ HireEdge runs as **two containers** sharing one image:
 | **web** | `runserver` (dev) or `gunicorn` (prod) | HTTP UI + Ninja API; enqueues Huey jobs |
 | **huey** | `python manage.py run_huey` | Consumes Redis queue; runs periodic tasks |
 
-Redis is **external** (not in compose). Default host: `192.168.2.174:6379` — set `HUEY_REDIS_*` in `.env`.
+Redis is **external** (not in compose). Configure `HUEY_REDIS_HOST` and `HUEY_REDIS_PORT` in `.env` based on [`.env.example`](../.env.example) (defaults to `127.0.0.1:6380` or `host.docker.internal`).
 
 ## Prerequisites
 
@@ -73,22 +73,20 @@ Back up `db.sqlite3` and `media/` before upgrades.
 
 ## External Redis
 
-Containers connect to Redis using `HUEY_REDIS_HOST`, `HUEY_REDIS_PORT`, `HUEY_REDIS_DB` from `.env`.
+Containers connect to Redis using `HUEY_REDIS_HOST`, `HUEY_REDIS_PORT`, `HUEY_REDIS_DB` from `.env` (see defaults and guidance in [`.env.example`](../.env.example)).
 
 **Requirements:**
 
 1. Redis listens on an interface reachable from the Docker host (not only `127.0.0.1` on a remote machine, unless you tunnel).
-2. Firewall allows port 6379 from the Docker bridge network.
+2. Firewall allows your configured port (e.g. `6380` or `6379`) from the Docker bridge network.
 3. `HUEY_IMMEDIATE` is unset or `0` so periodic jobs run in the **huey** container.
 
 ### Verify connectivity
 
 ```bash
-docker compose exec web python -c "import redis; r=redis.Redis(host='192.168.2.174', port=6379); print('PING', r.ping())"
+docker compose exec web python -c "import redis, os; r=redis.Redis(host=os.environ.get('HUEY_REDIS_HOST', '127.0.0.1'), port=int(os.environ.get('HUEY_REDIS_PORT', 6380))); print('PING', r.ping())"
 docker compose exec huey python manage.py huey_queue_status
 ```
-
-Replace `192.168.2.174` with your `HUEY_REDIS_HOST`.
 
 ### Redis on the same machine as Docker
 

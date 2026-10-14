@@ -1,0 +1,944 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <meta name="csrf-token" content="{{ csrf_token }}"/>
+    <title>AI Career Profiler — HireEdge Executive</title>
+
+    <!-- Typography & Material Symbols -->
+    <link href="https://fonts.googleapis.com" rel="preconnect"/>
+    <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+
+    <!-- Tailwind Script -->
+    <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            DEFAULT: '#0F382A',
+                            dark: '#002217',
+                            soft: '#C1ECD7',
+                            mist: '#F0FDF4',
+                            ink: '#002116',
+                            accent: '#00C805',
+                        },
+                        cockpit: {
+                            canvas: '#FAFAFA',
+                            card: '#FFFFFF',
+                            border: '#E4E4E7',
+                            borderHover: '#D4D4D8',
+                            textMain: '#09090B',
+                            textMuted: '#71717A',
+                            emeraldScore: '#059669',
+                            emeraldBg: '#ECFDF5',
+                            amberScore: '#D97706',
+                            amberBg: '#FFFBEB',
+                            blueScore: '#2563EB',
+                            blueBg: '#EFF6FF',
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        display: ['Plus Jakarta Sans', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
+                    }
+                }
+            }
+        };
+    </script>
+    <style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 20;
+            line-height: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .tabular-nums {
+            font-feature-settings: "tnum" 1, "cv05" 1;
+        }
+        /* iOS-style toggle switch */
+        .ios-toggle input:checked ~ .toggle-bg {
+            background-color: #0F382A;
+        }
+        .ios-toggle input:checked ~ .toggle-dot {
+            transform: translateX(18px);
+        }
+    </style>
+</head>
+<body class="bg-cockpit-canvas text-cockpit-textMain font-sans min-h-screen flex flex-col antialiased selection:bg-[#C1ECD7] selection:text-[#002116]">
+
+    <!-- Top Global Header -->
+    {% include "resume_app/_top_nav.html" %}
+
+    <main class="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 pb-32">
+
+        <!-- Entryway Mode / Breadcrumb Navigation (Stitch Target & Discover) -->
+        <div class="flex items-center justify-between mb-8">
+            <div class="flex items-center gap-2 text-xs font-medium text-cockpit-textMuted">
+                <a href="{% url 'career_cockpit' %}" class="hover:text-cockpit-textMain transition-colors">Cockpit</a>
+                <span>/</span>
+                <span class="text-cockpit-textMain font-semibold">Target &amp; Discover</span>
+                <span>/</span>
+                <span class="text-emerald-800 font-semibold">AI Profiler</span>
+            </div>
+
+            <!-- Path Fork Switcher -->
+            <div class="flex items-center bg-zinc-100 p-1 rounded-xl text-xs font-semibold">
+                <span class="px-3 py-1.5 rounded-lg bg-white text-zinc-900 shadow-sm border border-zinc-200/80 flex items-center gap-1.5">
+                    <span class="material-symbols-outlined text-[16px] text-emerald-700">psychology</span>
+                    AI Resume Profiler
+                </span>
+                <a href="{% url 'jobs_search' %}" class="px-3 py-1.5 rounded-lg text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/60 transition-colors flex items-center gap-1.5">
+                    <span class="material-symbols-outlined text-[16px] text-zinc-500">travel_explore</span>
+                    Search Sandbox
+                </a>
+            </div>
+        </div>
+
+        <!-- Hero Section: Clean, Minimalist, Robinhood Editorial -->
+        <header class="mb-8">
+            <h1 class="text-3xl sm:text-4xl font-extrabold font-display tracking-tight text-zinc-950 mb-2">
+                Discover your next career tracks
+            </h1>
+            <p class="text-sm sm:text-base text-zinc-600 max-w-2xl leading-relaxed">
+                We parse your background across 15+ industry vectors to surface high-yield archetypes, stretch leadership roles, and adjacent opportunities — completely agnostic to tech, healthcare, corporate finance, or trade.
+            </p>
+        </header>
+
+        <!-- Master Resume Strip / Selector -->
+        <section class="bg-white border border-zinc-200 rounded-2xl p-4 sm:p-5 mb-8 shadow-sm">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div class="flex items-center gap-3 min-w-0">
+                    <div class="w-10 h-10 rounded-xl bg-zinc-100 border border-zinc-200 flex items-center justify-center text-zinc-700 shrink-0">
+                        <span class="material-symbols-outlined text-[22px]">description</span>
+                    </div>
+                    <div class="min-w-0">
+                        <div class="text-[11px] font-mono uppercase tracking-wider text-zinc-400 font-semibold">Active Resume Vector</div>
+                        <div class="flex items-center gap-2 mt-0.5">
+                            <span id="active-resume-label" class="text-sm font-bold text-zinc-900 truncate">
+                                {% if selected_resume %}
+                                    {{ selected_resume.original_filename|default:selected_resume.file.name }}
+                                {% else %}
+                                    No resume selected yet
+                                {% endif %}
+                            </span>
+                            {% if selected_resume %}
+                            <span class="text-[11px] font-mono text-zinc-400 shrink-0">({{ selected_resume.uploaded_at|date:"M d, Y" }})</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-2 self-start sm:self-auto shrink-0">
+                    <!-- Resume Picker Dropdown if user has existing resumes -->
+                    {% if resumes|length > 1 %}
+                    <select id="resume-select-picker" class="text-xs font-semibold text-zinc-700 bg-zinc-50 border border-zinc-200 rounded-xl px-3 py-2 hover:bg-zinc-100 transition-colors focus:ring-1 focus:ring-brand focus:border-brand">
+                        {% for r in resumes %}
+                        <option value="{{ r.id }}" {% if selected_resume and selected_resume.id == r.id %}selected{% endif %}>
+                            {{ r.original_filename|default:r.file.name|truncatechars:28 }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                    {% endif %}
+
+                    <!-- Upload New Resume Button -->
+                    <label for="resume-file-input" class="cursor-pointer inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-zinc-800 bg-zinc-100 hover:bg-zinc-200 rounded-xl border border-zinc-200 transition-colors">
+                        <span class="material-symbols-outlined text-[16px]">upload_file</span>
+                        <span>Upload New</span>
+                    </label>
+                    <input type="file" id="resume-file-input" accept=".pdf,.docx,.txt" class="hidden"/>
+
+                    <!-- Run Analysis Action Button -->
+                    <button id="run-analyze-btn" type="button" class="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-brand hover:bg-brand-dark rounded-xl shadow-sm transition-all active:scale-95">
+                        <span id="analyze-spinner" class="material-symbols-outlined text-[16px] animate-spin hidden">progress_activity</span>
+                        <span id="analyze-btn-text">Re-Analyze Resume</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Upload progress bar -->
+            <div id="upload-status" class="hidden mt-3 text-xs text-zinc-500 flex items-center gap-2">
+                <span class="material-symbols-outlined text-[16px] text-brand animate-spin">sync</span>
+                <span id="upload-status-text">Uploading and extracting text...</span>
+            </div>
+        </section>
+
+        <!-- Loading Analysis State -->
+        <div id="loading-state" class="hidden py-16 text-center">
+            <div class="w-12 h-12 mx-auto rounded-2xl bg-emerald-50 text-emerald-800 flex items-center justify-center mb-4 ring-8 ring-emerald-50/50">
+                <span class="material-symbols-outlined text-[28px] animate-spin">refresh</span>
+            </div>
+            <h3 class="text-base font-bold text-zinc-900 mb-1">Analyzing career archetypes...</h3>
+            <p class="text-xs text-zinc-500 max-w-sm mx-auto">Evaluating experience across healthcare, engineering, corporate finance, and operations vectors.</p>
+        </div>
+
+        <!-- Archetypes Container -->
+        <section id="archetypes-section" class="space-y-6">
+            <!-- Summary Bar -->
+            <div id="profile-meta-bar" class="hidden flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-zinc-200">
+                <div class="flex items-center gap-2">
+                    <span class="text-xs font-bold uppercase tracking-wider text-zinc-400 font-mono">Detected Profile:</span>
+                    <span id="meta-industry-badge" class="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-zinc-100 text-zinc-800 border border-zinc-200">
+                        General
+                    </span>
+                    <span id="meta-seniority-badge" class="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-zinc-100 text-zinc-700 border border-zinc-200">
+                        Mid-Senior
+                    </span>
+                </div>
+                <div class="text-xs text-zinc-500 font-mono">
+                    <span id="selected-tracks-counter" class="font-bold text-zinc-900">3</span> of 3 tracks selected
+                </div>
+            </div>
+
+            <!-- Track List Cards (Robinhood spacious rows) -->
+            <div id="tracks-list" class="space-y-4">
+                <!-- Track rows rendered via JavaScript -->
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Floating Sticky Action Bar (Robinhood Bottom Dock) -->
+    <div id="action-dock" class="fixed bottom-0 inset-x-0 bg-white/95 backdrop-blur-md border-t border-zinc-200 py-3.5 px-4 sm:px-8 z-30 shadow-lg hidden">
+        <div class="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div class="flex items-center gap-3">
+                <div class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></div>
+                <div>
+                    <div class="text-xs font-bold text-zinc-900">
+                        <span id="dock-count-label">3 Career Tracks</span> Ready to Provision
+                    </div>
+                    <div class="text-[11px] text-zinc-500">
+                        Each track generates an isolated Search Profile with zero preference contamination.
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-3 w-full sm:w-auto">
+                <button id="provision-btn" type="button" class="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-full bg-[#0F382A] hover:bg-[#002217] text-[#C1ECD7] hover:text-white font-bold text-xs sm:text-sm shadow-md transition-all active:scale-[0.98]">
+                    <span id="provision-spinner" class="material-symbols-outlined text-[18px] animate-spin hidden">progress_activity</span>
+                    <span id="provision-btn-text">Activate Selected Tracks & Fetch Jobs →</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript Controller -->
+    <script>
+        (function() {
+            const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
+            let currentResumeId = {% if selected_resume %}{{ selected_resume.id }}{% else %}null{% endif %};
+            let archetypesData = [];
+            let tracksConfig = {};
+
+            const resumePicker = document.getElementById('resume-select-picker');
+            const fileInput = document.getElementById('resume-file-input');
+            const runAnalyzeBtn = document.getElementById('run-analyze-btn');
+            const analyzeSpinner = document.getElementById('analyze-spinner');
+            const analyzeBtnText = document.getElementById('analyze-btn-text');
+            const loadingState = document.getElementById('loading-state');
+            const tracksList = document.getElementById('tracks-list');
+            const actionDock = document.getElementById('action-dock');
+            const provisionBtn = document.getElementById('provision-btn');
+            const provisionSpinner = document.getElementById('provision-spinner');
+            const provisionBtnText = document.getElementById('provision-btn-text');
+            const metaBar = document.getElementById('profile-meta-bar');
+            const metaIndustry = document.getElementById('meta-industry-badge');
+            const metaSeniority = document.getElementById('meta-seniority-badge');
+            const activeResumeLabel = document.getElementById('active-resume-label');
+            const uploadStatus = document.getElementById('upload-status');
+            const uploadStatusText = document.getElementById('upload-status-text');
+
+            // Handle dropdown change: switch resume and display its saved profile immediately
+            if (resumePicker) {
+                resumePicker.addEventListener('change', function() {
+                    window.location.href = `{% url 'career_profiler' %}?resume_id=${this.value}`;
+                });
+            }
+
+            // Handle direct file upload
+            if (fileInput) {
+                fileInput.addEventListener('change', async function() {
+                    if (!this.files || !this.files[0]) return;
+                    const file = this.files[0];
+                    activeResumeLabel.textContent = file.name;
+                    uploadStatus.classList.remove('hidden');
+                    uploadStatusText.textContent = `Uploading and parsing ${file.name}...`;
+
+                    const formData = new FormData();
+                    formData.append('resume_file', file);
+                    formData.append('force_refresh', '1');
+
+                    try {
+                        setAnalyzingState(true);
+                        const res = await fetch("{% url 'career_profiler_analyze_api' %}", {
+                            method: "POST",
+                            headers: {
+                                "X-CSRFToken": csrfToken
+                            },
+                            body: formData
+                        });
+                        const data = await res.json();
+                        uploadStatus.classList.add('hidden');
+                        if (data.status === 'success') {
+                            currentResumeId = data.resume_id;
+                            renderArchetypes(data);
+                            analyzeBtnText.textContent = "Re-Analyze Resume";
+                        } else {
+                            alert(data.message || 'Analysis error occurred.');
+                            showEmptyPromptState();
+                        }
+                    } catch (err) {
+                        uploadStatus.classList.add('hidden');
+                        alert('Upload failed: ' + err.message);
+                        showEmptyPromptState();
+                    } finally {
+                        setAnalyzingState(false);
+                    }
+                });
+            }
+
+            runAnalyzeBtn.addEventListener('click', () => runAnalysis(true));
+            window.runAnalysis = runAnalysis;
+
+            async function runAnalysis(force = false) {
+                if (!currentResumeId) {
+                    alert('Please select or upload a resume to analyze.');
+                    return;
+                }
+                setAnalyzingState(true);
+                try {
+                    const res = await fetch("{% url 'career_profiler_analyze_api' %}", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "X-CSRFToken": csrfToken
+                        },
+                        body: JSON.stringify({
+                            resume_id: currentResumeId,
+                            force_refresh: force
+                        })
+                    });
+                    const data = await res.json();
+                    if (data.status === 'success') {
+                        renderArchetypes(data);
+                        analyzeBtnText.textContent = "Re-Analyze Resume";
+                    } else {
+                        alert(data.message || 'Analysis failed.');
+                        showEmptyPromptState();
+                    }
+                } catch (err) {
+                    alert('Network error analyzing resume: ' + err.message);
+                    showEmptyPromptState();
+                } finally {
+                    setAnalyzingState(false);
+                }
+            }
+
+            function setAnalyzingState(loading) {
+                if (loading) {
+                    runAnalyzeBtn.disabled = true;
+                    analyzeSpinner.classList.remove('hidden');
+                    analyzeBtnText.textContent = "Analyzing...";
+                    loadingState.classList.remove('hidden');
+                    tracksList.innerHTML = '';
+                    actionDock.classList.add('hidden');
+                    metaBar.classList.add('hidden');
+                } else {
+                    runAnalyzeBtn.disabled = false;
+                    analyzeSpinner.classList.add('hidden');
+                    analyzeBtnText.textContent = archetypesData.length ? "Re-Analyze Resume" : "Run Career Profiler";
+                    loadingState.classList.add('hidden');
+                }
+            }
+
+            function showEmptyPromptState() {
+                tracksList.innerHTML = `
+                    <div class="bg-white border border-zinc-200/90 rounded-2xl p-8 sm:p-12 text-center shadow-sm">
+                        <div class="w-14 h-14 mx-auto rounded-2xl bg-zinc-100 border border-zinc-200 text-[#0F382A] flex items-center justify-center mb-4 shadow-sm">
+                            <span class="material-symbols-outlined text-[28px]">psychology</span>
+                        </div>
+                        <h2 class="text-xl font-bold font-display text-zinc-950 mb-2">
+                            Ready to profile this resume
+                        </h2>
+                        <p class="text-sm text-zinc-600 max-w-md mx-auto mb-6 leading-relaxed">
+                            Discover verified Core Fit roles, <span class="font-semibold text-amber-900 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">+1 Next Level Leadership</span> targets, and adjacent career directions on-demand.
+                        </p>
+                        <button type="button" onclick="window.runAnalysis(true)" class="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-[#0F382A] hover:bg-[#002217] text-[#C1ECD7] hover:text-white font-bold text-sm shadow-sm transition-all active:scale-95">
+                            <span class="material-symbols-outlined text-[18px]">play_arrow</span>
+                            <span>Run Career Profiler</span>
+                        </button>
+                    </div>
+                `;
+                actionDock.classList.add('hidden');
+                metaBar.classList.add('hidden');
+            }
+
+            function renderArchetypes(data) {
+                archetypesData = data.archetypes || [];
+                metaIndustry.textContent = data.detected_industry || "General";
+                metaSeniority.textContent = data.detected_seniority || "Experienced";
+                metaBar.classList.remove('hidden');
+
+                tracksList.innerHTML = '';
+                tracksConfig = {};
+
+                if (archetypesData.length === 0) {
+                    showEmptyPromptState();
+                    return;
+                }
+
+                archetypesData.forEach((arch, idx) => {
+                    const slug = arch.suggested_slug || arch.slug || `track-${idx}`;
+                    // Default configuration for this track
+                    tracksConfig[slug] = {
+                        enabled: true,
+                        name: arch.title,
+                        primary_search_term: arch.primary_search_term || (arch.search_terms && arch.search_terms[0]) || arch.title,
+                        work_mode: 'everywhere', // 'everywhere' | 'remote' | 'metro'
+                        location: '',
+                        site_names: ['linkedin', 'indeed'],
+                        schedule_interval: 'daily',
+                        schedule_time: '08:30'
+                    };
+
+                    const isStretch = arch.type === 'stretch' ||
+                                      arch.type === 'stretch_leadership' ||
+                                      (arch.confidence_label && arch.confidence_label.toLowerCase().includes('next level')) ||
+                                      (arch.confidence_label && arch.confidence_label.toLowerCase().includes('stretch'));
+
+                    const badgeClass = (arch.type === 'core_fit' || arch.type === 'core')
+                        ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
+                        : (isStretch
+                            ? 'bg-amber-50 text-amber-950 border-amber-300 ring-1 ring-amber-400/20'
+                            : 'bg-blue-50 text-blue-900 border-blue-200');
+
+                    const badgeContent = isStretch
+                        ? `<span class="flex items-center gap-1"><span class="material-symbols-outlined text-[13px] text-amber-700">trending_up</span> Next Level / Promotion</span>`
+                        : ((arch.type === 'core_fit' || arch.type === 'core') ? 'Core Fit' : 'Adjacent / Pivot');
+
+                    const card = document.createElement('div');
+                    card.className = "bg-white border border-zinc-200/90 hover:border-zinc-300 rounded-2xl p-5 sm:p-6 transition-all shadow-sm";
+                    card.id = `card-${slug}`;
+
+                    card.innerHTML = `
+                        <!-- Main Row: Robinhood List Style -->
+                        <div class="flex items-start justify-between gap-4">
+                            <div class="min-w-0 flex-1">
+                                <div class="flex flex-wrap items-center gap-2 mb-2">
+                                    <span class="px-2.5 py-0.5 rounded-full text-[11px] font-bold border font-mono tracking-tight ${badgeClass}">
+                                        ${badgeContent}
+                                    </span>
+                                    ${isStretch ? `
+                                        <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100/80 text-amber-900 border border-amber-200/80 uppercase font-mono tracking-wider">
+                                            +1 Level Target
+                                        </span>
+                                    ` : ''}
+                                    ${arch.market_demand ? `<span class="text-[11px] text-zinc-400 font-mono">Market Demand: ${arch.market_demand}</span>` : ''}
+                                </div>
+                                <h2 class="text-lg sm:text-xl font-bold font-display text-zinc-950 tracking-tight">
+                                    ${escapeHtml(arch.title)}
+                                </h2>
+                                <p class="text-xs sm:text-sm text-zinc-600 mt-1 leading-relaxed">
+                                    ${escapeHtml(arch.rationale || arch.summary || '')}
+                                </p>
+
+                                <!-- Matched Skills Chips -->
+                                ${arch.matched_skills && arch.matched_skills.length ? `
+                                    <div class="flex flex-wrap items-center gap-1.5 mt-3">
+                                        ${arch.matched_skills.map(s => `<span class="px-2 py-0.5 rounded-md bg-zinc-100 text-zinc-700 text-[11px] font-mono">${escapeHtml(s)}</span>`).join('')}
+                                    </div>
+                                ` : ''}
+
+                                <!-- Quick Summary Pill Row -->
+                                <div class="flex flex-wrap items-center gap-2 mt-4 pt-3 border-t border-zinc-100 text-xs font-mono">
+                                    <span id="summary-loc-${slug}" class="text-zinc-500 bg-zinc-50 border border-zinc-200 px-2 py-0.5 rounded">
+                                        📍 Open to Relocation (Nationwide)
+                                    </span>
+                                    <span id="summary-sched-${slug}" class="text-zinc-500 bg-zinc-50 border border-zinc-200 px-2 py-0.5 rounded">
+                                        ⏰ Daily at 8:30 AM
+                                    </span>
+                                    <span id="summary-sites-${slug}" class="text-zinc-500 bg-zinc-50 border border-zinc-200 px-2 py-0.5 rounded">
+                                        🌐 LinkedIn, Indeed
+                                    </span>
+                                </div>
+                            </div>
+
+                            <!-- Right Controls: Tune Button + iOS Toggle -->
+                            <div class="flex items-center gap-2 sm:gap-2.5 shrink-0">
+                                <button type="button" onclick="window.viewMatches('${slug}')" id="btn-matches-${slug}" class="px-3 py-1.5 rounded-xl border border-emerald-300 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm active:scale-95">
+                                    <span class="material-symbols-outlined text-[16px] text-emerald-700">travel_explore</span>
+                                    <span>View Matches</span>
+                                </button>
+
+                                <button type="button" onclick="window.toggleDrawer('${slug}')" class="px-3 py-1.5 rounded-xl border border-zinc-200 text-zinc-700 hover:text-zinc-900 hover:bg-zinc-50 text-xs font-semibold flex items-center gap-1 transition-colors">
+                                    <span class="material-symbols-outlined text-[16px]">tune</span>
+                                    <span>Tune Criteria</span>
+                                </button>
+
+                                <label class="ios-toggle relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" checked onchange="window.toggleTrackEnabled('${slug}', this.checked)" class="sr-only">
+                                    <div class="toggle-bg w-11 h-6 bg-zinc-200 rounded-full transition-colors duration-200"></div>
+                                    <div class="toggle-dot absolute left-1 top-1 bg-white w-4 h-4 rounded-full shadow-sm transition-transform duration-200"></div>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Live Matches Preview Drawer -->
+                        <div id="matches-preview-${slug}" class="hidden mt-4 pt-4 border-t border-zinc-200/80 bg-zinc-50/40 rounded-xl p-4 sm:p-5 border border-zinc-200/60 shadow-sm transition-all">
+                            <div class="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-zinc-200/60">
+                                <div class="flex items-center gap-2 min-w-0">
+                                    <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
+                                    <span class="text-xs font-bold text-zinc-900 truncate">
+                                        Live Matches for <span id="matches-term-label-${slug}" class="text-emerald-900 font-mono"></span>
+                                    </span>
+                                    <span id="matches-loc-badge-${slug}" class="px-2 py-0.5 rounded text-[10px] font-mono bg-white text-zinc-600 border border-zinc-200 shrink-0"></span>
+                                </div>
+                                <div class="flex items-center gap-2 shrink-0">
+                                    <button type="button" onclick="window.viewMatches('${slug}')" class="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-800 hover:text-emerald-950 px-2 py-1 rounded-lg hover:bg-emerald-100/60 transition-colors">
+                                        <span class="material-symbols-outlined text-[14px]">refresh</span>
+                                        <span>Refresh</span>
+                                    </button>
+                                    <button type="button" onclick="window.closeMatches('${slug}')" class="p-1 text-zinc-400 hover:text-zinc-600 rounded-lg hover:bg-zinc-200/60 transition-colors" title="Close Preview">
+                                        <span class="material-symbols-outlined text-[16px]">close</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Loading State -->
+                            <div id="matches-loading-${slug}" class="hidden py-8 text-center">
+                                <span class="material-symbols-outlined text-[24px] text-emerald-700 animate-spin mb-1">progress_activity</span>
+                                <div class="text-xs font-semibold text-zinc-800">Scraping live job boards &amp; scoring against your resume...</div>
+                                <div class="text-[11px] text-zinc-400 mt-0.5 font-mono">Evaluating title closeness &amp; semantic role alignment</div>
+                            </div>
+
+                            <!-- Error State -->
+                            <div id="matches-error-${slug}" class="hidden py-4 text-center text-xs text-rose-600"></div>
+
+                            <!-- Empty State -->
+                            <div id="matches-empty-${slug}" class="hidden py-6 text-center text-xs text-zinc-500">
+                                <span class="material-symbols-outlined text-[24px] text-zinc-400 mb-1">search_off</span>
+                                <div class="font-medium text-zinc-700">No matching jobs found for this query yet.</div>
+                                <div class="text-[11px] text-zinc-400 mt-1">Try broadening your target location or adjusting search keywords in "Tune Criteria".</div>
+                            </div>
+
+                            <!-- Matches List Container -->
+                            <div id="matches-list-${slug}" class="space-y-2.5 mt-3">
+                                <!-- Rendered jobs -->
+                            </div>
+
+                            <!-- Helper Footer -->
+                            <div id="matches-footer-${slug}" class="hidden mt-4 pt-3 border-t border-zinc-200/60 flex flex-wrap items-center justify-between gap-2 text-[11px] text-zinc-500 font-mono">
+                                <span>💡 Results align well? You can fine-tune keywords or location anytime before provisioning.</span>
+                                <button type="button" onclick="window.toggleDrawer('${slug}', true)" class="text-emerald-800 font-bold hover:underline">Tune Keywords / Location →</button>
+                            </div>
+                        </div>
+
+                        <!-- Fine-Tuning Drawer / Inline Configuration Accordion -->
+                        <div id="drawer-${slug}" class="hidden mt-4 pt-5 border-t border-zinc-200 bg-zinc-50/60 rounded-xl p-4 sm:p-5 text-xs">
+                            <h3 class="text-xs font-bold uppercase tracking-wider text-zinc-500 font-mono mb-4">
+                                Fine-Tune Pipeline Parameters
+                            </h3>
+
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                                <!-- Location Preference (3-way selector) -->
+                                <div>
+                                    <label class="block font-semibold text-zinc-800 mb-1.5">Target Location</label>
+                                    <div class="grid grid-cols-3 gap-1 p-1 bg-zinc-200/70 rounded-xl mb-2 text-center text-[11px] font-semibold">
+                                        <button type="button" id="loc-btn-everywhere-${slug}" onclick="window.setLocationMode('${slug}', 'everywhere')" class="py-1.5 px-1 rounded-lg bg-white text-zinc-900 shadow-sm border border-zinc-200">
+                                            Open to Relocate
+                                        </button>
+                                        <button type="button" id="loc-btn-remote-${slug}" onclick="window.setLocationMode('${slug}', 'remote')" class="py-1.5 px-1 rounded-lg text-zinc-600 hover:text-zinc-900">
+                                            Remote Only
+                                        </button>
+                                        <button type="button" id="loc-btn-metro-${slug}" onclick="window.setLocationMode('${slug}', 'metro')" class="py-1.5 px-1 rounded-lg text-zinc-600 hover:text-zinc-900">
+                                            Specific Metro
+                                        </button>
+                                    </div>
+                                    <div id="metro-input-wrapper-${slug}" class="hidden mt-2">
+                                        <input type="text" id="metro-input-${slug}" placeholder="e.g. Dallas, TX or London" oninput="window.updateMetroInput('${slug}', this.value)" class="w-full text-xs rounded-lg border-zinc-300 focus:border-brand focus:ring-1 focus:ring-brand">
+                                        <span class="text-[10px] text-zinc-400 mt-1 block">Searches targeted specifically within 25-50 miles of this city.</span>
+                                    </div>
+                                    <span id="loc-hint-${slug}" class="text-[11px] text-zinc-500 block">
+                                        Drop geographic limits completely: query nationwide openings.
+                                    </span>
+                                </div>
+
+                                <!-- Scraper Run Cadence -->
+                                <div>
+                                    <label class="block font-semibold text-zinc-800 mb-1.5">Background Scraper Schedule</label>
+                                    <select onchange="window.updateSchedule('${slug}', this.value)" class="w-full text-xs rounded-xl border-zinc-300 bg-white font-medium focus:border-brand focus:ring-1 focus:ring-brand">
+                                        <option value="daily" selected>Daily Run (8:30 AM)</option>
+                                        <option value="weekdays">Weekdays (Mon-Fri 8:30 AM)</option>
+                                        <option value="weekly">Weekly (Monday 8:30 AM)</option>
+                                        <option value="off">Off (Manual Search Only)</option>
+                                    </select>
+                                    <span class="text-[11px] text-zinc-400 mt-1 block">Scheduled searches automatically ingest and score new matching jobs.</span>
+                                </div>
+
+                                <!-- Job Boards / Scraper Sources -->
+                                <div>
+                                    <label class="block font-semibold text-zinc-800 mb-1.5">Ingestion Sources</label>
+                                    <div class="flex flex-wrap gap-2">
+                                        <label class="inline-flex items-center gap-1.5 bg-white border border-zinc-200 px-2.5 py-1.5 rounded-lg cursor-pointer">
+                                            <input type="checkbox" checked onchange="window.toggleSource('${slug}', 'linkedin', this.checked)" class="rounded border-zinc-300 text-brand focus:ring-brand text-xs">
+                                            <span class="font-medium text-zinc-800">LinkedIn</span>
+                                        </label>
+                                        <label class="inline-flex items-center gap-1.5 bg-white border border-zinc-200 px-2.5 py-1.5 rounded-lg cursor-pointer">
+                                            <input type="checkbox" checked onchange="window.toggleSource('${slug}', 'indeed', this.checked)" class="rounded border-zinc-300 text-brand focus:ring-brand text-xs">
+                                            <span class="font-medium text-zinc-800">Indeed</span>
+                                        </label>
+                                        <label class="inline-flex items-center gap-1.5 bg-white border border-zinc-200 px-2.5 py-1.5 rounded-lg cursor-pointer">
+                                            <input type="checkbox" onchange="window.toggleSource('${slug}', 'glassdoor', this.checked)" class="rounded border-zinc-300 text-brand focus:ring-brand text-xs">
+                                            <span class="font-medium text-zinc-800">Glassdoor</span>
+                                        </label>
+                                        <label class="inline-flex items-center gap-1.5 bg-white border border-zinc-200 px-2.5 py-1.5 rounded-lg cursor-pointer">
+                                            <input type="checkbox" onchange="window.toggleSource('${slug}', 'ziprecruiter', this.checked)" class="rounded border-zinc-300 text-brand focus:ring-brand text-xs">
+                                            <span class="font-medium text-zinc-800">ZipRecruiter</span>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <!-- Primary Keyword Override -->
+                                <div>
+                                    <label class="block font-semibold text-zinc-800 mb-1.5">Search Query Override</label>
+                                    <input type="text" value="${escapeHtml(arch.primary_search_term || arch.title)}" oninput="window.updateKeyword('${slug}', this.value)" class="w-full text-xs rounded-xl border-zinc-300 focus:border-brand focus:ring-1 focus:ring-brand">
+                                    <span class="text-[11px] text-zinc-400 mt-1 block">Exact title or boolean keywords sent to job board scrapers.</span>
+                                </div>
+                            </div>
+
+                            <!-- Drawer Test Trigger -->
+                            <div class="mt-4 pt-3 border-t border-zinc-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                <div class="text-[11px] text-zinc-500">
+                                    Want to see how your tweaks perform before saving?
+                                </div>
+                                <button type="button" onclick="window.viewMatches('${slug}')" class="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-800 hover:bg-emerald-900 text-white text-xs font-bold shadow-sm transition-all active:scale-95">
+                                    <span class="material-symbols-outlined text-[15px]">travel_explore</span>
+                                    <span>Test &amp; View Matches</span>
+                                </button>
+                            </div>
+                        </div>
+                    `;
+
+                    tracksList.appendChild(card);
+                });
+
+                updateDockState();
+                actionDock.classList.remove('hidden');
+            }
+
+            // Window helper functions for inline card interactions
+            window.toggleDrawer = function(slug, forceOpen) {
+                const drawer = document.getElementById(`drawer-${slug}`);
+                if (!drawer) return;
+                if (forceOpen === true) {
+                    drawer.classList.remove('hidden');
+                } else {
+                    drawer.classList.toggle('hidden');
+                }
+            };
+
+            window.closeMatches = function(slug) {
+                const preview = document.getElementById(`matches-preview-${slug}`);
+                if (preview) preview.classList.add('hidden');
+            };
+
+            window.viewMatches = async function(slug) {
+                const preview = document.getElementById(`matches-preview-${slug}`);
+                const loading = document.getElementById(`matches-loading-${slug}`);
+                const errorBox = document.getElementById(`matches-error-${slug}`);
+                const emptyBox = document.getElementById(`matches-empty-${slug}`);
+                const list = document.getElementById(`matches-list-${slug}`);
+                const footer = document.getElementById(`matches-footer-${slug}`);
+                const termLabel = document.getElementById(`matches-term-label-${slug}`);
+                const locBadge = document.getElementById(`matches-loc-badge-${slug}`);
+                const btn = document.getElementById(`btn-matches-${slug}`);
+
+                if (!preview || !tracksConfig[slug]) return;
+
+                const cfg = tracksConfig[slug];
+                const query = (cfg.primary_search_term || cfg.name || '').trim();
+                const loc = cfg.location || (cfg.work_mode === 'remote' ? 'Remote' : '');
+
+                // Reveal preview panel
+                preview.classList.remove('hidden');
+                loading.classList.remove('hidden');
+                errorBox.classList.add('hidden');
+                emptyBox.classList.add('hidden');
+                list.innerHTML = '';
+                footer.classList.add('hidden');
+
+                if (termLabel) termLabel.textContent = `"${query}"`;
+                if (locBadge) locBadge.textContent = loc ? `📍 ${loc}` : '📍 Nationwide (Open to Relocate)';
+
+                if (btn) btn.classList.add('opacity-75');
+
+                try {
+                    const res = await fetch("{% url 'career_profiler_preview_matches_api' %}", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "X-CSRFToken": csrfToken
+                        },
+                        body: JSON.stringify({
+                            search_term: query,
+                            location: loc,
+                            site_names: cfg.site_names || ['indeed', 'linkedin'],
+                            resume_id: currentResumeId,
+                            results_wanted: 10
+                        })
+                    });
+
+                    const data = await res.json();
+                    loading.classList.add('hidden');
+
+                    if (data.status === 'success') {
+                        const matches = data.matches || [];
+                        if (matches.length === 0) {
+                            emptyBox.classList.remove('hidden');
+                        } else {
+                            renderMatchesList(slug, matches);
+                            footer.classList.remove('hidden');
+                        }
+                    } else {
+                        errorBox.textContent = data.message || 'Failed to fetch matches for this profile.';
+                        errorBox.classList.remove('hidden');
+                    }
+                } catch (err) {
+                    loading.classList.add('hidden');
+                    errorBox.textContent = 'Network error fetching matches: ' + err.message;
+                    errorBox.classList.remove('hidden');
+                } finally {
+                    if (btn) btn.classList.remove('opacity-75');
+                }
+            };
+
+            function renderMatchesList(slug, matches) {
+                const list = document.getElementById(`matches-list-${slug}`);
+                if (!list) return;
+                list.innerHTML = '';
+
+                matches.forEach(m => {
+                    const row = document.createElement('div');
+                    row.className = "p-3.5 bg-white rounded-xl border border-zinc-200/80 hover:border-zinc-300 hover:shadow-xs transition-all";
+
+                    const score = m.match_score || 0;
+                    let scoreBadge = '';
+                    if (score >= 85) {
+                        scoreBadge = `<span class="px-2 py-0.5 rounded-full text-[11px] font-bold font-mono bg-emerald-50 text-emerald-800 border border-emerald-200 flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>${score}% Match</span>`;
+                    } else if (score >= 70) {
+                        scoreBadge = `<span class="px-2 py-0.5 rounded-full text-[11px] font-bold font-mono bg-blue-50 text-blue-800 border border-blue-200 flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-blue-600"></span>${score}% Match</span>`;
+                    } else {
+                        scoreBadge = `<span class="px-2 py-0.5 rounded-full text-[11px] font-medium font-mono bg-zinc-100 text-zinc-700 border border-zinc-200">${score}% Match</span>`;
+                    }
+
+                    row.innerHTML = `
+                        <div class="flex items-start justify-between gap-3">
+                            <div class="min-w-0 flex-1">
+                                <div class="flex items-center gap-2">
+                                    <h4 class="text-sm font-bold text-zinc-950 truncate">
+                                        ${m.url ? `<a href="${escapeHtml(m.url)}" target="_blank" rel="noopener noreferrer" class="hover:text-brand hover:underline">${escapeHtml(m.title)}</a>` : escapeHtml(m.title)}
+                                    </h4>
+                                </div>
+                                <div class="flex flex-wrap items-center gap-1.5 mt-0.5 text-xs text-zinc-500 font-medium">
+                                    <span class="text-zinc-800 font-semibold">${escapeHtml(m.company)}</span>
+                                    <span>·</span>
+                                    <span>${escapeHtml(m.location)}</span>
+                                    <span>·</span>
+                                    <span class="text-[11px] font-mono text-zinc-400">${escapeHtml(m.source)}</span>
+                                    ${m.date_posted ? `<span>·</span><span class="text-[11px] font-mono text-zinc-400">${escapeHtml(m.date_posted)}</span>` : ''}
+                                </div>
+                                ${m.snippet ? `
+                                    <p class="text-xs text-zinc-600 mt-1.5 line-clamp-2 leading-relaxed">
+                                        ${escapeHtml(m.snippet)}
+                                    </p>
+                                ` : ''}
+                            </div>
+                            <div class="shrink-0 flex items-center gap-2">
+                                ${scoreBadge}
+                                ${m.url ? `
+                                    <a href="${escapeHtml(m.url)}" target="_blank" rel="noopener noreferrer" class="p-1 text-zinc-400 hover:text-zinc-700 transition-colors" title="View Posting">
+                                        <span class="material-symbols-outlined text-[16px]">open_in_new</span>
+                                    </a>
+                                ` : ''}
+                            </div>
+                        </div>
+                    `;
+                    list.appendChild(row);
+                });
+            }
+
+            window.toggleTrackEnabled = function(slug, checked) {
+                if (tracksConfig[slug]) {
+                    tracksConfig[slug].enabled = checked;
+                }
+                const card = document.getElementById(`card-${slug}`);
+                if (card) {
+                    if (checked) {
+                        card.classList.remove('opacity-50');
+                    } else {
+                        card.classList.add('opacity-50');
+                    }
+                }
+                updateDockState();
+            };
+
+            window.setLocationMode = function(slug, mode) {
+                if (!tracksConfig[slug]) return;
+                tracksConfig[slug].work_mode = mode;
+
+                const btnEverywhere = document.getElementById(`loc-btn-everywhere-${slug}`);
+                const btnRemote = document.getElementById(`loc-btn-remote-${slug}`);
+                const btnMetro = document.getElementById(`loc-btn-metro-${slug}`);
+                const metroWrapper = document.getElementById(`metro-input-wrapper-${slug}`);
+                const locHint = document.getElementById(`loc-hint-${slug}`);
+                const summaryPill = document.getElementById(`summary-loc-${slug}`);
+
+                [btnEverywhere, btnRemote, btnMetro].forEach(b => {
+                    b.className = "py-1.5 px-1 rounded-lg text-zinc-600 hover:text-zinc-900";
+                });
+
+                if (mode === 'everywhere') {
+                    btnEverywhere.className = "py-1.5 px-1 rounded-lg bg-white text-zinc-900 shadow-sm border border-zinc-200";
+                    metroWrapper.classList.add('hidden');
+                    tracksConfig[slug].location = '';
+                    locHint.textContent = "Drop geographic limits completely: query nationwide openings.";
+                    summaryPill.textContent = "📍 Open to Relocation (Nationwide)";
+                } else if (mode === 'remote') {
+                    btnRemote.className = "py-1.5 px-1 rounded-lg bg-white text-zinc-900 shadow-sm border border-zinc-200";
+                    metroWrapper.classList.add('hidden');
+                    tracksConfig[slug].location = 'Remote';
+                    locHint.textContent = "Restricted to 100% remote listings.";
+                    summaryPill.textContent = "📍 Remote Only";
+                } else if (mode === 'metro') {
+                    btnMetro.className = "py-1.5 px-1 rounded-lg bg-white text-zinc-900 shadow-sm border border-zinc-200";
+                    metroWrapper.classList.remove('hidden');
+                    const val = document.getElementById(`metro-input-${slug}`).value.trim();
+                    tracksConfig[slug].location = val || 'Specific Metro';
+                    locHint.textContent = "Targeting local commuting radius.";
+                    summaryPill.textContent = `📍 ${tracksConfig[slug].location}`;
+                }
+            };
+
+            window.updateMetroInput = function(slug, val) {
+                if (tracksConfig[slug]) {
+                    tracksConfig[slug].location = val.trim();
+                    const summaryPill = document.getElementById(`summary-loc-${slug}`);
+                    summaryPill.textContent = `📍 ${val.trim() || 'Specific Metro'}`;
+                }
+            };
+
+            window.updateSchedule = function(slug, interval) {
+                if (tracksConfig[slug]) {
+                    tracksConfig[slug].schedule_interval = interval;
+                    const summaryPill = document.getElementById(`summary-sched-${slug}`);
+                    const labels = {
+                        'daily': '⏰ Daily at 8:30 AM',
+                        'weekdays': '⏰ Weekdays at 8:30 AM',
+                        'weekly': '⏰ Weekly (Mon 8:30 AM)',
+                        'off': '⏰ Manual Only (Off)'
+                    };
+                    summaryPill.textContent = labels[interval] || interval;
+                }
+            };
+
+            window.toggleSource = function(slug, source, checked) {
+                if (!tracksConfig[slug]) return;
+                let sites = tracksConfig[slug].site_names || [];
+                if (checked && !sites.includes(source)) {
+                    sites.push(source);
+                } else if (!checked) {
+                    sites = sites.filter(s => s !== source);
+                }
+                tracksConfig[slug].site_names = sites;
+                const summaryPill = document.getElementById(`summary-sites-${slug}`);
+                summaryPill.textContent = `🌐 ${sites.map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(', ') || 'No sources'}`;
+            };
+
+            window.updateKeyword = function(slug, val) {
+                if (tracksConfig[slug]) {
+                    tracksConfig[slug].primary_search_term = val.trim();
+                }
+            };
+
+            function updateDockState() {
+                const enabledCount = Object.values(tracksConfig).filter(t => t.enabled).length;
+                const counter = document.getElementById('selected-tracks-counter');
+                if (counter) counter.textContent = enabledCount;
+
+                document.getElementById('dock-count-label').textContent = `${enabledCount} Career Track${enabledCount === 1 ? '' : 's'}`;
+                provisionBtn.disabled = enabledCount === 0;
+                if (enabledCount === 0) {
+                    provisionBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                } else {
+                    provisionBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                }
+            }
+
+            // Provisioning Action
+            provisionBtn.addEventListener('click', async function() {
+                const selectedList = Object.values(tracksConfig).filter(t => t.enabled);
+                if (selectedList.length === 0) {
+                    alert('Please select at least one track to provision.');
+                    return;
+                }
+
+                provisionBtn.disabled = true;
+                provisionSpinner.classList.remove('hidden');
+                provisionBtnText.textContent = "Deploying Pipelines...";
+
+                try {
+                    const res = await fetch("{% url 'career_profiler_provision_api' %}", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "X-CSRFToken": csrfToken
+                        },
+                        body: JSON.stringify({
+                            resume_id: currentResumeId,
+                            tracks: selectedList
+                        })
+                    });
+                    const data = await res.json();
+                    if (data.status === 'success') {
+                        // Redirect directly to Cockpit or target track
+                        window.location.href = data.redirect_url || "{% url 'career_cockpit' %}";
+                    } else {
+                        alert(data.message || 'Provisioning failed.');
+                        provisionBtn.disabled = false;
+                        provisionSpinner.classList.add('hidden');
+                        provisionBtnText.textContent = "Activate Selected Tracks & Fetch Jobs →";
+                    }
+                } catch (err) {
+                    alert('Network error provisioning tracks: ' + err.message);
+                    provisionBtn.disabled = false;
+                    provisionSpinner.classList.add('hidden');
+                    provisionBtnText.textContent = "Activate Selected Tracks & Fetch Jobs →";
+                }
+            });
+
+            function escapeHtml(str) {
+                if (!str) return '';
+                return String(str).replace(/[&<>"']/g, function(m) {
+                    return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[m];
+                });
+            }
+
+            // Initialize: display previously saved analysis if available, otherwise show empty on-demand prompt
+            const initialSavedAnalysis = {{ saved_analysis_json|safe }};
+            if (initialSavedAnalysis && initialSavedAnalysis.archetypes && initialSavedAnalysis.archetypes.length) {
+                renderArchetypes(initialSavedAnalysis);
+                analyzeBtnText.textContent = "Re-Analyze Resume";
+            } else {
+                showEmptyPromptState();
+                analyzeBtnText.textContent = "Run Career Profiler";
+            }
+        })();
+    </script>
+</body>
+</html>

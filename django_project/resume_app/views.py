@@ -426,14 +426,96 @@ def optimizer_view(request):
     if request.method == "POST":
         action = request.POST.get("action")
 
-        if action == "approve_and_mark_applied":
+        if action == "save_draft":
             target_job_id = request.POST.get("job_id") or request.GET.get("job_id") or request.session.get("optimizer_job_id")
-            track_slug = request.POST.get("track") or request.GET.get("track") or request.session.get("optimizer_track") or track_slug or "dir-plano"
+            track_slug = request.POST.get("track") or request.GET.get("track") or request.session.get("optimizer_track") or track_slug
             opt_id_val = request.POST.get("opt_id") or request.GET.get("opt_id") or opt_id
 
-            from .models import OptimizedResume, PipelineEntry
+            from .models import OptimizedResume, PipelineEntry, SearchProfile
+            opt = None
+            if opt_id_val:
+                try:
+                    opt = OptimizedResume.objects.filter(id=int(opt_id_val), owner=request.user).first()
+                except (ValueError, TypeError):
+                    opt = None
+
+            if not track_slug:
+                sp = SearchProfile.objects.filter(owner=request.user, is_default=True).first() or SearchProfile.objects.filter(owner=request.user).first()
+                track_slug = sp.slug if sp else "default"
+
+            markdown_text = (request.POST.get("markdown") or "").strip()
+            if not markdown_text and opt:
+                markdown_text = (opt.optimized_content or "").strip()
+
+            from .utils import sanitize_resume_markdown
+            markdown_text = sanitize_resume_markdown(markdown_text)
+
+            if opt and markdown_text:
+                opt.optimized_content = markdown_text
+                opt.save(update_fields=["optimized_content"])
+
+            if target_job_id:
+                try:
+                    entry = PipelineEntry.objects.filter(
+                        owner=request.user,
+                        job_listing_id=int(target_job_id),
+                        track=track_slug,
+                    ).first()
+                    if not entry:
+                        entry = PipelineEntry.objects.filter(
+                            owner=request.user,
+                            job_listing_id=int(target_job_id),
+                        ).first()
+                    if entry:
+                        if markdown_text:
+                            entry.applied_resume_markdown = markdown_text
+                        if opt:
+                            entry.applied_optimized_resume = opt
+                            if not opt.pipeline_entry:
+                                opt.pipeline_entry = entry
+                                opt.save(update_fields=["pipeline_entry"])
+                        entry.save(update_fields=["applied_resume_markdown", "applied_optimized_resume"])
+                    else:
+                        from .models import JobListing
+                        jl = JobListing.objects.filter(id=int(target_job_id)).first()
+                        if jl:
+                            pe = PipelineEntry.objects.create(
+                                owner=request.user,
+                                job_listing=jl,
+                                track=track_slug,
+                                stage=PipelineEntry.Stage.APPLYING,
+                                applied_resume_markdown=markdown_text or "",
+                                applied_optimized_resume=opt,
+                            )
+                            if opt and not opt.pipeline_entry:
+                                opt.pipeline_entry = pe
+                                opt.save(update_fields=["pipeline_entry"])
+                except Exception as e:
+                    logger.warning("Could not persist draft to pipeline entry: %s", e)
+
+            if request.headers.get("X-Requested-With") == "XMLHttpRequest" or "application/json" in request.headers.get("Accept", ""):
+                return JsonResponse({"ok": True, "message": "Draft resume saved."})
+
+            messages.success(request, "Draft resume saved in Applying stage.")
+            redirect_url = reverse("resume_optimizer") + f"?track={track_slug}"
+            if target_job_id:
+                redirect_url += f"&job_id={target_job_id}"
+            if opt_id_val:
+                redirect_url += f"&opt_id={opt_id_val}"
+            return redirect(redirect_url)
+
+        elif action in ("approve_and_mark_applied", "mark_applied"):
+            target_job_id = request.POST.get("job_id") or request.GET.get("job_id") or request.session.get("optimizer_job_id")
+            track_slug = request.POST.get("track") or request.GET.get("track") or request.session.get("optimizer_track") or track_slug
+            opt_id_val = request.POST.get("opt_id") or request.GET.get("opt_id") or opt_id
+
+            from .models import OptimizedResume, PipelineEntry, SearchProfile
             from .domain.event_bus import event_bus
             from .domain.events import JobMarkedApplied
+
+            if not track_slug:
+                sp = SearchProfile.objects.filter(owner=request.user, is_default=True).first() or SearchProfile.objects.filter(owner=request.user).first()
+                track_slug = sp.slug if sp else "default"
 
             opt = None
             if opt_id_val:
@@ -500,7 +582,7 @@ def optimizer_view(request):
                         entry.mark_done(save=True)
                         track_slug = entry.track
                         event_bus.publish(JobMarkedApplied(user_id=request.user.id, entry_id=entry.id, track=entry.track))
-                        messages.success(request, "Opportunity approved & moved to Applied!")
+                        messages.success(request, "Opportunity marked applied & moved to Applied!")
                     else:
                         from .models import JobListing
                         jl = JobListing.objects.filter(id=int(target_job_id)).first()
@@ -521,7 +603,7 @@ def optimizer_view(request):
                                 opt.save(update_fields=["pipeline_entry"])
                             record_job_liked(user=request.user, job=jl, track=track_slug)
                             event_bus.publish(JobMarkedApplied(user_id=request.user.id, entry_id=pe.id, track=track_slug))
-                            messages.success(request, "Opportunity approved & moved to Applied (tagged as Liked)!")
+                            messages.success(request, "Opportunity marked applied & moved to Applied (tagged as Liked)!")
                 except Exception as e:
                     messages.error(request, f"Could not advance pipeline stage: {e}")
             else:
@@ -784,6 +866,24 @@ def optimizer_view(request):
         _user_library_resumes(request.user).order_by("-uploaded_at")[:5]
     )
     show_agent_thoughts = can_view_optimizer_llm_debug(request)
+
+    from .models import SearchProfile, PipelineEntry
+    default_sp = SearchProfile.objects.filter(owner=request.user, is_default=True).first() or SearchProfile.objects.filter(owner=request.user).first()
+    default_profile_slug = default_sp.slug if default_sp else "default"
+    resolved_track = track_slug or default_profile_slug
+
+    target_pipeline_stage = "applying"
+    if target_job:
+        entry_for_stage = PipelineEntry.objects.filter(owner=request.user, job_listing=target_job)
+        if track_slug:
+            entry_for_stage = entry_for_stage.filter(track=track_slug).first() or entry_for_stage.first()
+        else:
+            entry_for_stage = entry_for_stage.first()
+        if entry_for_stage:
+            target_pipeline_stage = entry_for_stage.stage
+            if not track_slug and entry_for_stage.track:
+                resolved_track = entry_for_stage.track
+
     context = {
         "is_power_user": is_power_user(request.user),
         "show_agent_thoughts": show_agent_thoughts,
@@ -812,998 +912,13 @@ def optimizer_view(request):
         "optimizer_temperature": request.session.get("optimizer_temperature", "0.7"),
         "wizard_initial_step": wizard_initial_step,
         "target_job": target_job,
-        "pipeline_track": track_slug or (target_job.track if target_job and hasattr(target_job, "track") and target_job.track else "dir-plano"),
+        "pipeline_track": resolved_track,
+        "target_pipeline_stage": target_pipeline_stage,
     }
     return render(request, "resume_app/optimizer.html", context)
 
 
-def settings_view(request):
-    """
-    Settings: LLM integrations (tab) and app automation thresholds (tab).
-    """
-    from .models import (
-        AppAutomationSettings,
-        LLMProviderConfig,
-        LLMProviderPreference,
-        LLMAppUsageTotals,
-        LLMUsageByModel,
-        LLMUsageByQuery,
-        Track,
-    )
-    from .llm import USAGE_QUERY_LABELS, get_llm, list_models_for_provider
-    from .llm.rate_limit import get_llm_cooldown_ttl
-    from .crypto import decrypt_api_key
-    from langchain_core.messages import HumanMessage
-
-    user = get_active_user(request)
-    active_provider = _get_active_llm_provider(user, request)
-    provider_infos = []
-    for p in sorted(LLM_PROVIDERS):
-        config = LLMProviderConfig.objects.for_user(user).filter(provider=p).first()
-        provider_infos.append({
-            "name": p,
-            "key_stored": bool(config and config.encrypted_api_key),
-            "is_active": p == active_provider,
-            "priority": config.priority if config else 100,
-            "default_model": config.default_model if config else "",
-        })
-
-    if request.method == "POST":
-        from .account_views import handle_account_settings_post
-
-        account_response = handle_account_settings_post(request)
-        if account_response is not None:
-            return account_response
-
-        action = request.POST.get("action")
-        if action == "save_experience_mode":
-            from .experience import set_experience_mode
-            from .models import UserExperienceSettings
-            from .tenancy import get_real_user
-
-            real_user = get_real_user(request)
-            if not getattr(real_user, "is_staff", False):
-                messages.error(request, "Experience mode is managed by admins.")
-                return redirect(reverse("settings") + "?tab=account")
-            mode = (request.POST.get("experience_mode") or "").strip().lower()
-            if mode not in (
-                UserExperienceSettings.ExperienceMode.NORMAL,
-                UserExperienceSettings.ExperienceMode.POWER,
-            ):
-                messages.error(request, "Invalid experience mode.")
-            else:
-                set_experience_mode(user, mode)
-                label = "Advanced" if mode == UserExperienceSettings.ExperienceMode.POWER else "Simple"
-                messages.success(request, f"Experience mode set to {label}.")
-            return redirect(reverse("settings") + "?tab=account")
-        if action == "refresh_provider_models":
-            cached: dict[str, list] = {}
-            for cfg in _get_provider_preferences(user):
-                if not cfg.encrypted_api_key:
-                    continue
-                try:
-                    key = decrypt_api_key(cfg.encrypted_api_key)
-                    if key:
-                        cached[cfg.provider] = list(list_models_for_provider(cfg.provider, key))
-                    else:
-                        cached[cfg.provider] = []
-                except Exception:
-                    cached[cfg.provider] = []
-            request.session["settings_provider_models_map"] = cached
-            request.session.modified = True
-            messages.success(
-                request,
-                "Loaded model lists from providers. If a provider timed out, try again.",
-            )
-            return redirect(reverse("settings") + "?tab=llm")
-        if action == "reset_today_quotas":
-            from django.utils import timezone
-            from .models import UsageCounter, LLMDailyUsageBreakdown
-            today = timezone.localdate()
-            UsageCounter.objects.for_user(user).filter(period_date=today).delete()
-            LLMDailyUsageBreakdown.objects.for_user(user).filter(period_date=today).delete()
-            messages.success(
-                request,
-                f"Today's daily quota counters ({today.strftime('%b %d, %Y')}) were reset. You can now make new LLM calls.",
-            )
-            return redirect(reverse("settings") + "?tab=usage")
-        if action == "reset_llm_usage_stats":
-            if not request.user.is_staff:
-                messages.error(request, "Permission denied.")
-                return redirect(reverse("settings") + "?tab=usage")
-            from .models import UsageCounter, LLMDailyUsageBreakdown
-            solo = LLMAppUsageTotals.get_for_user(user)
-            LLMAppUsageTotals.objects.filter(pk=solo.pk).update(
-                total_input_tokens=0,
-                total_output_tokens=0,
-                total_requests=0,
-                total_estimated_invokes=0,
-            )
-            LLMUsageByModel.objects.for_user(user).delete()
-            LLMUsageByQuery.objects.for_user(user).delete()
-            UsageCounter.objects.for_user(user).delete()
-            LLMDailyUsageBreakdown.objects.for_user(user).delete()
-            messages.success(
-                request,
-                "LLM usage totals, per-model / per-query counters, and daily quota ledgers were reset.",
-            )
-            return redirect(reverse("settings") + "?tab=usage")
-        if action == "save_stop_llm_requests":
-            automation = AppAutomationSettings.get_for_user(user)
-            automation.stop_llm_requests = bool(request.POST.get("stop_llm_requests"))
-            automation.save(update_fields=["stop_llm_requests", "updated_at"])
-            messages.success(request, "LLM safety settings saved.")
-            return redirect(reverse("settings") + "?tab=llm")
-        if action == "save_app_automation":
-            automation = AppAutomationSettings.get_for_user(user)
-            automation.pipeline_to_vetting_enabled = bool(
-                request.POST.get("pipeline_to_vetting_enabled")
-            )
-            automation.vetting_to_applying_enabled = bool(
-                request.POST.get("vetting_to_applying_enabled")
-            )
-            try:
-                automation.pipeline_preference_margin_min = int(
-                    (request.POST.get("pipeline_preference_margin_min") or "0").strip()
-                )
-            except ValueError:
-                messages.error(request, "Pref margin threshold must be a whole number.")
-                return redirect(reverse("settings") + "?tab=app")
-            raw_match_min = request.POST.get("pipeline_match_score_min")
-            if raw_match_min is not None and raw_match_min.strip() != "":
-                try:
-                    pmm = int(raw_match_min.strip())
-                    if pmm < 0 or pmm > 100:
-                        messages.error(request, "Match score threshold must be between 0 and 100.")
-                        return redirect(reverse("settings") + "?tab=app")
-                    automation.pipeline_match_score_min = pmm
-                except ValueError:
-                    messages.error(request, "Match score threshold must be a whole number.")
-                    return redirect(reverse("settings") + "?tab=app")
-            raw_purge_max = request.POST.get("pipeline_purge_match_score_max")
-            if raw_purge_max is not None and raw_purge_max.strip() != "":
-                try:
-                    ppm = int(raw_purge_max.strip())
-                    if ppm < 0 or ppm > 100:
-                        messages.error(request, "Auto-dismiss match score threshold must be between 0 and 100.")
-                        return redirect(reverse("settings") + "?tab=app")
-                    automation.pipeline_purge_match_score_max = ppm
-                except ValueError:
-                    messages.error(request, "Auto-dismiss match score threshold must be a whole number.")
-                    return redirect(reverse("settings") + "?tab=app")
-            try:
-                vip = int(
-                    (request.POST.get("vetting_interview_probability_min") or "70").strip()
-                )
-            except ValueError:
-                messages.error(request, "Interview probability threshold must be a whole number.")
-                return redirect(reverse("settings") + "?tab=app")
-            if vip < 0 or vip > 100:
-                messages.error(request, "Interview probability must be between 0 and 100.")
-                return redirect(reverse("settings") + "?tab=app")
-            automation.vetting_interview_probability_min = vip
-            raw_wf = (request.POST.get("applying_optimizer_workflow") or "").strip()
-            if raw_wf:
-                from .prompt_store import get_optimizer_workflow_by_id
-
-                wf = get_optimizer_workflow_by_id(int(raw_wf), user) if raw_wf.isdigit() else None
-                if wf is None:
-                    messages.error(request, "Invalid optimizer workflow selection.")
-                    return redirect(reverse("settings") + "?tab=app")
-                automation.applying_optimizer_workflow = wf
-            else:
-                automation.applying_optimizer_workflow = None
-
-            _save_optimizer_supporting_context(
-                user,
-                (request.POST.get("optimization_notes") or "").strip(),
-                (request.POST.get("pipeline_skills_json") or "").strip(),
-                (request.POST.get("job_highlights") or "").strip(),
-            )
-
-            def _cleanup_days(field: str):
-                raw = (request.POST.get(field) or "").strip()
-                try:
-                    v = int(raw)
-                except ValueError:
-                    return None
-                if v < 0 or v > 365:
-                    return None
-                return v
-
-            cjob = _cleanup_days("cleanup_job_retention_days")
-            if cjob is None:
-                cjob = 7
-            cjob = max(1, min(30, cjob))
-            cg = _cleanup_days("cleanup_generated_resume_retention_days")
-            if cg is None:
-                cg = 7
-            automation.cleanup_job_retention_days = cjob
-            automation.cleanup_pipeline_retention_days = cjob
-            automation.cleanup_vetting_retention_days = cjob
-            automation.cleanup_applying_retention_days = cjob
-            automation.cleanup_done_retention_days = 0  # Applied jobs are strictly exempt from purge
-            automation.cleanup_generated_resume_retention_days = cg
-
-            automation.save(
-                update_fields=[
-                    "pipeline_to_vetting_enabled",
-                    "pipeline_match_score_min",
-                    "pipeline_purge_match_score_max",
-                    "pipeline_preference_margin_min",
-                    "vetting_to_applying_enabled",
-                    "vetting_interview_probability_min",
-                    "applying_optimizer_workflow",
-                    "cleanup_job_retention_days",
-                    "cleanup_pipeline_retention_days",
-                    "cleanup_vetting_retention_days",
-                    "cleanup_applying_retention_days",
-                    "cleanup_done_retention_days",
-                    "cleanup_generated_resume_retention_days",
-                    "updated_at",
-                ]
-            )
-            messages.success(request, "App automation settings saved.")
-            return redirect(reverse("settings") + "?tab=app")
-        if action == "save_export_replacements":
-            replacements = []
-            for i in range(5):
-                token = (request.POST.get(f"replacement_token_{i}") or "").strip()
-                value = (request.POST.get(f"replacement_value_{i}") or "").strip()
-                replacements.append({"token": token, "value": value})
-            automation = AppAutomationSettings.get_for_user(user)
-            stored = automation.set_export_replacements(replacements)
-            # Keep session mirror for in-flight tabs; DB is the source of truth.
-            request.session["export_replacements"] = stored
-            request.session.modified = True
-            messages.success(request, "Export replacement tokens saved.")
-            return redirect(reverse("settings") + "?tab=replacements")
-        if action == "dedupe_pipeline":
-            from .job_dedupe import dedupe_pipeline_entries
-
-            track = (request.POST.get("dedupe_track") or "*").strip().lower()
-            stage = (request.POST.get("dedupe_stage") or "all").strip().lower()
-            include_done = bool(request.POST.get("dedupe_include_done"))
-            try:
-                result = dedupe_pipeline_entries(
-                    user=user,
-                    track_slug=track,
-                    stage=stage,
-                    include_done=include_done,
-                )
-            except ValueError as e:
-                messages.error(request, str(e))
-                return redirect(reverse("settings") + "?tab=app")
-
-            n = int(result.get("entries_removed", 0))
-            g = int(result.get("duplicate_groups", 0))
-            if n == 0:
-                messages.info(request, "No duplicate groups found for the selected scope.")
-            else:
-                messages.success(
-                    request,
-                    f"Removed {n} duplicate pipeline row(s) across {g} group(s).",
-                )
-            return redirect(reverse("settings") + "?tab=app")
-        if action == "save_provider_preferences":
-            ping_prompt = "Respond with exactly: OK"
-            ping_results = []
-            remove_ids = set()
-            for rid in request.POST.getlist("remove_pref_id"):
-                try:
-                    remove_ids.add(int(rid))
-                except (TypeError, ValueError):
-                    pass
-
-            pref_ids = request.POST.getlist("pref_id")
-            pref_providers = request.POST.getlist("pref_provider")
-            pref_models = request.POST.getlist("pref_model")
-            pref_priorities = request.POST.getlist("pref_priority")
-            pref_rpms = request.POST.getlist("pref_rate_limit_rpm")
-            pref_tpms = request.POST.getlist("pref_rate_limit_tpm")
-            pref_cooldowns = request.POST.getlist("pref_rate_limit_cooldown")
-            pref_is_locals = request.POST.getlist("pref_is_local")
-            row_count = max(
-                len(pref_ids),
-                len(pref_providers),
-                len(pref_models),
-                len(pref_priorities),
-                len(pref_rpms),
-                len(pref_tpms),
-                len(pref_cooldowns),
-                len(pref_is_locals),
-            )
-
-            def _parse_rate_limit_field(raw: str):
-                v = (raw or "").strip()
-                if not v:
-                    return None
-                try:
-                    n = int(v)
-                    return n if n > 0 else None
-                except ValueError:
-                    return None
-
-            def _parse_cooldown_field(raw: str):
-                v = (raw or "").strip()
-                if not v:
-                    return None
-                try:
-                    n = int(v)
-                    return n if n > 0 else None
-                except ValueError:
-                    return None
-
-            saved_rows = []
-            rate_limit_partial_rows: list[str] = []
-            for i in range(row_count):
-                raw_id = pref_ids[i].strip() if i < len(pref_ids) else ""
-                provider = pref_providers[i].strip() if i < len(pref_providers) else ""
-                model = pref_models[i].strip() if i < len(pref_models) else ""
-                raw_priority = pref_priorities[i].strip() if i < len(pref_priorities) else "100"
-                rl_rpm = _parse_rate_limit_field(pref_rpms[i] if i < len(pref_rpms) else "")
-                rl_tpm = _parse_rate_limit_field(pref_tpms[i] if i < len(pref_tpms) else "")
-                rl_cd = _parse_cooldown_field(pref_cooldowns[i] if i < len(pref_cooldowns) else "")
-                raw_local = (pref_is_locals[i] if i < len(pref_is_locals) else "0").strip()
-                is_local = raw_local in ("1", "true", "on", "yes")
-                if not provider:
-                    continue
-                try:
-                    priority = max(0, int(raw_priority or "100"))
-                except ValueError:
-                    messages.error(request, f"Priority for {provider} must be a whole number.")
-                    return redirect(reverse("settings") + "?tab=llm")
-                cfg = (
-                    LLMProviderConfig.objects.for_user(user)
-                    .filter(provider=provider)
-                    .exclude(encrypted_api_key="")
-                    .first()
-                )
-                if not cfg:
-                    continue
-                pref_obj = None
-                if raw_id:
-                    try:
-                        rid = int(raw_id)
-                        if rid in remove_ids:
-                            LLMProviderPreference.objects.filter(
-                                id=rid,
-                                provider_config__owner=user,
-                            ).delete()
-                            continue
-                        pref_obj = LLMProviderPreference.objects.filter(
-                            id=rid,
-                            provider_config__owner=user,
-                        ).first()
-                    except (TypeError, ValueError):
-                        pref_obj = None
-                if pref_obj is None:
-                    pref_obj = LLMProviderPreference()
-                pref_obj.provider_config = cfg
-                pref_obj.model = model
-                pref_obj.priority = priority
-                pref_obj.is_local = is_local
-                if rl_rpm is not None and rl_tpm is not None:
-                    pref_obj.rate_limit_rpm = rl_rpm
-                    pref_obj.rate_limit_tpm = rl_tpm
-                elif rl_rpm is not None or rl_tpm is not None:
-                    rate_limit_partial_rows.append(provider)
-                    pref_obj.rate_limit_rpm = None
-                    pref_obj.rate_limit_tpm = None
-                else:
-                    pref_obj.rate_limit_rpm = None
-                    pref_obj.rate_limit_tpm = None
-                pref_obj.rate_limit_cooldown_seconds = rl_cd
-                pref_obj.save()
-                saved_rows.append(pref_obj)
-
-            if remove_ids:
-                LLMProviderPreference.objects.filter(
-                    id__in=remove_ids,
-                    provider_config__owner=user,
-                ).delete()
-
-            if AppAutomationSettings.get_for_user(user).stop_llm_requests:
-                messages.info(request, "Skipped connectivity ping while Stop LLM requests is enabled.")
-            for row in saved_rows:
-                cfg = row.provider_config
-                model = (row.model or cfg.default_model or "").strip()
-                if cfg.encrypted_api_key and model and not AppAutomationSettings.get_for_user(user).stop_llm_requests:
-                    try:
-                        api_key_decrypted = decrypt_api_key(cfg.encrypted_api_key)
-                        llm = get_llm(cfg.provider, api_key_decrypted, model=model)
-                        from .llm import log_llm_invoke
-
-                        log_llm_invoke(
-                            cfg.provider,
-                            model,
-                            query="settings_connectivity_ping",
-                            via="direct",
-                        )
-                        resp = llm.invoke([HumanMessage(content=ping_prompt)])
-                        text = (getattr(resp, "content", None) or str(resp)).strip()
-                        if text.upper().startswith("OK"):
-                            ping_results.append(f"{cfg.provider}/{model}: OK")
-                        else:
-                            ping_results.append(f"{cfg.provider}/{model}: unexpected response")
-                    except Exception as e:
-                        ping_results.append(f"{cfg.provider}/{model}: failed ({e})")
-            messages.success(request, "LLM provider preference list saved.")
-            if rate_limit_partial_rows:
-                messages.warning(
-                    request,
-                    "Rate limits require both RPM and TPM, or both blank. Cleared limits for: "
-                    + ", ".join(sorted(set(rate_limit_partial_rows))),
-                )
-            for line in ping_results:
-                if line.endswith(": OK"):
-                    messages.success(request, f"Connectivity check passed — {line}")
-                else:
-                    messages.warning(request, f"Connectivity check — {line}")
-            return redirect(reverse("settings") + "?tab=llm")
-        if action == "connect":
-            provider = (request.POST.get("provider") or "").strip()
-            api_key = (request.POST.get("api_key") or "").strip()
-            if not provider or provider not in LLM_PROVIDERS:
-                messages.error(request, "Invalid provider.")
-            elif not api_key:
-                if provider == "Ollama Local":
-                    messages.error(request, "Enter the Ollama host/IP before connecting.")
-                else:
-                    messages.error(request, "Enter an API key before connecting.")
-            else:
-                try:
-                    had_active_provider = bool(_get_active_llm_provider(user, request))
-                    api_llm_connect(request, ConnectRequest(provider=provider, api_key=api_key))
-                    if not had_active_provider:
-                        _set_active_llm_provider(user, provider)
-                        request.session["active_llm_provider"] = provider
-                        request.session.modified = True
-                    request.session.pop("settings_provider_models_map", None)
-                    messages.success(request, f"API key for {provider} validated and saved.")
-                    from .experience import mark_onboarding_step
-
-                    mark_onboarding_step(user, "llm")
-                    return redirect(reverse("settings") + "?tab=llm")
-                except HttpError as e:
-                    messages.error(request, str(e))
-        elif action == "set_active_provider":
-            provider = (request.POST.get("active_provider") or "").strip()
-            valid_connected = any(info["name"] == provider and info["key_stored"] for info in provider_infos)
-            if not valid_connected:
-                messages.error(request, "Choose a connected provider.")
-            else:
-                _set_active_llm_provider(user, provider)
-                request.session["active_llm_provider"] = provider
-                request.session.modified = True
-                messages.success(request, f"{provider} is now the active provider.")
-                return redirect(reverse("settings") + "?tab=llm")
-        elif action == "save_prompt_model_preferences":
-            from .models import TenantPromptModelPreference
-
-            # 1. Global Tenant Default (not settable by tenants in the UI)
-            if request.user.is_superuser and "global_default_provider_model" in request.POST:
-                global_choice = (request.POST.get("global_default_provider_model") or "").strip()
-                if global_choice and "::" in global_choice:
-                    g_prov, g_mod = global_choice.split("::", 1)
-                    TenantPromptModelPreference.objects.update_or_create(
-                        owner=user,
-                        query_kind="__default__",
-                        defaults={"provider": g_prov, "model": g_mod, "is_active": True},
-                    )
-                else:
-                    TenantPromptModelPreference.objects.for_user(user).filter(query_kind="__default__").delete()
-
-            # 2. Per-Prompt Overrides
-            for key, val in request.POST.items():
-                if key.startswith("prompt_pref_"):
-                    qk = key[len("prompt_pref_") :].strip()
-                    val = (val or "").strip()
-                    if val and "::" in val:
-                        p_prov, p_mod = val.split("::", 1)
-                        TenantPromptModelPreference.objects.update_or_create(
-                            owner=user,
-                            query_kind=qk,
-                            defaults={"provider": p_prov, "model": p_mod, "is_active": True},
-                        )
-                    else:
-                        TenantPromptModelPreference.objects.for_user(user).filter(query_kind=qk).delete()
-
-                    if qk == "matching":
-                        for alias_qk in (
-                            "fit_check",
-                            "pipeline_vetting_matching",
-                            "jobs_ai_match",
-                            "keyword_search_fit",
-                            "jobs_match_api",
-                        ):
-                            if val and "::" in val:
-                                p_prov, p_mod = val.split("::", 1)
-                                TenantPromptModelPreference.objects.update_or_create(
-                                    owner=user,
-                                    query_kind=alias_qk,
-                                    defaults={"provider": p_prov, "model": p_mod, "is_active": True},
-                                )
-                            else:
-                                TenantPromptModelPreference.objects.for_user(user).filter(query_kind=alias_qk).delete()
-
-            messages.success(request, "Prompt & Workflow model preferences saved successfully.")
-            return redirect(reverse("settings") + "?tab=llm")
-
-    tab = (request.GET.get("tab") or "account").strip().lower()
-    if tab not in ("account", "llm", "usage", "replacements", "app"):
-        tab = "account"
-    provider_preference_list = list(_get_provider_preferences(user))
-    connected_provider_names = [cfg.provider for cfg in provider_preference_list]
-    pref_rows = list(_get_provider_preference_rows(user).order_by("priority", "id"))
-    if not pref_rows and connected_provider_names:
-        for cfg in provider_preference_list:
-            LLMProviderPreference.objects.create(
-                provider_config=cfg,
-                model=cfg.default_model or "",
-                priority=cfg.priority,
-            )
-        pref_rows = list(_get_provider_preference_rows(user).order_by("priority", "id"))
-    raw_session_models = request.session.get("settings_provider_models_map")
-    if not isinstance(raw_session_models, dict):
-        models_cache: dict[str, list] = {}
-    else:
-        models_cache = {k: list(v or []) for k, v in raw_session_models.items()}
-
-    def _models_for_settings_preferences(provider: str, cfg: LLMProviderConfig) -> list:
-        """
-        Model dropdowns use only the session cache populated by
-        "Refresh model lists from providers" (no live provider calls on page load).
-        """
-        return list(models_cache.get(provider) or [])
-
-    provider_preference_rows = []
-    provider_models_map: dict[str, list] = {}
-    for pref in pref_rows:
-        cfg = pref.provider_config
-        models = _models_for_settings_preferences(cfg.provider, cfg)
-        provider_models_map[cfg.provider] = models
-        provider_preference_rows.append({"pref": pref, "cfg": cfg, "models": models})
-    for cfg in provider_preference_list:
-        if cfg.provider not in provider_models_map:
-            provider_models_map[cfg.provider] = _models_for_settings_preferences(cfg.provider, cfg)
-
-    tracks_for_dedupe = list(Track.ensure_baseline(user))
-    usage_totals = LLMAppUsageTotals.get_for_user(user)
-    stats_map = {(r.provider, r.model): r for r in LLMUsageByModel.objects.for_user(user)}
-    usage_rows = []
-    usage_cooldown_error = False
-    pref_keys_seen = set()
-    for item in provider_preference_rows:
-        pref = item["pref"]
-        cfg = item["cfg"]
-        prov = cfg.provider
-        mkey = (pref.model or cfg.default_model or "").strip() or "__default__"
-        m_gl = (pref.model or cfg.default_model or "").strip() or None
-        pref_keys_seen.add((prov, mkey))
-        ttl = None
-        try:
-            ttl = get_llm_cooldown_ttl(prov, m_gl, user=user)
-        except Exception:
-            usage_cooldown_error = True
-        st = stats_map.get((prov, mkey))
-        sin = int(st.sum_input_tokens) if st else 0
-        sout = int(st.sum_output_tokens) if st else 0
-        rc = int(st.request_count) if st else 0
-        avg = (sin + sout) // rc if rc else 0
-        usage_rows.append(
-            {
-                "provider": prov,
-                "model_display": mkey if mkey != "__default__" else "(default)",
-                "priority": pref.priority,
-                "on_ice": ttl is not None and ttl > 0,
-                "cooldown_seconds": ttl,
-                "connected": bool(cfg.encrypted_api_key),
-                "request_count": rc,
-                "sum_in": sin,
-                "sum_out": sout,
-                "sum_cached": int(st.sum_cached_tokens) if st else 0,
-                "last_used": st.last_used_at if st else None,
-                "avg_tokens": avg,
-            }
-        )
-    for st in LLMUsageByModel.objects.for_user(user).order_by("-last_used_at", "provider"):
-        if (st.provider, st.model) in pref_keys_seen:
-            continue
-        ttl = None
-        m_gl = None if st.model == "__default__" else st.model
-        try:
-            ttl = get_llm_cooldown_ttl(st.provider, m_gl, user=user)
-        except Exception:
-            usage_cooldown_error = True
-        rc = int(st.request_count)
-        sin, sout = int(st.sum_input_tokens), int(st.sum_output_tokens)
-        usage_rows.append(
-            {
-                "provider": st.provider,
-                "model_display": st.model if st.model != "__default__" else "(default)",
-                "priority": None,
-                "on_ice": ttl is not None and ttl > 0,
-                "cooldown_seconds": ttl,
-                "connected": True,
-                "request_count": rc,
-                "sum_in": sin,
-                "sum_out": sout,
-                "sum_cached": int(st.sum_cached_tokens),
-                "last_used": st.last_used_at,
-                "avg_tokens": (sin + sout) // rc if rc else 0,
-            }
-        )
-    est_pct = 0.0
-    if usage_totals.total_requests:
-        est_pct = 100.0 * float(usage_totals.total_estimated_invokes) / float(
-            usage_totals.total_requests
-        )
-
-    usage_by_query_rows = []
-    for r in LLMUsageByQuery.objects.for_user(user).order_by("query_kind", "provider", "model"):
-        qk = r.query_kind or ""
-        usage_by_query_rows.append(
-            {
-                "query_kind": qk,
-                "query_label": USAGE_QUERY_LABELS.get(
-                    qk, qk.replace("_", " ").title() if qk else "—"
-                ),
-                "provider": r.provider,
-                "model_display": r.model if r.model != "__default__" else "(default)",
-                "request_count": int(r.request_count),
-                "sum_in": int(r.sum_input_tokens),
-                "sum_out": int(r.sum_output_tokens),
-                "sum_cached": int(r.sum_cached_tokens),
-                "last_used": r.last_used_at,
-            }
-        )
-
-    from .subscriptions import METRIC_LLM_REQUESTS, METRIC_LLM_TOKENS, subscription_summary
-    from datetime import timedelta
-    from django.utils import timezone
-    from .models import UsageCounter
-
-    plan_usage = subscription_summary(user)
-    daily_llm_quota = {
-        "requests": plan_usage["usage"].get(METRIC_LLM_REQUESTS) or {},
-        "tokens": plan_usage["usage"].get(METRIC_LLM_TOKENS) or {},
-        "plan_name": plan_usage.get("plan_name") or "—",
-    }
-
-    today_date = timezone.localdate()
-    start_date = today_date - timedelta(days=30)
-    counters = UsageCounter.objects.for_user(user).filter(period_date__gte=start_date).order_by("-period_date", "metric")
-    daily_map = {}
-    for c in counters:
-        d = c.period_date
-        if d not in daily_map:
-            daily_map[d] = {
-                "date": d,
-                "is_today": d == today_date,
-                "is_yesterday": d == (today_date - timedelta(days=1)),
-                "date_display": "Today" if d == today_date else ("Yesterday" if d == (today_date - timedelta(days=1)) else d.strftime("%b %d, %Y")),
-                "llm_tokens": 0,
-                "llm_requests": 0,
-                "job_searches": 0,
-                "apply_runs": 0,
-                "updated_at": c.updated_at,
-            }
-        if c.metric == METRIC_LLM_TOKENS:
-            daily_map[d]["llm_tokens"] = c.count
-        elif c.metric == METRIC_LLM_REQUESTS:
-            daily_map[d]["llm_requests"] = c.count
-        elif c.metric == "job_searches":
-            daily_map[d]["job_searches"] = c.count
-        elif c.metric == "apply_runs":
-            daily_map[d]["apply_runs"] = c.count
-        if c.updated_at and (not daily_map[d]["updated_at"] or c.updated_at > daily_map[d]["updated_at"]):
-            daily_map[d]["updated_at"] = c.updated_at
-
-    if today_date not in daily_map:
-        daily_map[today_date] = {
-            "date": today_date,
-            "is_today": True,
-            "is_yesterday": False,
-            "date_display": "Today",
-            "llm_tokens": 0,
-            "llm_requests": 0,
-            "job_searches": 0,
-            "apply_runs": 0,
-            "updated_at": None,
-        }
-
-    token_limit = daily_llm_quota["tokens"].get("limit") or 0
-    request_limit = daily_llm_quota["requests"].get("limit") or 0
-
-    from .models import LLMDailyUsageBreakdown
-    from collections import defaultdict
-
-    breakdowns = LLMDailyUsageBreakdown.objects.for_user(user).filter(
-        period_date__gte=start_date
-    ).order_by("-period_date", "query_kind", "provider", "model")
-
-    daily_breakdowns_map = defaultdict(list)
-    for b in breakdowns:
-        qk = b.query_kind or ""
-        daily_breakdowns_map[b.period_date].append({
-            "query_kind": qk,
-            "query_label": USAGE_QUERY_LABELS.get(qk, qk.replace("_", " ").title() if qk else "—"),
-            "provider": b.provider,
-            "model_display": b.model if b.model != "__default__" else "(default)",
-            "request_count": int(b.request_count),
-            "sum_in": int(b.sum_input_tokens),
-            "sum_out": int(b.sum_output_tokens),
-            "sum_cached": int(b.sum_cached_tokens),
-            "last_used": b.last_used_at,
-        })
-
-    daily_usage_rows = []
-    for d, item in sorted(daily_map.items(), key=lambda x: x[0], reverse=True):
-        t_used = item["llm_tokens"]
-        r_used = item["llm_requests"]
-        t_pct = round((t_used / token_limit * 100), 1) if token_limit > 0 else 0
-        r_pct = round((r_used / request_limit * 100), 1) if request_limit > 0 else 0
-
-        is_tok_exceeded = token_limit > 0 and t_used >= token_limit
-        is_req_exceeded = request_limit > 0 and r_used >= request_limit
-        is_tok_near = token_limit > 0 and (t_used >= token_limit * 0.8) and not is_tok_exceeded
-        is_req_near = request_limit > 0 and (r_used >= request_limit * 0.8) and not is_req_exceeded
-
-        item["token_limit"] = token_limit
-        item["token_pct"] = t_pct
-        item["request_limit"] = request_limit
-        item["request_pct"] = r_pct
-        item["is_exceeded"] = is_tok_exceeded or is_req_exceeded
-        item["is_near_limit"] = (is_tok_near or is_req_near) and not item["is_exceeded"]
-
-        if not token_limit and not request_limit:
-            status_label = "Unlimited"
-            status_badge = "bg-slate-100 text-slate-600"
-        elif is_tok_exceeded and is_req_exceeded:
-            status_label = f"Exceeded (Req {r_pct}%, Tok {t_pct}%)"
-            status_badge = "bg-red-100 text-red-800 font-semibold"
-        elif is_tok_exceeded:
-            status_label = f"Tokens Exceeded ({t_pct}%)"
-            status_badge = "bg-red-100 text-red-800 font-semibold"
-        elif is_req_exceeded:
-            status_label = f"Requests Exceeded ({r_pct}%)"
-            status_badge = "bg-red-100 text-red-800 font-semibold"
-        elif is_tok_near or is_req_near:
-            max_p = max(t_pct, r_pct)
-            status_label = f"Near Limit ({max_p}%)"
-            status_badge = "bg-amber-100 text-amber-800 font-medium"
-        else:
-            max_p = max(t_pct, r_pct)
-            status_label = f"OK ({max_p}%)"
-            status_badge = "bg-emerald-50 text-emerald-700 font-medium"
-
-        item["status_label"] = status_label
-        item["status_badge"] = status_badge
-        item["breakdown_rows"] = daily_breakdowns_map.get(d, [])
-        item["has_breakdown"] = len(item["breakdown_rows"]) > 0
-        daily_usage_rows.append(item)
-
-    tenant_usage_rows = []
-    if request.user.is_staff:
-        from collections import defaultdict
-        tenant_usage = defaultdict(lambda: {
-            "username": "",
-            "email": "",
-            "local_requests": 0,
-            "local_input_tokens": 0,
-            "local_output_tokens": 0,
-            "remote_requests": 0,
-            "remote_input_tokens": 0,
-            "remote_output_tokens": 0,
-        })
-        # Preload local preferences to find is_local status efficiently
-        local_prefs = set(
-            LLMProviderPreference.objects.filter(is_local=True).values_list(
-                "provider_config__owner_id", "provider_config__provider", "model"
-            )
-        )
-        all_stats = LLMUsageByModel.objects.select_related("owner").all()
-        for st in all_stats:
-            o_id = st.owner_id
-            t = tenant_usage[o_id]
-            if not t["username"]:
-                t["username"] = st.owner.username
-                t["email"] = st.owner.email or ""
-
-            # check if local
-            is_local = False
-            if str(st.provider).strip().lower() == "ollama local":
-                is_local = True
-            else:
-                key = (o_id, st.provider, st.model)
-                if key in local_prefs:
-                    is_local = True
-                elif (o_id, st.provider, "__default__") in local_prefs:
-                    is_local = True
-
-            if is_local:
-                t["local_requests"] += st.request_count
-                t["local_input_tokens"] += st.sum_input_tokens
-                t["local_output_tokens"] += st.sum_output_tokens
-            else:
-                t["remote_requests"] += st.request_count
-                t["remote_input_tokens"] += st.sum_input_tokens
-                t["remote_output_tokens"] += st.sum_output_tokens
-
-        tenant_usage_rows = sorted(tenant_usage.values(), key=lambda x: x["username"])
-
-    optimizer_supporting_context = _get_optimizer_supporting_context(request)
-    automation_for_replacements = AppAutomationSettings.get_for_user(user)
-    raw_replacements = automation_for_replacements.export_replacements or []
-    # One-time migrate legacy session-only tokens into durable settings.
-    if not any(
-        isinstance(e, dict) and (e.get("token") or "").strip() and (e.get("value") or "").strip()
-        for e in (raw_replacements if isinstance(raw_replacements, list) else [])
-    ):
-        session_raw = request.session.get("export_replacements") or []
-        if isinstance(session_raw, list) and any(
-            isinstance(e, dict) and (e.get("token") or "").strip() and (e.get("value") or "").strip()
-            for e in session_raw
-        ):
-            raw_replacements = automation_for_replacements.set_export_replacements(session_raw)
-    replacement_entries = AppAutomationSettings.normalize_export_replacements(raw_replacements)
-
-    from .models import UserExperienceSettings
-    from .experience import is_power_user
-    from .account_views import account_settings_context
-    from .prompt_store import list_optimizer_workflows
-
-    from .models import TenantPromptModelPreference
-    from .llm.gateway import (
-        USAGE_QUERY_OPTIMIZER_WRITER,
-        USAGE_QUERY_OPTIMIZER_ATS_JUDGE,
-        USAGE_QUERY_OPTIMIZER_RECRUITER_JUDGE,
-        USAGE_QUERY_JD_CLEANSE,
-        USAGE_QUERY_MATCHING,
-        USAGE_QUERY_FIT_CHECK,
-        USAGE_QUERY_PIPELINE_VETTING,
-        USAGE_QUERY_PIPELINE_SKILL_EXTRACT,
-        USAGE_QUERY_COVER_LETTER,
-        USAGE_QUERY_INTERVIEW_PREP,
-    )
-
-    available_model_options = []
-    seen_opt_keys = set()
-    for item in provider_preference_rows:
-        cfg = item["cfg"]
-        pref = item["pref"]
-        prov = cfg.provider
-        m = (pref.model or cfg.default_model or "").strip()
-        k = (prov, m)
-        if k not in seen_opt_keys:
-            seen_opt_keys.add(k)
-            label = f"{prov} — {m}" if m else f"{prov} (default model)"
-            available_model_options.append({
-                "value": f"{prov}::{m}",
-                "label": label,
-                "provider": prov,
-                "model": m,
-                "is_local": pref.is_local or (prov.lower() == "ollama local"),
-            })
-
-    for prov, mlist in provider_models_map.items():
-        for m in (mlist or [])[:20]:
-            k = (prov, m)
-            if k not in seen_opt_keys:
-                seen_opt_keys.add(k)
-                available_model_options.append({
-                    "value": f"{prov}::{m}",
-                    "label": f"{prov} — {m}",
-                    "provider": prov,
-                    "model": m,
-                    "is_local": prov.lower() == "ollama local",
-                })
-
-    stored_prompt_prefs = {
-        p.query_kind: f"{p.provider}::{p.model}"
-        for p in TenantPromptModelPreference.objects.for_user(user).filter(is_active=True)
-    }
-    global_default_val = stored_prompt_prefs.get("__default__", "")
-
-    prompt_routing_sections = [
-        {
-            "category": "Resume Optimizer",
-            "description": "Generation, refinement, and scoring models used during resume optimization workflows.",
-            "items": [
-                {
-                    "query_kind": USAGE_QUERY_OPTIMIZER_WRITER,
-                    "label": "Resume Writer",
-                    "hint": "Rewrites experience bullets, summary, and achievements against targeted job description.",
-                    "selected": stored_prompt_prefs.get(USAGE_QUERY_OPTIMIZER_WRITER, ""),
-                },
-                {
-                    "query_kind": USAGE_QUERY_OPTIMIZER_ATS_JUDGE,
-                    "label": "ATS Rubric Judge",
-                    "hint": "Scoring judge for keyword overlap, formatting heuristics, and parseability.",
-                    "selected": stored_prompt_prefs.get(USAGE_QUERY_OPTIMIZER_ATS_JUDGE, ""),
-                },
-                {
-                    "query_kind": USAGE_QUERY_OPTIMIZER_RECRUITER_JUDGE,
-                    "label": "Recruiter Rubric Judge",
-                    "hint": "Scoring judge for impact, relevance, and executive clarity.",
-                    "selected": stored_prompt_prefs.get(USAGE_QUERY_OPTIMIZER_RECRUITER_JUDGE, ""),
-                },
-                {
-                    "query_kind": USAGE_QUERY_JD_CLEANSE,
-                    "label": "Job Description Cleanser",
-                    "hint": "Cleans raw job postings into concise requirements, removing company boilerplate.",
-                    "selected": stored_prompt_prefs.get(USAGE_QUERY_JD_CLEANSE, ""),
-                },
-            ],
-        },
-        {
-            "category": "Job Matching & Sourcing",
-            "description": "High-volume evaluation prompts for search results, candidate pipelines, and skill intelligence.",
-            "items": [
-                {
-                    "query_kind": USAGE_QUERY_MATCHING,
-                    "label": "Job Fit & Alignment Matcher",
-                    "hint": "Unified engine for job match scoring, fit diagnostics, and pipeline candidate vetting.",
-                    "selected": stored_prompt_prefs.get(USAGE_QUERY_MATCHING, ""),
-                },
-                {
-                    "query_kind": USAGE_QUERY_PIPELINE_SKILL_EXTRACT,
-                    "label": "Pipeline Skill & Market Extraction",
-                    "hint": "Extracts market-wide skill taxonomy, tools, and methodologies from batches of job descriptions.",
-                    "selected": stored_prompt_prefs.get(USAGE_QUERY_PIPELINE_SKILL_EXTRACT, ""),
-                },
-            ],
-        },
-        {
-            "category": "Career Assets & Prep",
-            "description": "Tailored career asset generation and interview preparation prompts.",
-            "items": [
-                {
-                    "query_kind": USAGE_QUERY_COVER_LETTER,
-                    "label": "Cover Letter Generator",
-                    "hint": "Drafts customized, professional cover letters tailored to optimized resumes.",
-                    "selected": stored_prompt_prefs.get(USAGE_QUERY_COVER_LETTER, ""),
-                },
-                {
-                    "query_kind": USAGE_QUERY_INTERVIEW_PREP,
-                    "label": "Interview Question Prep",
-                    "hint": "Generates likely behavioral and technical interview questions for targeted roles.",
-                    "selected": stored_prompt_prefs.get(USAGE_QUERY_INTERVIEW_PREP, ""),
-                },
-            ],
-        },
-    ]
-
-    context = {
-        "provider_infos": provider_infos,
-        "provider_preference_list": provider_preference_list,
-        "provider_preference_rows": provider_preference_rows,
-        "connected_provider_names": connected_provider_names,
-        "provider_models_map": provider_models_map,
-        "active_provider": active_provider,
-        "settings_tab": tab,
-        "app_automation": AppAutomationSettings.get_for_user(user),
-        "experience_settings": UserExperienceSettings.get_for_user(user),
-        "is_power_user": is_power_user(user),
-        "optimizer_workflows": list_optimizer_workflows(user),
-        "optimizer_supporting_context": optimizer_supporting_context,
-        "dedupe_tracks": tracks_for_dedupe,
-        "usage_totals": usage_totals,
-        "usage_rows": usage_rows,
-        "usage_estimated_pct": est_pct,
-        "usage_cooldown_error": usage_cooldown_error,
-        "usage_by_query_rows": usage_by_query_rows,
-        "daily_llm_quota": daily_llm_quota,
-        "daily_usage_rows": daily_usage_rows,
-        "replacement_entries": replacement_entries,
-        "tenant_usage_rows": tenant_usage_rows,
-        "available_model_options": available_model_options,
-        "global_default_val": global_default_val,
-        "prompt_routing_sections": prompt_routing_sections,
-    }
-    context.update(account_settings_context(user))
-    return render(request, "resume_app/settings.html", context)
+from .settings_views import settings_view
 
 
 def llm_test_view(request):
@@ -1939,215 +1054,18 @@ def llm_test_view(request):
     )
 
 
-@_staff_required
-def prompt_library_view(request):
-    """
-    Staff-only Prompt Library: edit system-wide Writer / Recruiter / Matching /
-    Insights / Cover letter / Interview prep / JD cleanse templates.
-    ATS judge prompts are managed as global AtsJudgeProfile rows (owner=null).
-    """
-    from .models import AtsJudgeProfile
-    from .prompt_store import (
-        get_ats_judge_profile_by_id,
-        get_ats_judge_profile_display,
-        list_ats_judge_profiles,
-        save_ats_judge_profile,
-    )
-
-    try:
-        prompts = get_effective_prompts(request)
-    except Exception:
-        prompts = get_effective_prompts(None)
-
-    ats_profiles = list_ats_judge_profiles()
-    selected_ats_id = request.GET.get("ats_profile")
-    if selected_ats_id:
-        try:
-            selected_ats_id = int(selected_ats_id)
-        except (ValueError, TypeError):
-            selected_ats_id = None
-    global_ats_ids = {p.pk for p in ats_profiles}
-    if selected_ats_id not in global_ats_ids:
-        selected_ats_id = None
-    if not selected_ats_id and ats_profiles:
-        default_ats = next((p for p in ats_profiles if p.is_default), None) or ats_profiles[0]
-        selected_ats_id = default_ats.pk
-    selected_ats = None
-    ats_prompts = {}
-    if selected_ats_id:
-        selected_ats = get_ats_judge_profile_by_id(selected_ats_id)
-        if selected_ats:
-            ats_prompts = get_ats_judge_profile_display(selected_ats)
-
-    if request.method == "POST":
-        action = request.POST.get("action")
-        if action == "save_ats_profile":
-            profile_id = request.POST.get("ats_profile_id")
-            name = (request.POST.get("ats_profile_name") or "").strip()
-            a_sys = request.POST.get("prompt_ats_system") or ""
-            a_usr = request.POST.get("prompt_ats_user") or ""
-            a_combined = request.POST.get("prompt_ats_combined") or ""
-
-            def _ats_triple(sys_v: str, usr_v: str, leg_v: str) -> tuple[str, str, str]:
-                sys_v = (sys_v or "").strip()
-                usr_v = (usr_v or "").strip()
-                leg_v = (leg_v or "").strip()
-                if sys_v or usr_v:
-                    return "", sys_v, usr_v
-                if leg_v:
-                    return leg_v, "", ""
-                return "", "", ""
-
-            ats_leg, ats_sys, ats_usr = _ats_triple(a_sys, a_usr, a_combined)
-            is_default = request.POST.get("ats_profile_is_default") == "on"
-            if profile_id and str(profile_id).strip().isdigit():
-                prof = get_ats_judge_profile_by_id(int(profile_id))
-                if prof is None:
-                    messages.error(request, "ATS profile not found.")
-                    return redirect(reverse("prompt_library"))
-            else:
-                prof = AtsJudgeProfile(owner=None, name=name or "New ATS profile")
-            save_ats_judge_profile(
-                prof,
-                name=name or prof.name,
-                ats_judge=ats_leg,
-                ats_judge_system=ats_sys,
-                ats_judge_user=ats_usr,
-            )
-            if is_default:
-                prof.is_default = True
-                prof.save()
-            messages.success(request, f'ATS profile "{prof.name}" saved.')
-            return redirect(reverse("prompt_library") + f"?ats_profile={prof.pk}")
-
-        if action == "new_ats_profile":
-            prof = AtsJudgeProfile.objects.create(owner=None, name="New ATS profile", slug="")
-            return redirect(reverse("prompt_library") + f"?ats_profile={prof.pk}")
-
-        if action == "delete_ats_profile":
-            profile_id = request.POST.get("ats_profile_id")
-            if profile_id and str(profile_id).strip().isdigit():
-                prof = get_ats_judge_profile_by_id(int(profile_id))
-                if prof is None:
-                    messages.error(request, "ATS profile not found.")
-                elif prof.is_builtin and AtsJudgeProfile.objects.filter(owner__isnull=True).count() <= 1:
-                    messages.error(request, "Cannot delete the only built-in ATS profile.")
-                else:
-                    was_default = prof.is_default
-                    name = prof.name
-                    prof.delete()
-                    if was_default:
-                        fallback = AtsJudgeProfile.objects.filter(owner__isnull=True).order_by("pk").first()
-                        if fallback:
-                            fallback.is_default = True
-                            fallback.save()
-                    messages.success(request, f'ATS profile "{name}" deleted.')
-            return redirect(reverse("prompt_library"))
-
-        if action == "save_prompts":
-            # Split (system/user) wins over Combined (legacy) when either side has text.
-            def _prompt_triple(sys_v: str, usr_v: str, leg_v: str) -> tuple[str, str, str]:
-                sys_v = (sys_v or "").strip()
-                usr_v = (usr_v or "").strip()
-                leg_v = (leg_v or "").strip()
-                if sys_v or usr_v:
-                    return "", sys_v, usr_v
-                if leg_v:
-                    return leg_v, "", ""
-                return "", "", ""
-
-            w_sys = request.POST.get("prompt_writer_system") or ""
-            w_usr = request.POST.get("prompt_writer_user") or ""
-            w_combined = request.POST.get("prompt_writer_combined") or ""
-            writer_leg, writer_sys, writer_usr = _prompt_triple(w_sys, w_usr, w_combined)
-
-            r_sys = request.POST.get("prompt_recruiter_system") or ""
-            r_usr = request.POST.get("prompt_recruiter_user") or ""
-            r_combined = request.POST.get("prompt_recruiter_combined") or ""
-            rec_leg, rec_sys, rec_usr = _prompt_triple(r_sys, r_usr, r_combined)
-
-            m_sys = request.POST.get("prompt_matching_system") or ""
-            m_usr = request.POST.get("prompt_matching_user") or ""
-            m_combined = request.POST.get("prompt_matching_combined") or ""
-            match_leg, match_sys, match_usr = _prompt_triple(m_sys, m_usr, m_combined)
-
-            i_sys = request.POST.get("prompt_insights_system") or ""
-            i_usr = request.POST.get("prompt_insights_user") or ""
-            i_combined = request.POST.get("prompt_insights_combined") or ""
-            ins_leg, ins_sys, ins_usr = _prompt_triple(i_sys, i_usr, i_combined)
-
-            jd_sys = request.POST.get("prompt_jd_cleanse_system") or ""
-            jd_usr = request.POST.get("prompt_jd_cleanse_user") or ""
-            jd_combined = request.POST.get("prompt_jd_cleanse_combined") or ""
-            jd_leg, jd_sys, jd_usr = _prompt_triple(jd_sys, jd_usr, jd_combined)
-
-            cl_sys = request.POST.get("prompt_cover_letter_system") or ""
-            cl_usr = request.POST.get("prompt_cover_letter_user") or ""
-            cl_combined = request.POST.get("prompt_cover_letter_combined") or ""
-            cl_leg, cl_sys, cl_usr = _prompt_triple(cl_sys, cl_usr, cl_combined)
-
-            ip_sys = request.POST.get("prompt_interview_prep_system") or ""
-            ip_usr = request.POST.get("prompt_interview_prep_user") or ""
-            ip_combined = request.POST.get("prompt_interview_prep_combined") or ""
-            ip_leg, ip_sys, ip_usr = _prompt_triple(ip_sys, ip_usr, ip_combined)
-
-            sr_sys = request.POST.get("prompt_skill_radar_system") or ""
-            sr_usr = request.POST.get("prompt_skill_radar_user") or ""
-            sr_combined = request.POST.get("prompt_skill_radar_combined") or ""
-            sr_leg, sr_sys, sr_usr = _prompt_triple(sr_sys, sr_usr, sr_combined)
-
-            prompts = {
-                "writer": writer_leg,
-                "writer_system": writer_sys,
-                "writer_user": writer_usr,
-                "recruiter_judge": rec_leg,
-                "recruiter_judge_system": rec_sys,
-                "recruiter_judge_user": rec_usr,
-                "matching": match_leg,
-                "matching_system": match_sys,
-                "matching_user": match_usr,
-                "insights": ins_leg,
-                "insights_system": ins_sys,
-                "insights_user": ins_usr,
-                "jd_cleanse": jd_leg,
-                "jd_cleanse_system": jd_sys,
-                "jd_cleanse_user": jd_usr,
-                "cover_letter": cl_leg,
-                "cover_letter_system": cl_sys,
-                "cover_letter_user": cl_usr,
-                "interview_prep": ip_leg,
-                "interview_prep_system": ip_sys,
-                "interview_prep_user": ip_usr,
-                "skill_radar": sr_leg,
-                "skill_radar_system": sr_sys,
-                "skill_radar_user": sr_usr,
-            }
-            save_prompts_to_profile(request, prompts)
-            prompts = get_effective_prompts(request)
-            messages.success(
-                request,
-                "System prompts saved. All users will use these for the Resume Optimizer, "
-                "Job Search, vetting, cover letter, interview prep, and JD cleansing.",
-            )
-            return redirect(reverse("prompt_library"))
-        if action == "reset_prompts":
-            try:
-                clear_all_prompts_in_profile(request)
-                messages.success(request, "Prompts reset to code defaults.")
-                return redirect(reverse("prompt_library"))
-            except Exception as e:
-                messages.error(request, f"Could not reset prompts: {e}")
-
-    return render(
-        request,
-        "resume_app/prompt_library.html",
-        {
-            "prompts": prompts,
-            "ats_profiles": ats_profiles,
-            "selected_ats": selected_ats,
-            "ats_prompts": ats_prompts,
-        },
-    )
+from .prompt_studio_views import (
+    prompt_library_view,
+    prompt_studio_save_api,
+    prompt_studio_set_model_preference_api,
+    prompt_studio_test_run_api,
+    prompt_studio_history_api,
+    prompt_studio_restore_api,
+    prompt_studio_delete_version_api,
+    prompt_studio_clear_history_api,
+    prompt_studio_resume_content_api,
+    prompt_studio_job_content_api,
+)
 
 
 # Step ids for workflow builder (must match agents.VALID_STEP_IDS)
@@ -2626,8 +1544,9 @@ def job_search_view(request):
             if job_search_llm_model and job_search_llm_model not in job_search_llm_models:
                 job_search_llm_model = job_search_llm_default_model
             if request.GET.get("llm_model"):
-                request.session["job_search_llm_model"] = job_search_llm_model or ""
-                request.session.modified = True
+                target_model = job_search_llm_model or ""
+                if request.session.get("job_search_llm_model") != target_model:
+                    request.session["job_search_llm_model"] = target_model
     except Exception:
         pass
 
@@ -2639,45 +1558,40 @@ def job_search_view(request):
     current_disqualifiers = []
 
     # Track / profile: dynamic list (e.g. IC vs Management vs custom).
-    tracks_qs = Track.ensure_baseline(request.user)
     from .models import SearchProfile
 
-    available_slugs = set(tracks_qs.values_list("slug", flat=True))
-    available_slugs.update(
-        SearchProfile.objects.for_user(request.user).values_list("slug", flat=True)
-    )
+    profiles_qs = SearchProfile.ensure_baseline(request.user)
+    tracks_qs = Track.ensure_baseline(request.user)
+    profile_labels_map = {p.slug: p.name for p in profiles_qs}
+    for t in tracks_qs:
+        if t.slug not in profile_labels_map:
+            profile_labels_map[t.slug] = t.label
+    available_slugs = set(profile_labels_map.keys())
+    job_tracks = [
+        {"slug": s, "label": l}
+        for s, l in sorted(profile_labels_map.items(), key=lambda x: x[1].lower())
+    ]
     raw_track_param = (
         (request.GET.get("profile") or request.GET.get("track") or "").strip().lower()
     )
     if raw_track_param:
-        raw_track = raw_track_param
+        if raw_track_param in ("none", "unbiased", "none (unbiased)", "none (unbiased / no profile)"):
+            raw_track = ""
+        elif raw_track_param in available_slugs:
+            raw_track = raw_track_param
+        else:
+            raw_track = ""
     elif applied_preset.get("profile_slug"):
-        raw_track = applied_preset["profile_slug"].strip().lower()
+        preset_slug = applied_preset["profile_slug"].strip().lower()
+        raw_track = preset_slug if preset_slug in available_slugs else ""
     else:
-        raw_track = (
-            request.session.get("job_search_profile_slug")
-            or request.session.get("job_search_track")
-            or ""
-        ).strip().lower()
-    if not raw_track or raw_track not in available_slugs:
-        raw_track = Track.get_default_slug(request.user)
+        # Default in sandbox is None (unbiased / no profile context)
+        raw_track = ""
 
-    # Resume -> track association (default only):
-    # If a resume has a stored track AND the user did not explicitly pick a track in this request,
-    # default the page track to the resume's stored track.
-    if resume_id_val is not None and not raw_track_param:
-        try:
-            from .models import UserResume
-
-            selected_resume = _user_library_resumes(request.user).filter(id=resume_id_val).first()
-            if selected_resume and selected_resume.track and selected_resume.track in available_slugs:
-                raw_track = selected_resume.track
-        except Exception:
-            # Best-effort; never block job search.
-            pass
-    request.session["job_search_track"] = raw_track
-    request.session["job_search_profile_slug"] = raw_track
-    request.session.modified = True
+    if request.session.get("job_search_track") != raw_track:
+        request.session["job_search_track"] = raw_track
+    if request.session.get("job_search_profile_slug") != raw_track:
+        request.session["job_search_profile_slug"] = raw_track
 
     if saved_preset:
         from .saved_searches import saved_search_matches_params
@@ -2846,11 +1760,12 @@ def job_search_view(request):
         "job_search_llm_default_model": job_search_llm_default_model,
         "job_search_llm_model": job_search_llm_model,
         "job_search_track": raw_track,
-        "job_search_track_label": next(
-            (t.label for t in tracks_qs if t.slug == raw_track),
-            raw_track,
+        "job_search_track_label": (
+            profile_labels_map.get(raw_track, raw_track)
+            if raw_track
+            else "None (Unbiased)"
         ),
-        "job_tracks": list(tracks_qs),
+        "job_tracks": job_tracks,
         "site_options": list(ALLOWED_SITE_NAMES),
         "selected_site_names": selected_site_names,
         "preserved_site_query": preserved_site_query,
@@ -2870,532 +1785,20 @@ def job_search_view(request):
     return render(request, "resume_app/jobs_search.html", context)
 
 
-def job_tasks_view(request):
-    """Decommissioned in favor of Career Cockpit Search Schedule. Redirects to career_cockpit."""
-    track = (request.GET.get("track") or "").strip()
-    cockpit_url = reverse("career_cockpit")
-    if track:
-        cockpit_url += f"?track={track}"
-    return redirect(cockpit_url)
-
-
-
-@_staff_required
-def huey_dashboard_view(request):
-    """UI for monitoring Huey queue depth and controlling periodic tasks (pause/restore)."""
-
-    from huey.contrib.djhuey import HUEY
-
-    immediate = bool(getattr(HUEY, "immediate", False))
-    queue_stats = None
-    queue_stats_error = None
-    if not immediate:
-        try:
-            storage = HUEY.storage
-            queue_stats = {
-                "pending": storage.queue_size(),
-                "scheduled": storage.schedule_size(),
-                "results": storage.result_store_size(),
-            }
-        except Exception as e:
-            queue_stats_error = str(e)
-
-    periodic_rows: list[dict[str, object]] = []
-    now = timezone.now()
-    for info in PERIODIC_TASKS:
-        task_fn_name = info["task_fn_name"]
-        wrapper = get_periodic_task_wrapper(task_fn_name)
-        if wrapper is None:
-            # Shouldn't happen unless tasks.py was modified.
-            continue
-
-        is_revoked = False
-        try:
-            is_revoked = bool(wrapper.is_revoked())
-        except Exception:
-            is_revoked = False
-
-        next_run_at = None
-        try:
-            next_run_at = get_next_run_at(info["cron_string"], from_time=now)
-        except Exception:
-            next_run_at = None
-
-        periodic_rows.append(
-            {
-                "task_fn_name": task_fn_name,
-                "display_name": info["display_name"],
-                "cron_string": info["cron_string"],
-                "schedule_description": cron_to_short_description(info["cron_string"]),
-                "basic": info.get("basic") or info.get("description") or "",
-                "advanced": info.get("advanced") or "",
-                "is_revoked": is_revoked,
-                "next_run_at": next_run_at,
-            }
-        )
-
-    from datetime import timedelta
-    twenty_four_hours_ago = now - timedelta(hours=24)
-    searches_24h = JobSearchTaskRun.objects.filter(started_at__gte=twenty_four_hours_ago).count()
-    failed_24h = JobSearchTaskRun.objects.filter(started_at__gte=twenty_four_hours_ago, status="failed").count()
-    active_running = JobSearchTaskRun.objects.filter(status="running").count()
-
-    from .tasks import CLEANUP_STATUS_CACHE_KEY
-    cleanup_status = cache.get(CLEANUP_STATUS_CACHE_KEY)
-
-    adhoc_rows: list[dict[str, str]] = []
-    for info in ADHOC_RUN_NOW_TASKS:
-        adhoc_rows.append(
-            {
-                "task_fn_name": info["task_fn_name"],
-                "display_name": info["display_name"],
-                "basic": info.get("basic") or "",
-                "advanced": info.get("advanced") or "",
-            }
-        )
-
-    # Build recent activity items from search scrapes
-    recent_searches = list(
-        JobSearchTaskRun.objects.select_related("task", "task__owner")
-        .order_by("-started_at")[:20]
-    )
-
-    unified_activity = []
-    for s in recent_searches:
-        user_name = s.task.owner.get_username() if s.task and s.task.owner else "System"
-        title = s.task.name if s.task else "Job Search"
-        subtitle = s.task.search_term if s.task else ""
-        unified_activity.append({
-            "type": "Search Scrape",
-            "type_badge": "bg-sky-50 text-sky-700 border-sky-200",
-            "title": title,
-            "subtitle": subtitle,
-            "user": user_name,
-            "status": s.status,  # completed, failed, running
-            "started_at": s.started_at,
-            "finished_at": s.finished_at,
-            "items_count": getattr(s, "jobs_fetched", 0),
-            "error_message": s.error_message,
-        })
-
-    unified_activity.sort(key=lambda x: x["started_at"] or now, reverse=True)
-    unified_activity = unified_activity[:25]
-
-    context = {
-        "immediate": immediate,
-        "queue_stats": queue_stats,
-        "queue_stats_error": queue_stats_error,
-        "periodic_tasks": periodic_rows,
-        "adhoc_run_tasks": adhoc_rows,
-        "recent_runs": recent_searches[:10],
-        "unified_activity": unified_activity,
-        "searches_24h": searches_24h,
-        "applies_24h": 0,
-        "failed_24h": failed_24h,
-        "active_running": active_running,
-        "cleanup_status": cleanup_status,
-    }
-    return render(request, "resume_app/huey_dashboard.html", context)
-
-
-@_staff_required
-def huey_periodic_revoke_view(request, task_name: str):
-    """Pause a specific Huey periodic task via revoke()."""
-
-    if request.method != "POST":
-        return HttpResponseNotAllowed(["POST"])
-
-    from huey.contrib.djhuey import HUEY
-
-    immediate = bool(getattr(HUEY, "immediate", False))
-    if immediate:
-        messages.error(request, "Huey is in immediate mode; periodic pause controls are disabled.")
-        return redirect("huey_dashboard")
-
-    info = get_periodic_task_info(task_name)
-    if not info:
-        messages.error(request, f"Unknown periodic task: {task_name}")
-        return redirect("huey_dashboard")
-
-    wrapper = get_periodic_task_wrapper(task_name)
-    if wrapper is None:
-        messages.error(request, f"Periodic task not found: {task_name}")
-        return redirect("huey_dashboard")
-
-    try:
-        wrapper.revoke()
-    except Exception as e:
-        messages.error(request, f"Failed to pause task: {e}")
-        return redirect("huey_dashboard")
-
-    messages.success(request, f'Paused: {info["display_name"]}')
-    return redirect("huey_dashboard")
-
-
-@_staff_required
-def huey_periodic_restore_view(request, task_name: str):
-    """Restore a specific Huey periodic task via restore()."""
-
-    if request.method != "POST":
-        return HttpResponseNotAllowed(["POST"])
-
-    from huey.contrib.djhuey import HUEY
-
-    immediate = bool(getattr(HUEY, "immediate", False))
-    if immediate:
-        messages.error(request, "Huey is in immediate mode; periodic restore controls are disabled.")
-        return redirect("huey_dashboard")
-
-    info = get_periodic_task_info(task_name)
-    if not info:
-        messages.error(request, f"Unknown periodic task: {task_name}")
-        return redirect("huey_dashboard")
-
-    wrapper = get_periodic_task_wrapper(task_name)
-    if wrapper is None:
-        messages.error(request, f"Periodic task not found: {task_name}")
-        return redirect("huey_dashboard")
-
-    try:
-        wrapper.restore()
-    except Exception as e:
-        messages.error(request, f"Failed to restore task: {e}")
-        return redirect("huey_dashboard")
-
-    messages.success(request, f'Restored: {info["display_name"]}')
-    return redirect("huey_dashboard")
-
-
-@_staff_required
-def huey_flush_queue_view(request):
-    """Flush pending Huey queue (destructive)."""
-
-    if request.method != "POST":
-        return HttpResponseNotAllowed(["POST"])
-
-    from huey.contrib.djhuey import HUEY
-
-    immediate = bool(getattr(HUEY, "immediate", False))
-    if immediate:
-        messages.error(request, "Huey is in immediate mode; there is no Redis queue to flush.")
-        return redirect("huey_dashboard")
-
-    confirm = (request.POST.get("confirm") or "").strip().lower()
-    if confirm != "yes":
-        messages.error(request, "Queue flush cancelled (missing confirmation).")
-        return redirect("huey_dashboard")
-
-    try:
-        storage = HUEY.storage
-        storage.flush_queue()
-    except Exception as e:
-        messages.error(request, f"Failed to flush queue: {e}")
-        return redirect("huey_dashboard")
-
-    messages.success(request, "Huey queue flushed (pending tasks removed).")
-    return redirect("huey_dashboard")
-
-
-@_staff_required
-def huey_run_cleanup_now_view(request):
-    """Enqueue Cleanup Manager (dedupe + retention + inactive check) immediately."""
-    if request.method != "POST":
-        return HttpResponseNotAllowed(["POST"])
-
-    try:
-        from .tasks import cleanup_manager
-
-        cleanup_manager()
-    except Exception as e:
-        messages.error(request, f"Failed to queue cleanup task: {e}")
-        return redirect("huey_dashboard")
-
-    messages.success(request, "Cleanup Manager queued (dedupe, retention purge, inactive Applying check).")
-    return redirect("huey_dashboard")
-
-
-@_staff_required
-def huey_task_run_now_view(request, task_name: str):
-    """Enqueue a periodic Huey task or an ad-hoc @db_task that needs no arguments."""
-
-    if request.method != "POST":
-        return HttpResponseNotAllowed(["POST"])
-
-    if task_name not in run_now_task_names():
-        messages.error(request, f"Unknown or unsupported on-demand task: {task_name}")
-        return redirect("huey_dashboard")
-
-    wrapper = get_periodic_task_wrapper(task_name)
-    if wrapper is None:
-        messages.error(request, f"Task not found in resume_app.tasks: {task_name}")
-        return redirect("huey_dashboard")
-
-    label = get_run_now_display_name(task_name)
-    try:
-        wrapper()
-    except Exception as e:
-        messages.error(request, f'Failed to queue "{label}": {e}')
-        return redirect("huey_dashboard")
-
-    messages.success(request, f"Queued: {label}")
-    return redirect("huey_dashboard")
-
-
-def job_task_create_view(request):
-    """Create a new job search task. Sets next_run_at from cron."""
-    from .saved_searches import get_saved_search_or_none
-
-    tracks_qs = Track.ensure_baseline(request.user)
-    track_list = list(tracks_qs)
-    default_track = Track.get_default_slug(request.user)
-    preset = get_saved_search_or_none(request.user, request.GET.get("preset"))
-    if request.method != "POST":
-        if preset:
-            context = {
-                "task": None,
-                "form_track": preset.profile_slug or default_track,
-                "job_tracks": track_list,
-                "form_frequency": "0 9 * * *",
-                "form_jobs_to_fetch": preset.results_wanted or 50,
-                "form_site_name": normalize_site_names(
-                    preset.site_names if isinstance(preset.site_names, list) else None
-                ),
-                "form_start_time": "",
-                "form_name": preset.name,
-                "form_search_term": preset.search_term,
-                "form_location": preset.location,
-            }
-        else:
-            context = {
-                "task": None,
-                "form_track": default_track,
-                "job_tracks": track_list,
-                "form_frequency": "0 9 * * *",
-                "form_jobs_to_fetch": 50,
-                "form_site_name": list(DEFAULT_SITE_NAMES),
-                "form_start_time": "",
-                "form_name": "",
-                "form_search_term": "",
-                "form_location": "",
-            }
-        return render(request, "resume_app/job_task_form.html", context)
-
-    data, errs = _parse_task_form(request, default_track, {t.slug for t in track_list})
-    if errs:
-        for e in errs:
-            messages.error(request, e)
-        return redirect("job_task_create")
-
-    task = JobSearchTask(
-        owner=request.user,
-        name=data["name"],
-        search_term=data["search_term"],
-        location=data["location"],
-        track=data["track"],
-        jobs_to_fetch=data["jobs_to_fetch"],
-        frequency=data["frequency"],
-        start_time=data["start_time"],
-        site_name=data["site_name"],
-        is_active=True,
-    )
-    try:
-        task.full_clean()
-    except ValidationError as e:
-        for _k, v in e.message_dict.items():
-            for msg in (v if isinstance(v, list) else [v]):
-                messages.error(request, msg)
-        return redirect("job_task_create")
-    task.next_run_at = get_next_run_at(task.frequency)
-    task.save()
-    messages.success(request, f"Task \"{task.name or task.search_term}\" created. Next run: {task.next_run_at}")
-    cockpit_url = reverse("career_cockpit")
-    if task.track:
-        cockpit_url += f"?track={task.track}"
-    return redirect(cockpit_url)
-
-
-def job_task_edit_view(request, task_id):
-    """Edit a job search task. Optionally update next_run_at."""
-    task = get_owned_or_404(JobSearchTask, request.user, id=task_id)
-    tracks_qs = Track.ensure_baseline(request.user)
-    track_list = list(tracks_qs)
-    if request.method != "POST":
-        context = {
-            "task": task,
-            "form_track": task.track,
-            "job_tracks": track_list,
-            "form_frequency": task.frequency,
-            "form_jobs_to_fetch": task.jobs_to_fetch,
-            "form_site_name": normalize_site_names(
-                task.site_name if isinstance(task.site_name, list) else None
-            ),
-            "form_start_time": task.start_time.strftime("%H:%M") if task.start_time else "",
-        }
-        return render(request, "resume_app/job_task_form.html", context)
-
-    data, errs = _parse_task_form(request, Track.get_default_slug(request.user), {t.slug for t in track_list})
-    if errs:
-        for e in errs:
-            messages.error(request, e)
-        return redirect("job_task_edit", task_id=task_id)
-    task.name = data["name"]
-    task.search_term = data["search_term"]
-    task.location = data["location"]
-    task.track = data["track"]
-    task.jobs_to_fetch = data["jobs_to_fetch"]
-    task.frequency = data["frequency"]
-    task.start_time = data["start_time"]
-    task.site_name = data["site_name"]
-    try:
-        task.full_clean()
-    except ValidationError as e:
-        for _k, v in e.message_dict.items():
-            for msg in (v if isinstance(v, list) else [v]):
-                messages.error(request, msg)
-        return redirect("job_task_edit", task_id=task_id)
-    task.save()
-    messages.success(request, "Task updated.")
-    cockpit_url = reverse("career_cockpit")
-    if task.track:
-        cockpit_url += f"?track={task.track}"
-    return redirect(cockpit_url)
-
-
-def job_task_run_now_view(request, task_id):
-    """Enqueue run_job_search_task once with 60-min cooldown and concurrency check."""
-    task = get_owned_or_404(JobSearchTask, request.user, id=task_id)
-    is_ajax = (
-        request.headers.get("x-requested-with") == "XMLHttpRequest"
-        or "application/json" in request.headers.get("accept", "")
-        or request.content_type == "application/json"
-    )
-
-    track_slug = task.track or (task.saved_search.slug if task.saved_search else "")
-    cockpit_url = reverse("career_cockpit")
-    if track_slug:
-        cockpit_url += f"?track={track_slug}"
-    redirect_url = request.POST.get("next") or request.GET.get("next") or cockpit_url
-
-    from django.core.cache import cache
-    import time
-    from .tasks import get_job_search_task_lock_key
-    from .models import JobSearchTaskRun
-
-    # 1. Check if a search task is already actively running for this user
-    lock_key = get_job_search_task_lock_key(request.user.id)
-    is_running = bool(cache.get(lock_key)) or task.runs.filter(status=JobSearchTaskRun.STATUS_RUNNING).exists()
-    if is_running:
-        msg = "A search task is already actively running for your account. Please wait for it to complete."
-        if is_ajax:
-            return JsonResponse({"status": "running", "message": msg}, status=409)
-        messages.warning(request, msg)
-        return redirect(redirect_url)
-
-    # 2. Check 60-minute manual cooldown (cleared on failed run so user can retry immediately)
-    COOLDOWN_SECONDS = 3600
-    cooldown_key = f"job_task_manual_cooldown:{task.id}"
-    last_run = task.runs.first()
-    if last_run and last_run.status == JobSearchTaskRun.STATUS_FAILED and not is_running:
-        cache.delete(cooldown_key)
-        expires_at = None
-    else:
-        expires_at = cache.get(cooldown_key)
-
-    now = time.time()
-    if expires_at and expires_at > now:
-        remaining = int(expires_at - now)
-        mins = max(1, (remaining + 59) // 60)
-        msg = f"Task is on cooldown. Please wait {mins} minute{'s' if mins != 1 else ''} before running again."
-        if is_ajax:
-            return JsonResponse({
-                "status": "cooldown",
-                "message": msg,
-                "cooldown_remaining_seconds": remaining,
-            }, status=429)
-        messages.warning(request, msg)
-        return redirect(redirect_url)
-
-    # 3. Set cooldown, mark pending, and enqueue task
-    cache.set(cooldown_key, now + COOLDOWN_SECONDS, timeout=COOLDOWN_SECONDS)
-    cache.set(f"job_task_pending:{task.id}", now, timeout=180)
-    run_job_search_task(task.owner_id, task.id)
-
-    task_label = task.name or (task.saved_search.name if task.saved_search else None) or task.search_term
-    msg = f'Search "{task_label}" queued to run now.'
-    if is_ajax:
-        return JsonResponse({
-            "status": "queued",
-            "message": msg,
-            "task_id": task.id,
-            "cooldown_remaining_seconds": COOLDOWN_SECONDS,
-        })
-
-    messages.success(request, msg)
-    return redirect(redirect_url)
-
-
-def job_task_status_view(request, task_id):
-    """Return JSON status of a JobSearchTask (running state, last run, cooldown)."""
-    task = get_owned_or_404(JobSearchTask, request.user, id=task_id)
-    from django.core.cache import cache
-    from django.utils.timesince import timesince
-    import time
-    from .tasks import get_job_search_task_lock_key
-    from .models import JobSearchTaskRun
-
-    is_pending = bool(cache.get(f"job_task_pending:{task.id}"))
-    lock_key = get_job_search_task_lock_key(request.user.id)
-    is_running = is_pending or bool(cache.get(lock_key)) or task.runs.filter(status=JobSearchTaskRun.STATUS_RUNNING).exists()
-
-    cooldown_key = f"job_task_manual_cooldown:{task.id}"
-    last_run = task.runs.first()
-    if last_run and last_run.status == JobSearchTaskRun.STATUS_FAILED and not is_running:
-        cache.delete(cooldown_key)
-        cooldown_remaining = 0
-    else:
-        expires_at = cache.get(cooldown_key)
-        now = time.time()
-        cooldown_remaining = max(0, int(expires_at - now)) if (expires_at and expires_at > now) else 0
-
-    last_run = task.runs.first()
-    last_run_data = None
-    if last_run:
-        last_run_data = {
-            "id": last_run.id,
-            "status": last_run.status,
-            "started_at": last_run.started_at.isoformat() if last_run.started_at else None,
-            "finished_at": last_run.finished_at.isoformat() if last_run.finished_at else None,
-            "jobs_fetched": last_run.jobs_fetched,
-            "jobs_added": last_run.jobs_added_to_pipeline,
-            "jobs_eliminated": last_run.jobs_eliminated,
-            "has_details": bool(last_run.details),
-            "date_display": last_run.started_at.strftime("%b %d, %Y · %I:%M %p") if last_run.started_at else "",
-            "timesince": timesince(last_run.started_at) if last_run.started_at else "",
-            "json_url": reverse("scheduled_run_details_json", args=[last_run.id]),
-            "csv_url": reverse("download_scheduled_run_csv", args=[last_run.id]),
-        }
-
-    return JsonResponse({
-        "status": "ok",
-        "task_id": task.id,
-        "is_running": is_running,
-        "cooldown_remaining_seconds": cooldown_remaining,
-        "last_run": last_run_data,
-    })
-
-
-def job_task_toggle_active_view(request, task_id):
-    """Toggle is_active and redirect to Cockpit."""
-    task = get_owned_or_404(JobSearchTask, request.user, id=task_id)
-    task.is_active = not task.is_active
-    task.save()
-    status = "activated" if task.is_active else "paused"
-    messages.success(request, f"Task \"{task.name or task.search_term}\" {status}.")
-    cockpit_url = reverse("career_cockpit")
-    if task.track:
-        cockpit_url += f"?track={task.track}"
-    return redirect(cockpit_url)
-
+from .huey_views import (
+    job_tasks_view,
+    huey_dashboard_view,
+    huey_periodic_revoke_view,
+    huey_periodic_restore_view,
+    huey_flush_queue_view,
+    huey_run_cleanup_now_view,
+    huey_task_run_now_view,
+    job_task_create_view,
+    job_task_edit_view,
+    job_task_run_now_view,
+    job_task_status_view,
+    job_task_toggle_active_view,
+)
 
 
 MAX_TRACK_RESUME_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -4000,106 +2403,10 @@ def track_delete_view(request, slug: str):
     return redirect("track_list")
 
 
-@login_required
-def download_scheduled_run_csv_view(request, run_id: int):
-    """Download CSV audit log of all fetched jobs for a scheduled task run."""
-    import csv
-    from django.http import HttpResponse, Http404
-    from django.shortcuts import get_object_or_404
-    from django.utils.text import slugify
-    from .models import JobSearchTaskRun
-
-    user = get_active_user(request)
-    run = get_object_or_404(
-        JobSearchTaskRun.objects.select_related("task", "task__saved_search"),
-        id=run_id,
-        task__owner=user,
-    )
-    if not run.details:
-        raise Http404("Details for this run are no longer available (only kept for the last 2 runs).")
-
-    profile_name = (
-        run.task.saved_search.name
-        if run.task.saved_search
-        else (run.task.name or run.task.search_term or f"task_{run.task_id}")
-    )
-    safe_profile = slugify(profile_name) or "scheduled_run"
-    date_str = run.started_at.strftime("%Y%m%d_%H%M") if run.started_at else "run"
-    filename = f"{safe_profile}_{date_str}_job_audit.csv"
-
-    response = HttpResponse(content_type="text/csv; charset=utf-8")
-    response["Content-Disposition"] = f'attachment; filename="{filename}"'
-
-    writer = csv.writer(response)
-    writer.writerow([
-        "Job Title",
-        "Company",
-        "Location",
-        "Source",
-        "Status",
-        "Reason / Matched Rule",
-        "Date Posted",
-        "Job URL",
-    ])
-
-    status_labels = {
-        "saved_to_pipeline": "Saved to Pipeline",
-        "reposted_to_pipeline": "Saved to Pipeline (Reposted)",
-        "already_in_pipeline": "Already in Pipeline",
-        "previously_removed": "Previously Removed",
-        "eliminated_disqualifier": "Eliminated: Disqualifier",
-        "eliminated_disliked": "Eliminated: Disliked",
-        "eliminated_hidden": "Eliminated: Hidden",
-        "eliminated_duplicate": "Eliminated: Duplicate",
-    }
-
-    for item in run.details:
-        disp_raw = item.get("disposition", "")
-        status_human = status_labels.get(disp_raw, disp_raw.replace("_", " ").title())
-        writer.writerow([
-            item.get("title", ""),
-            item.get("company", ""),
-            item.get("location", ""),
-            item.get("source", ""),
-            status_human,
-            item.get("reason", ""),
-            item.get("date_posted", ""),
-            item.get("url", ""),
-        ])
-
-    return response
-
-
-@login_required
-def scheduled_run_details_json_view(request, run_id: int):
-    """Return JSON audit log for in-browser inspector modal."""
-    from django.http import JsonResponse
-    from django.shortcuts import get_object_or_404
-    from .models import JobSearchTaskRun
-
-    user = get_active_user(request)
-    run = get_object_or_404(
-        JobSearchTaskRun.objects.select_related("task", "task__saved_search"),
-        id=run_id,
-        task__owner=user,
-    )
-    profile_name = (
-        run.task.saved_search.name
-        if run.task.saved_search
-        else (run.task.name or run.task.search_term or f"task_{run.task_id}")
-    )
-    return JsonResponse({
-        "run_id": run.id,
-        "profile_name": profile_name,
-        "track": run.task.track or "",
-        "started_at": run.started_at.isoformat() if run.started_at else None,
-        "status": run.get_status_display(),
-        "jobs_fetched": run.jobs_fetched,
-        "jobs_eliminated": max(0, run.jobs_fetched - run.jobs_after_filter),
-        "jobs_saved": run.jobs_added_to_pipeline,
-        "details": run.details or [],
-        "jobs": run.details or [],
-    })
+from .pipeline_export_views import (
+    download_scheduled_run_csv_view,
+    scheduled_run_details_json_view,
+)
 
 
 
@@ -4114,9 +2421,10 @@ def vetting_match_debug_view(request, job_listing_id: int):
     raw_track = (request.GET.get("track") or request.session.get("job_search_track") or "").strip().lower()
     if not raw_track or raw_track not in available_slugs:
         raw_track = Track.get_default_slug(request.user)
-    request.session["job_search_track"] = raw_track
-    request.session["job_search_profile_slug"] = raw_track
-    request.session.modified = True
+    if request.session.get("job_search_track") != raw_track:
+        request.session["job_search_track"] = raw_track
+    if request.session.get("job_search_profile_slug") != raw_track:
+        request.session["job_search_profile_slug"] = raw_track
 
     entry = (
         PipelineEntry.objects.for_user(request.user).filter(
@@ -4226,9 +2534,10 @@ def focus_breakdown_view(request, job_listing_id: int):
     raw_track = (request.GET.get("track") or request.session.get("job_search_track") or "").strip().lower()
     if not raw_track or raw_track not in available_slugs:
         raw_track = Track.get_default_slug(request.user)
-    request.session["job_search_track"] = raw_track
-    request.session["job_search_profile_slug"] = raw_track
-    request.session.modified = True
+    if request.session.get("job_search_track") != raw_track:
+        request.session["job_search_track"] = raw_track
+    if request.session.get("job_search_profile_slug") != raw_track:
+        request.session["job_search_profile_slug"] = raw_track
 
     data = get_focus_breakdown(job_listing_id, user=request.user, track=raw_track)
     if data is None:
@@ -4381,9 +2690,10 @@ def fit_inspector_view(request):
         if raw_track not in profile_slugs and profile_slugs:
             raw_track = profile_slugs[0]
 
-    request.session["job_search_track"] = raw_track
-    request.session["job_search_profile_slug"] = raw_track
-    request.session.modified = True
+    if request.session.get("job_search_track") != raw_track:
+        request.session["job_search_track"] = raw_track
+    if request.session.get("job_search_profile_slug") != raw_track:
+        request.session["job_search_profile_slug"] = raw_track
 
     from .track_actions import (
         normalize_track_slug,
@@ -4774,108 +3084,18 @@ def update_dashboard_settings_api(request):
     })
 
 
-@login_required
-def pipeline_applied_resume_json_view(request, entry_id: int):
-    """
-    Return JSON snapshot of the applied/tailored resume markdown for a pipeline entry.
-    """
-    user = get_active_user(request)
-    entry = get_owned_or_404(PipelineEntry, user, id=entry_id)
-    job = entry.job_listing
+from .pipeline_export_views import (
+    pipeline_applied_resume_json_view,
+    pipeline_export_pdf_view,
+    pipeline_export_docx_view,
+)
+from .career_profiler_views import (
+    career_profiler_view,
+    career_profiler_analyze_api,
+    career_profiler_provision_api,
+    career_profiler_preview_matches_api,
+)
 
-    markdown = entry.applied_resume_markdown or ""
-    if not markdown and entry.applied_optimized_resume:
-        markdown = entry.applied_optimized_resume.optimized_content or ""
-    elif not markdown:
-        opt = entry.optimized_resumes.filter(status="completed").exclude(optimized_content="").order_by("-updated_at").first()
-        if opt and (opt.optimized_content or "").strip():
-            markdown = opt.optimized_content
-            entry.applied_resume_markdown = markdown
-            entry.applied_optimized_resume = opt
-            entry.save(update_fields=["applied_resume_markdown", "applied_optimized_resume"])
-
-    from .utils import sanitize_resume_markdown
-    sanitized = sanitize_resume_markdown(markdown)
-    if sanitized != markdown:
-        markdown = sanitized
-        entry.applied_resume_markdown = sanitized
-        entry.save(update_fields=["applied_resume_markdown"])
-
-    return JsonResponse({
-        "success": True,
-        "entry_id": entry.id,
-        "job_listing_id": entry.job_listing_id,
-        "job_title": job.title if job else "",
-        "company_name": job.company_name if job else "",
-        "has_resume": bool(markdown.strip()),
-        "markdown": markdown,
-        "applied_at": entry.applied_at.isoformat() if entry.applied_at else None,
-        "optimized_resume_id": entry.applied_optimized_resume_id,
-    })
-
-
-@login_required
-def pipeline_export_pdf_view(request, entry_id: int):
-    """
-    Export snapshot of applied resume markdown as PDF.
-    """
-    from django.http import Http404, HttpResponse
-    from .api import _apply_export_replacements, _build_export_pdf, _export_file_response, _format_export_filename
-    from .utils import sanitize_resume_markdown
-
-    user = get_active_user(request)
-    entry = get_owned_or_404(PipelineEntry, user, id=entry_id)
-    content = entry.applied_resume_markdown or ""
-    if not content and entry.applied_optimized_resume:
-        content = entry.applied_optimized_resume.optimized_content or ""
-    if not content.strip():
-        raise Http404("No applied resume markdown available for export.")
-
-    content = sanitize_resume_markdown(content)
-    content = _apply_export_replacements(content, request)
-    buf = _build_export_pdf(content)
-    if buf is None:
-        return HttpResponse("PDF export requires reportlab; install with: pip install reportlab", status=503)
-
-    job = entry.job_listing
-    company = (job.company_name or "").strip() if job else ""
-    title = (job.title or "").strip() if job else ""
-    filename = _format_export_filename("applied_resume", company, title, "pdf")
-    return _export_file_response(buf, filename=filename, content_type="application/pdf")
-
-
-@login_required
-def pipeline_export_docx_view(request, entry_id: int):
-    """
-    Export snapshot of applied resume markdown as Word (DOCX).
-    """
-    from django.http import Http404, HttpResponse
-    from .api import _apply_export_replacements, _build_export_docx, _export_file_response, _format_export_filename
-    from .utils import sanitize_resume_markdown
-
-    user = get_active_user(request)
-    entry = get_owned_or_404(PipelineEntry, user, id=entry_id)
-    content = entry.applied_resume_markdown or ""
-    if not content and entry.applied_optimized_resume:
-        content = entry.applied_optimized_resume.optimized_content or ""
-    if not content.strip():
-        raise Http404("No applied resume markdown available for export.")
-
-    content = sanitize_resume_markdown(content)
-    content = _apply_export_replacements(content, request)
-    buf = _build_export_docx(content)
-    if buf is None:
-        return HttpResponse("Word export requires python-docx; install with: pip install python-docx", status=503)
-
-    job = entry.job_listing
-    company = (job.company_name or "").strip() if job else ""
-    title = (job.title or "").strip() if job else ""
-    filename = _format_export_filename("applied_resume", company, title, "docx")
-    return _export_file_response(
-        buf,
-        filename=filename,
-        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    )
 
 
 

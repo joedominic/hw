@@ -37,7 +37,7 @@
     <!-- Contextual Opportunity Telemetry & Action Bar -->
     <div class="mb-6 bg-white border border-slate-200 rounded-xl p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div class="flex items-center gap-3">
-            <a href="{% url 'career_cockpit' %}?track={{ pipeline_track|default:'dir-plano' }}&stage=applying" 
+            <a href="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage={{ target_pipeline_stage }}" 
                id="back-to-cockpit-link"
                class="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-brand bg-slate-100 hover:bg-slate-200 px-3 py-2 rounded-lg transition"
                title="Return to Career Cockpit (Esc)">
@@ -49,7 +49,7 @@
             {% if target_job %}
             <div>
                 <div class="flex items-center gap-2">
-                    <span class="text-xs font-bold uppercase tracking-wider text-brand px-1.5 py-0.5 rounded bg-brand-soft">Target Role</span>
+                    <span class="text-xs font-bold font-semibold text-brand px-1.5 py-0.5 rounded bg-brand-soft">Target Role</span>
                     <h2 class="text-sm font-bold text-slate-900 leading-tight">{{ target_job.title }}</h2>
                 </div>
                 <div class="flex items-center gap-2 text-xs text-slate-500 mt-1">
@@ -69,28 +69,47 @@
             </div>
             {% else %}
             <div>
-                <span class="text-xs font-bold uppercase tracking-wider text-slate-500">Autonomous Tailoring Studio</span>
+                <span class="text-xs font-bold font-semibold text-slate-500">Autonomous Tailoring Studio</span>
                 <p class="text-xs text-slate-500">Select or paste an opportunity below to optimize your CV with persona judges.</p>
             </div>
             {% endif %}
         </div>
 
-        <div class="flex items-center gap-3 self-end md:self-auto">
+        <div class="flex flex-wrap items-center gap-2.5 self-end md:self-auto">
+            {% if target_job and target_job.url %}
+            <a href="{{ target_job.url }}" target="_blank" rel="noopener noreferrer"
+               class="h-9 px-3 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center gap-1.5 transition shadow-xs"
+               title="Open official employer job posting in a new tab">
+                <span class="material-symbols-outlined text-[16px] text-slate-500">open_in_new</span>
+                <span>Employer Post</span>
+            </a>
+            {% endif %}
+
             {% if target_job or optimized_resume_id %}
-            <form method="post" action="{% url 'resume_optimizer' %}{% if target_job %}?job_id={{ target_job.id }}&track={{ pipeline_track|default:'dir-plano' }}{% elif optimized_resume_id %}?opt_id={{ optimized_resume_id }}{% endif %}" id="approve-apply-form" class="inline" onsubmit="if (window.syncApproveMarkdown) window.syncApproveMarkdown();">
+            <button type="button" 
+                    id="save-draft-top-btn" 
+                    onclick="window.submitSaveDraft();"
+                    class="h-9 px-3.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center gap-1.5 transition shadow-xs"
+                    title="Save tailored resume draft (stays in Applying stage) (Ctrl+S)">
+                <span class="material-symbols-outlined text-[16px] text-slate-500">save</span>
+                <span>Save Draft</span>
+                <kbd class="hidden sm:inline-block ml-1 bg-slate-100 border border-slate-200 text-slate-500 px-1 py-0.5 rounded text-[10px] font-mono">Ctrl+S</kbd>
+            </button>
+
+            <form method="post" action="{% url 'resume_optimizer' %}{% if target_job %}?job_id={{ target_job.id }}&track={{ pipeline_track }}{% elif optimized_resume_id %}?opt_id={{ optimized_resume_id }}{% endif %}" id="approve-apply-form" class="inline" onsubmit="if (window.syncApproveMarkdown) window.syncApproveMarkdown();">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="approve_and_mark_applied"/>
                 <input type="hidden" name="job_id" value="{% if target_job %}{{ target_job.id }}{% endif %}" id="approve-apply-job-id"/>
-                <input type="hidden" name="track" value="{{ pipeline_track|default:'dir-plano' }}" id="approve-apply-track"/>
+                <input type="hidden" name="track" value="{{ pipeline_track }}" id="approve-apply-track"/>
                 <input type="hidden" name="opt_id" value="{{ optimized_resume_id|default:'' }}" id="approve-apply-opt-id"/>
                 <input type="hidden" name="markdown" value="" id="approve-apply-markdown"/>
                 <button type="submit" 
                         id="approve-apply-btn" 
-                        class="h-9 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-2 transition shadow-sm hover:shadow"
-                        title="Approve tailored resume and advance to Applied stage (Ctrl+Enter)">
-                    <span class="material-symbols-outlined text-[18px]">verified</span>
-                    <span>Approve &amp; Mark Applied</span>
-                    <kbd class="hidden sm:inline-block ml-1 bg-emerald-800/50 text-emerald-100 px-1.5 py-0.5 rounded text-[10px] font-mono">Ctrl+Enter</kbd>
+                        class="h-9 px-4 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs flex items-center gap-2 transition shadow-xs hover:shadow-sm"
+                        title="Mark applied and move opportunity to Applied stage (Ctrl+Enter)">
+                    <span class="material-symbols-outlined text-[18px]">task_alt</span>
+                    <span>I Submitted This</span>
+                    <kbd class="hidden sm:inline-block ml-1 bg-emerald-900/50 text-emerald-100 px-1.5 py-0.5 rounded text-[10px] font-mono">Ctrl+Enter</kbd>
                 </button>
             </form>
             {% endif %}
@@ -173,7 +192,7 @@
 
                     <div class="mt-5 space-y-4">
                         <div>
-                            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500" for="llm-model-select">Model version</label>
+                            <label class="mb-1 block text-xs font-semibold font-semibold text-slate-500" for="llm-model-select">Model version</label>
                             <select id="llm-model-select" name="llm_model" class="w-full rounded-concierge border border-slate-200 bg-white px-3 py-2 text-sm text-concierge-slate focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20 {% if not llm_models %}opacity-60{% endif %}" {% if not llm_models %}disabled{% endif %}>
                                 {% if not llm_models %}
                                     <option>(Connect an API key to load models)</option>
@@ -185,7 +204,7 @@
                             </select>
                         </div>
                         <div>
-                            <div class="mb-1 flex justify-between text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            <div class="mb-1 flex justify-between text-xs font-semibold font-semibold text-slate-500">
                                 <label for="llm-temperature">Temperature</label>
                                 <span id="llm-temperature-label" class="font-mono text-concierge-slate">{{ optimizer_temperature }}</span>
                             </div>
@@ -209,12 +228,12 @@
                     <p class="mt-1 text-xs text-slate-400">Snapshot from your last run when available.</p>
                     <dl class="mt-6 space-y-4">
                         <div>
-                            <dt class="text-xs font-medium uppercase tracking-wide text-slate-400">LLM response time</dt>
+                            <dt class="text-xs font-medium font-semibold text-slate-400">LLM response time</dt>
                             <dd class="mt-0.5 text-2xl font-semibold">{% if status and status.logs %}—{% else %}—{% endif %}</dd>
                             <dd class="text-xs text-slate-500">Per-step timing is not yet aggregated.</dd>
                         </div>
                         <div>
-                            <dt class="text-xs font-medium uppercase tracking-wide text-slate-400">Prompt token usage</dt>
+                            <dt class="text-xs font-medium font-semibold text-slate-400">Prompt token usage</dt>
                             <dd class="mt-0.5 text-2xl font-semibold">
                                 {% if status %}
                                     {{ status.total_input_tokens|default:0 }} <span class="text-lg font-normal text-slate-400">in</span>
@@ -225,7 +244,7 @@
                             </dd>
                         </div>
                         <div>
-                            <dt class="text-xs font-medium uppercase tracking-wide text-slate-400">Engine</dt>
+                            <dt class="text-xs font-medium font-semibold text-slate-400">Engine</dt>
                             <dd class="mt-0.5 text-2xl font-semibold">{% if llm_key_stored %}Online{% else %}Offline{% endif %}</dd>
                         </div>
                     </dl>
@@ -247,13 +266,17 @@
                 <p class="mb-4 text-xs text-slate-500">Prompts are system-wide and managed by admins. Everyone uses the same templates.</p>
                 <div class="grid gap-4 md:grid-cols-3">
                     <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-card">
-                        <div class="flex h-10 w-10 items-center justify-center rounded-concierge bg-slate-100 text-lg">✍</div>
+                        <div class="flex h-10 w-10 items-center justify-center rounded-concierge bg-emerald-50 text-brand">
+                            <span class="material-symbols-outlined text-[20px]">edit_note</span>
+                        </div>
                         <h3 class="mt-3 font-semibold text-concierge-slate">The Writer</h3>
                         <p class="mt-1 text-xs text-slate-500">Tailors your resume to the job description.</p>
                         <p class="mt-3 line-clamp-3 rounded-concierge bg-slate-50 p-2 font-mono text-xs leading-relaxed text-slate-600">{{ prompts.writer|truncatechars:160 }}</p>
                     </div>
                     <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-card">
-                        <div class="flex h-10 w-10 items-center justify-center rounded-concierge bg-slate-100 text-lg">⚖</div>
+                        <div class="flex h-10 w-10 items-center justify-center rounded-concierge bg-emerald-50 text-brand">
+                            <span class="material-symbols-outlined text-[20px]">balance</span>
+                        </div>
                         <h3 class="mt-3 font-semibold text-concierge-slate">ATS judge</h3>
                         <p class="mt-1 text-xs text-slate-500">Scores keyword and structure fit. Choose the <strong>ATS profile</strong> on the Input step (Workflow section) before you run.</p>
                         <p id="ats-profile-summary-setup" class="mt-3 rounded-concierge bg-slate-50 p-2 text-xs text-slate-600"></p>
@@ -262,7 +285,9 @@
                         {% endif %}
                     </div>
                     <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-card">
-                        <div class="flex h-10 w-10 items-center justify-center rounded-concierge bg-slate-100 text-lg">👤</div>
+                        <div class="flex h-10 w-10 items-center justify-center rounded-concierge bg-emerald-50 text-brand">
+                            <span class="material-symbols-outlined text-[20px]">person</span>
+                        </div>
                         <h3 class="mt-3 font-semibold text-concierge-slate">The recruiter</h3>
                         <p class="mt-1 text-xs text-slate-500">Human-style review and narrative feedback.</p>
                         <p class="mt-3 line-clamp-3 rounded-concierge bg-slate-50 p-2 font-mono text-xs leading-relaxed text-slate-600">{{ prompts.recruiter_judge|truncatechars:160 }}</p>
@@ -312,7 +337,7 @@
                 <div class="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-card">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h3 class="text-base font-bold text-concierge-slate">Upload resume</h3>
-                        <span class="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">PDF preferred</span>
+                        <span class="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-bold font-semibold text-slate-500">PDF preferred</span>
                     </div>
                     {% if prefill_resume_id %}
                         <p id="selected-resume-banner" class="mt-3 rounded-xl bg-brand-mist px-3 py-2 text-xs text-brand-ink">Using <strong>{{ prefill_resume_name|default:"Resume" }}</strong>. Choose a file or another document below to override.</p>
@@ -329,7 +354,7 @@
                     </label>
                     <p id="resume-file-name" class="mt-2 text-center text-xs font-medium text-brand"></p>
                     <div class="mt-5 border-t border-slate-100 pt-4">
-                        <p class="text-[11px] font-bold uppercase tracking-wider text-slate-400">Recent documents</p>
+                        <p class="text-[11px] font-bold font-semibold text-slate-400">Recent documents</p>
                         {% if recent_resumes %}
                         <ul class="mt-3 space-y-1.5" id="recent-resumes-list">
                             {% for r in recent_resumes %}
@@ -387,19 +412,19 @@
                     <p class="text-xs text-slate-500">Passed to the Writer only; lengths are capped server-side. Saved when you leave this step or run. Leave blank to use defaults from <a href="{% url 'settings' %}?tab=app" class="font-semibold text-brand hover:underline">Settings</a>.</p>
                     <div class="mt-4 grid gap-4 lg:grid-cols-3">
                         <div>
-                            <label class="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-slate-400" for="optimization-notes-input">Notes</label>
+                            <label class="mb-1.5 block text-[11px] font-bold font-semibold text-slate-400" for="optimization-notes-input">Notes</label>
                             <textarea id="optimization-notes-input" name="optimization_notes" rows="5"
                                       class="w-full rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-sm text-concierge-slate focus:border-brand focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand/20"
                                       placeholder="e.g. Emphasize leadership, omit Company X">{{ optimization_notes_value|default:'' }}</textarea>
                         </div>
                         <div>
-                            <label class="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-slate-400" for="pipeline-skills-input">Pipeline / skills JSON</label>
+                            <label class="mb-1.5 block text-[11px] font-bold font-semibold text-slate-400" for="pipeline-skills-input">Pipeline / skills JSON</label>
                             <textarea id="pipeline-skills-input" name="pipeline_skills_json" rows="5"
                                       class="w-full rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-sm text-concierge-slate focus:border-brand focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand/20"
                                       placeholder='e.g. {"hard_skills":["python","aws"]}'>{{ pipeline_skills_json_value|default:'' }}</textarea>
                         </div>
                         <div>
-                            <label class="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-slate-400" for="job-highlights-input">Supplemental accomplishments</label>
+                            <label class="mb-1.5 block text-[11px] font-bold font-semibold text-slate-400" for="job-highlights-input">Supplemental accomplishments</label>
                             <textarea id="job-highlights-input" name="job_highlights" rows="5"
                                       class="w-full rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-sm text-concierge-slate focus:border-brand focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand/20"
                                       placeholder="List accomplishments you want the optimizer to weave in">{{ job_highlights_value|default:'' }}</textarea>
@@ -460,7 +485,7 @@
 
                 <div class="mt-6 flex flex-wrap items-end gap-5 border-t border-slate-100 pt-6">
                     <div id="run-mode-toggle-wrap" class="min-w-[14rem] flex-1">
-                        <span class="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-slate-400">Run mode</span>
+                        <span class="mb-1.5 block text-[11px] font-bold font-semibold text-slate-400">Run mode</span>
                         <div class="inline-flex rounded-xl bg-slate-100 p-1" role="group" aria-label="Run mode">
                             <label class="run-mode-label cursor-pointer">
                                 <input type="radio" class="peer sr-only" name="run_mode" id="run-mode-full" value="full" checked>
@@ -473,7 +498,7 @@
                         </div>
                     </div>
                     <div class="w-28">
-                        <label class="mb-1.5 block text-[11px] font-bold uppercase tracking-wider text-slate-400" for="rate-limit-input">Delay (sec)</label>
+                        <label class="mb-1.5 block text-[11px] font-bold font-semibold text-slate-400" for="rate-limit-input">Delay (sec)</label>
                         <input type="number" min="0" step="1" id="rate-limit-input" name="rate_limit_delay"
                                class="w-full rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 text-sm font-medium focus:border-brand focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand/20"
                                value="{{ request.POST.rate_limit_delay|default:'' }}"
@@ -1090,7 +1115,7 @@
             html += '<div><div class="flex items-center gap-2">';
             html += '<span class="material-symbols-outlined text-brand text-[20px]">difference</span>';
             html += '<h4 class="text-base font-bold text-slate-900">Dual-Pane Diff Workbench</h4>';
-            html += '<span class="rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 uppercase tracking-wide">Live Sync</span></div>';
+            html += '<span class="rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 font-semibold">Live Sync</span></div>';
             html += '<p class="mt-1 text-xs text-slate-500">Compare your original resume against the tailored version. Edit directly in the right pane—changes auto-save to draft.</p></div>';
             html += '<div class="flex flex-wrap items-center gap-3">';
             html += '<div class="inline-flex rounded-lg bg-slate-100 p-0.5 text-xs font-semibold" role="tablist" id="diff-view-mode-tabs">';
@@ -1126,7 +1151,8 @@
             html += '<div class="flex flex-wrap items-center gap-2">';
             html += '<a id="export-pdf-btn" class="inline-flex items-center gap-1.5 rounded-lg bg-brand hover:bg-brand-hover text-white px-3.5 py-2 text-xs font-bold transition shadow-sm export-button" href="/api/resume/export/' + esc(resumeId) + '/pdf" data-base-href="/api/resume/export/' + esc(resumeId) + '/pdf" data-resume-id="' + esc(resumeId) + '"><span class="material-symbols-outlined text-[16px]">picture_as_pdf</span><span>Export PDF</span></a>';
             html += '<a id="export-docx-btn" class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 px-3.5 py-2 text-xs font-bold transition shadow-sm export-button" href="/api/resume/export/' + esc(resumeId) + '/docx" data-base-href="/api/resume/export/' + esc(resumeId) + '/docx" data-resume-id="' + esc(resumeId) + '"><span class="material-symbols-outlined text-[16px]">description</span><span>Export Word (.docx)</span></a>';
-            html += '<button type="button" onclick="window.submitApproveAndApply();" class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 text-xs font-bold transition shadow-sm"><span class="material-symbols-outlined text-[16px]">verified</span><span>Approve &amp; Mark Applied</span><kbd class="hidden sm:inline-block ml-1 bg-emerald-800/40 text-emerald-100 px-1 py-0.5 rounded text-[9px] font-mono">Ctrl+Enter</kbd></button></div></div>';
+            html += '<button type="button" onclick="window.submitSaveDraft();" class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 px-3.5 py-2 text-xs font-bold transition shadow-sm"><span class="material-symbols-outlined text-[16px]">save</span><span>Save Draft</span></button>';
+            html += '<button type="button" onclick="window.submitApproveAndApply();" class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 text-xs font-bold transition shadow-sm"><span class="material-symbols-outlined text-[16px]">task_alt</span><span>I Submitted This</span><kbd class="hidden sm:inline-block ml-1 bg-emerald-900/40 text-emerald-100 px-1 py-0.5 rounded text-[9px] font-mono">Ctrl+Enter</kbd></button></div></div>';
         } else {
             html += '<h4 class="text-lg font-semibold text-concierge-slate">Draft so far</h4>';
             html += '<p class="mt-1 text-xs text-slate-500">Run still in progress — you can edit and save after the run <strong>completes</strong>. Exports unlock then.</p>';
@@ -1208,7 +1234,7 @@
 
         html += '<div class="space-y-4">';
         html += "<h4 class=\"text-sm font-semibold text-concierge-slate\">Signals from judges</h4>";
-        html += "<p class=\"text-xs font-medium uppercase tracking-wide text-slate-400\">Feedback (markdown)</p>";
+        html += "<p class=\"text-xs font-medium font-semibold text-slate-400\">Feedback (markdown)</p>";
         html += judgeFeedbackMarkdownHtml(fb);
         html += "</div></div>";
 
@@ -1839,6 +1865,71 @@
         }
     };
 
+    window.submitSaveDraft = function () {
+        if (window.syncApproveMarkdown) {
+            window.syncApproveMarkdown();
+        }
+        var topBtn = document.getElementById("save-draft-top-btn");
+        if (topBtn) {
+            topBtn.disabled = true;
+            topBtn.innerHTML = '<span class="material-symbols-outlined text-[16px] animate-spin">refresh</span><span>Saving…</span>';
+        }
+        var editor = document.getElementById("optimizer-draft-editor");
+        var markdownContent = editor ? editor.value : "";
+        var csrf = document.querySelector("[name=csrfmiddlewaretoken]");
+        var csrfToken = csrf ? csrf.value : "";
+
+        var form = document.createElement("form");
+        form.method = "POST";
+        form.action = window.location.pathname + window.location.search;
+
+        var csrfInput = document.createElement("input");
+        csrfInput.type = "hidden";
+        csrfInput.name = "csrfmiddlewaretoken";
+        csrfInput.value = csrfToken;
+        form.appendChild(csrfInput);
+
+        var actionInput = document.createElement("input");
+        actionInput.type = "hidden";
+        actionInput.name = "action";
+        actionInput.value = "save_draft";
+        form.appendChild(actionInput);
+
+        var mdInput = document.createElement("input");
+        mdInput.type = "hidden";
+        mdInput.name = "markdown";
+        mdInput.value = markdownContent;
+        form.appendChild(mdInput);
+
+        var urlParams = new URLSearchParams(window.location.search);
+        var optId = urlParams.get("opt_id");
+        if (optId) {
+            var optInput = document.createElement("input");
+            optInput.type = "hidden";
+            optInput.name = "opt_id";
+            optInput.value = optId;
+            form.appendChild(optInput);
+        }
+        var jobId = urlParams.get("job_id");
+        if (jobId) {
+            var jInput = document.createElement("input");
+            jInput.type = "hidden";
+            jInput.name = "job_id";
+            jInput.value = jobId;
+            form.appendChild(jInput);
+        }
+        var tr = urlParams.get("track");
+        if (tr) {
+            var trInput = document.createElement("input");
+            trInput.type = "hidden";
+            trInput.name = "track";
+            trInput.value = tr;
+            form.appendChild(trInput);
+        }
+        document.body.appendChild(form);
+        form.submit();
+    };
+
     window.submitApproveAndApply = function () {
         if (window.syncApproveMarkdown) {
             window.syncApproveMarkdown();
@@ -1848,7 +1939,7 @@
             var submitBtn = document.getElementById("approve-apply-btn");
             if (submitBtn) {
                 submitBtn.disabled = true;
-                submitBtn.innerHTML = '<span class="material-symbols-outlined text-[18px] animate-spin">refresh</span><span>Approving...</span>';
+                submitBtn.innerHTML = '<span class="material-symbols-outlined text-[18px] animate-spin">refresh</span><span>Submitting…</span>';
             }
             form.submit();
             return;
@@ -1909,13 +2000,16 @@
         fallbackForm.submit();
     };
 
-    // Keyboard Shortcuts: Esc to Return, Ctrl+Enter to Approve & Mark Applied
+    // Keyboard Shortcuts: Esc to Return, Ctrl+S to Save Draft, Ctrl+Enter to I Submitted This
     document.addEventListener("keydown", function (e) {
         if (e.key === "Escape") {
             var backBtn = document.getElementById("back-to-cockpit-link");
             if (backBtn && backBtn.href) {
                 window.location.href = backBtn.href;
             }
+        } else if ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S")) {
+            e.preventDefault();
+            window.submitSaveDraft();
         } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
             e.preventDefault();
             window.submitApproveAndApply();

@@ -8,7 +8,7 @@
         </div>
         <div class="space-y-4 p-4">
             <div>
-                <p class="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Saved Searches</p>
+                <p class="mb-2 text-[10px] font-semibold font-semibold text-slate-500">Saved Searches</p>
                 {% if saved_searches %}
                 <div class="flex flex-wrap gap-2">
                     {% for entry in saved_search_entries %}
@@ -18,7 +18,7 @@
                        aria-current="{% if selected_preset_id == entry.search.id %}true{% else %}false{% endif %}">
                         {{ entry.search.name }}
                         {% if selected_preset_id == entry.search.id and preset_is_dirty %}
-                        <span class="inline-flex rounded-full bg-amber-300/90 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-950">Edited</span>
+                        <span class="inline-flex rounded-full bg-amber-300/90 px-1.5 py-0.5 text-[9px] font-bold font-semibold text-amber-950">Edited</span>
                         {% elif entry.schedule %}
                         <span class="inline-flex h-4 w-4 items-center justify-center rounded-full {% if selected_preset_id == entry.search.id %}bg-brand/40{% else %}bg-brand/20{% endif %}" aria-hidden="true">
                             <svg class="h-2.5 w-2.5 {% if selected_preset_id == entry.search.id %}text-white{% else %}text-brand{% endif %}" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd"/></svg>
@@ -42,11 +42,17 @@
                 </form>
             </div>
             <div class="rounded-xl border border-slate-100 bg-slate-50/80 p-3">
-                <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Automatic runs</p>
+                <div class="flex items-center justify-between gap-1 mb-1">
+                    <p class="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Automate into Cockpit <span class="sr-only">Automatic runs</span></p>
+                    <span class="inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[9px] font-bold text-emerald-800 border border-emerald-200">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Feeds Cockpit
+                    </span>
+                </div>
                 {% if selected_preset_schedule.is_active and selected_preset_schedule.label %}
-                <p class="mt-1 text-xs text-slate-600">{{ selected_preset_schedule.label }}</p>
+                <p class="mt-1 text-xs text-slate-700 font-medium">Active: {{ selected_preset_schedule.label }}</p>
+                <p class="mt-0.5 text-[11px] text-slate-500">Automatically sources new matching roles directly into your Cockpit pipeline.</p>
                 {% else %}
-                <p class="mt-1 text-xs text-slate-500">Run this search on a schedule and add matches to your pipeline.</p>
+                <p class="mt-1 text-xs text-slate-500">Schedule this query to continuously find and feed matched roles directly into your Cockpit review queue.</p>
                 {% endif %}
                 {% if selected_preset_schedule.is_custom %}
                 <p class="mt-2 text-xs text-amber-700">This search uses a custom cron schedule.</p>
@@ -59,7 +65,7 @@
                     <input type="hidden" name="preset_id" value="{{ selected_preset_id }}">
                     <div class="grid grid-cols-2 gap-2">
                         <div>
-                            <label class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500" for="schedule-interval">Frequency</label>
+                            <label class="mb-1 block text-[10px] font-semibold text-slate-500" for="schedule-interval">Frequency</label>
                             <select id="schedule-interval" name="schedule_interval"
                                     class="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm">
                                 <option value="off" {% if selected_preset_schedule.interval == "off" %}selected{% endif %}>Off</option>
@@ -69,14 +75,14 @@
                             </select>
                         </div>
                         <div id="schedule-time-wrap">
-                            <label class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500" for="schedule-time">Time</label>
+                            <label class="mb-1 block text-[10px] font-semibold text-slate-500" for="schedule-time">Time</label>
                             <input type="time" id="schedule-time" name="schedule_time"
                                    value="{{ selected_preset_schedule.time }}"
                                    class="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm">
                         </div>
                     </div>
                     <button type="submit" class="w-full rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white hover:bg-brand-hover">
-                        Save schedule
+                        Save Cockpit Schedule <span class="sr-only">Save schedule</span>
                     </button>
                 </form>
                 {% endif %}
@@ -103,7 +109,7 @@
                     Editing <span class="font-semibold text-concierge-slate">{{ selected_preset.name }}</span>.
                     {% endif %}
                 </p>
-                <label class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500" for="saved-search-name-input">Name</label>
+                <label class="mb-1 block text-[10px] font-semibold font-semibold text-slate-500" for="saved-search-name-input">Name</label>
                 <input type="text" id="saved-search-name-input" name="saved_search_name"
                        value="{{ selected_preset.name }}"
                        placeholder="{{ selected_preset.name }}"
@@ -118,8 +124,8 @@
                     </button>
                 </div>
                 {% else %}
-                <label class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500" for="saved-search-name-input">
-                    Save current search
+                <label class="mb-1 block text-[10px] font-semibold text-slate-500" for="saved-search-name-input">
+                    Save query to feed Cockpit
                 </label>
                 <input type="text" id="saved-search-name-input" name="saved_search_name"
                        value=""
@@ -127,13 +133,13 @@
                        class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
                        required>
                 <button type="submit" class="w-full rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover">
-                    Save search
+                    Save Query to Cockpit <span class="sr-only">Save search</span>
                 </button>
                 {% endif %}
             </form>
 
             <div class="border-t border-slate-100 pt-3">
-                <p class="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Phrases to Avoid</p>
+                <p class="mb-2 text-[10px] font-semibold font-semibold text-slate-500">Phrases to Avoid</p>
                 <p class="mb-2 text-xs text-slate-500">Jobs with these phrases are hidden.</p>
                 <form id="disqualifier-add-form" class="mb-3 flex gap-2">
                     <input type="text" name="phrase" id="disqualifier-phrase-input" placeholder="e.g. Entry Level" maxlength="500" autocomplete="off"
@@ -157,7 +163,7 @@
     {# Growth Pulse #}
     {% if find_jobs_pulse %}
     <div class="overflow-hidden rounded-2xl bg-brand p-5 text-white shadow-card">
-        <p class="text-[10px] font-bold uppercase tracking-widest text-teal-200/90">Growth Pulse</p>
+        <p class="text-[10px] font-bold font-semibold text-teal-200/90">Growth Pulse</p>
         <div class="mt-4">
             <div class="flex items-center justify-between text-sm">
                 <span class="font-medium text-teal-50">Profile Strength</span>
@@ -186,7 +192,7 @@
     {# Resume ↔ profile #}
     <div class="overflow-hidden rounded-2xl border border-slate-200/90 bg-white shadow-card">
         <div class="p-5">
-            <p class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Resumes</p>
+            <p class="text-[10px] font-bold font-semibold text-slate-500">Resumes</p>
             <p class="mt-2 text-sm font-semibold leading-snug text-concierge-slate">
                 Assign a PDF to each saved-search profile so applications use the right resume.
             </p>
@@ -197,9 +203,9 @@
     </div>
 
     {# Pro tip #}
-    <div class="overflow-hidden rounded-2xl border border-slate-200/90 bg-gradient-to-br from-brand-mist via-white to-slate-50 shadow-card">
+    <div class="overflow-hidden rounded-2xl border border-slate-200/90 bg-slate-50/70 border border-slate-200/90 shadow-card">
         <div class="p-5">
-            <p class="text-[10px] font-bold uppercase tracking-widest text-brand">Pro tip</p>
+            <p class="text-[10px] font-bold font-semibold text-brand">Pro tip</p>
             <p class="mt-2 text-sm font-semibold leading-snug text-concierge-slate">
                 Personalize cover letters automatically with AI after you tailor a resume.
             </p>

@@ -14,13 +14,36 @@ from .track_actions import normalize_track_slug, q_preference_embedding_track
 logger = logging.getLogger(__name__)
 
 
+def get_user_preference_version(user) -> int:
+    """Return user-scoped preference cache version."""
+    uid = getattr(user, "pk", user)
+    v = cache.get(f"pref_version:u{uid}")
+    if v is None:
+        return 1
+    return int(v)
+
+
+def bump_user_preference_version(user) -> int:
+    """Increment user preference cache version to atomically invalidate all tracks."""
+    uid = getattr(user, "pk", user)
+    key = f"pref_version:u{uid}"
+    try:
+        new_v = cache.incr(key)
+    except Exception:
+        v = cache.get(key)
+        new_v = (int(v) + 1) if v is not None else 2
+        cache.set(key, new_v, timeout=60 * 60 * 24 * 30)
+    return new_v
+
+
 def get_preference_vector_cache_key(user, track: Optional[str] = None) -> str:
     from django.conf import settings
     base = getattr(settings, "PREFERENCE_VECTOR_CACHE_KEY", "job_preference_vector")
     uid = getattr(user, "pk", user)
+    v = get_user_preference_version(user)
     if track:
-        return f"{base}:u{uid}:{track}"
-    return f"{base}:u{uid}"
+        return f"{base}:u{uid}:v{v}:{track}"
+    return f"{base}:u{uid}:v{v}"
 
 
 def get_preference_vectors(
@@ -145,34 +168,25 @@ def get_liked_jobs_for_focus_reason(*, user, track: Optional[str] = None):
 
 
 def invalidate_preference_cache(user, track: Optional[str] = None) -> None:
-    """Call when user likes or dislikes a job, or deletes/removes training data."""
-    cache.delete(get_preference_vector_cache_key(user))
-    slugs = set()
+    """
+    Atomically invalidate preference vector cache for all tracks without query churn.
+    Bumps user preference version so all cached tracks/profiles are invalidated in 1 operation.
+    """
+    bump_user_preference_version(user)
+    uid = getattr(user, "pk", user)
+    cache.delete(f"job_preference_vector:u{uid}")
     if track:
-        slugs.add(str(track).strip().lower())
-    try:
-        slugs.update(s.lower() for s in Track.objects.for_user(user).values_list("slug", flat=True) if s)
-    except Exception:
-        pass
-    try:
-        slugs.update(s.lower() for s in SearchProfile.objects.for_user(user).values_list("slug", flat=True) if s)
-    except Exception:
-        pass
-    try:
-        slugs.update(s.lower() for s in JobListingEmbedding.objects.filter(owner=user).values_list("track", flat=True).distinct() if s)
-    except Exception:
-        pass
-    for slug in slugs:
-        cache.delete(get_preference_vector_cache_key(user, slug))
+        cache.delete(f"job_preference_vector:u{uid}:{track}")
 
 
 def get_disliked_embeddings_cache_key(user, track: Optional[str] = None) -> str:
     from django.conf import settings
     base = getattr(settings, "DISLIKED_EMBEDDINGS_CACHE_KEY", "job_disliked_embeddings")
     uid = getattr(user, "pk", user)
+    v = get_user_preference_version(user)
     if track:
-        return f"{base}:u{uid}:{track}"
-    return f"{base}:u{uid}"
+        return f"{base}:u{uid}:v{v}:{track}"
+    return f"{base}:u{uid}:v{v}"
 
 
 def get_disliked_embeddings(*, user, track: Optional[str] = None) -> List[Tuple[int, List[float]]]:
@@ -214,25 +228,15 @@ def get_disliked_embeddings(*, user, track: Optional[str] = None) -> List[Tuple[
 
 
 def invalidate_disliked_embeddings_cache(user, track: Optional[str] = None) -> None:
-    """Call when user likes or dislikes a job, or deletes/removes training data."""
-    cache.delete(get_disliked_embeddings_cache_key(user))
-    slugs = set()
+    """
+    Atomically invalidate disliked embeddings cache for all tracks without query churn.
+    Bumps user preference version so all cached tracks/profiles are invalidated in 1 operation.
+    """
+    bump_user_preference_version(user)
+    uid = getattr(user, "pk", user)
+    cache.delete(f"job_disliked_embeddings:u{uid}")
     if track:
-        slugs.add(str(track).strip().lower())
-    try:
-        slugs.update(s.lower() for s in Track.objects.for_user(user).values_list("slug", flat=True) if s)
-    except Exception:
-        pass
-    try:
-        slugs.update(s.lower() for s in SearchProfile.objects.for_user(user).values_list("slug", flat=True) if s)
-    except Exception:
-        pass
-    try:
-        slugs.update(s.lower() for s in JobListingEmbedding.objects.filter(owner=user).values_list("track", flat=True).distinct() if s)
-    except Exception:
-        pass
-    for slug in slugs:
-        cache.delete(get_disliked_embeddings_cache_key(user, slug))
+        cache.delete(f"job_disliked_embeddings:u{uid}:{track}")
 
 
 def get_liked_jobs_with_embeddings(*, user, track: Optional[str] = None):

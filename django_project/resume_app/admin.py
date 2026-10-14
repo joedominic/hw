@@ -26,6 +26,8 @@ from .models import (
     UserPromptProfile,
     EmployerInterviewEvent,
     PipelineEntry,
+    UserResume,
+    OptimizedResume,
 )
 
 
@@ -227,8 +229,11 @@ class JobListingAdmin(admin.ModelAdmin):
 
 @admin.register(JobMatchResult)
 class JobMatchResultAdmin(admin.ModelAdmin):
-    list_display = ("job_listing", "resume", "fit_score", "status", "analyzed_at")
-    list_filter = ("status",)
+    list_display = ("job_listing", "resume", "owner", "fit_score", "status", "analyzed_at")
+    list_filter = ("status", "analyzed_at")
+    list_select_related = ("owner", "job_listing", "resume")
+    raw_id_fields = ("owner", "job_listing", "resume")
+    search_fields = ("owner__username", "job_listing__title", "job_listing__company_name")
 
 
 @admin.register(JobListingEmbedding)
@@ -281,4 +286,32 @@ class EmployerInterviewEventAdmin(admin.ModelAdmin):
     list_filter = ("round_type", "status")
     raw_id_fields = ("owner", "pipeline_entry")
     search_fields = ("interviewer_names", "location_or_link", "notes")
+
+
+@admin.register(PipelineEntry)
+class PipelineEntryAdmin(admin.ModelAdmin):
+    list_display = ("id", "owner", "job_listing", "stage", "post_apply_substatus", "track", "added_at", "removed_at")
+    list_filter = ("stage", "post_apply_substatus", "track", "removed_at")
+    list_select_related = ("owner", "job_listing", "search_profile")
+    raw_id_fields = ("owner", "job_listing", "search_profile", "applied_optimized_resume")
+    search_fields = ("owner__username", "job_listing__title", "job_listing__company_name", "track")
+    date_hierarchy = "added_at"
+
+
+@admin.register(UserResume)
+class UserResumeAdmin(admin.ModelAdmin):
+    list_display = ("id", "original_filename", "owner", "track", "is_library", "uploaded_at")
+    list_filter = ("is_library", "uploaded_at")
+    list_select_related = ("owner",)
+    raw_id_fields = ("owner",)
+    search_fields = ("original_filename", "track", "owner__username")
+
+
+@admin.register(OptimizedResume)
+class OptimizedResumeAdmin(admin.ModelAdmin):
+    list_display = ("id", "owner", "status", "ats_score", "recruiter_score", "created_at")
+    list_filter = ("status", "created_at")
+    list_select_related = ("owner", "pipeline_entry")
+    raw_id_fields = ("owner", "original_resume", "job_description", "pipeline_entry", "optimizer_workflow", "ats_judge_profile")
+    search_fields = ("owner__username",)
 

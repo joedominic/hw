@@ -53,6 +53,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "resume_app.middleware.SessionInterruptedMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -318,6 +319,9 @@ OPENAI_API_KEY = env("OPENAI_API_KEY", default=None)
 ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY", default=None)
 GROQ_API_KEY = env("GROQ_API_KEY", default=None)
 GOOGLE_API_KEY = env("GOOGLE_API_KEY", default=None)
+OLLAMA_API_KEY = env("OLLAMA_API_KEY", default=None)
+OPENROUTER_API_KEY = env("OPENROUTER_API_KEY", default=None)
+OLLAMA_LOCAL_HOST = env.str("OLLAMA_LOCAL_HOST", default=env.str("OLLAMA_HOST", default="http://127.0.0.1:11434"))
 
 # Preference / abuse cache — configured after Huey Redis settings below.
 # Bump when embedding formula changes (v5 = sentence-level role similarity, pref_role_sentences)

@@ -36,7 +36,7 @@ JobApp-Main/
 │       ├── sourcing/                 # Hexagonal job scraping architecture (ports, adapters, clients)
 │       ├── agents.py                 # LangGraph resume optimizer graph (Writer, ATS, Recruiter)
 │       ├── optimizer_budget.py       # Context budget trimming and semantic JD excerpting
-│       ├── llm_gateway.py            # Central LLM invocation, routing, quotas, and fallback
+│       ├── llm/                      # Central LLM gateway, provider factories, rate limiting, and policies
 │       ├── dashboard_stats.py        # Performance dashboard telemetry aggregation
 │       ├── tenancy.py                # Tenant isolation helpers (OwnedManager, get_owned_or_404)
 │       └── templates/resume_app/     # Server-rendered HTML templates
@@ -48,14 +48,14 @@ JobApp-Main/
 
 ## 3. Main Modules & Subsystems
 
-- `models.py` — Domain models partitioned into global shared entities (`JobListing`, `JobDescription`, `AtsJudgeProfile`) and tenant-owned entities (`UserResume`, `OptimizedResume`, `PipelineEntry`, `JobSearchTask`, `SearchProfile`, `EmployerInterviewEvent`).
+- `models.py` — Domain models partitioned into global shared entities (`JobListing`, `JobDescription`, `AtsJudgeProfile`) and tenant-owned entities (`UserResume`, `CareerProfileAnalysis`, `OptimizedResume`, `PipelineEntry`, `JobSearchTask`, `SearchProfile`, `EmployerInterviewEvent`).
 - `views.py` — Core server-rendered UI: Career Cockpit (`career_cockpit_view`), Resume Optimizer, Find Jobs, Settings, Performance Dashboard, Fit Inspector, and Staff tools.
 - `pipeline_board.py` — Multi-stage Kanban pipeline management (Pipeline, Vetting, Applying, Done) with inline feedback actions.
 - `api.py` & `jobs_api.py` — Django Ninja REST endpoints for interactive UI actions, background job polling, and data export.
 - `tasks.py` — Huey background tasks: scheduled job scraping, vetting matching, metric recalculation, and cleanup.
 - `sourcing/` — Hexagonal job ingestion subsystem with dedicated adapters for JobSpy, Greenhouse, BuiltIn, Levels.fyi, and Dice.
 - `agents.py` & `optimizer_budget.py` — Multi-agent LangGraph workflow orchestrating resume re-writing, keyword matching, and recruiter readability scoring.
-- `llm_gateway.py`, `llm_policy.py`, `llm_factory.py` — Enterprise LLM router managing provider selection, fallback chains, per-user daily token budgets, and concurrency controls.
+- `llm/` (`llm/gateway.py`, `llm/policy.py`, `llm/factory.py`) — Enterprise LLM subsystem managing provider selection, fallback chains, per-user daily token budgets, and concurrency controls.
 - `tenancy.py` & `middleware.py` — Multi-tenant query scoping and global authentication enforcement.
 
 ---
@@ -73,7 +73,7 @@ sequenceDiagram
 
     User->>Web: Action (e.g. "Run Search Now")
     Web->>Redis: Set job_task_pending:{task_id} (180s TTL)
-    Web->>Redis: Set job_task_manual_cooldown:{task_id} (3600s TTL)
+    Web->>Redis: Set job_task_manual_cooldown:{task_id} (180s TTL)
     Web->>Redis: Enqueue task in Huey queue
     Web-->>User: HTTP 200 / Redirect to Cockpit
 
@@ -109,40 +109,46 @@ To guarantee multi-tenant scalability, prevent duplicate scrapes, and safeguard 
    - Set atomically on task dispatch with a 180s TTL.
    - Prevents the client polling loop from encountering race conditions where a task is enqueued in Redis but not yet written to the database by the worker.
 3. **Manual Trigger Cooldown (`job_task_manual_cooldown:{task_id}`):**
-   - 60-minute TTL (3,600s) preventing accidental or abusive repeated scraping.
-   - **Automatic Failure Recovery:** If a task fails due to a network error, exception, or timeout, the worker and the status views immediately delete this key, allowing the user to retry without waiting an hour.
+   - 3-minute TTL (180s) preventing accidental or abusive repeated scraping.
+   - **Automatic Failure Recovery:** If a task fails due to a network error, exception, or timeout, the worker and the status views immediately delete this key, allowing the user to retry without waiting for cooldown expiry.
 4. **Vetting Matching Concurrency Lock (`vetting_matching_task_running:u{user_id}`):**
    - 1,800s TTL. Enforces sequential execution of deep analysis per user so local Ollama reuses KV cache prefixes across consecutive jobs.
 
 ---
 
-## 6. Review-Stage Deep Analysis & Prefix-Caching Architecture
+## 6. Review-Stage Deep Analysis & Two-Pass Batch Architecture
 
-To eliminate runaway compute costs while providing deep semantic insights, LLM diagnostics are **strictly scoped to the Review (`Vetting`) stage**:
+To eliminate runaway compute costs while providing deep semantic insights, LLM diagnostics run **only for opportunities in Review (`vetting`) and Applying (`applying`) stages** in an optimized **Two-Pass Batch Architecture**:
 
 ```mermaid
-flowchart LR
-    Sourced["1. Sourced Jobs<br>(Pipeline / New)"] -->|Heuristic & Centroid Filter| Filter["Skip Deep LLM<br>(Fast & Free)"]
-    Filter -->|User Shortlists or Auto-Promote| Vetting["2. Review Stage<br>(Stage.VETTING)"]
-    Vetting --> HueyTask["evaluate_vetting_matching_task"]
-    HueyTask --> Cleanser["Heuristic Cleanser<br>(0ms regex, no LLM)"]
-    Cleanser --> Radar["SkillRadarService.analyze<br>(Local Ollama)"]
-    Radar --> KV["KV Prefix Cache Warmth<br>(~2.06s inference)"]
-    KV --> StoreDB["MySQL: PipelineEntry<br>(prob, reasoning, resume_id)"]
-    KV --> StoreRedis["Redis Cache<br>(cockpit_ollama_skill_radar_...)"]
+flowchart TD
+    subgraph Pass1 ["Pass 1: Labor Compliance & Authenticity Audit (Global Posting Context)"]
+        P1_Jobs["Un-audited JobListings"] --> P1_Extract["Date & Window Extraction<br>(posted_date, application_window)"]
+        P1_Extract --> P1_Ollama["JobAuthenticityService<br>(10-Point Deterministic Rules)"]
+        P1_Ollama --> P1_DB["Global Catalog Write: JobListing<br>(verdict, score, rationale, trail)"]
+        P1_Ollama --> P1_Redis["Redis: job_authenticity_{id} (7d)"]
+    end
+
+    subgraph Pass2 ["Pass 2: Resume Match Radar (Candidate Context)"]
+        P2_Jobs["Review-Stage PipelineEntries"] --> P2_Cleanse["Heuristic Cleanser<br>(0ms regex, no LLM)"]
+        P2_Cleanse --> P2_Ollama["SkillRadarService.analyze<br>(Candidate Resume Prefix Cached)"]
+        P2_Ollama --> P2_DB["Tenant Write: PipelineEntry<br>(prob, reasoning, stretch_skills)"]
+        P2_Ollama --> P2_Redis["Redis: cockpit_ollama_skill_radar_... (7d)"]
+    end
+
+    Pass1 --> Pass2
 ```
 
-1. **Stage Isolation:** Raw newly sourced listings are evaluated only with fast token embeddings and preference centroids. Deep analysis runs only when a card enters `Stage.VETTING`.
-2. **Consolidated Diagnostic Schema:** A single LLM call replaces fragmented matching prompts, returning:
-   - `match_score` (0–100 integer)
-   - `core_competencies` (substantiated technical & architectural requirements)
-   - `stretch_skills` (missing, weak, or unsubstantiated qualifications)
-   - `fit_summary` (concise executive fit synthesis)
-3. **KV Cache Prefix Alignment:** The prompt orders `Candidate Resume` ahead of `Job Title` and `Job Description`. Because system instructions and candidate resume remain identical across consecutive jobs, local Ollama reuses the precomputed KV cache prefix, achieving ~2.06s inference (a 70% latency reduction).
-4. **Heuristic JD Cleansing:** The vetting pipeline uses regex section-stripping (`use_llm=False`) rather than generative rewriting, avoiding cache eviction.
-5. **Dual Persistence:**
-   - **Redis Cache:** Instant diagnostic modal loading (`cockpit_ollama_skill_radar_{user_id}_{resume_id}_{job_id}`).
-   - **Database Fallback:** Persisted to `PipelineEntry` (`vetting_interview_probability`, `vetting_interview_reasoning`). If Redis cache expires, UI cards fall back seamlessly to DB values without showing "unanalyzed".
+1. **Pass 1: Labor Compliance & Authenticity Audit (`JobAuthenticityService.audit`):**
+   - **System Prefix Cache Warmth:** All listings in Pass 1 share the exact same system prompt prefix. Running Pass 1 sequentially across the batch maintains 100% warm KV cache in local Ollama, avoiding prompt thrashing ("ping-ponging").
+   - **Lifespan & Date Intelligence:** Extracts `posted_date` and computes `application_window` (detecting statutory corporate minimums such as 5 business days and calendar deltas $\le 4$ days).
+   - **Deterministic 10-Point Classifier:** Assigns verdicts: `PERM_COMPLIANCE`, `PHANTOM_PIPELINE`, `INTERNAL_PRESELECT` ($\ge 40$), or `GENUINE_EXTERNAL` ($< 40$).
+   - **Global Intrinsic Persistence:** Posting authenticity is an intrinsic property of the job listing, audited once across all tenants and stored on `JobListing`.
+   - **Confidentiality Sanitization:** Raw 10-point audit checklist evidence and arithmetic sums are withheld from non-staff client responses to protect proprietary evaluation IP.
+2. **Pass 2: Resume Match Radar (`SkillRadarService.analyze`):**
+   - **Candidate Resume KV Alignment:** Once Pass 1 finishes, the worker switches to the candidate context. Ordering Candidate Resume ahead of the Job Description allows Ollama to reuse the candidate KV prefix, cutting latency from ~6.95s to ~2.06s (~70% speedup).
+   - **Heuristic JD Cleansing:** Zero-latency regex section-stripping (`use_llm=False`) cleans boilerplate without eviction.
+   - **Dual Persistence:** Instant modal loading via Redis cache with fallback persistence in `PipelineEntry`.
 
 ---
 
@@ -170,6 +176,6 @@ Default compiled graph: **Writer → ATS Judge → Recruiter Judge** (single pas
 
 1. **Preserve Tenant Scoping:** Never perform un-scoped queries on tenant-owned models. Always use `for_user(user)`.
 2. **Global vs Tenant Catalog:** Treat `JobListing` as a shared global catalog; store user reactions, pipeline states, and notes in `PipelineEntry` and `JobListingAction`.
-3. **Route LLMs via Gateway:** Never bypass `llm_gateway.py` with direct SDK calls. All calls must respect token budgets, user stop switches, and audit logging.
+3. **Route LLMs via Gateway:** Never bypass `resume_app/llm/gateway.py` with direct SDK calls. All calls must respect token budgets, user stop switches, and audit logging.
 4. **Reliable Background Execution:** Keep long-running I/O (scraping, AI generation, embedding calculation) in Huey tasks with durable database state.
 5. **Lock Lifecycle:** Always wrap Redis lock releases in `try ... finally` blocks and set explicit TTL expiration.

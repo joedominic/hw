@@ -259,6 +259,99 @@ def upsert_job_listing_from_fetch(row: dict) -> Tuple["JobListing", bool]:
     )
 
 
+def bulk_upsert_job_listings(rows: List[dict]) -> List["JobListing"]:
+    """
+    Bulk upsert normalized fetch rows into JobListing using Django 5 bulk_create with update_conflicts.
+
+    Replaces sequential N+1 filter().update() + get() loop with batch database statements,
+    eliminating SQLite lock contention and database roundtrips.
+    """
+    from django.utils import timezone as tz
+    from django.db.models import Q
+    from functools import reduce
+    import operator
+    from .models import JobListing
+
+    if not rows:
+        return []
+
+    now = tz.now()
+    # Deduplicate rows by (source, external_id) keeping latest row in batch
+    unique_rows: dict[Tuple[str, str], dict] = {}
+    ordered_keys: List[Tuple[str, str]] = []
+    for r in rows:
+        s = _scalar_fetch_value(r.get("source"))
+        eid = _scalar_fetch_value(r.get("external_id"))
+        if not s or not eid:
+            continue
+        key = (str(s), str(eid))
+        if key not in unique_rows:
+            ordered_keys.append(key)
+        unique_rows[key] = r
+
+    if not unique_rows:
+        return []
+
+    instances: List[JobListing] = []
+    for key in ordered_keys:
+        r = unique_rows[key]
+        source, external_id = key
+        desc = _scalar_fetch_value(r.get("description")) or ""
+        title = _scalar_fetch_value(r.get("title")) or "Untitled"
+        company_name = _scalar_fetch_value(r.get("company_name")) or "Unknown"
+        location = _scalar_fetch_value(r.get("location")) or ""
+        url = _scalar_fetch_value(r.get("job_url")) or ""
+        posted_at = r.get("date_posted")
+
+        instances.append(
+            JobListing(
+                source=source,
+                external_id=external_id,
+                title=title,
+                company_name=company_name,
+                location=location,
+                description=desc,
+                url=url,
+                posted_at=posted_at,
+                fetched_at=now,
+            )
+        )
+
+    # Django bulk_create with update_conflicts.
+    # PostgreSQL requires unique_fields to identify the conflict target constraint.
+    # SQLite and MySQL do not support unique_fields (they conflict against any unique constraint/PK).
+    bulk_kwargs: dict[str, Any] = {
+        "update_conflicts": True,
+        "update_fields": ["title", "company_name", "location", "description", "url", "posted_at"],
+    }
+    from django.db import connections, router
+    db_alias = router.db_for_write(JobListing)
+    if connections[db_alias].features.supports_update_conflicts_with_target:
+        bulk_kwargs["unique_fields"] = ["source", "external_id"]
+
+    JobListing.objects.bulk_create(instances, **bulk_kwargs)
+
+    # Fetch stored models with primary keys in chunks to avoid SQLite variable limit
+    jobs_by_key: dict[Tuple[str, str], JobListing] = {}
+    chunk_size = 100
+    for i in range(0, len(ordered_keys), chunk_size):
+        chunk = ordered_keys[i : i + chunk_size]
+        q_expr = reduce(operator.or_, [Q(source=s, external_id=eid) for s, eid in chunk])
+        for job in JobListing.objects.filter(q_expr):
+            jobs_by_key[(job.source, job.external_id)] = job
+
+    # Return list of JobListing matching input order
+    out: List[JobListing] = []
+    for r in rows:
+        s = _scalar_fetch_value(r.get("source"))
+        eid = _scalar_fetch_value(r.get("external_id"))
+        if s and eid:
+            job = jobs_by_key.get((str(s), str(eid)))
+            if job:
+                out.append(job)
+    return out
+
+
 def _fetch_jobs_jobspy(
     search_term: str,
     location: Optional[str],

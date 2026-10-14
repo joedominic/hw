@@ -81,19 +81,13 @@ def run_ollama_guard_on_payloads(payloads: list, track_slug: str, *, user) -> li
     Updates payloads in-place with 'ollama_guard_status' and 'ollama_guard_reason'.
     """
     import re
+    import json
 
-    from .llm import get_llm
-    from .models import LLMProviderConfig, Track
+    from langchain_core.messages import HumanMessage
+    from .llm import invoke_llm_messages, local_llm_available, USAGE_QUERY_FIT_CHECK
+    from .models import Track
 
-    provider = "Ollama Local"
-    config = LLMProviderConfig.objects.for_user(user).filter(provider=provider).first()
-    if not config or not config.is_active:
-        return payloads
-
-    try:
-        llm = get_llm(provider, model=config.default_model or "nemotron")
-    except Exception as e:
-        logger.warning("[ollama_guard] Could not initialize Ollama: %s", e)
+    if not user or not local_llm_available(user):
         return payloads
 
     track_obj = Track.objects.for_user(user).filter(slug=track_slug).first()
@@ -108,22 +102,17 @@ def run_ollama_guard_on_payloads(payloads: list, track_slug: str, *, user) -> li
 
     for p in payloads:
         try:
-            import json
-
-            from langchain_core.messages import HumanMessage
-
             prompt = prompt_template.format(
                 target_level=target_level, title=p.title, snippet=p.snippet
             )
-            from .llm import log_llm_invoke
-
-            log_llm_invoke(
-                provider,
-                getattr(llm, "_resume_model", None) or config.default_model or "nemotron",
-                query="ollama_guard",
-                via="direct",
+            response = invoke_llm_messages(
+                [HumanMessage(content=prompt)],
+                user=user,
+                usage_query_kind=USAGE_QUERY_FIT_CHECK,
+                prefer_local=True,
+                only_local=True,
+                allow_local=True,
             )
-            response = llm.invoke([HumanMessage(content=prompt)])
             content = response.content if hasattr(response, "content") else str(response)
 
             # Simple JSON extraction

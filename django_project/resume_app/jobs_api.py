@@ -27,7 +27,7 @@ from .models import (
     Track,
     EmployerInterviewEvent,
 )
-from .job_sources import fetch_jobs, normalize_site_names, upsert_job_listing_from_fetch
+from .job_sources import fetch_jobs, normalize_site_names, upsert_job_listing_from_fetch, bulk_upsert_job_listings
 from .job_search_core import (
     annotate_saved_flags,
     rank_and_filter_jobs,
@@ -65,6 +65,8 @@ from .schemas import (
     FetchJobDescriptionRequest,
     FetchJobDescriptionResponse,
     JobSearchResponse,
+    JobSearchAsyncTaskResponse,
+    JobSearchAsyncStatusResponse,
     MatchRequest,
     MatchResponse,
     MarkAppliedRequest,
@@ -461,8 +463,10 @@ def jobs_search(request, payload: JobSearchRequest):
         raise HttpError(400, "search_term is required")
 
     resume_id = payload.resume_id
-    search_track = normalize_track_slug(payload.track, user)
-    disliked_listing_ids = _disliked_listing_id_set(user, search_track)
+    raw_track = payload.track
+    is_unbiased = not raw_track or str(raw_track).strip().lower() in ("none", "unbiased", "")
+    search_track = None if is_unbiased else normalize_track_slug(raw_track, user)
+    disliked_listing_ids = set() if is_unbiased else _disliked_listing_id_set(user, search_track)
     disqualifier_pattern = build_disqualifier_pattern(_get_disqualifier_phrases(user))
     jobs_with_meta = []  # (job, JobPayload)
 
@@ -506,7 +510,7 @@ def jobs_search(request, payload: JobSearchRequest):
                 user=user,
                 search_term=payload.search_term.strip(),
                 location=payload.location.strip() if payload.location else None,
-                track=payload.track,
+                track=search_track,
                 results_wanted=payload.results_wanted or 50,
                 site_name=normalize_site_names(payload.site_name),
                 sort=(payload.sort or "match"),
@@ -547,6 +551,42 @@ def jobs_search(request, payload: JobSearchRequest):
     return JobSearchResponse(jobs=jobs_out, total=len(jobs_out))
 
 
+@router.post("/search/async", response=JobSearchAsyncTaskResponse)
+def jobs_search_async(request, payload: JobSearchRequest):
+    """Enqueue asynchronous JobSpy search in background Huey worker and return immediately."""
+    import uuid
+    from .tasks import job_search_async_task
+
+    user = api_user(request)
+    if not payload.search_term or not payload.search_term.strip():
+        raise HttpError(400, "search_term is required")
+
+    task_id = str(uuid.uuid4())
+    cache.set(f"job_search_task:{task_id}", {"status": "queued", "progress": 0}, timeout=1800)
+
+    job_search_async_task(
+        task_id=task_id,
+        user_id=user.pk,
+        search_term=payload.search_term.strip(),
+        location=payload.location.strip() if payload.location else None,
+        track=payload.track,
+        results_wanted=payload.results_wanted or 50,
+        site_name=normalize_site_names(payload.site_name),
+        sort=(payload.sort or "match"),
+    )
+    return JobSearchAsyncTaskResponse(task_id=task_id, status="queued")
+
+
+@router.get("/search/async/{task_id}/status", response=JobSearchAsyncStatusResponse)
+def jobs_search_async_status(request, task_id: str):
+    """Poll status and results of an asynchronous background job search."""
+    user = api_user(request)
+    data = cache.get(f"job_search_task:{task_id}")
+    if not data:
+        raise HttpError(404, "Search task not found or expired")
+    return JobSearchAsyncStatusResponse(**data)
+
+
 # Session key for storing LLM match results (Why? page). Max keys to avoid huge session.
 JOB_LLM_MATCH_SESSION_KEY = "job_llm_match"
 JOB_LLM_MATCH_MAX_ENTRIES = 100
@@ -568,12 +608,14 @@ def jobs_ai_match(request, payload: AiMatchRequest):
     resume_text = parse_pdf(resume.file.path) or ""
     if not resume_text:
         raise HttpError(400, "Could not extract text from resume.")
-    try:
-        llm = _get_llm_from_request(user, provider=payload.llm_provider, model=payload.llm_model)
-    except HttpError:
-        raise
-    except Exception as e:
-        raise HttpError(400, str(e)) from e
+    llm = None
+    if payload.llm_provider:
+        try:
+            llm = _get_llm_from_request(user, provider=payload.llm_provider, model=payload.llm_model)
+        except HttpError:
+            raise
+        except Exception as e:
+            raise HttpError(400, str(e)) from e
     prof = profile_for_llm(request)
     ms, mu, ml = resolve_prompt_parts(prof, "matching")
     from django.conf import settings
@@ -658,12 +700,14 @@ def jobs_insights(request, payload: InsightsRequest):
     logger.info("[insights] Request: job_listing_ids=%s, llm_provider=%s, llm_model=%s", payload.job_listing_ids, payload.llm_provider, payload.llm_model)
     if not payload.job_listing_ids:
         raise HttpError(400, "job_listing_ids is required and must not be empty.")
-    try:
-        llm = _get_llm_from_request(user, provider=payload.llm_provider, model=payload.llm_model)
-    except HttpError:
-        raise
-    except Exception as e:
-        raise HttpError(400, str(e)) from e
+    llm = None
+    if payload.llm_provider:
+        try:
+            llm = _get_llm_from_request(user, provider=payload.llm_provider, model=payload.llm_model)
+        except HttpError:
+            raise
+        except Exception as e:
+            raise HttpError(400, str(e)) from e
     prof = profile_for_llm(request)
     is_sys, is_user, is_leg = resolve_prompt_parts(prof, "insights")
     job_map = {j.id: j for j in JobListing.objects.filter(id__in=payload.job_listing_ids)}
@@ -765,12 +809,14 @@ def pipeline_interview_prep_generate(request, pipeline_entry_id: int, payload: I
 
     user = api_user(request)
     entry = get_owned_or_404(PipelineEntry, user, id=pipeline_entry_id)
-    try:
-        llm = _get_llm_from_request(user, provider=payload.llm_provider, model=payload.llm_model)
-    except HttpError:
-        raise
-    except Exception as e:
-        raise HttpError(400, str(e)) from e
+    llm = None
+    if payload.llm_provider:
+        try:
+            llm = _get_llm_from_request(user, provider=payload.llm_provider, model=payload.llm_model)
+        except HttpError:
+            raise
+        except Exception as e:
+            raise HttpError(400, str(e)) from e
     target_type = payload.interview_type or "recruiter"
     try:
         stored, markdown, prompt_text = generate_interview_prep(entry, llm=llm, interview_type=target_type)
@@ -916,8 +962,7 @@ def pipeline_log_interview_event(request, pipeline_entry_id: int, payload: LogIn
                 prep_type = "hiring_manager"
             elif payload.round_type == "behavioral":
                 prep_type = "behavioral"
-            llm = _get_llm_from_request(user)
-            generate_interview_prep(entry, llm=llm, interview_type=prep_type)
+            generate_interview_prep(entry, llm=None, interview_type=prep_type)
         except Exception as exc:
             logger.warning("Auto-generating interview prep during event log failed: %s", exc)
 
@@ -1139,8 +1184,8 @@ def jobs_run_keyword_search(request, payload: RunKeywordSearchRequest):
         disliked_ids = _disliked_listing_id_set(user, eff_track)
         disqualifier_pattern = build_disqualifier_pattern(_get_disqualifier_phrases(user))
         candidates = []  # (job, resume, keyword)
-        for r in raw:
-            job, _ = upsert_job_listing_from_fetch(r)
+        persisted = bulk_upsert_job_listings(raw)
+        for job in persisted:
             if job.id in existing or job.id in disliked_ids or job_matches_disqualifiers(job, disqualifier_pattern):
                 continue
             candidates.append((job, resume, keyword))
@@ -1570,7 +1615,7 @@ def jobs_match(request, job_listing_id: int, payload: MatchRequest):
         resume_id = latest.id
     resume = get_owned_or_404(UserResume, user, id=resume_id, is_library=True)
 
-    llm = _get_llm_from_request(user, payload.llm_provider, payload.llm_model)
+    llm = _get_llm_from_request(user, payload.llm_provider, payload.llm_model) if payload.llm_provider else None
     try:
         resume_text = parse_pdf(resume.file.path)
     except Exception as e:
@@ -1672,18 +1717,19 @@ def jobs_save(request, job_listing_id: int, track: Optional[str] = None, profile
     job = get_object_or_404(JobListing, id=job_listing_id)
     raw_track = _resolve_track_from_request(user, request, track=track, profile=profile)
     dw = dual_write_track_fields(user=user, slug=raw_track)
-    JobListingAction.objects.get_or_create(
-        owner=user,
-        job_listing=job,
-        action=JobListingAction.ActionType.SAVED,
-        track=dw["track"],
-        defaults={"search_profile": dw["search_profile"]},
-    )
-    entry, landed_in_review = ensure_pipeline_entry_on_manual_save(
-        user,
-        job_listing_id=job.id,
-        slug=dw["track"],
-    )
+    with transaction.atomic():
+        JobListingAction.objects.get_or_create(
+            owner=user,
+            job_listing=job,
+            action=JobListingAction.ActionType.SAVED,
+            track=dw["track"],
+            defaults={"search_profile": dw["search_profile"]},
+        )
+        entry, landed_in_review = ensure_pipeline_entry_on_manual_save(
+            user,
+            job_listing_id=job.id,
+            slug=dw["track"],
+        )
     if landed_in_review:
         _enqueue_vetting_match_for_entry(request, user, entry)
     return {"success": True}
@@ -1697,10 +1743,11 @@ def jobs_unsave(request, job_listing_id: int, track: Optional[str] = None, profi
         _resolve_track_from_request(user, request, track=track, profile=profile),
         user,
     )
-    JobListingAction.objects.for_user(user).filter(
-        job_listing_id=job_listing_id, action=JobListingAction.ActionType.SAVED
-    ).filter(q_saved_rows_for_track(slug)).delete()
-    remove_pipeline_entry_on_unsave(user, job_listing_id=job_listing_id, slug=slug)
+    with transaction.atomic():
+        JobListingAction.objects.for_user(user).filter(
+            job_listing_id=job_listing_id, action=JobListingAction.ActionType.SAVED
+        ).filter(q_saved_rows_for_track(slug)).delete()
+        remove_pipeline_entry_on_unsave(user, job_listing_id=job_listing_id, slug=slug)
     return {"success": True}
 
 
@@ -1829,3 +1876,52 @@ def jobs_unhide(request, job_listing_id: int, track: Optional[str] = None, profi
     invalidate_preference_cache(user)
     invalidate_disliked_embeddings_cache(user)
     return {"success": True}
+
+
+@router.post("/{job_listing_id}/audit-authenticity")
+def audit_job_authenticity_endpoint(request, job_listing_id: int):
+    """
+    On-demand labor compliance & posting authenticity audit for a job listing.
+    """
+    user = api_user(request)
+    job = get_object_or_404(JobListing, id=job_listing_id)
+    from .authenticity import JobAuthenticityService
+
+    result = JobAuthenticityService.audit(job, user=user, force_refresh=True)
+    payload = dict(result)
+    if not (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)):
+        payload.pop("audit_trail", None)
+        payload.pop("authenticity_audit_trail", None)
+        payload.pop("scoring_calculation", None)
+
+    return {
+        "status": "success",
+        "success": True,
+        "job_id": job.id,
+        "authenticity": payload,
+    }
+
+
+@router.get("/{job_listing_id}/authenticity")
+def get_job_authenticity_endpoint(request, job_listing_id: int):
+    """
+    Retrieve cached or persisted authenticity audit for a job listing.
+    """
+    user = api_user(request)
+    job = get_object_or_404(JobListing, id=job_listing_id)
+    from .authenticity import JobAuthenticityService
+
+    result = JobAuthenticityService.audit(job, user=user, force_refresh=False)
+    payload = dict(result)
+    if not (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)):
+        payload.pop("audit_trail", None)
+        payload.pop("authenticity_audit_trail", None)
+        payload.pop("scoring_calculation", None)
+
+    return {
+        "status": "success",
+        "success": True,
+        "job_id": job.id,
+        "authenticity": payload,
+    }
+

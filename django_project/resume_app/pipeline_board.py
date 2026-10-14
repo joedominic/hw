@@ -87,13 +87,19 @@ def _attach_optimized_resume_ids_for_stage(user, pipeline_jobs, raw_track: str, 
     latest_by_entry: dict[int, int] = {}
     latest_events: dict[int, Any] = {}
     if entry_ids_list:
+        from django.db.models import Max
         from .models import EmployerInterviewEvent
-        for orow in OptimizedResume.objects.for_user(user).filter(
-            pipeline_entry_id__in=entry_ids_list
-        ).order_by("-created_at"):
-            eid = orow.pipeline_entry_id
-            if eid is not None and eid not in latest_by_entry:
-                latest_by_entry[eid] = orow.id
+
+        latest_opt_rows = (
+            OptimizedResume.objects.for_user(user)
+            .filter(pipeline_entry_id__in=entry_ids_list)
+            .values("pipeline_entry_id")
+            .annotate(latest_id=Max("id"))
+        )
+        for row in latest_opt_rows:
+            pe_id = row["pipeline_entry_id"]
+            if pe_id is not None:
+                latest_by_entry[pe_id] = row["latest_id"]
         for ev in EmployerInterviewEvent.objects.filter(
             pipeline_entry_id__in=entry_ids_list
         ).order_by("-created_at"):
@@ -274,9 +280,20 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
     if is_cockpit:
         pipeline_track_tabs = saved_search_profile_tabs(user)
         try:
+            # Cockpit job profile count: sum of Review (vetting) + Apply (applying).
+            # Ignore Applied (done) and New (pipeline / blank).
+            profile_count_qs = PipelineEntry.objects.for_user(user).filter(
+                removed_at__isnull=True,
+                stage__in=[PipelineEntry.Stage.VETTING, PipelineEntry.Stage.APPLYING],
+            )
+            auto_sett = AppAutomationSettings.get_for_user(user) if user.is_authenticated else None
+            ret_days = int(auto_sett.cleanup_pipeline_retention_days or 7) if auto_sett else 7
+            if ret_days > 0:
+                cutoff = timezone.now() - timedelta(days=ret_days)
+                profile_count_qs = profile_count_qs.filter(job_listing__fetched_at__gte=cutoff)
+
             counts_by_track = dict(
-                PipelineEntry.objects.filter(owner=user, removed_at__isnull=True)
-                .values("track")
+                profile_count_qs.values("track")
                 .annotate(cnt=models.Count("id"))
                 .values_list("track", "cnt")
             )
@@ -727,21 +744,55 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
     pipeline_stage_total = len(pipeline_jobs_full)
 
     from django.utils.timesince import timesince
+
+    now = timezone.now()
+
+    def _format_clean_ago(dt, prefix=""):
+        if not dt:
+            return ""
+        try:
+            raw = timesince(dt, now).split(",")[0].replace("\xa0", " ").strip()
+            return f"{prefix} {raw} ago".strip()
+        except Exception:
+            return ""
+
     for j in pipeline_jobs_full:
         f_dt = getattr(j, "fetched_at", None)
         p_dt = getattr(j, "posted_at", None)
         diff_days = abs((f_dt.date() - p_dt.date()).days) if (f_dt and p_dt) else 0
         j.has_date_diff = diff_days >= 1
-        j.sourced_age = f"Sourced {timesince(f_dt)} ago" if f_dt else ""
-        j.posted_age = f"Posted {timesince(p_dt)} ago" if p_dt else ""
-        if j.has_date_diff and j.sourced_age and j.posted_age:
-            j.combined_age = f"{j.sourced_age} ({j.posted_age})"
-        elif j.sourced_age:
-            j.combined_age = j.sourced_age
+        j.sourced_age = _format_clean_ago(f_dt, "Sourced")
+        j.posted_age = _format_clean_ago(p_dt, "Posted")
+
+        # Determine freshness (posted or sourced within last 48 hours / 2 days)
+        p_sec = (now - p_dt).total_seconds() if p_dt else None
+        f_sec = (now - f_dt).total_seconds() if f_dt else None
+
+        is_fresh = False
+        fresh_label = ""
+
+        if p_sec is not None and 0 <= p_sec <= 2 * 86400:
+            is_fresh = True
+            fresh_label = _format_clean_ago(p_dt, "Posted")
+        elif f_sec is not None and 0 <= f_sec <= 2 * 86400:
+            is_fresh = True
+            fresh_label = _format_clean_ago(f_dt, "Sourced")
+
+        j.is_fresh = is_fresh
+        j.fresh_label = fresh_label
+
+        if j.has_date_diff and j.posted_age and j.sourced_age:
+            j.combined_age = f"{j.posted_age} · {j.sourced_age}"
+            j.dormant_date_display = f"{j.posted_age} · {j.sourced_age}"
         elif j.posted_age:
             j.combined_age = j.posted_age
+            j.dormant_date_display = j.posted_age
+        elif j.sourced_age:
+            j.combined_age = j.sourced_age
+            j.dormant_date_display = j.sourced_age
         else:
             j.combined_age = "Recently"
+            j.dormant_date_display = "Recently"
 
     # Distinct sources for filter dropdown (raw `source` matches JobListing.source)
     source_labels: dict[str, str] = {}
@@ -793,7 +844,7 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
             now = timezone.now()
             filtered_jobs = []
             for j in pipeline_jobs:
-                job_date = j.fetched_at or j.posted_at
+                job_date = j.posted_at or j.fetched_at
                 if job_date:
                     diff = now - job_date
                     if diff.days <= max_age_days:
@@ -807,7 +858,7 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
     # Sort the final pipeline_jobs list according to the selected criterion
     from datetime import datetime
     def get_job_date(j):
-        return j.fetched_at or j.posted_at or datetime.min.replace(tzinfo=timezone.utc)
+        return j.posted_at or j.fetched_at or datetime.min.replace(tzinfo=timezone.utc)
 
     if sort_by in ("latest", "newest"):
         pipeline_jobs.sort(key=get_job_date, reverse=True)
@@ -851,6 +902,7 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
         "applying": applying_count_qs.count(),
         "done": base_qs.filter(stage=PipelineEntry.Stage.DONE).count(),
     }
+    total_pipeline_jobs = sum(stage_counts.values())
     pipeline_resume_summary_eligible_count = stage_counts["vetting"] + stage_counts["applying"]
 
     search_q = (request.GET.get("q") or "").strip()
@@ -976,6 +1028,11 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
     ).count()
     total_active = base_qs.count()
     conversion_percent = int(round((done_total / total_active) * 100)) if total_active else 0
+
+    weekly_target = getattr(automation_settings, "weekly_target_applications", 10) or 10
+    weekly_gap = max(0, weekly_target - done_this_week)
+    oldest_applying_entry = base_qs.filter(stage=PipelineEntry.Stage.APPLYING).order_by("added_at").first()
+    oldest_applying_id = oldest_applying_entry.job_listing_id if oldest_applying_entry else None
 
     clear_url = reverse(board_stage) + f"?track={raw_track}"
 
@@ -1315,6 +1372,7 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
             setattr(job, "negative_influences_json", json.dumps(neg_influences))
             setattr(job, "similar_jobs_json", json.dumps(pos_influences))
             setattr(job, "extracted_salary", extract_job_salary(job))
+            setattr(job, "authenticity_audit_json", "[]")
 
         if sort_by in ("score", "match", "focus"):
             pipeline_jobs.sort(
@@ -1409,6 +1467,7 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
         "pipeline_tracks": pipeline_track_tabs,
         "pipeline_track_tabs": pipeline_track_tabs,
         "stage_counts": stage_counts,
+        "total_pipeline_jobs": total_pipeline_jobs,
         "board_stage": board_stage,
         "board_stage_display": stage_tab_labels[board_stage],
         "board_page_title": board_titles[board_stage],
@@ -1422,6 +1481,9 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
         "show_board_metrics": power_user and board_stage == "pipeline",
         "done_total": done_total,
         "done_this_week": done_this_week,
+        "weekly_target": weekly_target,
+        "weekly_gap": weekly_gap,
+        "oldest_applying_id": oldest_applying_id,
         "conversion_percent": conversion_percent,
         "job_tasks_url": job_tasks_url,
         "pipeline_board_extra_query": pipeline_board_extra_query,
@@ -1442,9 +1504,27 @@ def career_cockpit_view(request):
     from django.contrib.messages import get_messages
     # Drain any queued messages in session so they do not build up or spill into other pages
     list(get_messages(request))
-    stage = (request.GET.get("stage") or "pipeline").strip().lower()
-    if stage not in BOARD_STAGES:
+    req_stage = request.GET.get("stage")
+    if req_stage:
+        stage = req_stage.strip().lower()
+        if stage not in BOARD_STAGES:
+            stage = "pipeline"
+    else:
         stage = "pipeline"
+        user = request.user
+        if user.is_authenticated:
+            from .models import PipelineEntry, SearchProfile
+            raw_track = (request.GET.get("track") or "").strip()
+            if not raw_track:
+                sp = SearchProfile.objects.filter(owner=user, is_default=True).first() or SearchProfile.objects.filter(owner=user).first()
+                if sp:
+                    raw_track = sp.slug
+            if raw_track:
+                base_qs = PipelineEntry.objects.for_user(user).filter(track=raw_track, removed_at__isnull=True)
+                p_cnt = base_qs.filter(models.Q(stage="") | models.Q(stage=PipelineEntry.Stage.PIPELINE)).count()
+                v_cnt = base_qs.filter(stage=PipelineEntry.Stage.VETTING).count()
+                if p_cnt == 0 and v_cnt > 0:
+                    stage = "vetting"
     return pipeline_board_view(request, stage, template_name="resume_app/career_cockpit.html")
 
 

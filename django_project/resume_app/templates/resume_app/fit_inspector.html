@@ -9,7 +9,7 @@
         <div>
             <div class="flex items-center gap-2">
                 <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Fit Inspector</h1>
-                <span class="rounded bg-brand-soft px-2 py-0.5 text-xs font-semibold text-brand-ink uppercase tracking-wider">Power Play</span>
+                <span class="rounded bg-brand-soft px-2 py-0.5 text-xs font-semibold text-brand-ink font-semibold">Power Play</span>
             </div>
             <p class="mt-1 text-sm text-slate-600">
                 Simulate job fit against your AI preference models, diagnose matching drivers, and prune training jobs.
@@ -18,7 +18,7 @@
 
         <!-- Track / Search Profile Selector -->
         <div class="flex items-center gap-2">
-            <label for="track-select" class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Search Profile:</label>
+            <label for="track-select" class="text-xs font-semibold text-slate-500 font-semibold">Search Profile:</label>
             <form method="get" id="track-form" class="inline">
                 <select id="track-select" name="track" onchange="this.form.submit()"
                         class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand">
@@ -72,13 +72,13 @@
 
             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
-                    <label for="id_title" class="block text-xs font-semibold text-slate-700 uppercase tracking-wide">Job Title *</label>
+                    <label for="id_title" class="block text-xs font-semibold text-slate-700 font-semibold">Job Title *</label>
                     <input type="text" id="id_title" name="title" value="{{ sim_title }}" required
                            placeholder="e.g. Principal Software Engineer"
                            class="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm text-slate-800 shadow-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand">
                 </div>
                 <div>
-                    <label for="id_company" class="block text-xs font-semibold text-slate-700 uppercase tracking-wide">Company Name (Optional)</label>
+                    <label for="id_company" class="block text-xs font-semibold text-slate-700 font-semibold">Company Name (Optional)</label>
                     <input type="text" id="id_company" name="company" value="{{ sim_company }}"
                            placeholder="e.g. TechCorp"
                            class="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm text-slate-800 shadow-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand">
@@ -86,7 +86,7 @@
             </div>
 
             <div>
-                <label for="id_description" class="block text-xs font-semibold text-slate-700 uppercase tracking-wide">Job Description / Requirements *</label>
+                <label for="id_description" class="block text-xs font-semibold text-slate-700 font-semibold">Job Description / Requirements *</label>
                 <textarea id="id_description" name="description" rows="6" required
                           placeholder="Paste job description, responsibilities, or technical requirements here..."
                           class="mt-1 w-full rounded-lg border border-slate-300 p-3 text-sm text-slate-800 shadow-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand font-mono text-xs">{{ sim_description }}</textarea>
@@ -116,7 +116,7 @@
                     <!-- Card 1: V1 Match Score -->
                     <div class="rounded-xl border border-brand/30 bg-white p-4 shadow-sm relative overflow-hidden">
                         <div class="flex items-center justify-between">
-                            <span class="text-xs font-bold text-brand uppercase tracking-wide">V1 Match Score</span>
+                            <span class="text-xs font-bold text-brand font-semibold">V1 Match Score</span>
                             <span class="rounded px-1.5 py-0.5 text-[10px] font-semibold {% if analysis.v1_score >= analysis.threshold %}bg-emerald-100 text-emerald-800{% else %}bg-slate-100 text-slate-600{% endif %}">
                                 Min {{ analysis.threshold }}%
                             </span>
@@ -134,7 +134,7 @@
 
                     <!-- Card 2: Title Textual Match -->
                     <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                        <div class="text-xs font-medium text-slate-500 uppercase tracking-wide">Title Match (35%)</div>
+                        <div class="text-xs font-medium text-slate-500 font-semibold">Title Match (35%)</div>
                         <div class="mt-2 flex items-baseline gap-1">
                             <span class="text-2xl font-bold text-slate-900">{{ analysis.title_textual_pct }}%</span>
                         </div>
@@ -143,7 +143,7 @@
 
                     <!-- Card 3: Description Semantic Match -->
                     <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                        <div class="text-xs font-medium text-slate-500 uppercase tracking-wide">Desc Semantic (65%)</div>
+                        <div class="text-xs font-medium text-slate-500 font-semibold">Desc Semantic (65%)</div>
                         <div class="mt-2 flex items-baseline gap-1">
                             <span class="text-2xl font-bold text-slate-900">{{ analysis.desc_calibrated_pct }}%</span>
                         </div>
@@ -152,7 +152,7 @@
 
                     <!-- Card 4: Outcome Verdict -->
                     <div class="rounded-xl border p-4 shadow-sm {{ analysis.verdict_style }}">
-                        <div class="text-xs font-semibold uppercase tracking-wide">Pipeline Verdict</div>
+                        <div class="text-xs font-semibold font-semibold">Pipeline Verdict</div>
                         <div class="mt-1.5 text-base font-bold">{{ analysis.verdict_label }}</div>
                         <div class="mt-1 text-xs leading-relaxed opacity-90">{{ analysis.verdict_desc }}</div>
                     </div>
@@ -187,7 +187,9 @@
                     <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                         <div class="flex items-center justify-between border-b border-slate-100 pb-3">
                             <div class="flex items-center gap-2">
-                                <span class="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">👍</span>
+                                <span class="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
+                                    <span class="material-symbols-outlined text-[14px]">thumb_up</span>
+                                </span>
                                 <h3 class="text-sm font-semibold text-slate-900">Top Liked Drivers (Positive Pull)</h3>
                             </div>
                             <span class="text-xs text-slate-400">Pairwise V1 Score</span>
@@ -229,7 +231,9 @@
                     <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                         <div class="flex items-center justify-between border-b border-slate-100 pb-3">
                             <div class="flex items-center gap-2">
-                                <span class="flex h-6 w-6 items-center justify-center rounded-full bg-rose-100 text-xs font-bold text-rose-700">👎</span>
+                                <span class="flex h-6 w-6 items-center justify-center rounded-full bg-rose-100 text-rose-700">
+                                    <span class="material-symbols-outlined text-[14px]">thumb_down</span>
+                                </span>
                                 <h3 class="text-sm font-semibold text-slate-900">Top Disliked Drivers (Negative Pull)</h3>
                             </div>
                             <span class="text-xs text-slate-400">Higher % = More Penalty</span>
@@ -287,11 +291,13 @@
 
                 <!-- Sentiment Filter Buttons -->
                 <div class="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-0.5 text-xs font-semibold">
-                    <button type="button" class="lib-filter-btn rounded-md px-3 py-1.5 transition {% if default_filter == 'liked' %}text-white bg-slate-800{% else %}text-slate-600 hover:text-slate-900{% endif %}" data-filter="liked">
-                        👍 Liked Jobs ({{ liked_count }})
+                    <button type="button" class="lib-filter-btn rounded-md px-3 py-1.5 transition flex items-center gap-1 {% if default_filter == 'liked' %}text-white bg-slate-800{% else %}text-slate-600 hover:text-slate-900{% endif %}" data-filter="liked">
+                        <span class="material-symbols-outlined text-[14px]">thumb_up</span>
+                        <span>Liked Jobs ({{ liked_count }})</span>
                     </button>
-                    <button type="button" class="lib-filter-btn rounded-md px-3 py-1.5 transition {% if default_filter == 'disliked' %}text-white bg-slate-800{% else %}text-slate-600 hover:text-slate-900{% endif %}" data-filter="disliked">
-                        👎 Disliked Jobs ({{ disliked_count }})
+                    <button type="button" class="lib-filter-btn rounded-md px-3 py-1.5 transition flex items-center gap-1 {% if default_filter == 'disliked' %}text-white bg-slate-800{% else %}text-slate-600 hover:text-slate-900{% endif %}" data-filter="disliked">
+                        <span class="material-symbols-outlined text-[14px]">thumb_down</span>
+                        <span>Disliked Jobs ({{ disliked_count }})</span>
                     </button>
                     <button type="button" class="lib-filter-btn rounded-md px-3 py-1.5 transition {% if default_filter == 'all' %}text-white bg-slate-800{% else %}text-slate-600 hover:text-slate-900{% endif %}" data-filter="all">
                         All ({{ total_count }})
@@ -308,7 +314,7 @@
                 <div class="overflow-x-auto">
                     <table class="min-w-full text-left text-xs" id="training-library-table">
                         <thead>
-                            <tr class="border-b border-slate-200 text-slate-400 uppercase tracking-wide">
+                            <tr class="border-b border-slate-200 text-slate-400 font-semibold">
                                 <th class="pb-2.5 pr-3">Sentiment</th>
                                 <th class="pb-2.5 pr-3">Job Title</th>
                                 <th class="pb-2.5 pr-3">Company</th>

@@ -52,6 +52,8 @@ def q_clear_on_sentiment_change(slug: str) -> Q:
 
 def disliked_listing_id_set(user, track: Optional[str]) -> Set[int]:
     """Jobs disliked for FIT preference (also excluded from search)."""
+    if not track or str(track).strip().lower() in ("none", "unbiased", ""):
+        return set()
     slug = normalize_track_slug(track, user)
     return set(
         JobListingAction.objects.for_user(user)
@@ -68,6 +70,8 @@ def hidden_listing_id_set(user, track: Optional[str], cooldown_days: Optional[in
     Hidden actions older than the cooldown window expire and no longer exclude the job from search.
     If cooldown_days is 0 or False, all hidden jobs are returned regardless of age.
     """
+    if not track or str(track).strip().lower() in ("none", "unbiased", ""):
+        return set()
     slug = normalize_track_slug(track, user)
     qs = (
         JobListingAction.objects.for_user(user)
@@ -92,6 +96,12 @@ def excluded_listing_id_set(user, track: Optional[str], cooldown_days: Optional[
 
 def liked_listing_id_set(user, track: Optional[str]) -> Set[int]:
     """Liked job IDs for this track (plus legacy global likes)."""
+    if not track or str(track).strip().lower() in ("none", "unbiased", ""):
+        return set(
+            JobListingAction.objects.for_user(user)
+            .filter(action=JobListingAction.ActionType.LIKED)
+            .values_list("job_listing_id", flat=True)
+        )
     slug = normalize_track_slug(track, user)
     return set(
         JobListingAction.objects.for_user(user)
@@ -102,6 +112,12 @@ def liked_listing_id_set(user, track: Optional[str]) -> Set[int]:
 
 
 def saved_listing_id_set(user, track: Optional[str]) -> Set[int]:
+    if not track or str(track).strip().lower() in ("none", "unbiased", ""):
+        return set(
+            JobListingAction.objects.for_user(user)
+            .filter(action=JobListingAction.ActionType.SAVED)
+            .values_list("job_listing_id", flat=True)
+        )
     slug = normalize_track_slug(track, user)
     return set(
         JobListingAction.objects.for_user(user)

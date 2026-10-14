@@ -202,12 +202,22 @@ class SkillRadarService:
                 desc_slice = desc[:4500].strip()
                 resume_slice = (resume_text or "")[:4000].strip()
 
+                # Ensure static resume tokens precede dynamic job description tokens for Ollama KV caching
+                def _ensure_kv_cache_prefix_order(t: str) -> str:
+                    if not t or "{resume_text}" not in t or "{job_description}" not in t:
+                        return t
+                    if t.find("{job_description}") < t.find("{resume_text}"):
+                        return f"Candidate Resume:\n{{resume_text}}\n\n" + t.replace("{resume_text}", "[See candidate resume above]")
+                    return t
+
                 if leg_tmpl:
-                    prompt_text = leg_tmpl.replace("{job_title}", title).replace("{job_description}", desc_slice).replace("{resume_text}", resume_slice)
+                    tmpl = _ensure_kv_cache_prefix_order(leg_tmpl)
+                    prompt_text = tmpl.replace("{resume_text}", resume_slice).replace("{job_title}", title).replace("{job_description}", desc_slice)
                     messages = [HumanMessage(content=prompt_text)]
                 else:
+                    tmpl = _ensure_kv_cache_prefix_order(usr_tmpl)
                     sys_rendered = sys_tmpl
-                    usr_rendered = usr_tmpl.replace("{job_title}", title).replace("{job_description}", desc_slice).replace("{resume_text}", resume_slice)
+                    usr_rendered = tmpl.replace("{resume_text}", resume_slice).replace("{job_title}", title).replace("{job_description}", desc_slice)
                     messages = [
                         SystemMessage(content=sys_rendered),
                         HumanMessage(content=usr_rendered),

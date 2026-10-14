@@ -1,44 +1,45 @@
-# HireEdge — Product Feature Brief
-
-*Executive summary of product capabilities, architectural differentiators, and market positioning.*
+> [!NOTE]
+> This document is a high-level product brief and market positioning overview. For the authoritative behavioral specification of all screens, routes, and interactions, see [`site-functionality.md`](site-functionality.md).
 
 ---
 
 ## 1. The Problem
 
-Job seekers spend 60–80% of their job hunt on low-leverage, fragmented tasks: tailoring resumes to each individual job description, manually checking multiple disconnected job boards, losing track of application stages across ad-hoc spreadsheets, and guessing at hiring requirements.
+Job seekers spend 60–80% of their job hunt on low-leverage, fragmented tasks: manually checking multiple disconnected job boards, tailoring resumes in separate tools, losing track of application stages across spreadsheets, and guessing at hiring requirements.
 
-Despite the proliferation of point-solution AI tools, the workflow remains disjointed: one tool rewrites a resume, another tracks submissions, and search aggregators bombard users with duplicate postings.
+Despite the proliferation of point-solution AI tools, the workflow remains disjointed: one tool rewrites a resume, another tracks submissions, and search aggregators bombard users with duplicate postings. Candidates experience severe cognitive fatigue from context-switching across browser tabs and punitive agile tracking dashboards.
 
 ---
 
 ## 2. What HireEdge Does
 
-HireEdge is an **AI-powered job search and career acceleration operating system** that integrates the complete job search lifecycle into a single unified workspace:
+HireEdge is an **AI-powered job search and career acceleration operating system** that organizes the complete job search lifecycle around the **Stitch 3-Tab Model**:
 
-1. **Discover:** Aggregates live job postings across six major channels, deduplicating listings and ranking them with semantic fit and user preference learning.
-2. **Automate:** Automates recurring search tasks via the **Career Cockpit**, with on-demand manual triggers, cooldown protection, and full ingestion breakdowns.
-3. **Evaluate:** Pre-scores job opportunities with AI fit checks and keyword alignment before the user commits time.
-4. **Tailor:** Deploys a multi-agent LangGraph workflow (Writer → ATS Judge → Recruiter Judge) to tailor resumes and generate custom cover letters.
-5. **Track & Momentum:** Manages candidates across a 4-stage Kanban pipeline, monitoring interview loops (`EmployerInterviewEvent`) and application velocity in a real-time Performance Dashboard.
+- **Tab 1: Target & Discover (`/jobs/profiler/` & `/jobs/search/`):** AI Resume Profiler and Search Sandbox with 1-click `+ Add to Review` ingestion.
+- **Tab 2: Career Cockpit (`/jobs/cockpit/`):** Central tri-pane triage workstation, slide-over Automation Drawer, deep LLM fit evaluation, and in-funnel resume tailoring return loop.
+- **Tab 3: Tracker (`/performance/`):** Positive career momentum telemetry, weekly goals, active streaks, and employer interview tracking.
+
+*(For detailed screen behaviors, keyboard shortcuts, and state transitions, see the authoritative specification in [`docs/site-functionality.md`](site-functionality.md)).*
 
 ---
 
 ## 3. Core Feature Set
 
-### 🔍 Multi-Source Job Discovery & Ranking
-- Aggregates live listings from **Indeed, LinkedIn (via JobSpy), Greenhouse direct boards, BuiltIn, Levels.fyi, and Dice**.
-- Semantic matching using `sentence-transformers` (`all-MiniLM-L6-v2`) embeddings.
-- Dynamic preference learning: user likes and dislikes continuously adjust a profile centroid vector.
-- Automatic deduplication across boards: identical roles on multiple aggregators collapse to a single listing.
-- Negative keyword disqualifiers: auto-screens out unwanted companies, titles, or locations.
+### 🎯 Tab 1: AI Profiler & Multi-Source Search Sandbox
+- **AI Resume Profiler:** Parses candidate resumes, evaluates core market strengths, and creates fine-tuned search profiles with targeted Boolean terms.
+- **Multi-Source Sourcing:** Live listings across **Indeed, LinkedIn (via JobSpy), Greenhouse direct boards, BuiltIn, Levels.fyi, and Dice**.
+- **Centroid Preference Learning:** User feedback (likes and dislikes) refines profile semantic embeddings over time.
+- **Cross-Board Deduplication:** Duplicates across multiple boards collapse into a single normalized record.
+- **One-Click Ingestion Bridge:** Any discovered role can be instantly sent to the Cockpit Review stage via `+ Add to Review`.
 
-### 🕹️ Career Cockpit & Search Automation
-- Centralized scheduling of automated search tasks (daily, weekdays, weekly, custom cron).
-- On-demand **"Run Search Now"** execution with atomic pending state preventing premature polling exit.
-- 60-minute manual trigger cooldown with **automatic failure reset** (zero lockout on failed runs).
-- Interactive Run Inspection Modal detailing disposition breakdowns (New, Reposted, Already in Pipeline, Expired, Eliminated, Previously Removed) with CSV and JSON exports.
-- Skill Radar visualizing top technical and domain skills in demand.
+### 🕹️ Tab 2: Career Cockpit & Autonomous Search Automation
+- **Unified Tri-Pane Kanban:** Manage jobs across `New`, `Review`, `Applying`, and `Applied`.
+- **Slide-Over Automation Drawer:** Full automation controls (daily, weekdays, weekly, custom cron) kept cleanly out of the daily triage view.
+- **On-Demand "Run Search Now":** Manual triggers with atomic Redis pending state and a 3-minute cooldown (180s limit).
+- **Automatic Cooldown Reset on Failure:** Zero lingering lockout when an execution fails or times out.
+- **Run Inspection Modal:** Granular ingestion disposition breakdowns (New, Reposted, Already in Pipeline, Expired, Eliminated) with CSV and JSON exports.
+- **Deterministic Labor Compliance & Authenticity Auditor:** Evaluates listings in Review/Applying using 10 deterministic compliance checks, extracting posting dates and application lifespan deltas ($\le 4$ calendar days) to unmask fake listings, DOL ETA-9089 PERM testing notices, evergreen talent pools, and internal promotions.
+- **Keyboard Triage Hotkeys:** Rapid navigation (`J/K`), stage advancement (`E/L`), and AI tailoring (`T`).
 
 ### ✍️ Multi-Agent AI Resume Optimization
 - **3-Agent LangGraph Pipeline:**
@@ -46,13 +47,14 @@ HireEdge is an **AI-powered job search and career acceleration operating system*
   2. *ATS Judge Node:* Evaluates keyword coverage, formatting, and applicant tracking fit.
   3. *Recruiter Judge Node:* Evaluates executive readability, brevity, and business impact.
 - **Hybrid Local LLM Routing:** Run ATS and Recruiter judges on local Ollama models (`OPTIMIZER_JUDGES_PREFER_LOCAL=True`) to achieve zero marginal cloud API cost on evaluation steps.
-- **Semantic JD Cleansing:** Extracts core role requirements using semantic slicing to minimize input token burn.
-- **Artifact Generation:** Export tailored resumes and cover letters (with Short / Standard / Detailed controls) as PDF or DOCX.
+- **Context-Preserved Return Loop:** Escape back to Cockpit via `Esc` or approve draft and advance to Applied via `Ctrl+Enter`.
+- **Artifact Export:** PDF and DOCX export with custom cover letter generator.
 
-### 📊 Kanban Pipeline & Interview Tracking
-- 4-stage pipeline: **Pipeline (New) → Vetting (Review) → Applying (Tailoring) → Done (Applied)**.
-- Post-application interview tracking via `EmployerInterviewEvent` (Recruiter Screen, Hiring Manager, Tech Screen, On-Site, Offer).
-- Progressive-load Performance Dashboard (`/performance/`) tracking submission volume and funnel conversion velocity.
+### 📈 Tab 3: Tracker & Real-World Interview Management
+- **Positive Momentum Focus:** Eliminates guilt-inducing sprint deficit warnings in favor of positive streak counters and weekly goal bars.
+- **Funnel Conversion Velocity:** Visual telemetry tracking stage advancement and submission volume.
+- **Employer Interview Loops (`EmployerInterviewEvent`):** Explicit tracking for phone screens, technical interviews, panel rounds, offers, and rejections.
+- **Instant Shell Render:** Redis-cached telemetry with progressive client-side hydration.
 
 ### ⚙️ Multi-Tenancy, Quotas & Subscriptions
 - Multi-tenant architecture with owner-scoped data isolation and staff impersonation via `django-hijack`.
@@ -66,13 +68,16 @@ HireEdge is an **AI-powered job search and career acceleration operating system*
 
 | Feature | HireEdge | Typical Competitor |
 |---------|----------|-------------------|
-| **Workflow Scope** | Unified Search → Automation → Tailor → Interview Tracking | Fragmented point solutions |
-| **Multi-Source Sourcing** | 6 channels (Indeed, LinkedIn, Greenhouse, BuiltIn, Levels.fyi, Dice) | 1–2 boards or manual copy-paste |
-| **Search Automation Hub** | Career Cockpit with on-demand trigger, cooldowns & inspection modal | Static email alerts or basic cron |
+| **Workflow Scope** | **Stitch 3-Tab Model** (Target & Discover $\rightarrow$ Cockpit $\rightarrow$ Tracker) | Disjointed multi-app point solutions |
+| **Automation Ergonomics** | Slide-Over Automation Drawer with on-demand triggers & failure recovery | Rigid email alerts or hidden background cron |
+| **Sandbox-to-Pipeline Bridge** | 1-click `+ Add to Review` directly into Review stage | Manual copy-paste between browser tabs |
+| **Multi-Source Sourcing** | 6 live channels (Indeed, LinkedIn, Greenhouse, BuiltIn, Levels, Dice) | 1–2 scraping boards or manual copy-paste |
+| **Posting Authenticity & Compliance** | 10-point deterministic auditor detecting DOL PERM filings, phantom pools & short windows | Zero authenticity checks (candidates waste hours on fake/internal postings) |
 | **AI Resume Rewriting** | 3-agent LangGraph workflow with ATS + Recruiter evaluations | Single-prompt generic LLM rewrite |
 | **Local LLM Support** | Hybrid local Ollama routing for evaluation judges | Cloud-only paid API models |
-| **Preference Learning** | Semantic centroid learns from user likes/dislikes | Keyword filtering only |
-| **Interview Tracking** | First-class `EmployerInterviewEvent` linked to pipeline jobs | Generic external spreadsheet |
+| **In-Funnel Return Loop** | Context-preserved tailoring with "Back to Cockpit (`Esc`)" | External modal or disorienting new window |
+| **Tracking Philosophy** | Constructive momentum, streaks & weekly target progress | Punitive agile sprint deficit shaming |
+| **Interview Loop Tracking** | First-class `EmployerInterviewEvent` tied to pipeline jobs | Generic external spreadsheet |
 | **Self-Service BYOK** | Connect personal keys for OpenAI, Anthropic, Groq, Google, Ollama | Proprietary closed token billing |
 
 ---

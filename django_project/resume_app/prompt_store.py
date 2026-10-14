@@ -8,28 +8,44 @@ live in global AtsJudgeProfile rows (owner=null).
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from .models import AtsJudgeProfile, OptimizerWorkflow, SystemPromptProfile
+from .models import AtsJudgeProfile, OptimizerWorkflow, PromptVersionHistory, SystemPromptProfile
 from .prompts import (
     DEFAULT_ATS_JUDGE_PROMPT,
     DEFAULT_ATS_JUDGE_SYSTEM,
     DEFAULT_ATS_JUDGE_USER,
-    DEFAULT_INSIGHTS_PROMPT,
-    DEFAULT_INSIGHTS_SYSTEM,
-    DEFAULT_INSIGHTS_USER,
+    DEFAULT_CAREER_PROFILER_PROMPT,
+    DEFAULT_CAREER_PROFILER_SYSTEM,
+    DEFAULT_CAREER_PROFILER_USER,
     DEFAULT_COVER_LETTER_PROMPT,
     DEFAULT_COVER_LETTER_SYSTEM,
     DEFAULT_COVER_LETTER_USER,
+    DEFAULT_FIT_CHECK_PROMPT,
+    DEFAULT_FIT_CHECK_SYSTEM,
+    DEFAULT_FIT_CHECK_USER,
+    DEFAULT_INSIGHTS_PROMPT,
+    DEFAULT_INSIGHTS_SYSTEM,
+    DEFAULT_INSIGHTS_USER,
     DEFAULT_INTERVIEW_PREP_PROMPT,
     DEFAULT_INTERVIEW_PREP_SYSTEM,
     DEFAULT_INTERVIEW_PREP_USER,
     DEFAULT_JD_CLEANSE_PROMPT,
     DEFAULT_JD_CLEANSE_SYSTEM,
     DEFAULT_JD_CLEANSE_USER,
+    DEFAULT_JOB_AUTHENTICITY_PROMPT,
+    DEFAULT_JOB_AUTHENTICITY_SYSTEM,
+    DEFAULT_JOB_AUTHENTICITY_USER,
     DEFAULT_MATCHING_PROMPT,
     DEFAULT_MATCHING_SYSTEM,
     DEFAULT_MATCHING_USER,
+    DEFAULT_PIPELINE_RESUME_REFINE_PROMPT,
+    DEFAULT_PIPELINE_RESUME_REFINE_SYSTEM,
+    DEFAULT_PIPELINE_RESUME_REFINE_USER,
+    DEFAULT_PIPELINE_SKILL_EXTRACT_PROMPT,
+    DEFAULT_PIPELINE_SKILL_EXTRACT_SYSTEM,
+    DEFAULT_PIPELINE_SKILL_EXTRACT_USER,
     DEFAULT_RECRUITER_JUDGE_PROMPT,
     DEFAULT_RECRUITER_JUDGE_SYSTEM,
     DEFAULT_RECRUITER_JUDGE_USER,
@@ -53,6 +69,11 @@ DEFAULT_PROMPTS: Dict[str, str] = {
     "interview_prep": DEFAULT_INTERVIEW_PREP_PROMPT,
     "jd_cleanse": DEFAULT_JD_CLEANSE_PROMPT,
     "skill_radar": DEFAULT_SKILL_RADAR_PROMPT,
+    "career_profiler": DEFAULT_CAREER_PROFILER_PROMPT,
+    "job_authenticity": DEFAULT_JOB_AUTHENTICITY_PROMPT,
+    "pipeline_skill_extract": DEFAULT_PIPELINE_SKILL_EXTRACT_PROMPT,
+    "fit_check": DEFAULT_FIT_CHECK_PROMPT,
+    "pipeline_resume_refine": DEFAULT_PIPELINE_RESUME_REFINE_PROMPT,
 }
 
 _LEGACY_FIELDS = (
@@ -65,6 +86,11 @@ _LEGACY_FIELDS = (
     "interview_prep",
     "jd_cleanse",
     "skill_radar",
+    "career_profiler",
+    "job_authenticity",
+    "pipeline_skill_extract",
+    "fit_check",
+    "pipeline_resume_refine",
 )
 
 _PROMPT_SPEC = {
@@ -107,7 +133,418 @@ _PROMPT_SPEC = {
         DEFAULT_SKILL_RADAR_SYSTEM,
         DEFAULT_SKILL_RADAR_USER,
     ),
+    "career_profiler": (
+        "career_profiler",
+        "career_profiler_system",
+        "career_profiler_user",
+        DEFAULT_CAREER_PROFILER_SYSTEM,
+        DEFAULT_CAREER_PROFILER_USER,
+    ),
+    "job_authenticity": (
+        "job_authenticity",
+        "job_authenticity_system",
+        "job_authenticity_user",
+        DEFAULT_JOB_AUTHENTICITY_SYSTEM,
+        DEFAULT_JOB_AUTHENTICITY_USER,
+    ),
+    "pipeline_skill_extract": (
+        "pipeline_skill_extract",
+        "pipeline_skill_extract_system",
+        "pipeline_skill_extract_user",
+        DEFAULT_PIPELINE_SKILL_EXTRACT_SYSTEM,
+        DEFAULT_PIPELINE_SKILL_EXTRACT_USER,
+    ),
+    "fit_check": (
+        "fit_check",
+        "fit_check_system",
+        "fit_check_user",
+        DEFAULT_FIT_CHECK_SYSTEM,
+        DEFAULT_FIT_CHECK_USER,
+    ),
+    "pipeline_resume_refine": (
+        "pipeline_resume_refine",
+        "pipeline_resume_refine_system",
+        "pipeline_resume_refine_user",
+        DEFAULT_PIPELINE_RESUME_REFINE_SYSTEM,
+        DEFAULT_PIPELINE_RESUME_REFINE_USER,
+    ),
 }
+
+PROMPT_DEFINITIONS: List[Dict[str, Any]] = [
+    {
+        "key": "writer",
+        "name": "Resume Writer",
+        "category": "Optimization Pipeline",
+        "description": "Synthesizes resume revisions incorporating job descriptions, feedback, and skill keywords.",
+        "default_engine": "cloud",
+        "icon": "edit_note",
+        "known_vars": [
+            "resume_text",
+            "source_resume_text",
+            "optimized_resume",
+            "job_description",
+            "full_job_description",
+            "feedback",
+            "optimization_notes",
+            "pipeline_skills_json",
+            "job_highlights",
+            "retrieval_context",
+        ],
+    },
+    {
+        "key": "ats_judge",
+        "name": "ATS Gatekeeper",
+        "category": "Optimization Pipeline",
+        "description": "Evaluates candidate match against job requirements using applicant tracking parsing logic.",
+        "default_engine": "cloud",
+        "icon": "fact_check",
+        "known_vars": ["optimized_resume", "job_description"],
+    },
+    {
+        "key": "recruiter_judge",
+        "name": "Recruiter Judge",
+        "category": "Optimization Pipeline",
+        "description": "Simulates human recruiter scrutiny, identifying red flags, seniority alignment, and impact.",
+        "default_engine": "cloud",
+        "icon": "person_search",
+        "known_vars": ["optimized_resume", "job_description"],
+    },
+    {
+        "key": "pipeline_resume_refine",
+        "name": "Targeted Keyword Refiner",
+        "category": "Optimization Pipeline",
+        "description": "Groups and polishes shortlisted pipeline keyword themes into tailored resume bullet stems.",
+        "default_engine": "local",
+        "icon": "tune",
+        "known_vars": ["job_titles", "ranked_keywords", "job_count"],
+    },
+    {
+        "key": "job_authenticity",
+        "name": "Labor Compliance & Authenticity Auditor",
+        "category": "Evaluation & Vetting",
+        "description": "Deterministic 7-point labor compliance auditor detecting DOL ETA-9089 PERM testing, salary locks, and internal placeholders.",
+        "default_engine": "local",
+        "icon": "verified_user",
+        "known_vars": ["title", "company", "location", "job_description"],
+    },
+    {
+        "key": "matching",
+        "name": "Job Matching Scorer",
+        "category": "Evaluation & Vetting",
+        "description": "Evaluates interview probability and semantic alignment between resume and vetted job.",
+        "default_engine": "local",
+        "icon": "compare_arrows",
+        "known_vars": ["resume_text", "job_description", "title", "company"],
+    },
+    {
+        "key": "fit_check",
+        "name": "Quick Fit Assessor",
+        "category": "Evaluation & Vetting",
+        "description": "Rapid recruiter screening assessment determining whether a candidate is a reasonable match for a role.",
+        "default_engine": "local",
+        "icon": "thumb_up",
+        "known_vars": ["resume_text", "job_description"],
+    },
+    {
+        "key": "pipeline_skill_extract",
+        "name": "Pipeline Skill Extractor",
+        "category": "Evaluation & Vetting",
+        "description": "Extracts discrete hard skills, methodologies, soft skills, outcomes, and action verbs from job batches into strict JSON.",
+        "default_engine": "local",
+        "icon": "playlist_add_check",
+        "known_vars": ["job_descriptions"],
+    },
+    {
+        "key": "insights",
+        "name": "Batch Job Insights",
+        "category": "Evaluation & Vetting",
+        "description": "Extracts highlights, key requirements, and quick evaluation metrics from job descriptions.",
+        "default_engine": "cloud",
+        "icon": "insights",
+        "known_vars": ["job_description", "title", "company"],
+    },
+    {
+        "key": "jd_cleanse",
+        "name": "JD Cleanser & Parser",
+        "category": "Evaluation & Vetting",
+        "description": "Strips recruiter boilerplate, EEO statements, and cleans messy job postings into pure requirements.",
+        "default_engine": "local",
+        "icon": "cleaning_services",
+        "known_vars": ["title", "job_description"],
+    },
+    {
+        "key": "career_profiler",
+        "name": "Universal Career Profiler",
+        "category": "Candidate & Career Tools",
+        "description": "Synthesizes universal career archetypes across industries and provisions search profiles.",
+        "default_engine": "cloud",
+        "icon": "psychology",
+        "known_vars": ["resume_text"],
+    },
+    {
+        "key": "skill_radar",
+        "name": "Skill Radar Analyzer",
+        "category": "Candidate & Career Tools",
+        "description": "Audits candidate skill profile against market demand and identifies strategic gaps.",
+        "default_engine": "cloud",
+        "icon": "radar",
+        "known_vars": ["resume_text"],
+    },
+    {
+        "key": "cover_letter",
+        "name": "Cover Letter Architect",
+        "category": "Candidate & Career Tools",
+        "description": "Generates tailored, persuasive cover letters bridging resume experience to target role.",
+        "default_engine": "cloud",
+        "icon": "mail",
+        "known_vars": ["resume_text", "job_description", "company_name", "role_title"],
+    },
+    {
+        "key": "interview_prep",
+        "name": "Interview Prep Coach",
+        "category": "Candidate & Career Tools",
+        "description": "Generates high-yield behavioral and technical interview questions with STAR coaching points.",
+        "default_engine": "cloud",
+        "icon": "quiz",
+        "known_vars": ["resume_text", "job_description", "company_name", "role_title"],
+    },
+]
+
+PROMPT_TO_QUERY_KIND_MAP: Dict[str, str] = {
+    "writer": "optimizer_writer",
+    "ats_judge": "optimizer_ats_judge",
+    "recruiter_judge": "optimizer_recruiter_judge",
+    "matching": "matching",
+    "insights": "job_insights",
+    "jd_cleanse": "jd_cleanse",
+    "career_profiler": "career_profiler",
+    "skill_radar": "pipeline_skill_extract",
+    "cover_letter": "cover_letter",
+    "interview_prep": "interview_prep",
+    "job_authenticity": "job_authenticity",
+    "pipeline_skill_extract": "pipeline_skill_extract",
+    "fit_check": "fit_check",
+    "pipeline_resume_refine": "pipeline_resume_refine",
+}
+
+
+def get_available_model_options(user, request=None) -> List[Dict[str, Any]]:
+    """
+    Returns unified list of available LLM models configured in settings,
+    including priority preference rows, connected BYOK provider configs, and platform defaults.
+    """
+    import logging
+    _log = logging.getLogger(__name__)
+
+    from .models import LLMProviderConfig
+    from .llm.session import get_provider_preference_rows
+    from .llm.gateway import SYSTEM_DEFAULT_MODELS
+
+    available: List[Dict[str, Any]] = []
+    seen = set()
+
+    # 1. Models explicitly configured in user provider preference rows
+    if user and getattr(user, "is_authenticated", False):
+        try:
+            pref_rows = list(get_provider_preference_rows(user).order_by("priority", "id"))
+            for pref in pref_rows:
+                cfg = pref.provider_config
+                prov = (cfg.provider or "").strip()
+                m = (pref.model or cfg.default_model or "").strip()
+                if prov and (prov, m) not in seen:
+                    seen.add((prov, m))
+                    is_local = bool(pref.is_local) or (prov.lower() == "ollama local")
+                    label = f"{prov} — {m}" if m else f"{prov} (default model)"
+                    available.append({
+                        "value": f"{prov}::{m}",
+                        "label": label,
+                        "provider": prov,
+                        "model": m,
+                        "is_local": is_local,
+                    })
+        except Exception as e:
+            _log.debug("Failed querying LLMProviderPreference: %s", e)
+
+    # 2. Configured provider keys (BYOK) with default models or session-cached models
+    if user and getattr(user, "is_authenticated", False):
+        try:
+            cached_models: Dict[str, List[str]] = {}
+            if request and hasattr(request, "session"):
+                cached_models = request.session.get("settings_provider_models_map") or {}
+
+            configs = LLMProviderConfig.objects.for_user(user).exclude(encrypted_api_key="")
+            for cfg in configs:
+                prov = (cfg.provider or "").strip()
+                if not prov:
+                    continue
+                # check cached models from provider
+                for m in (cached_models.get(prov) or [])[:15]:
+                    if (prov, m) not in seen:
+                        seen.add((prov, m))
+                        available.append({
+                            "value": f"{prov}::{m}",
+                            "label": f"{prov} — {m}",
+                            "provider": prov,
+                            "model": m,
+                            "is_local": prov.lower() == "ollama local",
+                        })
+                # default model if any
+                dm = (cfg.default_model or "").strip()
+                if dm and (prov, dm) not in seen:
+                    seen.add((prov, dm))
+                    available.append({
+                        "value": f"{prov}::{dm}",
+                        "label": f"{prov} — {dm}",
+                        "provider": prov,
+                        "model": dm,
+                        "is_local": prov.lower() == "ollama local",
+                    })
+        except Exception as e:
+            _log.debug("Failed querying LLMProviderConfig: %s", e)
+
+    # 3. Platform default fallback candidates
+    for _qk, specs in SYSTEM_DEFAULT_MODELS.items():
+        for spec in specs:
+            prov = spec.get("provider", "").strip()
+            m = spec.get("model", "").strip()
+            if prov and (prov, m) not in seen:
+                seen.add((prov, m))
+                available.append({
+                    "value": f"{prov}::{m}",
+                    "label": f"{prov} — {m}",
+                    "provider": prov,
+                    "model": m,
+                    "is_local": prov.lower() == "ollama local",
+                })
+
+    return available
+
+
+def set_prompt_model_preference(user, prompt_key: str, provider: str, model: str) -> None:
+    """
+    Persists per-prompt model routing to TenantPromptModelPreference.
+    Synchronizes aliases (e.g. matching aliases). If provider is blank, clears override.
+    """
+    from .models import TenantPromptModelPreference
+
+    provider = (provider or "").strip()
+    model = (model or "").strip()
+    qk = PROMPT_TO_QUERY_KIND_MAP.get(prompt_key, prompt_key)
+
+    target_keys = {qk, prompt_key}
+    if prompt_key == "matching" or qk == "matching":
+        target_keys.update({
+            "fit_check",
+            "pipeline_vetting_matching",
+            "jobs_ai_match",
+            "keyword_search_fit",
+            "jobs_match_api",
+        })
+    elif prompt_key == "skill_radar":
+        target_keys.update({"pipeline_skill_extract", "skill_radar"})
+    elif prompt_key == "insights":
+        target_keys.update({"job_insights", "insights"})
+
+    if provider:
+        for k in target_keys:
+            TenantPromptModelPreference.objects.update_or_create(
+                owner=user,
+                query_kind=k,
+                defaults={"provider": provider, "model": model, "is_active": True},
+            )
+    else:
+        for k in target_keys:
+            TenantPromptModelPreference.objects.for_user(user).filter(query_kind=k).delete()
+
+
+def get_prompt_model_preference(user, prompt_key: str) -> Tuple[str, str]:
+    """
+    Returns (provider, model) configured for a given prompt key, or ('', '') if defaulting.
+    """
+    from .models import TenantPromptModelPreference
+
+    qk = PROMPT_TO_QUERY_KIND_MAP.get(prompt_key, prompt_key)
+    target_pref = (
+        TenantPromptModelPreference.objects.for_user(user)
+        .filter(query_kind=qk, is_active=True)
+        .first()
+    )
+    if not target_pref and qk != prompt_key:
+        target_pref = (
+            TenantPromptModelPreference.objects.for_user(user)
+            .filter(query_kind=prompt_key, is_active=True)
+            .first()
+        )
+    if not target_pref:
+        target_pref = (
+            TenantPromptModelPreference.objects.for_user(user)
+            .filter(query_kind="__default__", is_active=True)
+            .first()
+        )
+    if target_pref:
+        return (target_pref.provider or "").strip(), (target_pref.model or "").strip()
+    return "", ""
+
+
+def get_all_prompt_model_preferences(user) -> Dict[str, str]:
+    """
+    Returns a mapping of prompt_key -> 'Provider::Model' for all prompt definitions and ATS profiles.
+    """
+    from .models import TenantPromptModelPreference
+
+    prefs = (
+        TenantPromptModelPreference.objects.for_user(user)
+        .filter(is_active=True)
+        .values("query_kind", "provider", "model")
+    )
+    pref_map = {p["query_kind"]: f"{p['provider']}::{p['model']}" for p in prefs}
+
+    out: Dict[str, str] = {}
+    for p_key, qk in PROMPT_TO_QUERY_KIND_MAP.items():
+        val = pref_map.get(qk) or pref_map.get(p_key) or ""
+        out[p_key] = val
+    for k, v in pref_map.items():
+        if k not in out:
+            out[k] = v
+    return out
+
+
+
+def extract_template_variables(*template_strings: Optional[str]) -> List[str]:
+    """
+    Extract dynamic `{variable}` placeholders from prompt template strings.
+    Ignores double curly braces `{{...}}` (e.g. JSON/template escapes) and literal JSON object keys.
+    Returns sorted unique variable names preserving first appearance order.
+    """
+    found: List[str] = []
+    seen: set[str] = set()
+    for text in template_strings:
+        if not text:
+            continue
+        matches = re.findall(r"(?<!\{)\{([a-zA-Z_][a-zA-Z0-9_]*)\}(?!\})", str(text))
+        for var in matches:
+            if var not in seen:
+                seen.add(var)
+                found.append(var)
+    return found
+
+
+def inject_variables_into_template(template: str, variables: Dict[str, Any]) -> str:
+    """
+    Safely inject variables into a prompt template without mutating or damaging
+    literal braces (such as JSON schemas or escaped double braces).
+    """
+    if not template:
+        return ""
+
+    def replacer(match: re.Match) -> str:
+        var_name = match.group(1)
+        if var_name in variables:
+            val = variables[var_name]
+            return str(val if val is not None else "")
+        return match.group(0)
+
+    return re.sub(r"(?<!\{)\{([a-zA-Z_][a-zA-Z0-9_]*)\}(?!\})", replacer, template)
 
 
 def get_system_prompt_profile() -> SystemPromptProfile:
@@ -484,3 +921,137 @@ def get_optimizer_workflow_by_id(workflow_id: Optional[int], user=None) -> Optio
         return _global_workflow_qs().select_related("ats_judge_profile").get(pk=int(workflow_id))
     except (OptimizerWorkflow.DoesNotExist, ValueError, TypeError):
         return None
+
+
+# ---------------------------------------------------------------------------
+# Prompt Version History & Audit Logging
+# ---------------------------------------------------------------------------
+
+
+def record_prompt_version(
+    prompt_key: str,
+    system_prompt: str = "",
+    user_prompt: str = "",
+    legacy_combined: str = "",
+    author=None,
+    change_summary: str = "",
+) -> PromptVersionHistory:
+    """
+    Record a point-in-time snapshot of a prompt template.
+    Auto-increments version_number for the given prompt_key.
+    """
+    latest = (
+        PromptVersionHistory.objects.filter(prompt_key=prompt_key)
+        .order_by("-version_number")
+        .first()
+    )
+    next_ver = (latest.version_number + 1) if latest else 1
+    return PromptVersionHistory.objects.create(
+        prompt_key=prompt_key,
+        version_number=next_ver,
+        system_prompt=system_prompt or "",
+        user_prompt=user_prompt or "",
+        legacy_combined=legacy_combined or "",
+        author=author if (author and getattr(author, "is_authenticated", False)) else None,
+        change_summary=change_summary[:255] if change_summary else f"Revision v{next_ver}",
+    )
+
+
+def list_prompt_versions(prompt_key: str, limit: int = 50) -> List[PromptVersionHistory]:
+    """Return historical revisions for a prompt_key, newest first."""
+    return list(
+        PromptVersionHistory.objects.filter(prompt_key=prompt_key)
+        .select_related("author")
+        .order_by("-version_number")[:limit]
+    )
+
+
+def get_prompt_version(version_id: int) -> Optional[PromptVersionHistory]:
+    """Fetch single prompt version by primary key."""
+    try:
+        return PromptVersionHistory.objects.select_related("author").get(pk=int(version_id))
+    except (PromptVersionHistory.DoesNotExist, ValueError, TypeError):
+        return None
+
+
+def delete_prompt_version(version_id: int) -> bool:
+    """Delete a single historical revision."""
+    try:
+        ver = PromptVersionHistory.objects.get(pk=int(version_id))
+        ver.delete()
+        return True
+    except (PromptVersionHistory.DoesNotExist, ValueError, TypeError):
+        return False
+
+
+def clear_prompt_versions(prompt_key: Optional[str] = None) -> int:
+    """Prune/clear historical revisions for a prompt_key or all prompts."""
+    qs = PromptVersionHistory.objects.all()
+    if prompt_key:
+        qs = qs.filter(prompt_key=prompt_key)
+    count, _ = qs.delete()
+    return count
+
+
+def restore_prompt_version(version_id: int, user=None) -> Tuple[bool, str, Dict[str, str]]:
+    """
+    Restore a prompt template from a PromptVersionHistory record back into active database profile.
+    Also creates a new revision tracking the restore.
+    """
+    ver = get_prompt_version(version_id)
+    if not ver:
+        return False, "Revision not found.", {}
+
+    prompt_key = ver.prompt_key
+    if prompt_key.startswith("ats_profile_"):
+        try:
+            prof_id = int(prompt_key.replace("ats_profile_", ""))
+            prof = get_ats_judge_profile_by_id(prof_id)
+            if not prof:
+                return False, f"ATS Profile #{prof_id} not found.", {}
+            save_ats_judge_profile(
+                prof,
+                ats_judge=ver.legacy_combined,
+                ats_judge_system=ver.system_prompt,
+                ats_judge_user=ver.user_prompt,
+            )
+        except Exception as e:
+            return False, f"Could not restore ATS profile: {e}", {}
+    elif prompt_key == "ats_judge":
+        default_ats = get_default_ats_judge_profile()
+        if default_ats:
+            save_ats_judge_profile(
+                default_ats,
+                ats_judge=ver.legacy_combined,
+                ats_judge_system=ver.system_prompt,
+                ats_judge_user=ver.user_prompt,
+            )
+        else:
+            return False, "No default ATS profile to restore.", {}
+    else:
+        spec = _PROMPT_SPEC.get(prompt_key)
+        if not spec:
+            return False, f"Unknown prompt key '{prompt_key}'.", {}
+        leg_a, sys_a, usr_a, _ds, _du = spec
+        profile = get_system_prompt_profile()
+        setattr(profile, leg_a, ver.legacy_combined)
+        setattr(profile, sys_a, ver.system_prompt)
+        setattr(profile, usr_a, ver.user_prompt)
+        profile.save()
+
+    # Log new version snapshot documenting the rollback
+    record_prompt_version(
+        prompt_key=prompt_key,
+        system_prompt=ver.system_prompt,
+        user_prompt=ver.user_prompt,
+        legacy_combined=ver.legacy_combined,
+        author=user,
+        change_summary=f"Restored from revision v{ver.version_number}",
+    )
+
+    return True, f"Successfully restored v{ver.version_number}.", {
+        "system": ver.system_prompt,
+        "user": ver.user_prompt,
+        "legacy_combined": ver.legacy_combined,
+    }
+

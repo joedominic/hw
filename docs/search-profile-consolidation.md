@@ -1,6 +1,6 @@
 # Search Profile Consolidation Plan
 
-**Status:** Phase 1 implemented (additive model + dual-write)  
+**Status:** Phase 1 done, Phase 2 partial, Phases 3–5 open  
 **Goal:** Replace the split between `Track`, `SavedJobSearch`, and loosely coupled `JobSearchTask` with a single user-facing primitive — **Search Profile (SP)** — that owns search config, scheduling, pipeline scope, and per-profile scoring.
 
 ---
@@ -58,7 +58,7 @@ flowchart LR
 
 ---
 
-## 3. `SearchProfile` schema (target model)
+## 3. Target: `SearchProfile` Schema
 
 Rename `SavedJobSearch` → `SearchProfile` (table rename + model alias during transition).
 

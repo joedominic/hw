@@ -8,15 +8,16 @@ This guide establishes conventions, high-value entry points, and architectural r
 
 Before modifying features, routes, or models, review the relevant knowledge base files:
 
-1. `docs/README.md` — High-level layout and entry points.
-2. Domain-specific documents:
-   - `docs/career-cockpit.md` — Task scheduling, on-demand execution, cooldowns, and inspection.
-   - `docs/job-sources-scraping.md` — Multi-board scraping architecture and adapters.
-   - `docs/performance-and-analytics.md` — Performance dashboard and interview tracking.
-   - `docs/site-functionality.md` — User workflows and UI behavior.
-   - `docs/architecture.md` — Framework boundaries and background execution.
-   - `docs/data-model.md` — Model schemas and multi-tenant scoping.
+1. `docs/README.md` — High-level layout, spec hierarchy, and entry points.
+2. Behavioral specs (authoritative):
+   - `docs/site-functionality.md` — Canonical user workflows and UI behavior.
+   - `docs/career-cockpit.md` — Task scheduling, on-demand execution, cooldowns, and keyboard hotkeys.
+   - `docs/performance-and-analytics.md` — Career momentum dashboard and interview tracking.
+   - `docs/data-model.md` — Model schemas, stage transitions, and multi-tenant scoping.
    - `docs/api-reference.md` — URL routing and Django Ninja endpoints.
+3. System and operations guides:
+   - `docs/architecture.md` — Framework boundaries and background execution.
+   - `docs/job-sources-scraping.md` — Multi-board scraping architecture and adapters.
    - `docs/operations.md` — Environment, testing, and worker management.
 
 ---
@@ -35,7 +36,7 @@ Before modifying features, routes, or models, review the relevant knowledge base
 - **Job Sourcing Engine:** `django_project/resume_app/sourcing/` and `job_sources.py`
 - **Resume Optimizer Graph:** `django_project/resume_app/agents.py`
 - **Optimizer Context & Token Budgets:** `django_project/resume_app/optimizer_budget.py`
-- **LLM Gateway & Rate Limiting:** `django_project/resume_app/llm_gateway.py` and `llm_policy.py`
+- **LLM Subsystem & Gateway:** `django_project/resume_app/llm/` (`gateway.py`, `factory.py`, `policy.py`)
 - **Performance Telemetry:** `django_project/resume_app/dashboard_stats.py`
 
 ---
@@ -43,7 +44,15 @@ Before modifying features, routes, or models, review the relevant knowledge base
 ## 3. Core Coding Rules
 
 1. **Virtual Environment Discipline:**
-   Always execute Python commands with the repository virtualenv at `D:\Workshop\JobApp-Main\env\Scripts\python.exe`.
+   Always execute Python commands with the repository virtualenv:
+   ```powershell
+   # From django_project/:
+   ..\env\Scripts\python.exe manage.py <command>
+
+   # Or from repository root:
+   .\env\Scripts\python.exe django_project\manage.py <command>
+   ```
+   *(On Linux/macOS: `../env/bin/python manage.py <command>` or `./env/bin/python django_project/manage.py <command>`)*
 2. **Tenant Scoping Enforcement:**
    Always scope queries on user models using `.for_user(user)` or `get_owned_or_404()`. Never write global queries that could leak data across tenants.
 3. **Shared Job Catalog vs Tenant State:**
@@ -53,16 +62,17 @@ Before modifying features, routes, or models, review the relevant knowledge base
 5. **Redis Lock Safety:**
    Always acquire Redis locks with safety timeouts and release them in `try ... finally` blocks.
 6. **LLM Gateway Routing:**
-   Never bypass `llm_gateway.py` with raw vendor SDK calls. All AI invocations must respect token budgets, daily caps, and user stop controls.
+   Never bypass `resume_app/llm/gateway.py` with raw vendor SDK calls. All AI invocations must respect token budgets, daily caps, and user stop controls.
 
 ---
 
 ## 4. Documentation Maintenance
 
-When modifying behavior, update the corresponding documentation in `docs/` in the same commit:
+When modifying code, you **must update the corresponding documentation in `docs/` in the same change**:
 
-- **Workflows & Features:** `docs/site-functionality.md` or `docs/career-cockpit.md`.
-- **Routes & REST APIs:** `docs/api-reference.md`.
-- **Database Models & Relationships:** `docs/data-model.md`.
-- **Scraping & Sourcing:** `docs/job-sources-scraping.md`.
-- **Operations & Tests:** `docs/operations.md`.
+- **Adding or modifying a route/URL:** Update `docs/api-reference.md`.
+- **Adding or modifying a database model:** Update `docs/data-model.md`.
+- **Workflows, UI buttons & hotkeys:** Update `docs/site-functionality.md` and `docs/career-cockpit.md`.
+- **Telemetry or interview stages:** Update `docs/performance-and-analytics.md`.
+- **Scraping adapters or sources:** Update `docs/job-sources-scraping.md`.
+- **Operations, environment, tests:** Update `docs/operations.md`.

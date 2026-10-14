@@ -311,7 +311,7 @@ def save_interview_prep_data(
 def generate_cover_letter(
     optimized: OptimizedResume,
     *,
-    llm,
+    llm=None,
     prompts_profile=None,
     job_cache_key: Optional[str] = None,
     length: Optional[str] = "standard",
@@ -422,7 +422,7 @@ def generate_cover_letter(
 def generate_interview_prep(
     entry: PipelineEntry,
     *,
-    llm,
+    llm=None,
     prompts_profile=None,
     job_cache_key: Optional[str] = None,
     interview_type: str = "recruiter",
