@@ -196,11 +196,20 @@ class SkillRadarService:
                 profile = get_system_prompt_profile()
                 sys_tmpl, usr_tmpl, leg_tmpl = resolve_prompt_parts(profile, "skill_radar")
 
+                from django.conf import settings
+
                 title = getattr(job_listing, "title", "Role") or "Role"
-                desc = (job_description or getattr(job_listing, "description", None) or getattr(job_listing, "snippet", "") or "").strip()
-                # Keep prompt payload compact for fast local inference (~3-4k chars each)
-                desc_slice = desc[:4500].strip()
-                resume_slice = (resume_text or "")[:4000].strip()
+                raw_desc = (job_description or getattr(job_listing, "description", None) or getattr(job_listing, "snippet", "") or "").strip()
+                max_jd_chars = int(getattr(settings, "SKILL_RADAR_JD_MAX_CHARS", 10000))
+                max_resume_chars = int(getattr(settings, "SKILL_RADAR_RESUME_MAX_CHARS", 12000))
+
+                # Strip EEO, benefits, and HR fluff before LLM ingestion to reduce token load and latency
+                from .jd_cleanser import JDCleanserService
+                desc = JDCleanserService.cleanse_heuristically(raw_desc, title=title, max_chars=max_jd_chars)
+                if not desc:
+                    desc = raw_desc[:max_jd_chars]
+                desc_slice = desc.strip()
+                resume_slice = (resume_text or "")[:max_resume_chars].strip()
 
                 # Ensure static resume tokens precede dynamic job description tokens for Ollama KV caching
                 def _ensure_kv_cache_prefix_order(t: str) -> str:

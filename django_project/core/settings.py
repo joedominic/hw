@@ -302,7 +302,7 @@ LLM_DAILY_TOKEN_LIMIT_BY_PLAN = {
 # Shared burn cap for platform/env API keys across all users (0 = unlimited).
 LLM_PLATFORM_DAILY_TOKEN_LIMIT = env.int("LLM_PLATFORM_DAILY_TOKEN_LIMIT", default=5_000_000)
 # Wall-clock timeout per gateway/browser-use LLM invoke (seconds; 0 = disabled).
-LLM_INVOKE_TIMEOUT_SECONDS = env.int("LLM_INVOKE_TIMEOUT_SECONDS", default=180)
+LLM_INVOKE_TIMEOUT_SECONDS = env.int("LLM_INVOKE_TIMEOUT_SECONDS", default=480)
 # Max concurrent in-flight LLM calls per user (0 = unlimited).
 LLM_USER_MAX_CONCURRENT = env.int("LLM_USER_MAX_CONCURRENT", default=2)
 # Free-form POST /llm/complete: max combined system+user characters.
@@ -365,6 +365,9 @@ OPTIMIZER_RETRIEVAL_KEYWORD_WEIGHT = 0.25
 # Judge steps: cap draft + cleansed JD payloads; prefer local/small models when configured.
 OPTIMIZER_JUDGE_RESUME_MAX_CHARS = 12000
 OPTIMIZER_JUDGE_JD_MAX_CHARS = 8000
+# Skill Radar (Interview Fit & Skill Diagnostics) input payload limits
+SKILL_RADAR_RESUME_MAX_CHARS = env.int("SKILL_RADAR_RESUME_MAX_CHARS", default=12000)
+SKILL_RADAR_JD_MAX_CHARS = env.int("SKILL_RADAR_JD_MAX_CHARS", default=10000)
 # When True, ATS/Recruiter judges prefer an is_local (Ollama) preference row.
 # Default False: resume optimization should use cloud/remote LLMs whenever available.
 OPTIMIZER_JUDGES_PREFER_LOCAL = env.bool("OPTIMIZER_JUDGES_PREFER_LOCAL", default=False)
@@ -541,4 +544,23 @@ PIPELINE_LLM_KEYWORD_MIN_COUNT = env.int("PIPELINE_LLM_KEYWORD_MIN_COUNT", defau
 
 # Minimum days after a user deleted a job before a verified repost is eligible to reappear in the pipeline
 PIPELINE_DELETED_REPOST_COOLDOWN_DAYS = env.int("PIPELINE_DELETED_REPOST_COOLDOWN_DAYS", default=14)
+
+# --- Langfuse LLM Observability & Telemetry ---
+LANGFUSE_PUBLIC_KEY = env("LANGFUSE_PUBLIC_KEY", default="")
+LANGFUSE_SECRET_KEY = env("LANGFUSE_SECRET_KEY", default="")
+LANGFUSE_BASE_URL = env("LANGFUSE_BASE_URL", default=env("LANGFUSE_HOST", default="https://cloud.langfuse.com"))
+LANGFUSE_HOST = LANGFUSE_BASE_URL
+LANGFUSE_ENABLED = env.bool("LANGFUSE_ENABLED", default=bool(LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY))
+# Privacy & Telemetry Guardrails (default True for data privacy):
+# LANGFUSE_MASK_PII: scrub PII fields (names, addresses, emails, phone numbers, SSNs, URLs) with placeholders ([NAME], [ADDRESS], [EMAIL], [PHONE], etc.)
+LANGFUSE_MASK_PII = env.bool("LANGFUSE_MASK_PII", default=True)
+# LANGFUSE_REDACT_CONTENT: emergency zero-content mode; when True, completely replaces input prompt and output response with "redacted-by-litellm" in telemetry
+LANGFUSE_REDACT_CONTENT = env.bool("LANGFUSE_REDACT_CONTENT", default=False)
+LANGFUSE_DROP_ALL_CONTENT = env.bool("LANGFUSE_DROP_ALL_CONTENT", default=LANGFUSE_REDACT_CONTENT)
+
+# Ollama reasoning/thinking mode:
+# When True (default), allows Ollama models with reasoning capabilities (e.g. Nemotron, DeepSeek-R1)
+# to use their full chain-of-thought scratchpad for high accuracy evaluation.
+OLLAMA_ENABLE_THINKING = env.bool("OLLAMA_ENABLE_THINKING", default=True)
+
 

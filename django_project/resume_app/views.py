@@ -1069,11 +1069,12 @@ from .prompt_studio_views import (
 
 
 # Step ids for workflow builder (must match agents.VALID_STEP_IDS)
-WORKFLOW_STEP_IDS = ["writer", "ats_judge", "recruiter_judge", "jd_cleanse"]
+WORKFLOW_STEP_IDS = ["writer", "resume_judge", "ats_judge", "recruiter_judge", "jd_cleanse"]
 WORKFLOW_STEP_LABELS = {
     "writer": "Writer",
-    "ats_judge": "ATS Judge",
-    "recruiter_judge": "Recruiter Judge",
+    "resume_judge": "Unified Judge (ATS + Recruiter)",
+    "ats_judge": "ATS Judge (Legacy)",
+    "recruiter_judge": "Recruiter Judge (Legacy)",
     "jd_cleanse": "JD Cleanse",
 }
 

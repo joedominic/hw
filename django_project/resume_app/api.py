@@ -35,6 +35,7 @@ from .agents import (
     ats_judge_node,
     recruiter_judge_node,
     jd_cleanse_node,
+    resume_judge_node,
 )
 from django.conf import settings
 
@@ -104,6 +105,7 @@ class OptimizeRequest(Schema):
     prompt_writer: Optional[str] = None  # override default writer prompt template
     prompt_ats_judge: Optional[str] = None  # override default ATS judge prompt template
     prompt_recruiter_judge: Optional[str] = None  # override default recruiter judge prompt template
+    prompt_resume_judge: Optional[str] = None  # override unified judge prompt template
     ats_judge_profile_id: OptionalFormInt = None  # named ATS profile from library
     optimizer_workflow_id: OptionalFormInt = None  # saved workflow (steps + default ATS)
     debug: Optional[bool] = None  # when True, log full prompts sent to LLM in agent logs
@@ -119,6 +121,12 @@ class StatusResponse(Schema):
     status_display: Optional[str] = None
     ats_score: Optional[int] = None
     recruiter_score: Optional[int] = None
+    composite_score: Optional[int] = None
+    ats_feedback: Optional[str] = None
+    recruiter_feedback: Optional[str] = None
+    last_ats_json: Optional[dict] = None
+    last_recruiter_json: Optional[dict] = None
+    last_resume_judge_json: Optional[dict] = None
     optimized_content: Optional[str] = None
     original_content: Optional[str] = None
     original_filename: Optional[str] = None
@@ -132,6 +140,7 @@ class StatusResponse(Schema):
     cover_letter_generated_at: Optional[str] = None
     pipeline_entry_id: Optional[int] = None
     interview_prep_markdown: Optional[str] = None
+    discrepancies: Optional[dict] = None
 
 class PromptsResponse(Schema):
     writer: str
@@ -173,7 +182,7 @@ class FitCheckResponse(Schema):
 
 
 class RunStepRequest(Schema):
-    step: str  # writer | ats_judge | recruiter_judge
+    step: str  # writer | ats_judge | recruiter_judge | jd_cleanse | resume_judge
     job_description: str
     use_resume_id: OptionalFormInt = None
     optimized_resume: Optional[str] = None  # draft text; writer uses when non-empty. Judges: draft or file/use_resume_id (PDF text).
@@ -181,6 +190,7 @@ class RunStepRequest(Schema):
     prompt_writer: Optional[str] = None
     prompt_ats_judge: Optional[str] = None
     prompt_recruiter_judge: Optional[str] = None
+    prompt_resume_judge: Optional[str] = None
     ats_judge_profile_id: OptionalFormInt = None
     optimizer_workflow_id: OptionalFormInt = None
     llm_provider: str
@@ -293,8 +303,8 @@ def run_step(
     user = api_user(request)
     step = (payload.step or "").strip().lower()
     logger.warning("[run_step] step=%s, job_desc_len=%s, optimized_resume_len=%s", step, len(payload.job_description or ""), len(payload.optimized_resume or ""))
-    if step not in ("writer", "ats_judge", "recruiter_judge", "jd_cleanse"):
-        raise HttpError(400, "step must be one of: writer, ats_judge, recruiter_judge, jd_cleanse")
+    if step not in ("writer", "ats_judge", "recruiter_judge", "jd_cleanse", "resume_judge"):
+        raise HttpError(400, "step must be one of: writer, ats_judge, recruiter_judge, jd_cleanse, resume_judge")
     if not (payload.job_description or "").strip():
         raise HttpError(400, "job_description is required")
     if payload.llm_provider not in LLM_PROVIDERS:
@@ -321,6 +331,8 @@ def run_step(
         _ov["ats_judge"] = payload.prompt_ats_judge.strip()
     if payload.prompt_recruiter_judge and str(payload.prompt_recruiter_judge).strip():
         _ov["recruiter_judge"] = payload.prompt_recruiter_judge.strip()
+    if payload.prompt_resume_judge and str(payload.prompt_resume_judge).strip():
+        _ov["resume_judge"] = payload.prompt_resume_judge.strip()
     workflow = None
     if payload.optimizer_workflow_id:
         from .prompt_store import get_optimizer_workflow_by_id
@@ -443,7 +455,7 @@ def run_step(
                 },
             )
 
-        if step in ("ats_judge", "recruiter_judge"):
+        if step in ("ats_judge", "recruiter_judge", "resume_judge"):
             optimized_resume = (payload.optimized_resume or "").strip()
             resume_text = ""
             if not optimized_resume:
@@ -453,7 +465,7 @@ def run_step(
             if not optimized_resume and not resume_text:
                 raise HttpError(
                     400,
-                    "For ATS/Recruiter steps provide optimized_resume (current draft text), "
+                    "For Judge steps provide optimized_resume (current draft text), "
                     "or upload a PDF resume / use_resume_id to score the original resume.",
                 )
             state = {
@@ -478,6 +490,10 @@ def run_step(
                 "recruiter_judge_prompt_system": _graph_prompts["recruiter_judge_prompt_system"],
                 "recruiter_judge_prompt_user": _graph_prompts["recruiter_judge_prompt_user"],
                 "recruiter_judge_prompt_legacy": _graph_prompts["recruiter_judge_prompt_legacy"],
+                "resume_judge_prompt_template": _graph_prompts.get("resume_judge_prompt_template", ""),
+                "resume_judge_prompt_system": _graph_prompts.get("resume_judge_prompt_system", ""),
+                "resume_judge_prompt_user": _graph_prompts.get("resume_judge_prompt_user", ""),
+                "resume_judge_prompt_legacy": _graph_prompts.get("resume_judge_prompt_legacy", ""),
                 "debug": debug,
                 "max_iterations": 3,
                 "user": user,
@@ -506,7 +522,7 @@ def run_step(
                 if out.get("last_ats_json") is not None:
                     output["response_json"] = out["last_ats_json"]
                 return RunStepResponse(step="ats_judge", output=output)
-            else:
+            elif step == "recruiter_judge":
                 out = recruiter_judge_node(state)
                 fb = out.get("feedback")
                 if isinstance(fb, list) and fb:
@@ -529,6 +545,36 @@ def run_step(
                 if out.get("last_recruiter_json") is not None:
                     output["response_json"] = out["last_recruiter_json"]
                 return RunStepResponse(step="recruiter_judge", output=output)
+            else:
+                out = resume_judge_node(state)
+                fb = out.get("feedback")
+                if isinstance(fb, list) and fb:
+                    fb_str = "\n".join(str(item) for item in fb)
+                elif not isinstance(fb, str):
+                    fb_str = str(fb) if fb else ""
+                else:
+                    fb_str = fb
+                output = {
+                    "ats_score": out.get("ats_score"),
+                    "recruiter_score": out.get("recruiter_score"),
+                    "composite_score": out.get("composite_score"),
+                    "approved": out.get("approved"),
+                    "feedback": fb_str,
+                    "last_ats_json": out.get("last_ats_json"),
+                    "last_recruiter_json": out.get("last_recruiter_json"),
+                    "last_resume_judge_json": out.get("last_resume_judge_json"),
+                    "response_json": out.get("last_resume_judge_json"),
+                    "debug_prompt": out.get("debug_prompt"),
+                    "debug_messages": out.get("debug_messages"),
+                    "debug_format_summary": out.get("debug_format_summary"),
+                    "raw_llm_response": out.get("raw_llm_response"),
+                    "raw_llm_response_retry": out.get("raw_llm_response_retry"),
+                    "parse_info": out.get("parse_info"),
+                    "input_tokens": out.get("input_tokens"),
+                    "output_tokens": out.get("output_tokens"),
+                    "tokens_estimated": out.get("tokens_estimated"),
+                }
+                return RunStepResponse(step="resume_judge", output=output)
     except HttpError:
         raise
     except LLMRequestsDisabled as e:
@@ -756,11 +802,12 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
     model = model or None
 
     prompts = None
-    if payload.prompt_writer or payload.prompt_ats_judge or payload.prompt_recruiter_judge:
+    if payload.prompt_writer or payload.prompt_ats_judge or payload.prompt_recruiter_judge or payload.prompt_resume_judge:
         prompts = {
             "writer": payload.prompt_writer or None,
             "ats_judge": payload.prompt_ats_judge or None,
             "recruiter_judge": payload.prompt_recruiter_judge or None,
+            "resume_judge": payload.prompt_resume_judge or None,
         }
 
     # Debug flag: form sends "true"/"false" as string; read from POST so it's not lost
@@ -855,12 +902,46 @@ def get_status_data(resume_id: int, user, request=None):
     # Use stored scores; fall back to last log for backward compat
     ats_score = optimized.ats_score
     recruiter_score = optimized.recruiter_score
-    if ats_score is None or recruiter_score is None:
-        for log in logs:
-            if 'ats_score' in log.thought:
-                ats_score = log.thought['ats_score']
-            if 'recruiter_score' in log.thought:
-                recruiter_score = log.thought['recruiter_score']
+    composite_score = None
+    ats_feedback = None
+    recruiter_feedback = None
+    last_ats_json = None
+    last_recruiter_json = None
+    last_resume_judge_json = None
+
+    for log in logs:
+        thought = log.thought or {}
+        if ats_score is None and 'ats_score' in thought:
+            ats_score = thought['ats_score']
+        if recruiter_score is None and 'recruiter_score' in thought:
+            recruiter_score = thought['recruiter_score']
+        if 'composite_score' in thought:
+            composite_score = thought['composite_score']
+        if thought.get('last_ats_json'):
+            last_ats_json = thought['last_ats_json']
+        if thought.get('last_recruiter_json'):
+            last_recruiter_json = thought['last_recruiter_json']
+        if thought.get('last_resume_judge_json'):
+            last_resume_judge_json = thought['last_resume_judge_json']
+
+        if log.step_name in ("ats_judge", "resume_judge"):
+            if thought.get("last_ats_json", {}).get("strategic_feedback"):
+                ats_feedback = thought["last_ats_json"]["strategic_feedback"]
+            elif thought.get("strategic_feedback"):
+                ats_feedback = thought["strategic_feedback"]
+            elif log.step_name == "ats_judge" and thought.get("feedback"):
+                fb = thought.get("feedback")
+                ats_feedback = fb[-1] if isinstance(fb, list) and fb else (fb if isinstance(fb, str) else "")
+
+        if log.step_name in ("recruiter_judge", "resume_judge"):
+            if thought.get("last_recruiter_json", {}).get("feedback"):
+                recruiter_feedback = thought["last_recruiter_json"]["feedback"]
+            elif log.step_name == "recruiter_judge" and thought.get("feedback"):
+                fb = thought.get("feedback")
+                recruiter_feedback = fb[-1] if isinstance(fb, list) and fb else (fb if isinstance(fb, str) else "")
+
+    if composite_score is None and ats_score is not None and recruiter_score is not None:
+        composite_score = round((ats_score + recruiter_score) / 2)
 
     interview_prep_markdown = None
     pipeline_entry_id = optimized.pipeline_entry_id
@@ -900,6 +981,21 @@ def get_status_data(resume_id: int, user, request=None):
     except Exception as e:
         logger.debug(f"Could not extract original resume text for resume {resume_id}: {e}")
 
+    discrepancy_report = None
+    if optimized.optimized_content and original_text:
+        try:
+            from .fact_checker import detect_resume_discrepancies
+            supp_text = ""
+            if optimized.optimizer_context_snapshot and isinstance(optimized.optimizer_context_snapshot, dict):
+                supp_text = str(optimized.optimizer_context_snapshot.get("job_highlights") or "")
+            discrepancy_report = detect_resume_discrepancies(
+                source_text=original_text,
+                optimized_text=optimized.optimized_content,
+                supplemental_text=supp_text,
+            )
+        except Exception as e:
+            logger.debug(f"Could not compute discrepancies for resume {resume_id}: {e}")
+
     # "status" must stay the canonical workflow value (queued|running|completed|failed) so
     # the optimizer UI and templates can branch correctly. Human progress lives in status_display.
     return {
@@ -907,6 +1003,12 @@ def get_status_data(resume_id: int, user, request=None):
         "status_display": (optimized.status_display or "").strip() or None,
         "ats_score": ats_score,
         "recruiter_score": recruiter_score,
+        "composite_score": composite_score,
+        "ats_feedback": ats_feedback,
+        "recruiter_feedback": recruiter_feedback,
+        "last_ats_json": last_ats_json,
+        "last_recruiter_json": last_recruiter_json,
+        "last_resume_judge_json": last_resume_judge_json,
         "optimized_content": optimized.optimized_content,
         "original_content": original_text,
         "original_filename": original_filename,
@@ -920,6 +1022,7 @@ def get_status_data(resume_id: int, user, request=None):
         "cover_letter_generated_at": cl_at.isoformat() if cl_at else None,
         "pipeline_entry_id": pipeline_entry_id,
         "interview_prep_markdown": interview_prep_markdown,
+        "discrepancies": discrepancy_report,
     }
 
 @router.get("/status/{resume_id}", response=StatusResponse)

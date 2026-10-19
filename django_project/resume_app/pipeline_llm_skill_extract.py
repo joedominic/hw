@@ -362,13 +362,22 @@ def maybe_run_pipeline_consolidation(
             max_per,
         )
     user_content = _build_consolidation_user_content(payload)
+    consolidation_sys = CONSOLIDATION_SYSTEM_PROMPT
+    try:
+        from .prompt_store import get_system_prompt
+        configured_consolidation = get_system_prompt("pipeline_resume_refine", user=user)
+        if configured_consolidation and str(configured_consolidation).strip():
+            consolidation_sys = str(configured_consolidation).strip()
+    except Exception:
+        pass
+
     try:
         content, _, _ = llm_call_with_retries(
             provider=provider,
             api_key=api_key,
             model=model,
             user_content=user_content,
-            system_prompt=CONSOLIDATION_SYSTEM_PROMPT,
+            system_prompt=consolidation_sys,
             max_attempts=max(1, int(http_max_attempts)),
             user=user,
         )
@@ -607,8 +616,19 @@ def llm_invoke_pipeline_batch(
     llm = get_llm(provider, api_key, model)
     llm, native_json = _bind_json_mode(llm, provider)
     user_text = user_content if native_json else (user_content + _USER_JSON_TAIL)
+
+    effective_system = system_prompt
+    if effective_system == SYSTEM_PROMPT:
+        try:
+            from .prompt_store import get_system_prompt
+            configured_prompt = get_system_prompt("pipeline_skill_extract", user=user)
+            if configured_prompt and str(configured_prompt).strip():
+                effective_system = str(configured_prompt).strip()
+        except Exception:
+            pass
+
     messages = [
-        SystemMessage(content=system_prompt),
+        SystemMessage(content=effective_system),
         HumanMessage(content=user_text),
     ]
     response = invoke_llm_messages(

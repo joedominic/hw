@@ -1167,6 +1167,108 @@ class WriterNodePromptTestCase(TestCase):
         self.assertIn(note, captured.get("prompt", ""))
         self.assertNotIn("SRC:\nSAME BODY", captured.get("prompt", ""))
 
+    def test_writer_node_formats_structured_judge_insights(self):
+        from resume_app.agents import writer_node
+
+        captured = {}
+
+        def fake_llm_invoke(llm, messages, **kwargs):
+            captured["prompt"] = "\n".join(getattr(m, "content", str(m)) for m in messages)
+            r = MagicMock()
+            r.content = "REVISED"
+            r.usage_metadata = None
+            return r
+
+        template = "DOC:\n{resume_text}\nFB:\n{feedback}\n"
+        state = {
+            "resume_text": "CANDIDATE DRAFT",
+            "source_resume_text": "CANDIDATE DRAFT",
+            "job_description": "TARGET JD",
+            "optimized_resume": "CANDIDATE DRAFT",
+            "feedback": [],
+            "last_resume_judge_json": {
+                "synthesis": {
+                    "priority_revisions": [
+                        "Standardize all employment dates to MM/YYYY.",
+                        "Add explicit Business Architecture and DevSecOps terminology."
+                    ]
+                },
+                "ats_evaluation": {
+                    "missing_keywords": ["Business Architecture", "DevSecOps", "AI DLC"],
+                    "ats_strategic_feedback": "Insert missing keywords in integration and CI/CD bullets.",
+                    "formatting_issues": ["Non-standard date formats"],
+                },
+                "recruiter_evaluation": {
+                    "bullet_critiques": [
+                        {
+                            "role_anchor": "Senior Architect",
+                            "original_text_snippet": "Provided architectural leadership",
+                            "feedback": "Use active action verb and quantify latency reduction.",
+                        }
+                    ],
+                    "quantification_gaps": [
+                        {
+                            "role_anchor": "Principal Architect",
+                            "issue": "AI enablement bullet lacks business impact %.",
+                        }
+                    ],
+                    "recruiter_feedback": "Elevate narrative to executive enterprise tier.",
+                },
+            },
+            "iteration_count": 1,
+            "llm": MagicMock(),
+            "writer_prompt_template": template,
+            "writer_prompt_system": "",
+            "writer_prompt_user": "",
+            "writer_prompt_legacy": "",
+            "debug": False,
+        }
+
+        with patch("resume_app.agents._llm_invoke_with_retry", side_effect=fake_llm_invoke):
+            writer_node(state)
+
+        p = captured.get("prompt", "")
+        self.assertIn("1. Standardize all employment dates to MM/YYYY.", p)
+        self.assertIn("Business Architecture, DevSecOps, AI DLC", p)
+        self.assertIn("Provided architectural leadership", p)
+        self.assertIn("Use active action verb and quantify latency reduction.", p)
+        self.assertIn("AI enablement bullet lacks business impact %.", p)
+        self.assertIn("Elevate narrative to executive enterprise tier.", p)
+
+    def test_writer_node_formats_empty_feedback_informative_placeholder(self):
+        from resume_app.agents import writer_node
+
+        captured = {}
+
+        def fake_llm_invoke(llm, messages, **kwargs):
+            captured["prompt"] = "\n".join(getattr(m, "content", str(m)) for m in messages)
+            r = MagicMock()
+            r.content = "INITIAL"
+            r.usage_metadata = None
+            return r
+
+        template = "FB:\n{feedback}\n"
+        state = {
+            "resume_text": "CANDIDATE DRAFT",
+            "source_resume_text": "CANDIDATE DRAFT",
+            "job_description": "TARGET JD",
+            "optimized_resume": "",
+            "feedback": [],
+            "iteration_count": 0,
+            "llm": MagicMock(),
+            "writer_prompt_template": template,
+            "writer_prompt_system": "",
+            "writer_prompt_user": "",
+            "writer_prompt_legacy": "",
+            "debug": False,
+        }
+
+        with patch("resume_app.agents._llm_invoke_with_retry", side_effect=fake_llm_invoke):
+            writer_node(state)
+
+        p = captured.get("prompt", "")
+        self.assertIn("(none — initial draft generation pass", p)
+
 
 class OptimizerAgentThoughtDebugTestCase(TestCase):
     def test_format_agent_log_thought_three_sections(self):
@@ -1479,6 +1581,121 @@ class JudgeNodeRoutingTestCase(TestCase):
             writer_node(state)
 
         self.assertFalse(captured.get("prefer_local"))
+
+    def test_resume_judge_node_unified_evaluation(self):
+        from resume_app.agents import resume_judge_node, VALID_STEP_IDS, create_workflow
+
+        self.assertIn("resume_judge", VALID_STEP_IDS)
+        wf = create_workflow()
+        self.assertIsNotNone(wf)
+
+        mock_json_content = json.dumps({
+            "ats_evaluation": {
+                "ats_score": 88,
+                "missing_keywords": ["gRPC", "Kubernetes"],
+                "formatting_issues": [],
+                "ats_strategic_feedback": "Incorporate gRPC in platform bullets."
+            },
+            "recruiter_evaluation": {
+                "recruiter_score": 82,
+                "quantification_gaps": [
+                    {"role_anchor": "Lead Architect at Company Y", "issue": "Missing latency metrics"}
+                ],
+                "bullet_critiques": [
+                    {
+                        "role_anchor": "Lead Architect at Company Y",
+                        "original_text_snippet": "Responsible for managing cloud migrations...",
+                        "feedback": "Replace with Spearheaded"
+                    }
+                ],
+                "recruiter_feedback": "Strong impact overall."
+            },
+            "synthesis": {
+                "composite_score": 85,
+                "approved": True,
+                "priority_revisions": ["Add gRPC", "Quantify latency"]
+            }
+        })
+
+        mock_response = MagicMock()
+        mock_response.content = mock_json_content
+        mock_response.usage_metadata = None
+
+        state = {
+            "resume_text": "Experienced Architect",
+            "optimized_resume": "Experienced Architect with Cloud expertise",
+            "job_description": "Requires Kubernetes and gRPC",
+            "job_title": "Lead Cloud Architect",
+            "score_threshold": 80,
+            "llm": MagicMock(),
+            "debug": False,
+        }
+
+        with patch("resume_app.agents._llm_invoke_with_retry", return_value=mock_response):
+            out = resume_judge_node(state)
+
+        self.assertEqual(out["ats_score"], 88)
+        self.assertEqual(out["recruiter_score"], 82)
+        # Deterministic math: round((88 + 82) / 2) = 85
+        self.assertEqual(out["composite_score"], 85)
+        # Feedback has locator anchors
+        feedback_str = "\n".join(out["feedback"])
+        self.assertIn("Lead Architect at Company Y", feedback_str)
+        self.assertIn("Replace with Spearheaded", feedback_str)
+        self.assertIn("gRPC", feedback_str)
+        # Both sub-dicts preserved for UI
+        self.assertIn("missing_keywords", out["last_ats_json"])
+        self.assertIn("quantification_gaps", out["last_recruiter_json"])
+
+    def test_get_status_data_surfaces_dual_lens_and_composite_score(self):
+        from django.contrib.auth import get_user_model
+        from resume_app.models import OptimizedResume, JobDescription, AgentLog, UserResume
+        from resume_app.api import get_status_data
+
+        User = get_user_model()
+        user = User.objects.create_user(username="dual_test_user", password="password123")
+        ur = UserResume.objects.create(owner=user, original_filename="test.pdf")
+        jd = JobDescription.objects.create(content="Cloud Architect Job")
+        opt = OptimizedResume.objects.create(
+            owner=user,
+            original_resume=ur,
+            job_description=jd,
+            status=OptimizedResume.STATUS_COMPLETED,
+            ats_score=88,
+            recruiter_score=82,
+        )
+        AgentLog.objects.create(
+            optimized_resume=opt,
+            step_name="resume_judge",
+            thought={
+                "ats_score": 88,
+                "recruiter_score": 82,
+                "composite_score": 85,
+                "last_ats_json": {
+                    "ats_match_score": 88,
+                    "missing_keywords": ["gRPC"],
+                    "formatting_issues": [],
+                    "strategic_feedback": "Incorporate gRPC into distributed systems.",
+                },
+                "last_recruiter_json": {
+                    "score": 82,
+                    "feedback": "Strong foundational impact.",
+                    "quantification_gaps": [{"role_anchor": "Lead Architect", "issue": "Missing latency"}],
+                    "bullet_critiques": [],
+                },
+                "last_resume_judge_json": {"mock": True},
+            },
+        )
+
+        data = get_status_data(opt.id, user)
+        self.assertEqual(data["ats_score"], 88)
+        self.assertEqual(data["recruiter_score"], 82)
+        self.assertEqual(data["composite_score"], 85)
+        self.assertEqual(data["ats_feedback"], "Incorporate gRPC into distributed systems.")
+        self.assertEqual(data["recruiter_feedback"], "Strong foundational impact.")
+        self.assertIsNotNone(data["last_ats_json"])
+        self.assertIsNotNone(data["last_recruiter_json"])
+        self.assertIsNotNone(data["last_resume_judge_json"])
 
 
 class ResumeKeywordMinerTestCase(TestCase):

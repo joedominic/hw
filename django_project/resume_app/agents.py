@@ -456,6 +456,27 @@ def run_matching(
                 res["raw_llm_content"] = "(from unified cache)"
             return res
 
+    if job_id and resume_id:
+        try:
+            from .skill_radar import SkillRadarService
+            radar_cache_key = SkillRadarService.get_cache_key(getattr(user, "id", None), job_id, resume_id)
+            radar_cached = cache.get(radar_cache_key)
+            if radar_cached and isinstance(radar_cached, dict) and radar_cached.get("match_score") is not None:
+                logger.info("[matching] SkillRadar cache HIT for %s", radar_cache_key)
+                res = {
+                    "score": radar_cached.get("match_score", 0),
+                    "reasoning": radar_cached.get("fit_summary", ""),
+                    "interview_probability": radar_cached.get("interview_probability"),
+                    "thoughts": radar_cached.get("fit_summary", ""),
+                }
+                if unified_key:
+                    cache.set(unified_key, res, 7 * 86400)
+                if return_debug:
+                    res["raw_llm_content"] = "(from skill radar cache)"
+                return res
+        except Exception as e:
+            logger.debug("[matching] Error checking SkillRadar cache: %s", e)
+
     fmt = dict(resume_text=resume_text, job_description=job_description)
     if prompt_template and str(prompt_template).strip():
         messages = [HumanMessage(content=_format_prompt(str(prompt_template).strip(), **fmt))]
@@ -616,6 +637,13 @@ class AgentState(_AgentStateBase, total=False):
     recruiter_judge_prompt_system: str
     recruiter_judge_prompt_user: str
     recruiter_judge_prompt_legacy: str
+    resume_judge_prompt_template: str
+    resume_judge_prompt_system: str
+    resume_judge_prompt_user: str
+    resume_judge_prompt_legacy: str
+    composite_score: int
+    approved: bool
+    last_resume_judge_json: dict
     # Per-node debug / metering (must be in schema or LangGraph drops them from stream updates)
     debug: bool
     input_tokens: int
@@ -636,11 +664,12 @@ class AgentState(_AgentStateBase, total=False):
 # Known state keys so we never trigger KeyError on stray keys (e.g. from merged JSON/session).
 _STATE_KEYS = frozenset({
     "resume_text", "job_description", "optimized_resume", "source_resume_text", "ats_score", "recruiter_score",
-    "feedback", "iteration_count", "llm", "writer_prompt_template", "ats_judge_prompt_template",
-    "recruiter_judge_prompt_template",
+    "composite_score", "approved", "feedback", "iteration_count", "llm", "writer_prompt_template", "ats_judge_prompt_template",
+    "recruiter_judge_prompt_template", "resume_judge_prompt_template",
     "writer_prompt_system", "writer_prompt_user", "writer_prompt_legacy",
     "ats_judge_prompt_system", "ats_judge_prompt_user", "ats_judge_prompt_legacy",
     "recruiter_judge_prompt_system", "recruiter_judge_prompt_user", "recruiter_judge_prompt_legacy",
+    "resume_judge_prompt_system", "resume_judge_prompt_user", "resume_judge_prompt_legacy",
     "debug", "max_iterations", "score_threshold", "job_cache_key",
     "writer_job_description", "optimization_notes", "pipeline_skills_json", "job_highlights",
     "retrieval_context", "optimizer_context_budget", "user_id",
@@ -648,7 +677,7 @@ _STATE_KEYS = frozenset({
     "input_tokens", "output_tokens", "tokens_estimated",
     "debug_prompt", "debug_messages", "debug_format_summary",
     "raw_llm_response", "raw_llm_response_retry", "raw_llm_result_type", "raw_llm_result_type_retry",
-    "parse_info", "last_ats_json", "last_recruiter_json",
+    "parse_info", "last_ats_json", "last_recruiter_json", "last_resume_judge_json",
 })
 
 
@@ -693,6 +722,97 @@ def _judge_job_description_from_state(state: dict) -> str:
     )
 
 
+def format_judge_feedback_for_writer(state: dict) -> str:
+    """
+    Format structured feedback from resume_judge (or legacy/individual judges) into an actionable Markdown directive block.
+    If no feedback is present (e.g. initial writer pass), returns an informative note.
+    """
+    rj = _state_get(state, "last_resume_judge_json")
+    sections: list[str] = []
+
+    if isinstance(rj, dict) and rj:
+        syn = rj.get("synthesis") or {}
+        ats = rj.get("ats_evaluation") or {}
+        rec = rj.get("recruiter_evaluation") or {}
+
+        # 0. Mandatory Grounding & Anti-Hallucination Directives
+        sections.append(
+            "#### MANDATORY FACTUAL GROUNDING DIRECTIVES (HIGHEST PRIORITY):\n"
+            "- CRITICAL TRUTH DIRECTIVE: Reviewer critiques below are directional advice. NEVER adopt hypothetical metrics, percentages, or team sizes (e.g. '12 engineers') from reviewer notes unless they exist verbatim in candidate facts.\n"
+            "- METRIC ABSENCE PROTOCOL: When a critique requests quantification but no numbers exist in candidate facts, quantify via ARCHITECTURAL SCOPE and COMPLEXITY (systems integrated, compliance mandates, transaction volume) instead of inventing percentages or headcounts.\n"
+            "- NO SOFT HALLUCINATIONS: Do NOT inject unverified technologies (e.g. AWS, TOGAF, GCP) using hedging phrases ('evaluated', 'familiar with'). If not in source facts, omit them."
+        )
+
+        # 1. Priority Revision Directives
+        priorities = syn.get("priority_revisions") or []
+        if priorities:
+            lines = ["#### 1. PRIORITY REVISION COMMANDS (MANDATORY):"]
+            for i, p in enumerate(priorities, 1):
+                lines.append(f"{i}. {p}")
+            sections.append("\n".join(lines))
+
+        # 2. ATS Keyword & Placement Directives
+        ats_lines = ["#### 2. ATS KEYWORD & SEARCHABILITY DIRECTIVES:"]
+        missing = ats.get("missing_keywords") or []
+        if missing:
+            ats_lines.append(f"- Missing Core Keywords (Must Integrate): {', '.join(missing)}")
+            ats_lines.append("  * Grounding Rule: Weave these keywords into existing accomplishments or technical skills summary where related work was performed. Do not fabricate false employers or degrees.")
+        ats_strat = (ats.get("ats_strategic_feedback") or "").strip()
+        if ats_strat:
+            ats_lines.append(f"- Strategic Keyword Placement: {ats_strat}")
+        fmt_issues = ats.get("formatting_issues") or []
+        if fmt_issues:
+            ats_lines.append(f"- Structure & Formatting Fixes: {'; '.join(fmt_issues)}")
+        if len(ats_lines) > 1:
+            sections.append("\n".join(ats_lines))
+
+        # 3. Recruiter Phrasing & Quantification Directives
+        rec_lines = ["#### 3. RECRUITER PHRASING & QUANTIFICATION DIRECTIVES:"]
+        critiques = rec.get("bullet_critiques") or []
+        if critiques:
+            rec_lines.append("- Targeted Bullet Phrasing Critiques (Locate and Reframe):")
+            for c in critiques:
+                if isinstance(c, dict):
+                    anchor = c.get("role_anchor") or "General"
+                    snippet = c.get("original_text_snippet")
+                    fb = c.get("feedback") or ""
+                    if snippet:
+                        rec_lines.append(f"  * [{anchor}] Original text: \"{snippet}\"\n    -> Rewrite directive: {fb}")
+                    else:
+                        rec_lines.append(f"  * [{anchor}] -> Rewrite directive: {fb}")
+        qgaps = rec.get("quantification_gaps") or []
+        if qgaps:
+            rec_lines.append("- Metric & Quantification Gaps (Sharpen Impact):")
+            for qg in qgaps:
+                if isinstance(qg, dict):
+                    anchor = qg.get("role_anchor") or "General"
+                    issue = qg.get("issue") or ""
+                    rec_lines.append(f"  * [{anchor}] {issue}")
+        rec_fb = (rec.get("recruiter_feedback") or "").strip()
+        if rec_fb:
+            rec_lines.append(f"- Executive Narrative & Seniority Guidance: {rec_fb}")
+        if len(rec_lines) > 1:
+            sections.append("\n".join(rec_lines))
+
+    # Fallback to state["feedback"] if last_resume_judge_json was not present or empty
+    if not sections:
+        raw_fb = _state_get(state, "feedback") or []
+        if isinstance(raw_fb, list) and raw_fb:
+            lines = ["#### Judge Feedback & Revision Directives:"]
+            for item in raw_fb:
+                s = str(item).strip()
+                if s:
+                    lines.append(f"- {s}")
+            if len(lines) > 1:
+                sections.append("\n".join(lines))
+        elif isinstance(raw_fb, str) and raw_fb.strip():
+            sections.append(f"#### Judge Feedback & Revision Directives:\n{raw_fb.strip()}")
+
+    if sections:
+        return "\n\n".join(sections)
+    return "(none — initial draft generation pass. Focus on tailoring to the job description while preserving all original facts, roles, and scope.)"
+
+
 def writer_node(state: AgentState):
     """
     Writer prompt `{resume_text}` = document to edit this invocation: non-empty `optimized_resume` first
@@ -729,6 +849,7 @@ def writer_node(state: AgentState):
         length_guardrail = (
             f"The source resume contains approximately {source_words} words. "
             f"Your tailored resume MUST preserve approximately the same level of depth, breadth, and detail, targeting roughly {target_min}–{target_max} words. "
+            f"This target range ({target_min}–{target_max} words) SUPERCEDES all general word limits. "
             "Do NOT summarize, drop career history, omit bullet points, or delete older roles to make it shorter."
         )
     else:
@@ -740,7 +861,7 @@ def writer_node(state: AgentState):
         resume_text=resume_body_this_step,
         job_description=jd_writer,
         full_job_description=full_jd_for_prompt,
-        feedback=", ".join(_state_get(state, "feedback") or []),
+        feedback=format_judge_feedback_for_writer(state),
         optimized_resume=prior,
         source_resume_text=source_for_prompt,
         source_word_count=source_words,
@@ -776,6 +897,7 @@ def writer_node(state: AgentState):
         "debug_format_summary": _format_field_summary(fmt),
     }
     from .llm import USAGE_QUERY_OPTIMIZER_WRITER
+    from .parsers import sanitize_ats_text
 
     response = _llm_invoke_with_retry(
         llm,
@@ -786,9 +908,10 @@ def writer_node(state: AgentState):
         prefer_local=False,
         allow_local=False,
     )
+    clean_resume = sanitize_ats_text(str(response.content or ""))
     out.update({
-        "optimized_resume": response.content,
-        "resume_text": response.content,
+        "optimized_resume": clean_resume,
+        "resume_text": clean_resume,
         "iteration_count": (_state_get(state, "iteration_count") or 0) + 1
     })
     usage = _normalize_token_usage(response, None, dbg_prompt)
@@ -1257,6 +1380,162 @@ def recruiter_judge_node(state: AgentState):
     )
 
 
+def resume_judge_node(state: AgentState):
+    """
+    Unified dual-lens resume evaluation node combining ATS keyword/parseability
+    and executive recruiter qualitative impact in a single LLM pass.
+    """
+    from .parsers import ResumeJudgeResult, parse_resume_judge_fallback
+    from .prompts import (
+        DEFAULT_ATS_JUDGE_SYSTEM,
+        DEFAULT_RECRUITER_JUDGE_SYSTEM,
+        DEFAULT_RESUME_JUDGE_PROMPT,
+        DEFAULT_RESUME_JUDGE_SYSTEM,
+        DEFAULT_RESUME_JUDGE_USER,
+    )
+    from .llm import USAGE_QUERY_OPTIMIZER_ATS_JUDGE
+
+    llm = _state_get(state, "llm")
+    draft = (_state_get(state, "optimized_resume") or "").strip() or (_state_get(state, "resume_text") or "").strip()
+    draft = truncate_judge_resume(draft)
+    judge_jd = truncate_judge_job_description(_judge_job_description_from_state(state))
+    job_title = (_state_get(state, "job_title") or "").strip() or "Target Role"
+    score_threshold = int(_state_get(state, "score_threshold") or 85)
+
+    # Resolve active ATS profile directives if present
+    ats_directives = ""
+    ats_sys = (_state_get(state, "ats_judge_prompt_system") or "").strip()
+    if ats_sys and ats_sys != DEFAULT_ATS_JUDGE_SYSTEM:
+        ats_directives = f"\nCustom ATS Profile Directives:\n{ats_sys}\n"
+
+    # Resolve active Recruiter directives if present
+    recruiter_directives = ""
+    rec_sys = (_state_get(state, "recruiter_judge_prompt_system") or "").strip()
+    if rec_sys and rec_sys != DEFAULT_RECRUITER_JUDGE_SYSTEM:
+        recruiter_directives = f"\nCustom Recruiter Directives:\n{rec_sys}\n"
+
+    fmt = {
+        "job_description": judge_jd,
+        "job_title": job_title,
+        "optimized_resume": draft,
+        "score_threshold": score_threshold,
+        "ats_profile_directives": ats_directives,
+        "recruiter_profile_directives": recruiter_directives,
+    }
+
+    legacy = (_state_get(state, "resume_judge_prompt_legacy") or "").strip()
+    sys_t = (_state_get(state, "resume_judge_prompt_system") or "").strip()
+    usr_t = (_state_get(state, "resume_judge_prompt_user") or "").strip()
+    if not legacy and not sys_t and not usr_t:
+        legacy = (_state_get(state, "resume_judge_prompt_template") or "").strip()
+
+    if not legacy and not sys_t and not usr_t:
+        messages = build_llm_messages_for_prompt(
+            legacy_combined=None,
+            system_template=DEFAULT_RESUME_JUDGE_SYSTEM,
+            user_template=DEFAULT_RESUME_JUDGE_USER,
+            format_kwargs=fmt,
+        )
+    else:
+        messages = build_llm_messages_for_prompt(
+            legacy_combined=legacy or None,
+            system_template=sys_t or None,
+            user_template=usr_t or None,
+            format_kwargs=fmt,
+        )
+
+    dbg_prompt, dm = _messages_to_debug_payload(messages)
+    prefer_local = _judges_prefer_local()
+    logger.warning(
+        "[resume_judge] prompts sent to LLM (%s message(s), chars=%s, prefer_local=%s):\n%s",
+        len(messages),
+        len(dbg_prompt),
+        prefer_local,
+        dbg_prompt[:8000] + ("..." if len(dbg_prompt) > 8000 else ""),
+    )
+
+    owner_user = _state_user(state)
+    usage_callback = TokenUsageCallback()
+    invoke_config = {"callbacks": [usage_callback]}
+
+    raw = _llm_invoke_with_retry(
+        llm,
+        messages,
+        user=owner_user,
+        job_cache_key=_state_get(state, "job_cache_key"),
+        usage_query_kind=USAGE_QUERY_OPTIMIZER_ATS_JUDGE,
+        config=invoke_config,
+        prefer_local=prefer_local,
+        allow_local=False,
+    )
+    raw_content = getattr(raw, "content", None)
+    if raw_content is None:
+        raw_content = str(raw) if raw is not None else ""
+    if not isinstance(raw_content, str):
+        raw_content = str(raw_content)
+
+    parsed_result, raw_dict = parse_resume_judge_fallback(raw_content, "resume_judge")
+
+    ats_score = parsed_result.ats_evaluation.ats_score
+    recruiter_score = parsed_result.recruiter_evaluation.recruiter_score
+    composite_score = round((ats_score + recruiter_score) / 2)
+    approved = composite_score >= score_threshold and len(parsed_result.ats_evaluation.missing_keywords) == 0
+
+    feedback_list = parsed_result.feedback_lines()
+
+    out = {
+        "ats_score": ats_score,
+        "recruiter_score": recruiter_score,
+        "composite_score": composite_score,
+        "approved": approved,
+        "feedback": feedback_list,
+        "last_ats_json": {
+            "ats_match_score": ats_score,
+            "missing_keywords": parsed_result.ats_evaluation.missing_keywords,
+            "formatting_issues": parsed_result.ats_evaluation.formatting_issues,
+            "strategic_feedback": parsed_result.ats_evaluation.ats_strategic_feedback,
+        },
+        "last_recruiter_json": {
+            "score": recruiter_score,
+            "feedback": parsed_result.recruiter_evaluation.recruiter_feedback,
+            "quantification_gaps": [g.model_dump() for g in parsed_result.recruiter_evaluation.quantification_gaps],
+            "bullet_critiques": [c.model_dump() for c in parsed_result.recruiter_evaluation.bullet_critiques],
+        },
+        "last_resume_judge_json": parsed_result.model_dump(),
+        "debug_prompt": dbg_prompt,
+        "debug_messages": dm,
+        "debug_format_summary": _format_field_summary(fmt),
+        "raw_llm_response": _serialize_llm_result_for_log(raw),
+        "raw_llm_result_type": type(raw).__name__ if raw is not None else "NoneType",
+    }
+
+    if raw is not None:
+        usage = _normalize_token_usage(raw, getattr(raw, "llm_output", None), dbg_prompt)
+        out["input_tokens"] = usage["input_tokens"]
+        out["output_tokens"] = usage["output_tokens"]
+        if usage.get("tokens_estimated"):
+            out["tokens_estimated"] = True
+    elif usage_callback.total_input_tokens or usage_callback.total_output_tokens:
+        out["input_tokens"] = usage_callback.total_input_tokens
+        out["output_tokens"] = usage_callback.total_output_tokens
+
+    push_node_llm_debug(
+        _state_get(state, "job_cache_key"),
+        _debug_payload_from_node_out(
+            step="resume_judge",
+            messages_debug=dm,
+            debug_prompt=dbg_prompt,
+            format_summary=out["debug_format_summary"],
+            input_tokens=out.get("input_tokens"),
+            output_tokens=out.get("output_tokens"),
+            tokens_estimated=bool(out.get("tokens_estimated")),
+            raw_llm_response=out.get("raw_llm_response"),
+            feedback=out.get("feedback"),
+        ),
+    )
+    return out
+
+
 def jd_cleanse_node(state: AgentState):
     """
     Shrink a noisy job posting to core requirements via the JD Cleanse Prompt Library templates.
@@ -1371,14 +1650,14 @@ def jd_cleanse_node(state: AgentState):
 
 # --- Graph Logic ---
 
-VALID_STEP_IDS = frozenset({"writer", "ats_judge", "recruiter_judge", "jd_cleanse"})
+VALID_STEP_IDS = frozenset({"writer", "ats_judge", "recruiter_judge", "jd_cleanse", "resume_judge"})
 
 
 def create_workflow_from_steps(steps: list, max_iterations: int = 3, loop_to: Optional[str] = None):
     """
     Build a compiled StateGraph from an ordered list of step ids. No recursion:
     the flow runs once from first step to last, then END.
-    steps: e.g. ["jd_cleanse", "writer", "ats_judge", "recruiter_judge"]
+    steps: e.g. ["jd_cleanse", "writer", "resume_judge"]
     Each position in the list gets its own graph node so repeated step types run in sequence
     without overwriting edges (one node per invocation, not per step type).
     loop_to: ignored (kept for API compatibility).
@@ -1393,6 +1672,7 @@ def create_workflow_from_steps(steps: list, max_iterations: int = 3, loop_to: Op
         "ats_judge": ats_judge_node,
         "recruiter_judge": recruiter_judge_node,
         "jd_cleanse": jd_cleanse_node,
+        "resume_judge": resume_judge_node,
     }
     workflow = StateGraph(AgentState)
     for i, step_id in enumerate(steps):
@@ -1407,5 +1687,5 @@ def create_workflow_from_steps(steps: list, max_iterations: int = 3, loop_to: Op
 
 
 def create_workflow():
-    """Default workflow: writer -> ats_judge -> recruiter_judge -> END (single pass)."""
-    return create_workflow_from_steps(["writer", "ats_judge", "recruiter_judge"])
+    """Default workflow: writer -> resume_judge -> END (single pass)."""
+    return create_workflow_from_steps(["writer", "resume_judge"])

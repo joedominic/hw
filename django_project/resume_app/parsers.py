@@ -44,6 +44,62 @@ class AtsJudgeResult(BaseModel):
         return "\n".join(sections) if sections else "No ATS feedback provided."
 
 
+class ResumeJudgeQuantificationGap(BaseModel):
+    role_anchor: str = Field(default="", description="Role or section identifier")
+    issue: str = Field(default="", description="Description of the quantification issue")
+
+
+class ResumeJudgeBulletCritique(BaseModel):
+    role_anchor: str = Field(default="", description="Role or section identifier")
+    original_text_snippet: str = Field(default="", description="Original bullet text snippet")
+    feedback: str = Field(default="", description="Actionable rewrite advice")
+
+
+class ResumeJudgeAtsEvaluation(BaseModel):
+    ats_score: int = Field(default=75, ge=0, le=100)
+    missing_keywords: list[str] = Field(default_factory=list)
+    formatting_issues: list[str] = Field(default_factory=list)
+    ats_strategic_feedback: str = Field(default="")
+
+
+class ResumeJudgeRecruiterEvaluation(BaseModel):
+    recruiter_score: int = Field(default=75, ge=0, le=100)
+    quantification_gaps: list[ResumeJudgeQuantificationGap] = Field(default_factory=list)
+    bullet_critiques: list[ResumeJudgeBulletCritique] = Field(default_factory=list)
+    recruiter_feedback: str = Field(default="")
+
+
+class ResumeJudgeSynthesis(BaseModel):
+    composite_score: int = Field(default=75, ge=0, le=100)
+    approved: bool = Field(default=False)
+    priority_revisions: list[str] = Field(default_factory=list)
+
+
+class ResumeJudgeResult(BaseModel):
+    ats_evaluation: ResumeJudgeAtsEvaluation = Field(default_factory=ResumeJudgeAtsEvaluation)
+    recruiter_evaluation: ResumeJudgeRecruiterEvaluation = Field(default_factory=ResumeJudgeRecruiterEvaluation)
+    synthesis: ResumeJudgeSynthesis = Field(default_factory=ResumeJudgeSynthesis)
+
+    def feedback_lines(self) -> list[str]:
+        lines: list[str] = []
+        if self.ats_evaluation.missing_keywords:
+            lines.append(f"ATS Missing Keywords: {', '.join(self.ats_evaluation.missing_keywords)}")
+        if self.ats_evaluation.ats_strategic_feedback:
+            lines.append(f"ATS Strategy: {self.ats_evaluation.ats_strategic_feedback}")
+        if self.recruiter_evaluation.recruiter_feedback:
+            lines.append(f"Recruiter: {self.recruiter_evaluation.recruiter_feedback}")
+        for bc in self.recruiter_evaluation.bullet_critiques:
+            if bc.original_text_snippet:
+                lines.append(f"Bullet Critique [{bc.role_anchor}]: '{bc.original_text_snippet}' -> {bc.feedback}")
+            else:
+                lines.append(f"Bullet Critique [{bc.role_anchor}]: {bc.feedback}")
+        for qg in self.recruiter_evaluation.quantification_gaps:
+            lines.append(f"Quantification Gap [{qg.role_anchor}]: {qg.issue}")
+        if self.synthesis.priority_revisions:
+            lines.append(f"Priority Commands: {'; '.join(self.synthesis.priority_revisions)}")
+        return lines
+
+
 class FitCheckResult(BaseModel):
     """Candidate-job fit: score 0-100, reasoning, and thoughts on why/why not a fit."""
 
@@ -182,6 +238,10 @@ def _extract_json_object(
                                 "formatting_issues",
                                 "strategic_feedback",
                                 "actionable_feedback",
+                                "ats_evaluation",
+                                "recruiter_evaluation",
+                                "synthesis",
+                                "composite_score",
                             }
                             if norm_keys & root_keys:
                                 return obj
@@ -797,6 +857,118 @@ def parse_score_fallback(content: str, node_name: str) -> tuple[ScoreFeedback, O
     return ScoreFeedback(score=70, feedback="Could not parse score. Defaulting."), None
 
 
+def parse_resume_judge_fallback(
+    content: str, node_name: str = "resume_judge"
+) -> tuple[ResumeJudgeResult, Optional[dict]]:
+    """Parse dual-lens resume_judge output with deterministic arithmetic guardrails."""
+    logger.debug("[%s] parse_resume_judge_fallback content len=%s", node_name, len(content) if content else 0)
+    data = _extract_json_object(content)
+    if isinstance(data, dict):
+        data = _normalize_dict_keys(data)
+
+    if data is not None:
+        try:
+            # Handle nested or flat keys
+            ats_part = _get_key(data, "ats_evaluation", "ats")
+            if not isinstance(ats_part, dict):
+                ats_part = data
+
+            rec_part = _get_key(data, "recruiter_evaluation", "recruiter")
+            if not isinstance(rec_part, dict):
+                rec_part = data
+
+            syn_part = _get_key(data, "synthesis", "combined")
+            if not isinstance(syn_part, dict):
+                syn_part = data
+
+            raw_ats_score = _get_key(ats_part, "ats_score", "ats_match_score", "score")
+            ats_score = int(raw_ats_score) if raw_ats_score is not None else 75
+            ats_score = max(0, min(100, ats_score))
+
+            missing_kw = _coerce_str_list(_get_key(ats_part, "missing_keywords"))
+            formatting = _coerce_str_list(_get_key(ats_part, "formatting_issues"))
+            ats_strat = str(_get_key(ats_part, "ats_strategic_feedback", "strategic_feedback", "feedback") or "").strip()
+
+            raw_rec_score = _get_key(rec_part, "recruiter_score", "score")
+            rec_score = int(raw_rec_score) if raw_rec_score is not None else 75
+            rec_score = max(0, min(100, rec_score))
+
+            rec_fb = str(_get_key(rec_part, "recruiter_feedback", "feedback") or "").strip()
+
+            # Parse quantification gaps
+            raw_qg = _get_key(rec_part, "quantification_gaps") or []
+            qg_list: list[ResumeJudgeQuantificationGap] = []
+            if isinstance(raw_qg, list):
+                for item in raw_qg:
+                    if isinstance(item, dict):
+                        qg_list.append(ResumeJudgeQuantificationGap(
+                            role_anchor=str(_get_key(item, "role_anchor", "section", "role") or ""),
+                            issue=str(_get_key(item, "issue", "feedback", "description") or ""),
+                        ))
+                    elif isinstance(item, str) and item.strip():
+                        qg_list.append(ResumeJudgeQuantificationGap(role_anchor="General", issue=item.strip()))
+
+            # Parse bullet critiques
+            raw_bc = _get_key(rec_part, "bullet_critiques") or []
+            bc_list: list[ResumeJudgeBulletCritique] = []
+            if isinstance(raw_bc, list):
+                for item in raw_bc:
+                    if isinstance(item, dict):
+                        bc_list.append(ResumeJudgeBulletCritique(
+                            role_anchor=str(_get_key(item, "role_anchor", "section", "role") or ""),
+                            original_text_snippet=str(_get_key(item, "original_text_snippet", "snippet", "original") or ""),
+                            feedback=str(_get_key(item, "feedback", "instruction", "rewrite") or ""),
+                        ))
+                    elif isinstance(item, str) and item.strip():
+                        bc_list.append(ResumeJudgeBulletCritique(role_anchor="General", original_text_snippet="", feedback=item.strip()))
+
+            # Synthesis with deterministic arithmetic: round((ats_score + recruiter_score) / 2)
+            calc_composite = round((ats_score + rec_score) / 2)
+            raw_approved = _get_key(syn_part, "approved")
+            if raw_approved is not None:
+                approved = bool(raw_approved)
+            else:
+                approved = calc_composite >= 85 and len(missing_kw) == 0
+
+            priority_rev = _coerce_str_list(_get_key(syn_part, "priority_revisions", "revisions", "action_items"))
+
+            res = ResumeJudgeResult(
+                ats_evaluation=ResumeJudgeAtsEvaluation(
+                    ats_score=ats_score,
+                    missing_keywords=missing_kw,
+                    formatting_issues=formatting,
+                    ats_strategic_feedback=ats_strat,
+                ),
+                recruiter_evaluation=ResumeJudgeRecruiterEvaluation(
+                    recruiter_score=rec_score,
+                    quantification_gaps=qg_list,
+                    bullet_critiques=bc_list,
+                    recruiter_feedback=rec_fb,
+                ),
+                synthesis=ResumeJudgeSynthesis(
+                    composite_score=calc_composite,
+                    approved=approved,
+                    priority_revisions=priority_rev,
+                ),
+            )
+            return res, data
+        except Exception as e:
+            logger.warning("[%s] Error building ResumeJudgeResult from parsed JSON: %s", node_name, e)
+
+    if content and isinstance(content, str):
+        score = _extract_plain_text_score(content) or 70
+        calc_composite = score
+        fallback_res = ResumeJudgeResult(
+            ats_evaluation=ResumeJudgeAtsEvaluation(ats_score=score, ats_strategic_feedback=content[:1000]),
+            recruiter_evaluation=ResumeJudgeRecruiterEvaluation(recruiter_score=score, recruiter_feedback=content[:1000]),
+            synthesis=ResumeJudgeSynthesis(composite_score=calc_composite, approved=calc_composite >= 85),
+        )
+        return fallback_res, None
+
+    default_res = ResumeJudgeResult()
+    return default_res, None
+
+
 def parse_fit_check_fallback(content: str) -> FitCheckResult:
     text = (content or "").strip()
     if not text:
@@ -953,4 +1125,53 @@ def parse_fit_check_fallback(content: str) -> FitCheckResult:
 
 def normalize_dict_keys(obj):
     return _normalize_dict_keys(obj)
+
+
+def sanitize_ats_text(text: str) -> str:
+    """
+    Deterministically sanitizes tailored resume text for enterprise ATS (Workday, Taleo, iCIMS):
+    1. Converts all Unicode hyphens and dashes (U+2010 through U+2015, U+2212) to standard ASCII hyphen (-).
+       Specifically eliminates U+2011 (non-breaking hyphen) which corrupts ATS tokens like 'cloud‑native'.
+    2. Converts curly double/single quotes (“ ” ‘ ’ « » „) and double quotes (\") to single quotes (').
+    3. Normalizes angle brackets (< and >) to plain text ('under / less than' and 'over / greater than').
+    4. Strips inline bold markdown (**text**) from bullet point lines so ATS parsers do not concatenate words.
+    5. Normalizes bullet points to standard ASCII hyphen followed by space ('- ').
+    """
+    if not text or not isinstance(text, str):
+        return text or ""
+
+    # 1. Unicode dashes & hyphens -> standard ASCII hyphen (ASCII 45)
+    # U+2010 (hyphen), U+2011 (non-breaking hyphen), U+2012 (figure dash),
+    # U+2013 (en dash), U+2014 (em dash), U+2015 (horizontal bar), U+2212 (minus sign)
+    text = re.sub(r"[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]", "-", text)
+
+    # 2. Quotes: curly quotes and double quotes -> single quote (')
+    text = re.sub(r'["\u201C\u201D\u201E\u201F\u00AB\u00BB]', "'", text)
+    text = re.sub(r"[\u2018\u2019\u201A\u201B`]", "'", text)
+
+    # 3. Angle brackets -> plain words (Workday parsing blacklist)
+    text = re.sub(r"<(?=\s*\d)", "under ", text)
+    text = re.sub(r"<", "less than ", text)
+    text = re.sub(r">(?=\s*\d)", "over ", text)
+    text = re.sub(r">", "greater than ", text)
+
+    # 4. Strip inline bolding within bullet point lines (- **text** or - text **bold**)
+    lines = text.split("\n")
+    cleaned_lines = []
+    for line in lines:
+        stripped = line.lstrip()
+        if stripped.startswith(("-", "*", "•")):
+            indent = line[: len(line) - len(stripped)]
+            # Normalize bullet prefix to standard '- '
+            if stripped.startswith(("•", "*")):
+                line = indent + "- " + stripped[1:].lstrip()
+            elif stripped.startswith("-") and not stripped.startswith("- "):
+                line = indent + "- " + stripped[1:].lstrip()
+            # Remove inline bolding inside bullet point items
+            cleaned_line = re.sub(r"\*\*([^*]+)\*\*", r"\1", line)
+            cleaned_lines.append(cleaned_line)
+        else:
+            cleaned_lines.append(line)
+
+    return "\n".join(cleaned_lines)
 

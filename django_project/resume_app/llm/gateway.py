@@ -784,9 +784,9 @@ def _ordered_eligible_candidates(
     return ordered
 
 
-def _build_llm_callable(cand: dict):
+def _build_llm_callable(cand: dict, metadata: dict | None = None):
     user = cand.get("user") or (getattr(cand.get("config"), "owner", None) if cand.get("config") else None)
-    return get_llm(cand["provider"], cand["api_key"], cand["model_get_llm"], user=user)
+    return get_llm(cand["provider"], cand["api_key"], cand["model_get_llm"], user=user, metadata=metadata)
 
 
 def _finalize_usage(
@@ -1023,7 +1023,25 @@ def invoke_llm_messages(
                 via="gateway",
                 extra="local" if cand.get("is_local") else "",
             )
-            llm = _build_llm_callable(cand)
+            from .telemetry import resolve_trace_names
+
+            t_name, g_name = resolve_trace_names(
+                query_kind=usage_query_kind,
+                job_cache_key=job_cache_key,
+                default_name=model_gl or mkey,
+            )
+            call_metadata = {
+                "query_kind": usage_query_kind or USAGE_QUERY_UNSPECIFIED,
+                "provider": provider,
+                "model": model_gl or mkey,
+                "trace_name": t_name,
+                "generation_name": g_name,
+            }
+            if job_cache_key:
+                call_metadata["job_cache_key"] = str(job_cache_key)
+                call_metadata["session_id"] = str(job_cache_key)
+
+            llm = _build_llm_callable(cand, metadata=call_metadata)
             invoke_llm = (
                 llm.with_structured_output(structured_schema)
                 if structured_schema is not None
@@ -1139,6 +1157,34 @@ def _invoke_single_llm(
     provider = getattr(llm, "_resume_provider", None) or "unknown"
     model_gl = getattr(llm, "_resume_model", None)
     log_llm_invoke(provider, model_gl, query=usage_query_kind, via=via)
+
+    from .telemetry import resolve_trace_names
+
+    t_name, g_name = resolve_trace_names(
+        query_kind=usage_query_kind,
+        job_cache_key=job_cache_key,
+        default_name=model_gl,
+    )
+    if hasattr(llm, "metadata"):
+        if getattr(llm, "metadata", None) is None:
+            llm.metadata = {}
+        llm.metadata.setdefault("trace_name", t_name)
+        llm.metadata.setdefault("generation_name", g_name)
+        llm.metadata.setdefault("query_kind", usage_query_kind or USAGE_QUERY_UNSPECIFIED)
+        if job_cache_key:
+            llm.metadata.setdefault("job_cache_key", str(job_cache_key))
+            llm.metadata.setdefault("session_id", str(job_cache_key))
+
+    call_config = dict(config or {})
+    call_meta = dict(call_config.get("metadata") or {})
+    call_meta.setdefault("trace_name", t_name)
+    call_meta.setdefault("generation_name", g_name)
+    call_meta.setdefault("query_kind", usage_query_kind or USAGE_QUERY_UNSPECIFIED)
+    if job_cache_key:
+        call_meta.setdefault("job_cache_key", str(job_cache_key))
+        call_meta.setdefault("session_id", str(job_cache_key))
+    call_config["metadata"] = call_meta
+
     est = estimate_tokens_from_messages(messages)
     reconcile, release = acquire_llm_slot(provider, model_gl, est, user=user)
     invoke_llm = (
@@ -1147,9 +1193,7 @@ def _invoke_single_llm(
     try:
 
         def _do_invoke():
-            if config is not None:
-                return invoke_llm.invoke(messages, config=config)
-            return invoke_llm.invoke(messages)
+            return invoke_llm.invoke(messages, config=call_config)
 
         raw = run_with_invoke_timeout(_do_invoke)
     except Exception as e:

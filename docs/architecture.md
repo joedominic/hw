@@ -11,7 +11,7 @@ HireEdge is a multi-tenant Django 5.2 application featuring server-rendered HTML
 - **Authentication & Tenancy:** Session authentication with `LoginRequiredMiddleware` enforcing auth globally. Multi-tenancy uses tenant-scoped models (`owner = ForeignKey(User)`) via `resume_app.tenancy`.
 - **Background Worker & Task Queue:** Huey backed by Redis (using `huey.RedisExpireHuey` with automatic result key expiration).
 - **Relational Database:** SQLite for local/test defaults; MySQL/MariaDB for production via PyMySQL.
-- **AI & Workflow Orchestration:** LangGraph and LangChain for structured resume optimization workflows; OpenAI, Anthropic, Groq, Google Gemini, and local Ollama integrations.
+- **AI & Workflow Orchestration:** LangGraph and LangChain for structured resume optimization workflows; unified **LiteLLM** abstraction layer supporting OpenAI, Anthropic, Groq, Google Gemini, and local/cloud Ollama; **Langfuse Cloud** telemetry integration with selective PII redaction (`LANGFUSE_MASK_PII`), workflow trace grouping, and step-level generation naming.
 - **Job Sourcing Engine:** Hexagonal architecture supporting JobSpy (Indeed, LinkedIn), Greenhouse direct boards, BuiltIn, Levels.fyi (encrypted API), and Dice (REST API + HTML fallback).
 - **UI Architecture:** Server-rendered Django templates styled with Tailwind CSS, Chart.js for data visualization, and vanilla JavaScript `fetch()` for progressive telemetry and status polling. Brand theme tokens live in `resume_app/templates/resume_app/_tailwind_theme.html`.
 

@@ -356,6 +356,9 @@ class SystemPromptProfile(models.Model):
     pipeline_resume_refine = models.TextField(blank=True)
     pipeline_resume_refine_system = models.TextField(blank=True)
     pipeline_resume_refine_user = models.TextField(blank=True)
+    resume_judge = models.TextField(blank=True)
+    resume_judge_system = models.TextField(blank=True)
+    resume_judge_user = models.TextField(blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

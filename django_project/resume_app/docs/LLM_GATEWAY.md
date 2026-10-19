@@ -6,10 +6,11 @@ Canonical reference for how product LLM traffic is selected, limited, timed out,
 
 | Module | Role |
 |--------|------|
-| [`llm/gateway.py`](../llm/gateway.py) | Central LangChain invoke path: kill switch, preference order, job pin, failover, usage recording, token budget consume |
+| [`llm/gateway.py`](../llm/gateway.py) | Central LangChain invoke path: kill switch, preference order, job pin, failover, usage recording, token budget consume, Langfuse metadata enrichment |
 | [`llm/policy.py`](../llm/policy.py) | Shared policy: kill switch helper, daily token budgets, per-user concurrency, invoke timeout, browser-use LLM wrapper |
 | [`llm/rate_limit.py`](../llm/rate_limit.py) | Redis RPM/TPM slots and cooldowns (BYOK vs platform scope) |
-| [`llm/factory.py`](../llm/factory.py) | Provider → LangChain client (`_resume_provider` / `_resume_model` metadata) |
+| [`llm/factory.py`](../llm/factory.py) | LiteLLM abstraction (`LiteLLMChatModel`), multi-provider parameter mappings, and Langfuse callback configuration |
+| [`llm/pii.py`](../llm/pii.py) | PII masking and redaction utilities (scans emails, phones, SSNs, addresses, and social handles) |
 | [`llm/session.py`](../llm/session.py) | Active provider + runtime candidates (UI / apply-agent candidate pick) |
 | [`llm/services.py`](../llm/services.py) | Provider models & connectivity probes |
 | [`rate_limits.py`](../rate_limits.py) | Plan daily **request** quota bridge (`METRIC_LLM_REQUESTS`) |
@@ -125,6 +126,20 @@ Every invoke logs at WARNING: `[llm] invoking {provider}/{model} (query=… via=
 | `LLMTokenBudgetExceeded` | Daily user or platform token budget |
 | `LLMConcurrencyLimitExceeded` | Too many in-flight calls |
 | `LLMInvokeTimeout` | Wall-clock deadline exceeded |
+
+## Observability & Telemetry (Langfuse Cloud)
+
+All gateway invocations automatically stream traces to **Langfuse Cloud** via LiteLLM's callback hooks (`success_callback` and `failure_callback`).
+
+- **Activation:** Automatically configured on startup in `ResumeAppConfig.ready()` via `configure_langfuse_telemetry()`.
+- **Enriched Metadata & Trace Naming:** Calls resolve descriptive trace and generation names via `resolve_trace_names` in `resume_app.llm.telemetry`. Multi-step optimizer calls group under `trace.name = "resume_optimizer"` with distinct generation names (`optimizer_writer`, `optimizer_ats_judge`, `optimizer_recruiter_judge`, `jd_cleanse`). Standalone calls log specific trace names (`fit_check`, `job_matching`, `pipeline_skill_extract`). Every call attaches user/tenant ID, model, provider, and `session_id = job_cache_key`.
+- **Privacy & PII Guardrails:**
+  - `LANGFUSE_MASK_PII=True` (default): **Selective PII Redaction**. Automatically masks candidate/user names, physical addresses, emails, phone numbers, SSNs, and social handles (`[NAME]`, `[ADDRESS]`, `[EMAIL]`, `[PHONE]`, `[SSN]`, `[LINKEDIN]`, `[GITHUB]`) before export, while preserving full prompt context, job descriptions, ATS scoring, and evaluation text for monitoring.
+  - `LANGFUSE_REDACT_CONTENT=False` (default): Emergency zero-content mode. When set to `True`, completely blanks out prompts and responses with `"redacted-by-litellm"`. Use only for extreme compliance requirements.
+- **Ollama Reasoning & Think Mode Guardrail:**
+  - Local reasoning models (e.g., `hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M`, DeepSeek-R1) prefill `<think>` prompt templates in Ollama, using an internal chain-of-thought scratchpad to achieve high reasoning accuracy on complex evaluations.
+  - HireEdge enables think mode by default (`OLLAMA_ENABLE_THINKING=True`) to maintain maximum evaluation accuracy. Any leaked `</think>` tags in output content are automatically split, keeping the clean answer in `content` and routing the thought monologue to `additional_kwargs["reasoning_content"]` (and Langfuse).
+  - To prevent read timeouts on large prompts during local reasoning generation, `LLM_INVOKE_TIMEOUT_SECONDS` is set to `300` (5 minutes), and system prompts include a concise reasoning directive (<250 tokens) to curb speculative wandering. If speed is prioritized over reasoning depth, set `OLLAMA_ENABLE_THINKING=False` to force `think=False`.
 
 ## Tests And env
 

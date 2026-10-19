@@ -49,6 +49,9 @@ from .prompts import (
     DEFAULT_RECRUITER_JUDGE_PROMPT,
     DEFAULT_RECRUITER_JUDGE_SYSTEM,
     DEFAULT_RECRUITER_JUDGE_USER,
+    DEFAULT_RESUME_JUDGE_PROMPT,
+    DEFAULT_RESUME_JUDGE_SYSTEM,
+    DEFAULT_RESUME_JUDGE_USER,
     DEFAULT_SKILL_RADAR_PROMPT,
     DEFAULT_SKILL_RADAR_SYSTEM,
     DEFAULT_SKILL_RADAR_USER,
@@ -74,6 +77,7 @@ DEFAULT_PROMPTS: Dict[str, str] = {
     "pipeline_skill_extract": DEFAULT_PIPELINE_SKILL_EXTRACT_PROMPT,
     "fit_check": DEFAULT_FIT_CHECK_PROMPT,
     "pipeline_resume_refine": DEFAULT_PIPELINE_RESUME_REFINE_PROMPT,
+    "resume_judge": DEFAULT_RESUME_JUDGE_PROMPT,
 }
 
 _LEGACY_FIELDS = (
@@ -91,6 +95,7 @@ _LEGACY_FIELDS = (
     "pipeline_skill_extract",
     "fit_check",
     "pipeline_resume_refine",
+    "resume_judge",
 )
 
 _PROMPT_SPEC = {
@@ -168,6 +173,13 @@ _PROMPT_SPEC = {
         DEFAULT_PIPELINE_RESUME_REFINE_SYSTEM,
         DEFAULT_PIPELINE_RESUME_REFINE_USER,
     ),
+    "resume_judge": (
+        "resume_judge",
+        "resume_judge_system",
+        "resume_judge_user",
+        DEFAULT_RESUME_JUDGE_SYSTEM,
+        DEFAULT_RESUME_JUDGE_USER,
+    ),
 }
 
 PROMPT_DEFINITIONS: List[Dict[str, Any]] = [
@@ -192,22 +204,20 @@ PROMPT_DEFINITIONS: List[Dict[str, Any]] = [
         ],
     },
     {
-        "key": "ats_judge",
-        "name": "ATS Gatekeeper",
+        "key": "resume_judge",
+        "name": "Unified Resume Judge (ATS + Recruiter)",
         "category": "Optimization Pipeline",
-        "description": "Evaluates candidate match against job requirements using applicant tracking parsing logic.",
+        "description": "Dual-lens evaluation assessing technical ATS keyword parseability and recruiter executive impact in a single turn.",
         "default_engine": "cloud",
-        "icon": "fact_check",
-        "known_vars": ["optimized_resume", "job_description"],
-    },
-    {
-        "key": "recruiter_judge",
-        "name": "Recruiter Judge",
-        "category": "Optimization Pipeline",
-        "description": "Simulates human recruiter scrutiny, identifying red flags, seniority alignment, and impact.",
-        "default_engine": "cloud",
-        "icon": "person_search",
-        "known_vars": ["optimized_resume", "job_description"],
+        "icon": "gavel",
+        "known_vars": [
+            "optimized_resume",
+            "job_description",
+            "job_title",
+            "score_threshold",
+            "ats_profile_directives",
+            "recruiter_profile_directives",
+        ],
     },
     {
         "key": "pipeline_resume_refine",
@@ -235,15 +245,6 @@ PROMPT_DEFINITIONS: List[Dict[str, Any]] = [
         "default_engine": "local",
         "icon": "compare_arrows",
         "known_vars": ["resume_text", "job_description", "title", "company"],
-    },
-    {
-        "key": "fit_check",
-        "name": "Quick Fit Assessor",
-        "category": "Evaluation & Vetting",
-        "description": "Rapid recruiter screening assessment determining whether a candidate is a reasonable match for a role.",
-        "default_engine": "local",
-        "icon": "thumb_up",
-        "known_vars": ["resume_text", "job_description"],
     },
     {
         "key": "pipeline_skill_extract",
@@ -312,6 +313,7 @@ PROMPT_DEFINITIONS: List[Dict[str, Any]] = [
 
 PROMPT_TO_QUERY_KIND_MAP: Dict[str, str] = {
     "writer": "optimizer_writer",
+    "resume_judge": "optimizer_ats_judge",
     "ats_judge": "optimizer_ats_judge",
     "recruiter_judge": "optimizer_recruiter_judge",
     "matching": "matching",
@@ -867,16 +869,23 @@ def build_optimizer_graph_prompt_state(
     for kind, prefix in (
         ("writer", "writer_prompt_"),
         ("recruiter_judge", "recruiter_judge_prompt_"),
+        ("resume_judge", "resume_judge_prompt_"),
     ):
         s, u, leg = resolve_prompt_parts(prof, kind)
-        override_key = {"writer": "writer", "recruiter_judge": "recruiter_judge"}[kind]
+        override_key = kind
         ov = (prompts_override or {}).get(override_key) if prompts_override else None
         if ov and str(ov).strip():
             s, u, leg = "", "", str(ov).strip()
         out[f"{prefix}system"] = s or ""
         out[f"{prefix}user"] = u or ""
         out[f"{prefix}legacy"] = leg or ""
-        _fallback = _DEF_W if kind == "writer" else _DEF_REC
+        if kind == "writer":
+            _fallback = _DEF_W
+        elif kind == "resume_judge":
+            from .prompts import DEFAULT_RESUME_JUDGE_PROMPT as _DEF_RJ
+            _fallback = _DEF_RJ
+        else:
+            _fallback = _DEF_REC
         out[f"{prefix}template"] = (leg if leg else (s + "\n\n" + u)).strip() or _fallback
     return out
 

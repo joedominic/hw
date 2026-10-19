@@ -386,9 +386,8 @@ def generate_cover_letter(
         effective_leg = f"{effective_leg}\n\n{length_instruction}{existing_draft_context}"
     elif not effective_usr_t and not effective_leg:
         effective_usr_t = (
-            f"Company: {{company_name}}\nRole: {{job_title}}\n\n"
-            f"Tailored resume:\n{{optimized_resume}}\n\n"
-            f"Job description:\n{{job_description}}\n\n"
+            f"<CANDIDATE_RESUME>\n{{optimized_resume}}\n</CANDIDATE_RESUME>\n\n"
+            f"<TARGET_JOB company=\"{{company_name}}\" role=\"{{job_title}}\">\n{{job_description}}\n</TARGET_JOB>\n\n"
             f"{length_instruction}{existing_draft_context}\n\nCover letter:"
         )
 

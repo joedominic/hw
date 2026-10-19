@@ -332,3 +332,11 @@ class PromptStudioEndpointsTestCase(TestCase):
         self.assertEqual(data["output"], "Model specific test output")
         self.assertEqual(data["model_used"], "Groq / llama-3.3-70b-versatile")
 
+    def test_prompt_definitions_exclude_legacy_judges(self):
+        from resume_app.prompt_store import PROMPT_DEFINITIONS, PROMPT_TO_QUERY_KIND_MAP
+        keys = [p["key"] for p in PROMPT_DEFINITIONS]
+        self.assertNotIn("ats_judge", keys, "ats_judge should not be exposed in Prompt Studio templates")
+        self.assertNotIn("recruiter_judge", keys, "recruiter_judge should not be exposed in Prompt Studio templates")
+        self.assertIn("resume_judge", keys, "resume_judge should be exposed in Prompt Studio templates")
+        self.assertIn("resume_judge", PROMPT_TO_QUERY_KIND_MAP)
+

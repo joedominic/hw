@@ -1557,6 +1557,17 @@ Select an opportunity to read the full job description.
                             </div>
                         </div>
 
+                        <!-- Core Competencies (Verified Skills) -->
+                        <div class="pt-1">
+                            <div class="bg-white p-3 rounded-lg border border-slate-200 space-y-2">
+                                <div class="text-xs font-bold flex items-center gap-1.5 text-emerald-800">
+                                    <span class="material-symbols-outlined text-[15px] text-emerald-600">verified</span>
+                                    <span>Core Competencies (Verified Skills)</span>
+                                </div>
+                                <div id="inspect-core-competencies" class="flex flex-wrap gap-1.5 min-h-[32px]"></div>
+                            </div>
+                        </div>
+
                         <!-- Stretch Skills (Role Gaps) -->
                         <div class="pt-1">
                             <div class="bg-white p-3 rounded-lg border border-slate-200 space-y-2">
@@ -3103,6 +3114,9 @@ Select an opportunity to read the full job description.
                         row.dataset.coreMatches = JSON.stringify(res.core_competencies || []);
                         row.dataset.stretchSkills = JSON.stringify(res.stretch_skills || []);
                         row.dataset.matchScore = res.match_score;
+                        if (res.interview_probability !== undefined && res.interview_probability !== null) {
+                            row.dataset.interviewProbability = res.interview_probability;
+                        }
                         row.dataset.fitSummary = res.fit_summary || '';
                         row.dataset.radarSource = 'ollama_local';
 

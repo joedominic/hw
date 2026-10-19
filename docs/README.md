@@ -30,11 +30,17 @@ For the complete, canonical user journey specification across the 3 tabs, see **
 - [Performance & Analytics](performance-and-analytics.md) — Momentum dashboard, conversion metrics, and employer interview tracking.
 - [Data Model](data-model.md) — Domain entities, tenant ownership model, relationships, and pipeline stage transitions.
 - [API Reference](api-reference.md) — HTML routes and Django Ninja REST API surface.
+- [Skill Radar & Fit Diagnostics](features/skill-radar-diagnostics.md) — Interview callback calibration, Nemotron-3 Ollama reasoning, and batch pipeline diagnostics.
+- [Prompt Suite Optimization](features/prompt-library-optimization.md) — Prompt library pruning, cross-workflow KV-cache prefix ordering, reasoning scratchpad constraints, and unified dual-lens resume judge.
+- [Optimizer UI Layout](features/optimizer-ui-layout.md) — Responsive layout architecture for ATS, recruiter reviews, and workbench real-estate on vertical monitors.
+- [Writer Judge Feedback Architecture](features/writer-judge-feedback.md) — Structured diagnostic synthesis, bullet critique resolution, and keyword grounding for resume revisions.
+- [Resume Factual Integrity & Discrepancies](features/resume-factual-integrity.md) — Metric Absence Protocol, anti-hypothetical judge sanitization, and automated discrepancy workbench alerts.
 - [Job Sourcing & Scraping](job-sources-scraping.md) — Multi-channel scraping architecture, adapters, deduplication, and ranking.
 
 ### Architecture & Operations
 - [Architecture](architecture.md) — Runtime stack, component boundaries, background processing, and Redis locks.
 - [Operations](operations.md) — Environment configuration, Redis setup, background workers, tests, and operational practices.
+- [LLM Telemetry & Privacy](guides/llm-telemetry-and-privacy.md) — Langfuse tracing, trace/generation naming architecture, and selective PII redaction.
 - [Agent Guide](agent-guide.md) — Engineering conventions, entry points, and maintenance map for AI agents.
 - [User Journey Trace](user-journey.md) — End-to-end lifecycle trace of a single job listing from ingestion to offer.
 - [Docker Deployment](DOCKER.md) — Containerized multi-service deployment.

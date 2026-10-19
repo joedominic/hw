@@ -1301,6 +1301,8 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
                     or 78
                 )
                 fit_summary = cached_radar.get("fit_summary") or getattr(job, "interview_reasoning", "") or ""
+                if cached_radar.get("interview_probability") is not None:
+                    setattr(job, "interview_probability", cached_radar.get("interview_probability"))
                 source_radar = "ollama_local"
             elif job_core or getattr(job, "vetting_match_score", None) is not None or getattr(job, "interview_probability", None) is not None:
                 core = job_core
@@ -1590,7 +1592,8 @@ def cockpit_skill_radar_api(request):
         entry = PipelineEntry.objects.filter(owner=request.user, job_listing=job).first()
         if entry:
             entry.record_vetting_interview_result(
-                probability=res.get("match_score"),
+                probability=res.get("interview_probability") or res.get("match_score"),
+                match_score=res.get("match_score"),
                 reasoning=res.get("fit_summary"),
                 resume_id=resume_id,
                 core_competencies=res.get("core_competencies"),

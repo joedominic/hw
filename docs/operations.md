@@ -74,6 +74,12 @@ HireEdge reads environment variables from the `.env` file in the repository root
 
 ### 3.3 LLM Gateway & Provider Limits
 - `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `GOOGLE_API_KEY`: Global provider fallback keys.
+- `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`: Langfuse Cloud project API keys for unified LLM observability.
+- `LANGFUSE_BASE_URL`: Base endpoint for Langfuse traces (default `https://cloud.langfuse.com`).
+- `LANGFUSE_ENABLED`: Boolean toggle (defaults to `True` when API keys exist).
+- `LANGFUSE_MASK_PII`: Primary privacy guardrail (default `True`). Scrubs PII fields (names, addresses, emails, phone numbers, SSNs, URLs) before telemetry export while keeping prompts readable for monitoring.
+- `LANGFUSE_REDACT_CONTENT`: Emergency zero-content mode (default `False`). When `True`, completely replaces input/output prompt text with `"redacted-by-litellm"`.
+- `LANGFUSE_DROP_ALL_CONTENT`: Alias for emergency zero-content mode (default `False`).
 - `LLM_USER_DAILY_REQUEST_LIMIT`: Daily request cap per user.
 - `LLM_DAILY_TOKEN_LIMIT_FREE` / `_PRO` / `_UNLIMITED`: Daily token allowances by plan.
 - `LLM_PLATFORM_DAILY_TOKEN_LIMIT`: Daily spending ceiling for environment-backed platform keys.
@@ -119,6 +125,7 @@ Run Django unit and integration tests using the repo-relative virtualenv from `d
 ..\env\Scripts\python.exe manage.py test resume_app.test_multi_tenant
 ..\env\Scripts\python.exe manage.py test resume_app.test_saved_searches
 ..\env\Scripts\python.exe manage.py test resume_app.test_llm_gateway_routing
+..\env\Scripts\python.exe manage.py test resume_app.test_langfuse_telemetry
 ```
 
 ---

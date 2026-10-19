@@ -327,6 +327,10 @@ def optimize_resume_task(
             "recruiter_judge_prompt_system": _pb["recruiter_judge_prompt_system"],
             "recruiter_judge_prompt_user": _pb["recruiter_judge_prompt_user"],
             "recruiter_judge_prompt_legacy": _pb["recruiter_judge_prompt_legacy"],
+            "resume_judge_prompt_template": _pb.get("resume_judge_prompt_template", ""),
+            "resume_judge_prompt_system": _pb.get("resume_judge_prompt_system", ""),
+            "resume_judge_prompt_user": _pb.get("resume_judge_prompt_user", ""),
+            "resume_judge_prompt_legacy": _pb.get("resume_judge_prompt_legacy", ""),
             "debug": bool(debug),
             "max_iterations": max(1, min(int(max_iterations), 5)),
             "score_threshold": max(0, min(100, int(score_threshold))),
@@ -386,7 +390,8 @@ def optimize_resume_task(
                     update_fields.append("status_display")
                     oc = last_state.get("optimized_resume")
                     if isinstance(oc, str) and oc.strip():
-                        optimized_resume.optimized_content = oc
+                        from .parsers import sanitize_ats_text
+                        optimized_resume.optimized_content = sanitize_ats_text(oc)
                         update_fields.append("optimized_content")
                 elif "ats_score" in state_update or "recruiter_score" in state_update:
                     optimized_resume.status_display = (
@@ -414,7 +419,9 @@ def optimize_resume_task(
             return {"status": "cancelled", "resume_id": resume_id}
 
         # Final update
-        optimized_resume.optimized_content = last_state['optimized_resume']
+        from .parsers import sanitize_ats_text
+        final_opt = last_state.get('optimized_resume') or ""
+        optimized_resume.optimized_content = sanitize_ats_text(final_opt) if isinstance(final_opt, str) else final_opt
         optimized_resume.status = OptimizedResume.STATUS_COMPLETED
         optimized_resume.ats_score = last_state.get('ats_score')
         optimized_resume.recruiter_score = last_state.get('recruiter_score')

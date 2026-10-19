@@ -41,8 +41,9 @@
             <p class="mt-1 text-sm text-slate-600">Add steps in order. Each uses the corresponding prompt from the library.</p>
             <div class="mt-4 flex flex-wrap gap-2">
                 <button type="button" class="rounded-concierge border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-concierge-slate hover:bg-slate-100" data-add-step="writer">+ Writer</button>
-                <button type="button" class="rounded-concierge border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-concierge-slate hover:bg-slate-100" data-add-step="ats_judge">+ ATS Judge</button>
-                <button type="button" class="rounded-concierge border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-concierge-slate hover:bg-slate-100" data-add-step="recruiter_judge">+ Recruiter Judge</button>
+                <button type="button" class="rounded-concierge border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-concierge-slate hover:bg-slate-100" data-add-step="resume_judge">+ Unified Judge (ATS + Recruiter)</button>
+                <button type="button" class="rounded-concierge border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-concierge-slate hover:bg-slate-100" data-add-step="ats_judge">+ ATS Judge (Legacy)</button>
+                <button type="button" class="rounded-concierge border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-concierge-slate hover:bg-slate-100" data-add-step="recruiter_judge">+ Recruiter Judge (Legacy)</button>
                 <button type="button" class="rounded-concierge border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-concierge-slate hover:bg-slate-100" data-add-step="jd_cleanse">+ JD Cleanse</button>
             </div>
             <ul id="workflow-steps-list" class="mt-4 divide-y divide-slate-100 rounded-concierge border border-slate-200 bg-slate-50/30"></ul>
@@ -71,9 +72,27 @@
                     </div>
                 </div>
 
+                <!-- Unified Judge -->
+                <div class="grid gap-4 sm:grid-cols-3 items-center rounded-xl border border-slate-100 bg-slate-50/50 p-4">
+                    <span class="font-medium text-concierge-slate text-sm">Unified Judge (ATS + Recruiter)</span>
+                    <div>
+                        <label class="mb-1 block text-xxs font-semibold uppercase tracking-wide text-slate-400">Provider</label>
+                        <select data-step-provider="resume_judge" class="w-full rounded-concierge border border-slate-200 bg-white px-2 py-1.5 text-xs">
+                            <option value="">— Default global preference —</option>
+                            {% for p in llm_providers %}
+                            <option value="{{ p }}">{{ p }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-xxs font-semibold uppercase tracking-wide text-slate-400">Model</label>
+                        <input type="text" data-step-model="resume_judge" class="w-full rounded-concierge border border-slate-200 bg-white px-2 py-1.5 text-xs placeholder:text-slate-400" placeholder="e.g. gpt-4o, claude-3-5-sonnet-latest">
+                    </div>
+                </div>
+
                 <!-- ATS Judge -->
                 <div class="grid gap-4 sm:grid-cols-3 items-center rounded-xl border border-slate-100 bg-slate-50/50 p-4">
-                    <span class="font-medium text-concierge-slate text-sm">ATS Judge</span>
+                    <span class="font-medium text-concierge-slate text-sm">ATS Judge (Legacy)</span>
                     <div>
                         <label class="mb-1 block text-xxs font-semibold uppercase tracking-wide text-slate-400">Provider</label>
                         <select data-step-provider="ats_judge" class="w-full rounded-concierge border border-slate-200 bg-white px-2 py-1.5 text-xs">
@@ -91,7 +110,7 @@
 
                 <!-- Recruiter Judge -->
                 <div class="grid gap-4 sm:grid-cols-3 items-center rounded-xl border border-slate-100 bg-slate-50/50 p-4">
-                    <span class="font-medium text-concierge-slate text-sm">Recruiter Judge</span>
+                    <span class="font-medium text-concierge-slate text-sm">Recruiter Judge (Legacy)</span>
                     <div>
                         <label class="mb-1 block text-xxs font-semibold uppercase tracking-wide text-slate-400">Provider</label>
                         <select data-step-provider="recruiter_judge" class="w-full rounded-concierge border border-slate-200 bg-white px-2 py-1.5 text-xs">
@@ -143,7 +162,13 @@
 
 <script>
 (function () {
-    var stepLabels = { writer: "Writer", ats_judge: "ATS Judge", recruiter_judge: "Recruiter Judge", jd_cleanse: "JD Cleanse" };
+    var stepLabels = {
+        writer: "Writer",
+        resume_judge: "Unified Judge (ATS + Recruiter)",
+        ats_judge: "ATS Judge",
+        recruiter_judge: "Recruiter Judge",
+        jd_cleanse: "JD Cleanse"
+    };
     var steps = [];
     var listEl = document.getElementById("workflow-steps-list");
     var inputEl = document.getElementById("workflow-steps-input");
@@ -218,7 +243,7 @@
     var initialConfigRaw = configInputEl.getAttribute("data-initial") || "{}";
     try {
         var initialConfig = JSON.parse(initialConfigRaw);
-        ["writer", "ats_judge", "recruiter_judge", "jd_cleanse"].forEach(function(stepId) {
+        ["writer", "resume_judge", "ats_judge", "recruiter_judge", "jd_cleanse"].forEach(function(stepId) {
             var provSel = document.querySelector('[data-step-provider="' + stepId + '"]');
             var modelInp = document.querySelector('[data-step-model="' + stepId + '"]');
             if (initialConfig[stepId]) {
@@ -241,7 +266,7 @@
         inputEl.value = JSON.stringify(steps);
 
         var finalConfig = {};
-        ["writer", "ats_judge", "recruiter_judge", "jd_cleanse"].forEach(function(stepId) {
+        ["writer", "resume_judge", "ats_judge", "recruiter_judge", "jd_cleanse"].forEach(function(stepId) {
             var provSel = document.querySelector('[data-step-provider="' + stepId + '"]');
             var modelInp = document.querySelector('[data-step-model="' + stepId + '"]');
             var provVal = provSel ? provSel.value : "";

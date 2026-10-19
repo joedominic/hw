@@ -200,6 +200,8 @@ def set_llm_cooldown(provider: str, model: str | None, seconds: int, *, user) ->
     """Mark provider+model unavailable for approximately `seconds` (Redis TTL)."""
     if seconds <= 0:
         return
+    if provider and provider.strip().lower() == "ollama local":
+        return
     try:
         r = _get_redis()
         r.setex(llm_cooldown_redis_key(provider, model, user=user), int(seconds), "1")
@@ -209,6 +211,8 @@ def set_llm_cooldown(provider: str, model: str | None, seconds: int, *, user) ->
 
 def get_llm_cooldown_ttl(provider: str, model: str | None, *, user) -> Optional[int]:
     """Remaining cooldown seconds, or None if unavailable / key missing / Redis error."""
+    if provider and provider.strip().lower() == "ollama local":
+        return None
     try:
         r = _get_redis()
         ttl = r.ttl(llm_cooldown_redis_key(provider, model, user=user))
@@ -221,6 +225,8 @@ def get_llm_cooldown_ttl(provider: str, model: str | None, *, user) -> Optional[
 
 
 def is_llm_on_cooldown(provider: str, model: str | None, *, user) -> bool:
+    if provider and provider.strip().lower() == "ollama local":
+        return False
     ttl = get_llm_cooldown_ttl(provider, model, user=user)
     return ttl is not None and ttl > 0
 
