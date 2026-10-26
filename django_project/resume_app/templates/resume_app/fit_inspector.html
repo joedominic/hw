@@ -1,0 +1,377 @@
+{% extends "resume_app/base.html" %}
+
+{% block title %}Fit Inspector — System{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-6xl space-y-8">
+    <!-- Header -->
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <div class="flex items-center gap-2">
+                <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Fit Inspector</h1>
+                <span class="rounded bg-brand-soft px-2 py-0.5 text-xs font-semibold text-brand-ink uppercase tracking-wider">Power Play</span>
+            </div>
+            <p class="mt-1 text-sm text-slate-600">
+                Simulate job fit against your AI preference models, diagnose matching drivers, and prune training jobs.
+            </p>
+        </div>
+
+        <!-- Track / Search Profile Selector -->
+        <div class="flex items-center gap-2">
+            <label for="track-select" class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Search Profile:</label>
+            <form method="get" id="track-form" class="inline">
+                <select id="track-select" name="track" onchange="this.form.submit()"
+                        class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 shadow-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand">
+                    {% for p in search_profiles %}
+                        <option value="{{ p.slug }}" {% if p.slug == selected_track %}selected{% endif %}>
+                            {{ p.label }}
+                        </option>
+                    {% endfor %}
+                </select>
+                {% if sim_title %}<input type="hidden" name="title" value="{{ sim_title }}">{% endif %}
+                {% if sim_company %}<input type="hidden" name="company" value="{{ sim_company }}">{% endif %}
+            </form>
+        </div>
+    </div>
+
+    <!-- Simulator Section -->
+    <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div class="mb-4 flex items-center justify-between border-b border-slate-100 pb-3">
+            <div>
+                <h2 class="text-base font-semibold text-concierge-slate">Job Fit Simulator</h2>
+                <p class="text-xs text-slate-500">Paste any job posting to test how the AI recommendation engine scores and ranks it.</p>
+            </div>
+            <div class="flex gap-2">
+                <span class="inline-flex items-center gap-1 rounded bg-green-50 px-2 py-1 text-xs font-medium text-green-700">
+                    <span class="h-1.5 w-1.5 rounded-full bg-green-500"></span> {{ liked_count }} Liked Training Jobs
+                </span>
+                <span class="inline-flex items-center gap-1 rounded bg-red-50 px-2 py-1 text-xs font-medium text-red-700">
+                    <span class="h-1.5 w-1.5 rounded-full bg-red-500"></span> {{ disliked_count }} Disliked Training Jobs
+                </span>
+            </div>
+        </div>
+
+        <form method="post" class="space-y-4">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="analyze">
+            <input type="hidden" name="track" value="{{ selected_track }}">
+
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                    <label for="id_title" class="block text-xs font-semibold text-slate-700 uppercase tracking-wide">Job Title *</label>
+                    <input type="text" id="id_title" name="title" value="{{ sim_title }}" required
+                           placeholder="e.g. Principal Software Engineer"
+                           class="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm text-slate-800 shadow-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand">
+                </div>
+                <div>
+                    <label for="id_company" class="block text-xs font-semibold text-slate-700 uppercase tracking-wide">Company Name (Optional)</label>
+                    <input type="text" id="id_company" name="company" value="{{ sim_company }}"
+                           placeholder="e.g. TechCorp"
+                           class="mt-1 w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm text-slate-800 shadow-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand">
+                </div>
+            </div>
+
+            <div>
+                <label for="id_description" class="block text-xs font-semibold text-slate-700 uppercase tracking-wide">Job Description / Requirements *</label>
+                <textarea id="id_description" name="description" rows="6" required
+                          placeholder="Paste job description, responsibilities, or technical requirements here..."
+                          class="mt-1 w-full rounded-lg border border-slate-300 p-3 text-sm text-slate-800 shadow-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand font-mono text-xs">{{ sim_description }}</textarea>
+            </div>
+
+            <div class="flex items-center justify-between pt-2">
+                <span class="text-xs text-slate-400">Uses local text embedding vectors to calculate cosine similarity against centroids.</span>
+                <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-brand px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover transition-colors">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
+                    Analyze Fit
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Analysis Results -->
+    {% if analysis %}
+        {% if not analysis.has_baseline %}
+            <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                {{ analysis.message }}
+            </div>
+        {% else %}
+            <div class="space-y-6">
+                <!-- Verdict Banner & Score Metrics -->
+                <div class="grid grid-cols-1 gap-4 sm:grid-cols-4">
+                    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                        <div class="text-xs font-medium text-slate-500 uppercase tracking-wide">Liked Similarity</div>
+                        <div class="mt-2 flex items-baseline gap-1">
+                            <span class="text-2xl font-bold text-slate-900">{{ analysis.like_percent }}%</span>
+                        </div>
+                        <div class="mt-1 text-xs text-slate-400">Similarity to positive centroid</div>
+                    </div>
+
+                    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                        <div class="text-xs font-medium text-slate-500 uppercase tracking-wide">Disliked Similarity</div>
+                        <div class="mt-2 flex items-baseline gap-1">
+                            <span class="text-2xl font-bold text-slate-900">
+                                {% if analysis.dislike_percent is not None %}{{ analysis.dislike_percent }}%{% else %}—{% endif %}
+                            </span>
+                        </div>
+                        <div class="mt-1 text-xs text-slate-400">Similarity to negative centroid</div>
+                    </div>
+
+                    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                        <div class="text-xs font-medium text-slate-500 uppercase tracking-wide">Preference Margin</div>
+                        <div class="mt-2 flex items-baseline gap-1">
+                            <span class="text-2xl font-bold {% if analysis.margin_percent is not None and analysis.margin_percent < -5 %}text-red-600{% elif analysis.margin_percent is not None and analysis.margin_percent >= 10 %}text-emerald-600{% else %}text-slate-900{% endif %}">
+                                {% if analysis.margin_percent is not None %}{% if analysis.margin_percent > 0 %}+{% endif %}{{ analysis.margin_percent }}%{% else %}—{% endif %}
+                            </span>
+                        </div>
+                        <div class="mt-1 text-xs text-slate-400">(Liked % − Disliked %)</div>
+                    </div>
+
+                    <div class="rounded-xl border p-4 shadow-sm {{ analysis.verdict_style }}">
+                        <div class="text-xs font-semibold uppercase tracking-wide">Outcome Verdict</div>
+                        <div class="mt-1.5 text-base font-bold">{{ analysis.verdict_label }}</div>
+                        <div class="mt-1 text-xs leading-relaxed opacity-90">{{ analysis.verdict_desc }}</div>
+                    </div>
+                </div>
+
+                <!-- Driver Breakdown: Top Matching Liked vs Disliked Jobs -->
+                <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                    <!-- Positive Drivers -->
+                    <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+                            <div class="flex items-center gap-2">
+                                <span class="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-700">👍</span>
+                                <h3 class="text-sm font-semibold text-slate-900">Top Liked Drivers (Positive Pull)</h3>
+                            </div>
+                            <span class="text-xs text-slate-400">Higher % = More Influence</span>
+                        </div>
+
+                        <div class="mt-3 divide-y divide-slate-100">
+                            {% for j in analysis.liked_drivers %}
+                                <div class="flex items-center justify-between py-3">
+                                    <div class="min-w-0 pr-3">
+                                        <div class="truncate text-sm font-medium text-slate-800">{{ j.title }}</div>
+                                        <div class="text-xs text-slate-500">{{ j.company }}</div>
+                                    </div>
+                                    <div class="flex items-center gap-3 shrink-0">
+                                        <span class="rounded bg-emerald-50 px-2 py-0.5 text-xs font-bold text-emerald-700 border border-emerald-200">{{ j.similarity_percent }}% match</span>
+                                        <form method="post" onsubmit="return confirm('Remove this job from your Liked training set? Centroid will be updated immediately.');">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="action" value="remove_like">
+                                            <input type="hidden" name="job_id" value="{{ j.job_id }}">
+                                            <input type="hidden" name="track" value="{{ selected_track }}">
+                                            <input type="hidden" name="title" value="{{ sim_title }}">
+                                            <input type="hidden" name="company" value="{{ sim_company }}">
+                                            <input type="hidden" name="description" value="{{ sim_description }}">
+                                            <button type="submit" class="rounded border border-red-200 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 hover:text-red-700 transition" title="Remove like">
+                                                Remove Like
+                                            </button>
+                                        </form>
+                                    </div>
+                                </div>
+                            {% empty %}
+                                <p class="py-4 text-center text-xs text-slate-400">No individual liked job matches computed.</p>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <!-- Negative Drivers -->
+                    <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+                            <div class="flex items-center gap-2">
+                                <span class="flex h-6 w-6 items-center justify-center rounded-full bg-rose-100 text-xs font-bold text-rose-700">👎</span>
+                                <h3 class="text-sm font-semibold text-slate-900">Top Disliked Drivers (Negative Pull)</h3>
+                            </div>
+                            <span class="text-xs text-slate-400">Higher % = More Penalty</span>
+                        </div>
+
+                        <div class="mt-3 divide-y divide-slate-100">
+                            {% for j in analysis.disliked_drivers %}
+                                <div class="flex items-center justify-between py-3">
+                                    <div class="min-w-0 pr-3">
+                                        <div class="truncate text-sm font-medium text-slate-800">{{ j.title }}</div>
+                                        <div class="text-xs text-slate-500">{{ j.company }}</div>
+                                    </div>
+                                    <div class="flex items-center gap-3 shrink-0">
+                                        <span class="rounded bg-rose-50 px-2 py-0.5 text-xs font-bold text-rose-700 border border-rose-200">{{ j.similarity_percent }}% match</span>
+                                        <form method="post" onsubmit="return confirm('Remove this job from your Disliked training set? Centroid will be updated immediately.');">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="action" value="remove_dislike">
+                                            <input type="hidden" name="job_id" value="{{ j.job_id }}">
+                                            <input type="hidden" name="track" value="{{ selected_track }}">
+                                            <input type="hidden" name="title" value="{{ sim_title }}">
+                                            <input type="hidden" name="company" value="{{ sim_company }}">
+                                            <input type="hidden" name="description" value="{{ sim_description }}">
+                                            <button type="submit" class="rounded border border-emerald-200 px-2 py-1 text-xs font-medium text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 transition" title="Restore (Un-dislike)">
+                                                Remove Dislike
+                                            </button>
+                                        </form>
+                                    </div>
+                                </div>
+                            {% empty %}
+                                <p class="py-4 text-center text-xs text-slate-400">No disliked jobs match this description.</p>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        {% endif %}
+    {% endif %}
+
+    <!-- Training Library Management -->
+    <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-slate-100 pb-4">
+            <div>
+                <h2 class="text-base font-semibold text-concierge-slate">Preference Training Library ({{ selected_track }})</h2>
+                <p class="text-xs text-slate-500">Every job listed here shapes your profile's Liked or Disliked recommendation vector.</p>
+            </div>
+
+            <!-- Controls: Filter Buttons and Search -->
+            <div class="flex flex-wrap items-center gap-2">
+                <!-- Search input -->
+                <div class="relative">
+                    <input type="text" id="library-search-input" placeholder="Filter by title or company..."
+                           class="w-48 sm:w-60 rounded-lg border border-slate-200 pl-8 pr-3 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand">
+                    <svg class="absolute left-2.5 top-2 h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                </div>
+
+                <!-- Sentiment Filter Buttons -->
+                <div class="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-0.5 text-xs font-semibold">
+                    <button type="button" class="lib-filter-btn rounded-md px-3 py-1.5 transition {% if default_filter == 'liked' %}text-white bg-slate-800{% else %}text-slate-600 hover:text-slate-900{% endif %}" data-filter="liked">
+                        👍 Liked Jobs ({{ liked_count }})
+                    </button>
+                    <button type="button" class="lib-filter-btn rounded-md px-3 py-1.5 transition {% if default_filter == 'disliked' %}text-white bg-slate-800{% else %}text-slate-600 hover:text-slate-900{% endif %}" data-filter="disliked">
+                        👎 Disliked Jobs ({{ disliked_count }})
+                    </button>
+                    <button type="button" class="lib-filter-btn rounded-md px-3 py-1.5 transition {% if default_filter == 'all' %}text-white bg-slate-800{% else %}text-slate-600 hover:text-slate-900{% endif %}" data-filter="all">
+                        All ({{ total_count }})
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Training Items Table -->
+        <div class="mt-4">
+            {% if not training_items %}
+                <p class="py-8 text-center text-sm text-slate-500">No liked or disliked training jobs found for profile <strong>{{ selected_track }}</strong>.</p>
+            {% else %}
+                <div class="overflow-x-auto">
+                    <table class="min-w-full text-left text-xs" id="training-library-table">
+                        <thead>
+                            <tr class="border-b border-slate-200 text-slate-400 uppercase tracking-wide">
+                                <th class="pb-2.5 pr-3">Sentiment</th>
+                                <th class="pb-2.5 pr-3">Job Title</th>
+                                <th class="pb-2.5 pr-3">Company</th>
+                                <th class="pb-2.5 pr-3">Date Added</th>
+                                <th class="pb-2.5 text-right">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100" id="training-library-tbody">
+                            {% for item in training_items %}
+                                <tr class="training-row hover:bg-slate-50/50 transition" data-action="{{ item.action }}" data-search="{{ item.title|lower }} {{ item.company|lower }}" {% if default_filter != 'all' and item.action != default_filter %}style="display: none;"{% endif %}>
+                                    <!-- Explicit Sentiment Badge -->
+                                    <td class="py-2.5 pr-3 whitespace-nowrap">
+                                        <span class="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold border {{ item.badge_class }}">
+                                            {{ item.icon }} {{ item.action_label }}
+                                        </span>
+                                    </td>
+                                    <!-- Title -->
+                                    <td class="py-2.5 pr-3 font-medium text-slate-900">
+                                        {% if item.url %}
+                                            <a href="{{ item.url }}" target="_blank" rel="noopener" class="hover:underline text-brand-ink">{{ item.title }}</a>
+                                        {% else %}
+                                            {{ item.title }}
+                                        {% endif %}
+                                    </td>
+                                    <!-- Company -->
+                                    <td class="py-2.5 pr-3 text-slate-600">{{ item.company }}</td>
+                                    <!-- Date -->
+                                    <td class="py-2.5 pr-3 text-slate-400 whitespace-nowrap">{{ item.created_at|date:"M d, Y" }}</td>
+                                    <!-- Action -->
+                                    <td class="py-2.5 text-right whitespace-nowrap">
+                                        {% if item.action == "liked" %}
+                                            <form method="post" class="inline" onsubmit="return confirm('Remove this job from Liked?');">
+                                                {% csrf_token %}
+                                                <input type="hidden" name="action" value="remove_like">
+                                                <input type="hidden" name="job_id" value="{{ item.job_id }}">
+                                                <input type="hidden" name="track" value="{{ selected_track }}">
+                                                <button type="submit" class="rounded border border-red-200 px-2.5 py-1 font-medium text-red-600 hover:bg-red-50 transition">Remove Like</button>
+                                            </form>
+                                        {% else %}
+                                            <form method="post" class="inline" onsubmit="return confirm('Restore this job (un-dislike)?');">
+                                                {% csrf_token %}
+                                                <input type="hidden" name="action" value="remove_dislike">
+                                                <input type="hidden" name="job_id" value="{{ item.job_id }}">
+                                                <input type="hidden" name="track" value="{{ selected_track }}">
+                                                <button type="submit" class="rounded border border-emerald-200 px-2.5 py-1 font-medium text-emerald-600 hover:bg-emerald-50 transition">Restore (Un-dislike)</button>
+                                            </form>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    <p id="no-matching-rows-msg" class="hidden py-8 text-center text-xs text-slate-400">No training jobs match your search/filter criteria.</p>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Vanilla JS Filter & Search Script (No External Dependencies) -->
+<script>
+(function() {
+    var searchInput = document.getElementById('library-search-input');
+    var filterBtns = document.querySelectorAll('.lib-filter-btn');
+    var rows = document.querySelectorAll('.training-row');
+    var emptyMsg = document.getElementById('no-matching-rows-msg');
+    var currentFilter = '{{ default_filter|default:"liked" }}';
+
+    function updateRows() {
+        var query = (searchInput ? searchInput.value : '').toLowerCase().trim();
+        var visibleCount = 0;
+
+        rows.forEach(function(row) {
+            var action = row.getAttribute('data-action');
+            var searchData = row.getAttribute('data-search') || '';
+
+            var matchesFilter = (currentFilter === 'all') || (action === currentFilter);
+            var matchesQuery = !query || (searchData.indexOf(query) !== -1);
+
+            if (matchesFilter && matchesQuery) {
+                row.style.display = '';
+                visibleCount++;
+            } else {
+                row.style.display = 'none';
+            }
+        });
+
+        if (emptyMsg) {
+            if (visibleCount === 0 && rows.length > 0) {
+                emptyMsg.classList.remove('hidden');
+            } else {
+                emptyMsg.classList.add('hidden');
+            }
+        }
+    }
+
+    if (filterBtns) {
+        filterBtns.forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                filterBtns.forEach(function(b) {
+                    b.classList.remove('text-white', 'bg-slate-800');
+                    b.classList.add('text-slate-600');
+                });
+                btn.classList.add('text-white', 'bg-slate-800');
+                btn.classList.remove('text-slate-600');
+                currentFilter = btn.getAttribute('data-filter') || 'all';
+                updateRows();
+            });
+        });
+    }
+
+    if (searchInput) {
+        searchInput.addEventListener('input', updateRows);
+    }
+})();
+</script>
+{% endblock %}

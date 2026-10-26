@@ -16,6 +16,7 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 **Defined:** `resume_app/tasks.py` — `@db_task()`
 
 **Signature (key params):**
+- `user_id`: owner `User.id` (tenancy context)
 - `resume_id`: `OptimizedResume.id`
 - `job_description_id`: `JobDescription.id`
 - `provider`: LLM provider name
@@ -34,7 +35,7 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 - Loads the `OptimizedResume` by `resume_id`.
 - Parses the resume PDF text via `parse_pdf(...)`.
 - Builds optimizer context via `optimizer_budget.build_optimizer_context_state()` (role-focused JD excerpt, truncated resume fields, char budgets).
-- Runs LLM calls through **`resume_app.llm_gateway.invoke_llm_messages`**: preference order, job pinning (`job_cache_key=str(optimized_resume.id)`), rate-limit cooldowns, and **`AppAutomationSettings.stop_llm_requests`** (kill switch). Writer and judges are remote-first by default (`prefer_local=False`); set `OPTIMIZER_JUDGES_PREFER_LOCAL=True` to prefer local Ollama for ATS/Recruiter only.
+- Runs LLM calls through **`resume_app.llm.invoke_llm_messages`**: preference order, job pinning (`job_cache_key=str(optimized_resume.id)`), rate-limit cooldowns, and **`AppAutomationSettings.stop_llm_requests`** (kill switch). Writer and judges are remote-first by default (`prefer_local=False`); set `OPTIMIZER_JUDGES_PREFER_LOCAL=True` to prefer local Ollama for ATS/Recruiter only.
 - Builds a LangGraph workflow:
   - default is `writer` → `ats_judge` → `recruiter_judge` (single pass, then END)
   - or uses `workflow_steps` if provided (each listed step runs once in order)
@@ -65,11 +66,12 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 
 ---
 
-## 2. `enqueue_applying_resume_optimization_task(pipeline_entry_ids, force_new=False)`
+## 2. `enqueue_applying_resume_optimization_task(user_id, pipeline_entry_ids, force_new=False)`
 
 **Defined:** `resume_app/tasks.py` — `@db_task()`
 
 **Signature:**
+- `user_id`: owner `User.id`
 - `pipeline_entry_ids`: list of `PipelineEntry.id`
 - `force_new`: when false, avoids enqueuing if queued/running already exists
 
@@ -101,86 +103,46 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 
 ---
 
-## 3. `run_job_search_task(task_id)`
+## 3. `run_job_search_task(user_id, task_id)`
 
 **Defined:** `resume_app/tasks.py` — `@db_task()`
 
 **Signature:**
+- `user_id`: owner `User.id`
 - `task_id`: `JobSearchTask.id`
 
 **When it runs:**
 - Enqueued by the periodic scheduler `enqueue_due_job_search_tasks()`.
-- Not called directly by users (the UI uses `JobSearchTask` + “Run now” which ends up enqueuing this).
+- Triggered when users click "Run Now" on a scheduled search task.
 
 **What it does:**
-- Uses a global lock (`JOB_SEARCH_TASK_LOCK_KEY`) so only one job-search run executes at a time.
+- Uses a **per-tenant lock** (`job_search_task_running:u{user_id}`) so concurrent searches for different users run in parallel without blocking each other.
 - Creates a `JobSearchTaskRun` row in `STATUS_RUNNING`.
-- Calls `run_job_search_core(...)` to:
-  - fetch external jobs
-  - apply search-time filters/ranking logic
-- For each returned job payload:
-  - upserts pipeline membership by creating `PipelineEntry` when needed
-  - if an entry was soft-deleted (`removed_at != null`), it does not re-add it
-- **Post-search step:** runs de-duplication for the task track only:
-  - calls `dedupe_pipeline_entries(track_slug=task.track, stage="pipeline", include_done=False)`
-- **Persist Fit/Pref:** writes `JobListingTrackMetrics` for ranked payloads via `persist_preference_metrics_for_jobs` (embedding-based **Fit %** and **Pref %**; not LLM `JobMatchResult.fit_score`).
-- **Auto-promote:** calls `apply_pipeline_auto_promotions()` so strong Pref margins can move rows to Vetting without waiting for `pipeline_manager`.
-
-**Score vocabulary (My jobs board):**
-- **Fit %** / **Pref %** — cached preference metrics from likes/dislikes (`JobListingTrackMetrics`).
-- **Interview %** — LLM resume↔JD vetting score on Review rows (`PipelineEntry.vetting_interview_*`); local Ollama only in auto-pipeline paths.
-- **fit_score** on keyword/manual match APIs — separate `JobMatchResult` path; not used for scheduled search ingest.
-
-**Returns:**
-- On success: `{"status": "success", "task_id": task_id}`
-- On errors: `{"status": "error", ...}`
-- On skip: `{"status": "skipped", ...}` when locked or task inactive.
+- Calls `run_job_search_core(...)` to fetch external jobs, filter, and rank.
+- Adds non-duplicate jobs to `PipelineEntry`.
+- Runs post-search deduplication and persists `JobListingTrackMetrics`.
+- Calls `apply_pipeline_auto_promotions()`.
 
 ---
 
-## 4. `evaluate_vetting_matching_task(pipeline_entry_ids, llm_provider=None, llm_model=None, matching_prompt=None)`
+## 4. `evaluate_vetting_matching_task(user_id, pipeline_entry_ids, llm_provider=None, llm_model=None, matching_prompt=None)`
 
 **Defined:** `resume_app/tasks.py` — `@db_task()`
 
 **Signature:**
+- `user_id`: owner `User.id`
 - `pipeline_entry_ids`: list of `PipelineEntry.id`
 - optional LLM override: `llm_provider`, `llm_model`
 - optional prompt override: `matching_prompt`
 
 **When it runs:**
-- Backfills vetting probability values via `enqueue_due_vetting_matching_tasks()`.
-- Runs immediately when pipeline rows are auto-promoted from Pipeline → Vetting (via `apply_pipeline_auto_promotions()`).
+- Backfills vetting probability values via `process_user_vetting_matching_task(user_id)`.
+- Runs immediately when pipeline rows are auto-promoted from Pipeline → Vetting.
 
 **What it does:**
-- Uses a global lock (`VETTING_MATCHING_LOCK_KEY`) so only one vetting matching task executes at a time.
-- Loads only existing, active pipeline entries:
-  - `stage = PipelineEntry.Stage.VETTING`
-  - `removed_at__isnull=True`
-  - ids limited to `pipeline_entry_ids`
-- Requires at least one row in `LLMProviderPreference` with a connected API key (same pool as the central LLM gateway).
-- Calls `run_matching(..., llm=None, job_cache_key="vetting:<entry_id>")` so selection, pinning, and cooldowns go through **`resume_app.llm_gateway`**.
-- Parses resumes:
-  - for each `track` present, loads the latest `UserResume` for that track (fallback to latest overall)
-  - uses only a snippet (capped by `RESUME_MATCHING_SNIPPET_CHARS`)
-- For each entry:
-  - skips if it was already evaluated for the same resume id (`vetting_interview_resume_id`)
-  - skips if job description is empty
-  - calls `run_matching(...)` (up to 3 attempts):
-    - extracts `interview_probability` and `reasoning`
-  - writes:
-    - `vetting_interview_probability` (clamped to 0..100)
-    - `vetting_interview_reasoning` (truncated to 2000 chars)
-    - `vetting_interview_resume_id`
-    - `vetting_interview_scored_at`
-  - calls `apply_vetting_to_applying_promotions([entry.id])`
-
-**Returns:**
-- `{"status": "success", "updated": <int>, "skipped": <int>, "errors": <list>}`
-- `{"status": "skipped", ...}` if no ids or no matching entries.
-- `{"status": "error", ...}` if no LLM is configured.
-
-**LLM cost driver:**
-- This is the primary source of “vetting” LLM usage (resume vs job matching). If you see periodic LLM token spikes, this is usually the function being called.
+- Uses a **per-tenant lock** (`vetting_matching_task_running:u{user_id}`) so multiple users can evaluate vetting matches concurrently.
+- Loads existing, active pipeline entries in VETTING stage for that user.
+- Calls `run_matching(...)` through `resume_app.llm` and records interview probabilities.
 
 ---
 
@@ -188,28 +150,11 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 
 **Defined:** `resume_app/tasks.py` — `@db_periodic_task(crontab(minute="*/20"))`
 
-**Signature:**
-- none
-
 **When it runs:**
 - Every 20 minutes.
 
 **Purpose:**
-- **Vetting Manager** (Huey dashboard name): backfills vetting interview probability for entries missing it or evaluated against an outdated “latest resume” per track. Rows with short job descriptions are skipped inside `evaluate_vetting_matching_task`.
-
-**What it does:**
-- Limits work per tick:
-  - considers the newest 200 candidate vetting entries
-  - enqueues up to `max_to_enqueue = 20` entries per run
-- Determines the latest resume id per track (fallback to latest overall)
-- Builds `to_enqueue` list where:
-  - `vetting_interview_probability is None` OR
-  - `vetting_interview_resume_id != latest.id`
-- Calls `evaluate_vetting_matching_task(to_enqueue, ...)` when non-empty.
-- Finally calls `apply_vetting_to_applying_promotions()` (global promotion pass).
-
-**Returns:**
-- `None` (periodic tasks don’t rely on a return value).
+- Periodic dispatcher that fans out `process_user_vetting_matching_task(user_id)` to Huey workers for each active user.
 
 ---
 
@@ -217,28 +162,11 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 
 **Defined:** `resume_app/tasks.py` — `@db_periodic_task(crontab(minute="*"))`
 
-**Signature:**
-- none
-
 **When it runs:**
 - Every minute.
 
 **Purpose:**
-- Finds due `JobSearchTask` rows (`next_run_at <= now`) and enqueues exactly one job-search task per tick to prevent overlap.
-
-**What it does:**
-- Queries:
-  - `JobSearchTask.is_active=True`
-  - `next_run_at` set and `<= now`
-  - orders by `next_run_at`, then `start_time`
-  - limits to 1 due task
-- For the selected task:
-  - computes `next_run_at` using `get_next_run_at(task.frequency, from_time=now)`
-  - updates `task.next_run_at`
-  - enqueues `run_job_search_task(task.id)`
-
-**Returns:**
-- `None`
+- Finds all due `JobSearchTask` rows across users (up to batch limit `MAX_DUE_JOB_SEARCH_TASKS_PER_TICK = 50`), advances `next_run_at`, and enqueues `run_job_search_task(task.owner_id, task.id)` concurrently.
 
 ---
 
@@ -423,6 +351,34 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 
 ---
 
+## 13. `purge_generated_resumes_periodic()`
+
+**Defined:** `resume_app/tasks.py` — `@db_periodic_task(crontab(minute="15", hour="*/6"))`
+
+**When it runs:**
+- Every 6 hours.
+
+**Purpose:**
+- Removes ephemeral generated `UserResume` PDFs older than `cleanup_generated_resume_retention_days` (from `AppAutomationSettings`) across all active users.
+
+---
+
+## 14. `pipeline_resume_llm_extract_task(run_dir_str)`
+
+**Defined:** `resume_app/tasks.py` — `@db_task()`
+
+**Signature:**
+- `run_dir_str`: Filesystem path to the run metadata directory.
+
+**When it runs:**
+- Enqueued via `POST /api/resume/jobs/pipeline-resume-summary/start` for batch skill extraction across pipeline jobs.
+
+**What it does:**
+- Loads run metadata (`run_meta.json`), verifies `owner_id`, resolves LLM provider credentials.
+- Executes batch skill extraction across pipeline jobs with rate-limiting, JSON parse retries, and optional keyword consolidation.
+
+---
+
 ## Operational notes (re: LLM usage)
 
 - The biggest periodic LLM load is typically:
@@ -434,7 +390,7 @@ All tasks are defined in `resume_app/tasks.py` and use Django models from `resum
 
 ### Redis-backed RPM / TPM limits
 
-- Implementation: `resume_app/llm_rate_limit.py`, enforced via `resume_app.llm_gateway.invoke_llm_messages` (optimizer, matching, insights, pipeline extract, etc.). Full gateway reference: [`LLM_GATEWAY.md`](LLM_GATEWAY.md).
+- Implementation: `resume_app/llm/rate_limit.py`, enforced via `resume_app.llm.invoke_llm_messages` (optimizer, matching, insights, pipeline extract, etc.). Full gateway reference: [`LLM_GATEWAY.md`](LLM_GATEWAY.md).
 - **Configuration (env / `core/settings.py`):**
   - `LLM_RATE_LIMIT_ENABLED` (default: `True`)
   - `LLM_RATE_LIMIT_FAIL_OPEN` (default: follows `DEBUG` — fail-closed in production; when true, Redis down / wait exceeded still allows the call)

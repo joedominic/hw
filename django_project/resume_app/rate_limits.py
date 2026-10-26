@@ -5,7 +5,7 @@ from typing import Optional
 
 from django.contrib.auth.models import AbstractBaseUser
 
-from .entitlements import METRIC_LLM_REQUESTS, QuotaExceeded, check_quota, consume_quota
+from .subscriptions import METRIC_LLM_REQUESTS, QuotaExceeded, check_quota, consume_quota
 
 
 class LLMUserRateLimitExceeded(Exception):

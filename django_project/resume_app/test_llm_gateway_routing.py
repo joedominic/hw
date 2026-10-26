@@ -20,13 +20,13 @@ def _cand(provider: str, model: str, *, priority: int, is_local: bool, preferenc
 
 
 class OrderedEligibleCandidatesTests(SimpleTestCase):
-    @patch("resume_app.llm_gateway._get_pin", return_value=(None, None))
-    @patch("resume_app.llm_gateway.is_llm_on_cooldown", return_value=False)
-    @patch("resume_app.llm_gateway._preference_candidates")
+    @patch("resume_app.llm.gateway._get_pin", return_value=(None, None))
+    @patch("resume_app.llm.gateway.is_llm_on_cooldown", return_value=False)
+    @patch("resume_app.llm.gateway._preference_candidates")
     def test_prefer_local_false_puts_remote_before_higher_priority_ollama(
         self, mock_prefs, _cd, _pin
     ):
-        from resume_app.llm_gateway import _ordered_eligible_candidates
+        from resume_app.llm.gateway import _ordered_eligible_candidates
 
         # Ollama is higher priority (lower number) than Groq — previously won Writer.
         mock_prefs.return_value = [
@@ -37,11 +37,11 @@ class OrderedEligibleCandidatesTests(SimpleTestCase):
         self.assertEqual(ordered[0]["provider"], "groq")
         self.assertEqual(ordered[1]["provider"], "Ollama Local")
 
-    @patch("resume_app.llm_gateway._get_pin", return_value=(None, None))
-    @patch("resume_app.llm_gateway.is_llm_on_cooldown", return_value=False)
-    @patch("resume_app.llm_gateway._preference_candidates")
+    @patch("resume_app.llm.gateway._get_pin", return_value=(None, None))
+    @patch("resume_app.llm.gateway.is_llm_on_cooldown", return_value=False)
+    @patch("resume_app.llm.gateway._preference_candidates")
     def test_prefer_local_true_puts_ollama_first(self, mock_prefs, _cd, _pin):
-        from resume_app.llm_gateway import _ordered_eligible_candidates
+        from resume_app.llm.gateway import _ordered_eligible_candidates
 
         mock_prefs.return_value = [
             _cand("groq", "llama-3.3-70b", priority=0, is_local=False, preference_id=2),
@@ -51,26 +51,26 @@ class OrderedEligibleCandidatesTests(SimpleTestCase):
         self.assertEqual(ordered[0]["provider"], "Ollama Local")
         self.assertEqual(ordered[1]["provider"], "groq")
 
-    @patch("resume_app.llm_gateway.is_llm_on_cooldown", return_value=False)
-    @patch("resume_app.llm_gateway._preference_candidates")
+    @patch("resume_app.llm.gateway.is_llm_on_cooldown", return_value=False)
+    @patch("resume_app.llm.gateway._preference_candidates")
     def test_local_pin_ignored_when_remote_first_and_remotes_exist(self, mock_prefs, _cd):
-        from resume_app.llm_gateway import _ordered_eligible_candidates
+        from resume_app.llm.gateway import _ordered_eligible_candidates
 
         mock_prefs.return_value = [
             _cand("Ollama Local", "llama3", priority=0, is_local=True, preference_id=1),
             _cand("groq", "llama-3.3-70b", priority=1, is_local=False, preference_id=2),
         ]
-        with patch("resume_app.llm_gateway._get_pin", return_value=("Ollama Local", "llama3")):
+        with patch("resume_app.llm.gateway._get_pin", return_value=("Ollama Local", "llama3")):
             ordered = _ordered_eligible_candidates(
                 user=object(), job_cache_key="1", prefer_local=False
             )
         self.assertEqual(ordered[0]["provider"], "groq")
 
-    @patch("resume_app.llm_gateway._get_pin", return_value=(None, None))
-    @patch("resume_app.llm_gateway.is_llm_on_cooldown", return_value=False)
-    @patch("resume_app.llm_gateway._preference_candidates")
+    @patch("resume_app.llm.gateway._get_pin", return_value=(None, None))
+    @patch("resume_app.llm.gateway.is_llm_on_cooldown", return_value=False)
+    @patch("resume_app.llm.gateway._preference_candidates")
     def test_allow_local_false_excludes_ollama_local(self, mock_prefs, _cd, _pin):
-        from resume_app.llm_gateway import _ordered_eligible_candidates
+        from resume_app.llm.gateway import _ordered_eligible_candidates
 
         mock_prefs.return_value = [
             _cand("Ollama Local", "nemotron", priority=0, is_local=True, preference_id=1),
@@ -82,7 +82,7 @@ class OrderedEligibleCandidatesTests(SimpleTestCase):
         self.assertEqual([c["provider"] for c in ordered], ["Ollama Cloud"])
 
     def test_provider_is_local_forces_ollama_local_name(self):
-        from resume_app.llm_gateway import provider_is_local
+        from resume_app.llm.gateway import provider_is_local
 
         self.assertTrue(provider_is_local("Ollama Local", preference_is_local=False))
         self.assertFalse(provider_is_local("Ollama Cloud", preference_is_local=False))

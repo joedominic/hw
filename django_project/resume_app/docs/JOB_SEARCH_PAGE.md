@@ -47,22 +47,14 @@ On the search form, **Sites** checkboxes select which boards to query. Implement
 | **Indeed** | [python-jobspy](https://pypi.org/project/python-jobspy/) | Default if none selected |
 | **LinkedIn** | python-jobspy | Fetches full descriptions (`linkedin_fetch_description`) |
 | **Dice** | `resume_app/dice_client.py` | Dice JSON search API (`job-search-api.svc.dhigroupinc.com`), with HTML fallback. Full descriptions are loaded from job-detail JSON-LD when Tailoring or using Auto-fill. |
-| **Adzuna** | `resume_app/adzuna_client.py` | [Adzuna API](https://developer.adzuna.com/) — requires keys in `.env` |
 | **Levels.fyi** | `resume_app/levels_client.py` | Undocumented encrypted jobs API (`api.levels.fyi/v1/job/search`). Full descriptions are loaded from `api.levels.fyi/v1/job/{id}` when Tailoring or using Auto-fill. |
-
-**Adzuna setup:** Register at [developer.adzuna.com](https://developer.adzuna.com/), then set:
-
-- `ADZUNA_APP_ID`
-- `ADZUNA_APP_KEY`
-- Optional: `ADZUNA_COUNTRY` (default `us`), `ADZUNA_MAX_PAGES` (default `3`)
-
-If Adzuna is checked but keys are missing, search returns a 502 with a clear error message.
+| **Built In** | `resume_app/builtin_client.py` | BuiltIn.com jobs API / scraper with proxy support. |
 
 **Dice:** Uses the same JSON search endpoint as the Dice website (no account required). Optional overrides: `DICE_API_KEY`, `DICE_COUNTRY_CODE` (default `US`), `DICE_RADIUS_MILES` (default `30`). If the API fails, the client falls back to scraping `/jobs` HTML.
 
 **Levels.fyi:** Uses the same encrypted JSON API as the Levels.fyi jobs site (no account required). Search maps `q` to a Levels.fyi `jobFamilySlug` when possible (e.g. Staff Software Engineer → `software-engineer`) and location → `locationSlug` (default `united-states`; aliases like `US` / `USA` are normalized). Optional env filters: `LEVELS_FYI_STANDARD_LEVELS`, `LEVELS_FYI_OFFSET_STEP` (default `10`), `LEVELS_FYI_PAGE_DELAY` (default `0.35`), `LEVELS_FYI_MAX_SCAN_PAGES` (default `30`). This API is undocumented and may break if Levels.fyi rotates encryption or changes endpoints.
 
-**Built In** is not supported yet.
+**Built In:** Scrapes and queries BuiltIn.com listings via `resume_app/builtin_client.py`. Optional settings: `BUILTIN_API_KEY`, `BUILTIN_USER_AGENT`, `BUILTIN_PAGE_DELAY`, `BUILTIN_PROXIES`.
 
 When multiple sites are selected, each provider receives a per-site result cap (`max(10, results_wanted / num_sites)`) so total raw volume stays bounded.
 

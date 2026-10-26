@@ -158,7 +158,7 @@ class Command(BaseCommand):
             cur.execute("SHOW FULL TABLES WHERE Table_type = 'BASE TABLE'")
             tables = [row[0] for row in cur.fetchall()]
 
-        fh.write(f"-- ResumeElite logical backup of `{dbname}`\n")
+        fh.write(f"-- HireEdge logical backup of `{dbname}`\n")
         fh.write(f"-- generated {_dt.datetime.now().isoformat(timespec='seconds')}\n")
         fh.write("SET FOREIGN_KEY_CHECKS=0;\n")
         fh.write("SET UNIQUE_CHECKS=0;\n")

@@ -35,14 +35,14 @@ logger = logging.getLogger(__name__)
 VETTING_MATCHING_JD_MIN_CHARS = 2000
 
 # Sources where a short stored description can be replaced via detail fetch (see dice/levels clients).
-ENRICHABLE_JD_SOURCES = frozenset({"dice", "levels"})
+ENRICHABLE_JD_SOURCES = frozenset({"dice", "levels", "builtin"})
 
 
 def effective_vetting_job_description(job: JobListing, *, enrich: bool = False) -> str:
     """
     Description used for vetting length checks and interview status.
 
-    When ``enrich`` is True, Dice/Levels listings below the vetting minimum may
+    When ``enrich`` is True, Dice/Levels/BuiltIn listings below the vetting minimum may
     fetch and persist full job-detail text (same path as Show description).
     """
     current = (job.description or "").strip()
@@ -50,13 +50,17 @@ def effective_vetting_job_description(job: JobListing, *, enrich: bool = False) 
         return current
     src = (job.source or "").strip().lower()
     if src == "dice":
-        from .dice_client import enrich_dice_job_listing_description
+        from .sourcing.clients.dice_client import enrich_dice_job_listing_description
 
         return (enrich_dice_job_listing_description(job) or current).strip()
     if src == "levels":
-        from .levels_client import enrich_levels_job_listing_description
+        from .sourcing.clients.levels_client import enrich_levels_job_listing_description
 
         return (enrich_levels_job_listing_description(job) or current).strip()
+    if src == "builtin":
+        from .sourcing.clients.builtin_client import enrich_builtin_job_listing_description
+
+        return (enrich_builtin_job_listing_description(job) or current).strip()
     return current
 
 
@@ -157,6 +161,14 @@ def _tokenize_for_bm25(text: str) -> List[str]:
     return re.findall(r"\w+", text.lower())
 
 
+INTERACTIVE_JOB_SEARCH_LOCK_TIMEOUT = 120  # 2 minutes max safety timeout
+
+
+def get_interactive_job_search_lock_key(user_id: int | str) -> str:
+    """Per-tenant lock key preventing overlapping live scrapes for the same user."""
+    return f"job_search_interactive:u{user_id}"
+
+
 def run_job_search_core(
     *,
     user,
@@ -166,77 +178,129 @@ def run_job_search_core(
     results_wanted: int = 50,
     site_name: Optional[List[str]] = None,
     sort: str = "focus",
-) -> Tuple[int, int, List[JobPayload], List[dict]]:
+    return_audit_log: bool = False,
+) -> Tuple[int, int, List[JobPayload], List[dict]] | Tuple[int, int, List[JobPayload], List[dict], List[dict]]:
     """
     Fetch jobs, upsert JobListing, apply filters and ranking. No request/session.
 
     Returns:
         (jobs_fetched, jobs_after_filter, list[JobPayload], refs_for_cache)
+        or (jobs_fetched, jobs_after_filter, list[JobPayload], refs_for_cache, audit_items) if return_audit_log=True
     """
     if not search_term or not search_term.strip():
         raise ValueError("search_term is required")
 
-    from .entitlements import METRIC_JOB_SEARCHES, QuotaExceeded, consume_quota
+    from django.core.cache import cache
+    from .subscriptions import METRIC_JOB_SEARCHES, QuotaExceeded, consume_quota
+
+    user_id = getattr(user, "id", None) if user is not None and getattr(user, "is_authenticated", False) else None
+    lock_key = get_interactive_job_search_lock_key(user_id) if user_id else None
+    if lock_key and not cache.add(lock_key, 1, INTERACTIVE_JOB_SEARCH_LOCK_TIMEOUT):
+        raise RuntimeError("A job search is already in progress for your account. Please wait for it to complete.")
 
     try:
-        consume_quota(user, METRIC_JOB_SEARCHES, 1)
-    except QuotaExceeded as exc:
-        raise ValueError(str(exc)) from exc
+        try:
+            consume_quota(user, METRIC_JOB_SEARCHES, 1)
+        except QuotaExceeded as exc:
+            raise ValueError(str(exc)) from exc
 
-    results_wanted = results_wanted or getattr(settings, "JOB_SEARCH_DEFAULT_RESULTS", 50)
-    site_name = normalize_site_names(site_name)
-    norm_track = normalize_track_slug(track, user)
-    disliked_listing_ids = excluded_listing_id_set(user, track)
-    from .models import UserDisqualifier
+        results_wanted = results_wanted or getattr(settings, "JOB_SEARCH_DEFAULT_RESULTS", 50)
+        site_name = normalize_site_names(site_name)
+        norm_track = normalize_track_slug(track, user)
+        disliked_listing_ids = excluded_listing_id_set(user, track)
+        from .models import UserDisqualifier
 
-    disqualifier_pattern = build_disqualifier_pattern(
-        list(UserDisqualifier.objects.for_user(user).values_list("phrase", flat=True))
-    )
-    jobs_with_meta: List[Tuple[JobListing, JobPayload]] = []
+        disqualifier_pattern = build_disqualifier_pattern(
+            list(UserDisqualifier.objects.for_user(user).values_list("phrase", flat=True))
+        )
+        jobs_with_meta: List[Tuple[JobListing, JobPayload]] = []
 
-    hours_old = getattr(settings, "JOB_SEARCH_HOURS_OLD", 168)
-    fetch_kwargs = {
-        "search_term": search_term.strip(),
-        "location": (location or "").strip() or None,
-        "site_name": site_name,
-        "results_wanted": results_wanted,
-        "hours_old": hours_old,
-    }
-    try:
-        raw = fetch_jobs(**fetch_kwargs)
-    except Exception as e:
-        raise RuntimeError(f"Job fetch failed: {e}") from e
+        hours_old = getattr(settings, "JOB_SEARCH_HOURS_OLD", 168)
+        fetch_kwargs = {
+            "search_term": search_term.strip(),
+            "location": (location or "").strip() or None,
+            "site_name": site_name,
+            "results_wanted": results_wanted,
+            "hours_old": hours_old,
+        }
+        try:
+            raw = fetch_jobs(**fetch_kwargs)
+        except Exception as e:
+            raise RuntimeError(f"Job fetch failed: {e}") from e
 
-    jobs_fetched = len(raw or [])
-    logger.info(
-        "[job_search_core] JobSpy returned %d jobs (requested %d, hours_old=%s)",
-        jobs_fetched,
-        results_wanted,
-        hours_old,
-    )
-    if not raw and results_wanted > 50:
-        raw = fetch_jobs(**{**fetch_kwargs, "results_wanted": 50})
         jobs_fetched = len(raw or [])
-        logger.info("[job_search_core] JobSpy retry(50) returned %d jobs", jobs_fetched)
+        logger.info(
+            "[job_search_core] JobSpy returned %d jobs (requested %d, hours_old=%s)",
+            jobs_fetched,
+            results_wanted,
+            hours_old,
+        )
+        if not raw and results_wanted > 50:
+            raw = fetch_jobs(**{**fetch_kwargs, "results_wanted": 50})
+            jobs_fetched = len(raw or [])
+            logger.info("[job_search_core] JobSpy retry(50) returned %d jobs", jobs_fetched)
 
-    refs_for_cache: List[dict] = []
-    for r in raw or []:
-        job, _ = upsert_job_listing_from_fetch(r)
-        refs_for_cache.append({"source": job.source, "external_id": job.external_id})
-        if job.id in disliked_listing_ids:
-            continue
-        if job_matches_disqualifiers(job, disqualifier_pattern):
-            continue
-        snippet = (job.description or "")[:300].replace("\n", " ")
-        pl = _job_to_payload(job, snippet=snippet)
-        jobs_with_meta.append((job, pl))
+        refs_for_cache: List[dict] = []
+        audit_items: List[dict] = []
+        audit_by_job_id: dict[int, dict] = {}
 
-    jobs_after_filter = len(jobs_with_meta)
-    logger.info("[job_search_core] After filter: %d jobs", jobs_after_filter)
+        for r in raw or []:
+            job, _ = upsert_job_listing_from_fetch(r)
+            refs_for_cache.append({"source": job.source, "external_id": job.external_id})
 
-    jobs_out = rank_and_filter_jobs(jobs_with_meta, norm_track, user=user)
-    annotate_saved_flags(user, norm_track, jobs_out)
-    return (jobs_fetched, jobs_after_filter, jobs_out, refs_for_cache)
+            audit_entry = {
+                "job_id": job.id,
+                "title": job.title or "",
+                "company": job.company_name or "",
+                "location": job.location or "",
+                "source": job.source or "",
+                "url": job.url or "",
+                "date_posted": job.date_posted.isoformat() if getattr(job, "date_posted", None) else "",
+                "disposition": "pending",
+                "reason": "",
+            }
+            audit_items.append(audit_entry)
+            audit_by_job_id[job.id] = audit_entry
+
+            if job.id in disliked_listing_ids:
+                audit_entry["disposition"] = "eliminated_disliked"
+                audit_entry["reason"] = "Eliminated: In user's disliked / hidden jobs"
+                continue
+
+            if disqualifier_pattern:
+                desc = (job.description or "")
+                dq_match = disqualifier_pattern.search(desc)
+                if dq_match:
+                    matched_kw = dq_match.group(0)
+                    audit_entry["disposition"] = "eliminated_disqualifier"
+                    audit_entry["reason"] = f"Eliminated: Matched disqualifier keyword '{matched_kw}'"
+                    continue
+
+            snippet = (job.description or "")[:300].replace("\n", " ")
+            pl = _job_to_payload(job, snippet=snippet)
+            jobs_with_meta.append((job, pl))
+
+        jobs_after_filter = len(jobs_with_meta)
+        logger.info("[job_search_core] After filter: %d jobs", jobs_after_filter)
+
+        jobs_out = rank_and_filter_jobs(jobs_with_meta, norm_track, user=user, sort=sort)
+        annotate_saved_flags(user, norm_track, jobs_out)
+
+        # Mark jobs that passed initial filter but were dropped during ranking / dedupe
+        kept_job_ids = {p.id for p in jobs_out}
+        for job, _pl in jobs_with_meta:
+            if job.id not in kept_job_ids:
+                entry = audit_by_job_id.get(job.id)
+                if entry and entry["disposition"] == "pending":
+                    entry["disposition"] = "eliminated_duplicate"
+                    entry["reason"] = "Eliminated: Duplicate posting or low preference threshold"
+
+        if return_audit_log:
+            return (jobs_fetched, jobs_after_filter, jobs_out, refs_for_cache, audit_items)
+        return (jobs_fetched, jobs_after_filter, jobs_out, refs_for_cache)
+    finally:
+        if lock_key:
+            cache.delete(lock_key)
 
 
 def _rank_jobs_with_meta(
@@ -473,16 +537,79 @@ def _apply_disliked_penalty_and_final_sort(
     return jobs_out
 
 
+def sort_job_payloads(jobs: List[JobPayload], sort_by: str = "match") -> List[JobPayload]:
+    """
+    Sort JobPayload objects by requested criteria:
+    - 'match' / 'focus': Match % / fit score descending, then freshness (date posted) descending
+    - 'latest' / 'freshness' / 'date' / 'newest': Date posted / fetched descending, then match % descending
+    - 'oldest': Date posted / fetched ascending, then match % descending
+    """
+    from datetime import datetime
+    from django.utils import timezone
+
+    def _get_job_date(p: JobPayload):
+        dt = getattr(p, "posted_at", None) or getattr(p, "fetched_at", None)
+        if dt is None:
+            return datetime.min.replace(tzinfo=timezone.utc)
+        if timezone.is_naive(dt):
+            dt = timezone.make_aware(dt, timezone.utc)
+        return dt
+
+    def _get_job_match_score(p: JobPayload) -> float:
+        if getattr(p, "matching_score", None) is not None:
+            return float(p.matching_score)
+        if getattr(p, "focus_percent_after_penalty", None) is not None:
+            return float(p.focus_percent_after_penalty)
+        if getattr(p, "focus_percent", None) is not None:
+            return float(p.focus_percent)
+        if getattr(p, "preference_margin_percent", None) is not None:
+            return float(p.preference_margin_percent)
+        return -999.0
+
+    normalized_sort = (sort_by or "match").strip().lower()
+    if normalized_sort in ("latest", "freshness", "date", "newest"):
+        return sorted(
+            jobs,
+            key=lambda p: (
+                _get_job_date(p),
+                _get_job_match_score(p) > -900.0,
+                _get_job_match_score(p),
+                getattr(p, "id", 0),
+            ),
+            reverse=True,
+        )
+    elif normalized_sort == "oldest":
+        return sorted(
+            jobs,
+            key=lambda p: (
+                _get_job_date(p),
+                -(_get_job_match_score(p) if _get_job_match_score(p) > -900.0 else -999.0),
+                -getattr(p, "id", 0),
+            ),
+        )
+    else:  # "match", "focus", default
+        return sorted(
+            jobs,
+            key=lambda p: (
+                _get_job_match_score(p) > -900.0,
+                _get_job_match_score(p),
+                _get_job_date(p),
+                getattr(p, "id", 0),
+            ),
+            reverse=True,
+        )
+
+
 def rank_and_filter_jobs(
     jobs_with_meta: List[Tuple[JobListing, JobPayload]],
     track: Optional[str],
     *,
     user,
+    sort: str = "match",
 ) -> List[JobPayload]:
     """
     Single entry point for preference ranking: score, auto-dislike margin < -5,
-    apply disliked penalty, and final sort. Used by run_job_search_core and by
-    jobs_search cache path. Preserves preference_margin_percent as primary sort.
+    apply disliked penalty, and final sort according to requested sort option.
     """
     ranked = _rank_jobs_with_meta(jobs_with_meta, track, user=user)
     jobs_out = _apply_auto_dislike(ranked, track, user)
@@ -509,7 +636,7 @@ def rank_and_filter_jobs(
             before,
             len(jobs_out),
         )
-    return jobs_out
+    return sort_job_payloads(jobs_out, sort_by=sort)
 
 
 def recompute_preferences_for_jobs(

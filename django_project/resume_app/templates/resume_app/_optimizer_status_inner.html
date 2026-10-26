@@ -53,12 +53,32 @@
     </div>
 </div>
 <div class="mt-8 border-t border-slate-100 pt-6" id="optimizer-cover-letter-section">
-    <h4 class="text-lg font-semibold text-concierge-slate">Cover letter</h4>
-    <p class="mt-1 text-xs text-slate-500">Generate a job-specific cover letter for apply forms. Until generated, the apply agent uses your global template from Apply Agent profile.</p>
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+            <h4 class="text-lg font-semibold text-concierge-slate">Cover letter</h4>
+            <p class="mt-1 text-xs text-slate-500">Generate a job-specific cover letter tailored to this role and your optimized resume.</p>
+        </div>
+        <div class="flex items-center gap-2">
+            <label for="cover-letter-length-select" class="text-xs font-medium text-slate-500">Length:</label>
+            <select id="cover-letter-length-select" class="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 shadow-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand">
+                <option value="short">Short (~150–200 words)</option>
+                <option value="standard" selected>Standard (~250–350 words)</option>
+                <option value="detailed">Detailed (~400–500 words)</option>
+            </select>
+        </div>
+    </div>
     <div class="mt-3 flex flex-wrap items-center gap-2">
         <button type="button" id="generate-cover-letter-btn" data-resume-id="{{ rid }}" class="inline-flex items-center gap-1.5 rounded-concierge bg-brand px-3 py-1.5 text-sm font-semibold text-white hover:bg-brand-hover">
             <span id="cover-letter-btn-text">{% if status.cover_letter %}Regenerate cover letter{% else %}Generate cover letter{% endif %}</span>
             <span id="cover-letter-spinner" class="hidden h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-white/40 border-t-white" role="status" aria-hidden="true"></span>
+        </button>
+        <button type="button" id="shorten-cover-letter-btn" data-resume-id="{{ rid }}" data-length="shorter" class="{% if not status.cover_letter %}hidden {% endif %}inline-flex items-center gap-1 rounded-concierge border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm">
+            <svg class="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 13H5v-2h14v2z"/></svg>
+            Make shorter
+        </button>
+        <button type="button" id="lengthen-cover-letter-btn" data-resume-id="{{ rid }}" data-length="longer" class="{% if not status.cover_letter %}hidden {% endif %}inline-flex items-center gap-1 rounded-concierge border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-sm">
+            <svg class="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v14m-7-7h14"/></svg>
+            Make longer
         </button>
         <span id="cover-letter-gen-status" class="text-xs text-slate-500" role="status" aria-live="polite"></span>
     </div>
@@ -67,6 +87,8 @@
     <div class="mt-3 flex flex-wrap items-center gap-3">
         <button type="button" id="save-cover-letter-btn" data-resume-id="{{ rid }}"
                 class="rounded-concierge border border-brand/20 bg-brand-mist px-4 py-2 text-sm font-semibold text-brand-ink hover:bg-brand-soft">Save cover letter</button>
+        <a id="export-cl-pdf-btn" class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50 export-cl-button {% if not status.cover_letter %}opacity-50 pointer-events-none{% endif %}" href="/api/resume/export/{{ rid }}/cover-letter/pdf" data-base-href="/api/resume/export/{{ rid }}/cover-letter/pdf" data-resume-id="{{ rid }}">Export PDF</a>
+        <a id="export-cl-docx-btn" class="inline-flex items-center rounded-concierge border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50 export-cl-button {% if not status.cover_letter %}opacity-50 pointer-events-none{% endif %}" href="/api/resume/export/{{ rid }}/cover-letter/docx" data-base-href="/api/resume/export/{{ rid }}/cover-letter/docx" data-resume-id="{{ rid }}">Export Word</a>
         <span id="save-cover-letter-status" class="text-xs text-slate-500" aria-live="polite"></span>
     </div>
     {% if status.interview_prep_markdown %}

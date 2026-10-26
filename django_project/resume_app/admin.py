@@ -3,20 +3,18 @@ from .models import (
     AtsJudgeProfile,
     AppAutomationSettings,
     ApplicantProfile,
-    ApplicationAttempt,
-    ApplicationAttemptStep,
-    AtsAutoSubmitStats,
     CustomerApiKey,
     LLMAppUsageTotals,
     LLMUsageByModel,
     LLMUsageByQuery,
+    LLMDailyUsageBreakdown,
     LLMProviderPreference,
     LLMProviderConfig,
+    TenantPromptModelPreference,
     JobListing,
     JobMatchResult,
     JobListingEmbedding,
     Plan,
-    SiteCredential,
     Subscription,
     StripeWebhookEvent,
     UsageCounter,
@@ -34,7 +32,9 @@ class PlanAdmin(admin.ModelAdmin):
     list_display = (
         "slug",
         "name",
+        "price_display",
         "llm_requests_per_day",
+        "llm_tokens_per_day",
         "job_searches_per_day",
         "apply_runs_per_day",
         "api_access",
@@ -108,6 +108,7 @@ class AppAutomationSettingsAdmin(admin.ModelAdmin):
         "vetting_to_applying_enabled",
         "vetting_interview_probability_min",
         "applying_optimizer_workflow",
+        "cleanup_job_retention_days",
         "cleanup_pipeline_retention_days",
         "cleanup_vetting_retention_days",
         "cleanup_applying_retention_days",
@@ -143,6 +144,20 @@ class LLMProviderPreferenceAdmin(admin.ModelAdmin):
         "updated_at",
     )
     list_filter = ("provider_config__provider",)
+
+
+@admin.register(TenantPromptModelPreference)
+class TenantPromptModelPreferenceAdmin(admin.ModelAdmin):
+    list_display = (
+        "owner",
+        "query_kind",
+        "provider",
+        "model",
+        "is_active",
+        "updated_at",
+    )
+    list_filter = ("query_kind", "provider", "is_active")
+    search_fields = ("owner__username", "query_kind", "provider", "model")
 
 
 @admin.register(LLMAppUsageTotals)
@@ -182,6 +197,21 @@ class LLMUsageByQueryAdmin(admin.ModelAdmin):
         "last_used_at",
     )
     list_filter = ("query_kind", "provider")
+
+
+@admin.register(LLMDailyUsageBreakdown)
+class LLMDailyUsageBreakdownAdmin(admin.ModelAdmin):
+    list_display = (
+        "period_date",
+        "query_kind",
+        "provider",
+        "model",
+        "request_count",
+        "sum_input_tokens",
+        "sum_output_tokens",
+        "last_used_at",
+    )
+    list_filter = ("period_date", "query_kind", "provider")
 
 
 @admin.register(JobListing)
@@ -238,32 +268,4 @@ class UserPromptProfileAdmin(admin.ModelAdmin):
 @admin.register(ApplicantProfile)
 class ApplicantProfileAdmin(admin.ModelAdmin):
     list_display = ("id", "full_name", "email", "updated_at")
-    readonly_fields = ("updated_at",)
-
-
-@admin.register(SiteCredential)
-class SiteCredentialAdmin(admin.ModelAdmin):
-    list_display = ("domain", "label", "username", "updated_at")
-    search_fields = ("domain", "label")
-    readonly_fields = ("created_at", "updated_at")
-
-
-class ApplicationAttemptStepInline(admin.TabularInline):
-    model = ApplicationAttemptStep
-    extra = 0
-    readonly_fields = ("step_name", "message", "screenshot_path", "created_at")
-    can_delete = False
-
-
-@admin.register(ApplicationAttempt)
-class ApplicationAttemptAdmin(admin.ModelAdmin):
-    list_display = ("id", "pipeline_entry", "status", "ats_type", "automation_mode", "error_code", "updated_at")
-    list_filter = ("status", "ats_type", "automation_mode")
-    readonly_fields = ("created_at", "updated_at", "started_at", "submitted_at", "last_heartbeat_at")
-    inlines = (ApplicationAttemptStepInline,)
-
-
-@admin.register(AtsAutoSubmitStats)
-class AtsAutoSubmitStatsAdmin(admin.ModelAdmin):
-    list_display = ("ats_type", "clean_submit_streak", "total_submits", "total_corrections", "full_auto_enabled")
     readonly_fields = ("updated_at",)

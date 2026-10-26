@@ -9,6 +9,8 @@ from resume_app.models import (
     AtsJudgeProfile,
     JobDescription,
     JobListing,
+    JobSearchTask,
+    JobSearchTaskRun,
     LLMProviderConfig,
     OptimizedResume,
     PipelineEntry,
@@ -86,7 +88,7 @@ class MultiTenantIsolationTests(TestCase):
 
     def test_llm_session_active_provider_scoped(self):
         """get_active_llm_provider(user) must return per-user active config only."""
-        from resume_app.llm_session import get_active_llm_provider
+        from resume_app.llm.session import get_active_llm_provider
 
         LLMProviderConfig.objects.create(
             owner=self.user_b,
@@ -229,6 +231,27 @@ class ImpersonationTests(TestCase):
         resp = client.get("/staff/users/")
         self.assertEqual(resp.status_code, 403)
 
+    def test_staff_menu_hides_jobs_unless_impersonating(self):
+        client = Client()
+        client.login(username="support", password="pass12345!")
+
+        # Staff user browsing settings: JOBS section should NOT be present
+        resp = client.get("/settings/")
+        self.assertEqual(resp.status_code, 200)
+        content = resp.content.decode("utf-8")
+        self.assertIn("Admin Console", content)
+        self.assertNotIn(">Find jobs<", content)
+        self.assertNotIn(">My jobs<", content)
+
+        # Hijack target candidate: JOBS section MUST be present
+        client.post("/hijack/acquire/", {"user_pk": self.target.pk, "next": "/"})
+        resp = client.get("/settings/")
+        self.assertEqual(resp.status_code, 200)
+        content = resp.content.decode("utf-8")
+        self.assertIn("Viewing as", content)
+        self.assertIn("Find jobs", content)
+        self.assertIn("My jobs", content)
+
 
 class MonitorAccessControlTests(TestCase):
     """Huey monitor views must be staff-only."""
@@ -251,8 +274,31 @@ class MonitorAccessControlTests(TestCase):
         client = Client()
         client.login(username="admin", password="pass12345!")
         resp = client.get("/jobs/huey/")
-        # 200 OK or redirect-to-login are both acceptable; 403 is not
-        self.assertNotEqual(resp.status_code, 403)
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Worker &amp; Task Queue Monitor")
+        self.assertContains(resp, "Periodic Task Schedulers")
+        self.assertContains(resp, "Queue Backlog")
+
+    def test_staff_monitor_renders_task_runs(self):
+        task = JobSearchTask.objects.create(
+            owner=self.user,
+            name="Senior Backend Role",
+            search_term="Python Django",
+            frequency="0 * * * *",
+        )
+        JobSearchTaskRun.objects.create(
+            task=task,
+            status=JobSearchTaskRun.STATUS_COMPLETED,
+            jobs_fetched=12,
+            jobs_added_to_pipeline=3,
+        )
+
+        client = Client()
+        client.login(username="admin", password="pass12345!")
+        resp = client.get("/jobs/huey/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Senior Backend Role")
+        self.assertContains(resp, "12")
 
 
 class FocusBreakdownStaffOnlyTests(TestCase):
@@ -293,60 +339,58 @@ class FocusBreakdownStaffOnlyTests(TestCase):
 
 
 class OptimizerAtsProfileScopingTests(TestCase):
-    """Optimizer must only list/select ATS profiles owned by the current user."""
+    """Optimizer lists global admin-managed ATS judge profiles and falls back to default."""
 
     def setUp(self):
         self.user_a = User.objects.create_user(username="alice_opt", password="pass12345!")
         self.user_b = User.objects.create_user(username="bob_opt", password="pass12345!")
-        self.profile_a = AtsJudgeProfile.objects.filter(owner=self.user_a).first()
-        if self.profile_a is None:
-            self.profile_a = AtsJudgeProfile.objects.create(
-                owner=self.user_a,
-                name="Alice Default",
-                slug="alice-default",
+        self.global_default = AtsJudgeProfile.objects.filter(owner__isnull=True, is_default=True).first()
+        if self.global_default is None:
+            self.global_default = AtsJudgeProfile.objects.create(
+                owner=None,
+                name="Global Default",
+                slug="global-default",
                 is_default=True,
-                ats_judge_system="A_SYS",
-                ats_judge_user="A_USR",
+                ats_judge_system="DEFAULT_SYS",
+                ats_judge_user="DEFAULT_USR",
             )
-        else:
-            self.profile_a.is_default = True
-            self.profile_a.save(update_fields=["is_default"])
-        self.profile_b = AtsJudgeProfile.objects.create(
-            owner=self.user_b,
-            name="Bob Workday",
-            slug="bob-workday",
-            is_default=True,
-            ats_judge_system="B_SYS",
-            ats_judge_user="B_USR",
+        self.global_custom = AtsJudgeProfile.objects.create(
+            owner=None,
+            name="Global Custom",
+            slug="global-custom",
+            is_default=False,
+            ats_judge_system="CUSTOM_SYS",
+            ats_judge_user="CUSTOM_USR",
         )
 
-    def test_optimizer_page_only_lists_own_ats_profiles(self):
+    def test_optimizer_page_lists_global_ats_profiles(self):
         client = Client()
         client.login(username="alice_opt", password="pass12345!")
         resp = client.get("/resume/optimizer/")
         self.assertEqual(resp.status_code, 200)
         profiles = resp.context["ats_profiles"]
         ids = {p.pk for p in profiles}
-        self.assertIn(self.profile_a.pk, ids)
-        self.assertNotIn(self.profile_b.pk, ids)
-        self.assertEqual(resp.context["selected_ats_profile_id"], self.profile_a.pk)
+        self.assertIn(self.global_default.pk, ids)
+        self.assertIn(self.global_custom.pk, ids)
+        self.assertEqual(resp.context["selected_ats_profile_id"], self.global_default.pk)
 
-    def test_optimizer_ignores_stale_session_ats_id_from_other_user(self):
+    def test_optimizer_ignores_invalid_session_ats_id(self):
         client = Client()
         client.login(username="alice_opt", password="pass12345!")
         session = client.session
-        session["optimizer_ats_judge_profile_id"] = self.profile_b.pk
+        session["optimizer_ats_judge_profile_id"] = 999999
         session.save()
         resp = client.get("/resume/optimizer/")
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.context["selected_ats_profile_id"], self.profile_a.pk)
+        self.assertEqual(resp.context["selected_ats_profile_id"], self.global_default.pk)
 
 
 class LandingPageTests(TestCase):
     def test_anonymous_user_sees_landing(self):
         resp = Client().get("/")
         self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "Land your next role")
+        self.assertContains(resp, "Your job search, smarter from day one")
+        self.assertContains(resp, "HireEdge")
         self.assertContains(resp, 'href="/accounts/login/"')
         self.assertContains(resp, 'href="/accounts/signup/"')
 

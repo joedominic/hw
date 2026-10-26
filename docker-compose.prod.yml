@@ -33,7 +33,7 @@ services:
           "CMD",
           "python",
           "-c",
-          "import os,redis; r=redis.Redis(host=os.environ.get('HUEY_REDIS_HOST','192.168.2.174'), port=int(os.environ.get('HUEY_REDIS_PORT',6379)), db=int(os.environ.get('HUEY_REDIS_DB',0))); r.ping()",
+          "import os,redis; r=redis.Redis(host=os.environ.get('HUEY_REDIS_HOST','127.0.0.1'), port=int(os.environ.get('HUEY_REDIS_PORT',6379)), db=int(os.environ.get('HUEY_REDIS_DB',0)), password=(os.environ.get('REDIS_PASSWORD') or None)); r.ping()",
         ]
       interval: 30s
       timeout: 10s

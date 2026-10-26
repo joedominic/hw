@@ -12,15 +12,15 @@ from django.utils import timezone
 from pydantic import BaseModel, Field
 
 from .agents import build_llm_messages_for_prompt, _llm_invoke_with_retry
-from .llm_gateway import USAGE_QUERY_COVER_LETTER, USAGE_QUERY_INTERVIEW_PREP
+from .llm.gateway import USAGE_QUERY_COVER_LETTER, USAGE_QUERY_INTERVIEW_PREP
 from .models import (
-    ApplicationAttempt,
     OptimizedResume,
     PipelineEntry,
     SystemPromptProfile,
     UserResume,
 )
 from .prompt_store import resolve_prompt_parts
+from .prompts import INTERVIEW_TYPES, INTERVIEW_TYPE_INSTRUCTIONS
 from .services import parse_pdf
 
 logger = logging.getLogger(__name__)
@@ -33,12 +33,15 @@ class InterviewPrepAnswer(BaseModel):
     question: str = ""
     talking_points: list[str] = Field(default_factory=list)
     resume_evidence: list[str] = Field(default_factory=list)
+    sample_answer: Optional[str] = ""
+
 
 
 class InterviewPrepResult(BaseModel):
     likely_questions: list[str] = Field(default_factory=list)
     themes_to_emphasize: list[str] = Field(default_factory=list)
     suggested_answers: list[InterviewPrepAnswer] = Field(default_factory=list)
+    questions_to_ask: list[str] = Field(default_factory=list)
 
 
 @dataclass
@@ -121,24 +124,12 @@ def resolve_interview_prep_inputs(entry: PipelineEntry) -> InterviewPrepInputs:
     jd = (job.description or "").strip()
 
     resume_text = ""
-    succeeded = (
-        ApplicationAttempt.objects.filter(
-            pipeline_entry=entry,
-            status=ApplicationAttempt.Status.SUCCEEDED,
-        )
-        .select_related("optimized_resume")
-        .order_by("-submitted_at", "-created_at")
-        .first()
-    )
-    if succeeded and succeeded.optimized_resume and (succeeded.optimized_resume.optimized_content or "").strip():
-        resume_text = succeeded.optimized_resume.optimized_content or ""
-    if not resume_text:
-        opt = _latest_completed_optimization(entry)
-        if opt and (opt.optimized_content or "").strip():
-            resume_text = opt.optimized_content or ""
-        elif opt and opt.job_description_id:
-            if not jd:
-                jd = (opt.job_description.content or "").strip()
+    opt = _latest_completed_optimization(entry)
+    if opt and (opt.optimized_content or "").strip():
+        resume_text = opt.optimized_content or ""
+    elif opt and opt.job_description_id:
+        if not jd:
+            jd = (opt.job_description.content or "").strip()
     if not resume_text:
         resume_text = _library_resume_text(entry.track, user=entry.owner)
     if not jd:
@@ -232,8 +223,89 @@ def interview_prep_to_markdown(stored: str) -> str:
                 for ev in item.resume_evidence:
                     lines.append(f"- {ev}")
                 lines.append("")
+            if getattr(item, "sample_answer", None) and str(item.sample_answer).strip():
+                lines.append("**Sample response**")
+                lines.append("")
+                lines.append(f"> {str(item.sample_answer).strip()}")
+                lines.append("")
             lines.append("")
+
+    if result.questions_to_ask:
+        if lines:
+            lines.append("---")
+            lines.append("")
+        lines.append("## Questions to ask the interviewer")
+        lines.append("")
+        for q in result.questions_to_ask:
+            lines.append(f"- {q}")
+        lines.append("")
     return "\n".join(lines).strip()
+
+
+def get_all_interview_preps(stored: str) -> dict[str, dict[str, Any]]:
+    """
+    Parse stored interview prep data. Supports version 2 multi-round dictionary,
+    as well as legacy version 1 JSON or raw string.
+    Returns: dict of interview_type -> {"content": ..., "markdown": ..., "generated_at": ...}
+    """
+    text = (stored or "").strip()
+    if not text:
+        return {}
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict):
+            if data.get("version") == 2 and isinstance(data.get("types"), dict):
+                return data["types"]
+            # Legacy single result JSON (has likely_questions or suggested_answers)
+            if "likely_questions" in data or "suggested_answers" in data:
+                return {
+                    "behavioral": {
+                        "content": text,
+                        "markdown": interview_prep_to_markdown(text),
+                        "generated_at": None,
+                    }
+                }
+    except Exception:
+        pass
+    # Plain text / fallback
+    return {
+        "behavioral": {
+            "content": text,
+            "markdown": text,
+            "generated_at": None,
+        }
+    }
+
+
+def get_interview_prep_for_type(stored: str, interview_type: str = "recruiter") -> dict[str, Any]:
+    """Return dict of {content, markdown, generated_at} for specific type, or empty dict."""
+    preps = get_all_interview_preps(stored)
+    return preps.get(interview_type, {})
+
+
+def save_interview_prep_data(
+    entry: PipelineEntry,
+    interview_type: str,
+    content: str,
+    markdown: Optional[str] = None,
+) -> None:
+    """Save prep for a specific interview round into entry.interview_prep, preserving other rounds."""
+    preps = get_all_interview_preps(entry.interview_prep)
+    now_iso = timezone.now().isoformat()
+    md = markdown if markdown is not None else interview_prep_to_markdown(content)
+    preps[interview_type] = {
+        "content": content,
+        "markdown": md,
+        "generated_at": now_iso,
+    }
+    entry.interview_prep = json.dumps({
+        "version": 2,
+        "types": preps,
+        "last_type": interview_type,
+    }, indent=2)
+    entry.interview_prep_generated_at = timezone.now()
+    entry.save(update_fields=["interview_prep", "interview_prep_generated_at"])
+
 
 
 def generate_cover_letter(
@@ -242,9 +314,11 @@ def generate_cover_letter(
     llm,
     prompts_profile=None,
     job_cache_key: Optional[str] = None,
+    length: Optional[str] = "standard",
 ) -> tuple[str, str]:
     """
     Generate and persist a cover letter for a completed optimization.
+    Supports size/length control ('short', 'standard', 'detailed', 'shorter', 'longer').
 
     Returns (cover_letter_text, prompt_text).
     """
@@ -261,22 +335,73 @@ def generate_cover_letter(
     sys_t, usr_t, leg = resolve_prompt_parts(profile, "cover_letter")
     company, title, _url = _job_meta_from_optimized(optimized)
     jd = (optimized.job_description.content or "").strip()
+
+    length_norm = (length or "standard").strip().lower()
+    length_directives = {
+        "short": (
+            "LENGTH & CONCISENESS REQUIREMENT:\n"
+            "- Keep the cover letter short, concise, and punchy (approx 150–200 words, 2 short paragraphs max).\n"
+            "- Focus immediately on the candidate's top 2 most impactful qualifications for this role without fluff."
+        ),
+        "standard": (
+            "LENGTH & CONCISENESS REQUIREMENT:\n"
+            "- Standard professional cover letter length (approx 250–350 words, 3–4 structured paragraphs).\n"
+            "- Include a compelling opening, core achievement evidence mapped to the job requirements, company/culture fit, and a professional closing."
+        ),
+        "detailed": (
+            "LENGTH & CONCISENESS REQUIREMENT:\n"
+            "- In-depth, comprehensive cover letter (approx 400–500 words, 4–5 detailed paragraphs).\n"
+            "- Thoroughly elaborate on specific technical projects, quantifiable leadership impact metrics, and deep strategic alignment with company initiatives."
+        ),
+        "shorter": (
+            "LENGTH & CONCISENESS REQUIREMENT:\n"
+            "- Condense and shorten the previous cover letter significantly (reduce by ~30–40%, target ~150–200 words).\n"
+            "- Eliminate wordiness while retaining the strongest impact points and technical keywords."
+        ),
+        "longer": (
+            "LENGTH & CONCISENESS REQUIREMENT:\n"
+            "- Expand and elaborate upon the cover letter (target ~400–500 words).\n"
+            "- Add greater depth and specific examples from the candidate's tailored resume illustrating hands-on experience relevant to the job description."
+        ),
+    }
+    length_instruction = length_directives.get(length_norm, length_directives["standard"])
+
+    existing_draft_context = ""
+    if length_norm in ("shorter", "longer") and (optimized.cover_letter or "").strip():
+        existing_draft_context = f"\n\nCurrent Draft Cover Letter to scale:\n{_truncate(optimized.cover_letter, MAX_RESUME_CHARS)}\n"
+
     fmt = {
         "optimized_resume": _truncate(optimized.optimized_content or "", MAX_RESUME_CHARS),
         "job_description": _truncate(jd, MAX_JD_CHARS),
         "company_name": company or "the company",
         "job_title": title or "the role",
+        "length_instruction": length_instruction,
     }
+
+    effective_usr_t = usr_t
+    effective_leg = leg
+    if effective_usr_t and "{length_instruction}" not in effective_usr_t:
+        effective_usr_t = f"{effective_usr_t}\n\n{length_instruction}{existing_draft_context}"
+    elif not effective_usr_t and effective_leg and "{length_instruction}" not in effective_leg:
+        effective_leg = f"{effective_leg}\n\n{length_instruction}{existing_draft_context}"
+    elif not effective_usr_t and not effective_leg:
+        effective_usr_t = (
+            f"Company: {{company_name}}\nRole: {{job_title}}\n\n"
+            f"Tailored resume:\n{{optimized_resume}}\n\n"
+            f"Job description:\n{{job_description}}\n\n"
+            f"{length_instruction}{existing_draft_context}\n\nCover letter:"
+        )
+
     messages = build_llm_messages_for_prompt(
-        legacy_combined=leg or None,
+        legacy_combined=effective_leg or None,
         system_template=sys_t or None,
-        user_template=usr_t or None,
+        user_template=effective_usr_t or None,
         format_kwargs=fmt,
     )
     prompt_text = "\n\n---\n\n".join(
         f"{type(m).__name__}:\n{getattr(m, 'content', '')}" for m in messages
     )
-    cache_key = job_cache_key or f"cover-letter:{optimized.id}"
+    cache_key = job_cache_key or f"cover-letter:{optimized.id}:{length_norm}"
     raw = _llm_invoke_with_retry(
         llm,
         messages,
@@ -300,15 +425,23 @@ def generate_interview_prep(
     llm,
     prompts_profile=None,
     job_cache_key: Optional[str] = None,
+    interview_type: str = "recruiter",
 ) -> tuple[str, str, str]:
     """
-    Generate and persist interview prep for a Done-stage pipeline entry.
+    Generate and persist interview prep for a Done-stage pipeline entry for the chosen round.
 
     Returns (stored_content, markdown_render, prompt_text).
     """
     entry = PipelineEntry.objects.select_related("job_listing").get(pk=entry.pk)
     if entry.stage != PipelineEntry.Stage.DONE:
         raise JobPrepError("Interview prep is available only for Done-stage jobs.")
+
+    if interview_type not in INTERVIEW_TYPES:
+        interview_type = "recruiter"
+
+    type_info = INTERVIEW_TYPES[interview_type]
+    type_label = type_info["label"]
+    type_instructions = INTERVIEW_TYPE_INSTRUCTIONS.get(interview_type, "")
 
     inputs = resolve_interview_prep_inputs(entry)
     if not inputs.job_description:
@@ -318,14 +451,34 @@ def generate_interview_prep(
             "No resume text available. Optimize a resume or upload a library resume for this track."
         )
 
+    company = inputs.company_name or "the company"
+    title = inputs.job_title or "the role"
+    raw_instructions = INTERVIEW_TYPE_INSTRUCTIONS.get(interview_type, "")
+    type_instructions = (
+        raw_instructions
+        .replace("{company_name}", company)
+        .replace("{job_title}", title)
+    )
+
     profile = prompts_profile or SystemPromptProfile.get_solo()
     sys_t, usr_t, leg = resolve_prompt_parts(profile, "interview_prep")
+
+    # If the custom/legacy template lacks {interview_instructions}, inject round guidance
+    if "{interview_instructions}" not in (usr_t or "") and "{interview_instructions}" not in (leg or ""):
+        guidance_block = f"\n\n--- TARGET INTERVIEW ROUND: {type_label.upper()} ---\n{type_instructions}\n"
+        if usr_t:
+            usr_t = f"{usr_t.strip()}{guidance_block}"
+        elif leg:
+            leg = f"{leg.strip()}{guidance_block}"
+
     fmt = {
         "resume_text": inputs.resume_text,
         "job_description": inputs.job_description,
-        "company_name": inputs.company_name or "the company",
-        "job_title": inputs.job_title or "the role",
+        "company_name": company,
+        "job_title": title,
         "job_url": inputs.job_url or "(none)",
+        "interview_type": type_label,
+        "interview_instructions": type_instructions,
     }
     messages = build_llm_messages_for_prompt(
         legacy_combined=leg or None,
@@ -336,7 +489,7 @@ def generate_interview_prep(
     prompt_text = "\n\n---\n\n".join(
         f"{type(m).__name__}:\n{getattr(m, 'content', '')}" for m in messages
     )
-    cache_key = job_cache_key or f"interview-prep:{entry.id}"
+    cache_key = job_cache_key or f"interview-prep:{entry.id}:{interview_type}"
     raw = _llm_invoke_with_retry(
         llm,
         messages,
@@ -348,7 +501,7 @@ def generate_interview_prep(
     if not stored:
         raise JobPrepError("LLM returned empty interview prep.", status_code=502)
 
-    entry.interview_prep = stored
-    entry.interview_prep_generated_at = timezone.now()
-    entry.save(update_fields=["interview_prep", "interview_prep_generated_at"])
-    return stored, interview_prep_to_markdown(stored), prompt_text
+    md = interview_prep_to_markdown(stored)
+    save_interview_prep_data(entry, interview_type, stored, md)
+    return stored, md, prompt_text
+

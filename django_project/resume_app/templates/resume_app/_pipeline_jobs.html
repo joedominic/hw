@@ -1,21 +1,59 @@
 {% if not pipeline_jobs %}
-    <div class="text-sm text-slate-600">
+    <div class="rounded-2xl border border-dashed border-slate-200 bg-white p-8 text-center shadow-sm">
         {% if pipeline_search_query %}
-            <p class="mb-0">No jobs match "{{ pipeline_search_query }}". <a href="{{ empty_clear_url }}" class="font-medium text-concierge-slate underline">Clear search</a>{% if is_power_user %} to see up to {% firstof pipeline_count_before_text_search pipeline_total_count %} job(s) matching your source/pref filters{% endif %}.</p>
+            <div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-500">
+                <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            </div>
+            <h3 class="text-base font-semibold text-concierge-slate">No matching jobs found</h3>
+            <p class="mt-1 text-sm text-slate-500">No jobs in {{ board_stage_display }} match "{{ pipeline_search_query }}".</p>
+            <div class="mt-4">
+                <a href="{{ empty_clear_url }}" class="inline-flex items-center gap-1.5 rounded-concierge border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-concierge-slate hover:bg-slate-50">
+                    Clear search filter
+                </a>
+            </div>
         {% else %}
-            <p class="mb-1">{{ empty_message }}</p>
+            <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-soft text-brand">
+                {% if board_stage == "pipeline" %}
+                <svg class="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                {% elif board_stage == "vetting" %}
+                <svg class="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                {% elif board_stage == "applying" %}
+                <svg class="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                {% else %}
+                <svg class="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M5 13l4 4L19 7"/></svg>
+                {% endif %}
+            </div>
+            <h3 class="text-base font-bold text-concierge-slate">{{ board_stage_display }} is empty</h3>
+            <p class="mx-auto mt-1.5 max-w-md text-sm text-slate-600 leading-relaxed">
+                {{ empty_message }}
+            </p>
             {% if empty_help_list %}
-                <ul class="mb-0 list-disc pl-5 text-sm">
+                <ul class="mx-auto mt-3 max-w-md list-disc text-left pl-6 text-xs text-slate-500 space-y-1">
                     {% for item in empty_help_list %}
                         <li>{{ item }}</li>
                     {% endfor %}
                 </ul>
             {% endif %}
-            {% if not is_power_user and board_stage == "pipeline" %}
-                <p class="mt-3 mb-0">
-                    <a href="{% url 'jobs_search' %}" class="inline-flex items-center rounded-lg bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover">Find jobs</a>
-                </p>
-            {% endif %}
+            <div class="mt-6 flex flex-wrap items-center justify-center gap-3">
+                {% if board_stage == "pipeline" %}
+                    <a href="{% url 'jobs_search' %}" class="inline-flex items-center gap-2 rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                        Find jobs to add
+                    </a>
+                {% elif board_stage == "vetting" %}
+                    <a href="{% url 'pipeline' %}" class="inline-flex items-center gap-2 rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
+                        Go to Pipeline backlog
+                    </a>
+                {% elif board_stage == "applying" %}
+                    <a href="{% url 'vetting' %}" class="inline-flex items-center gap-2 rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
+                        Review jobs in Vetting
+                    </a>
+                {% else %}
+                    <a href="{% url 'pipeline' %}" class="inline-flex items-center gap-2 rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
+                        View active jobs
+                    </a>
+                {% endif %}
+            </div>
         {% endif %}
     </div>
 {% else %}
@@ -54,9 +92,6 @@
                 {% if stage_label == "applying" %}
                 <button type="button" id="pipeline-bulk-open-optimizer" class="rounded-concierge border border-brand/20 bg-white px-3 py-1.5 text-xs font-semibold text-brand-ink hover:bg-brand-mist">
                     Open optimizer (selected)
-                </button>
-                <button type="submit" name="action" value="start_apply_agent" class="rounded-concierge border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-900 hover:bg-emerald-50">
-                    Start apply agent (selected)
                 </button>
                 {% endif %}
             </div>
@@ -114,7 +149,11 @@
                                 {% include "resume_app/_pipeline_interview_badge.html" with j=j vetting_jd_min_chars=vetting_jd_min_chars %}
                             {% endif %}
                             {% if j.preference_margin_percent is not None %}
-                                <span class="rounded-full px-2 py-0.5 text-xs font-medium {% if j.preference_margin_percent < -3 %}bg-red-100 text-red-900{% elif j.preference_margin_percent > 3 %}bg-emerald-100 text-emerald-900{% else %}bg-slate-100 text-slate-700{% endif %}">Pref {{ j.preference_margin_percent }}%</span>
+                                <span class="rounded-full px-2 py-0.5 text-xs font-medium {% if j.preference_margin_percent < -3 %}bg-rose-100 text-rose-900 border border-rose-200{% elif j.preference_margin_percent > 3 %}bg-emerald-100 text-emerald-900 border border-emerald-200{% else %}bg-slate-100 text-slate-700 border border-slate-200{% endif %}"
+                                      title="Preference Margin: difference between liked vs disliked job signals (controls auto-promotion to Review).">Pref {% if j.preference_margin_percent > 0 %}+{% endif %}{{ j.preference_margin_percent }}%</span>
+                            {% elif stage_label == "pipeline" %}
+                                <span class="rounded-full bg-slate-50 border border-dashed border-slate-300 px-2 py-0.5 text-xs font-medium text-slate-500"
+                                      title="Preference Margin: Neutral. Like (👍) or Dislike (👎) jobs in this track to train automated promotion to Review.">Pref: Neutral</span>
                             {% endif %}
                             {% if j.source_display or j.source %}
                                 <span class="rounded-full border border-brand/20 bg-brand-mist px-2 py-0.5 text-xs font-medium text-brand-ink" title="{{ j.source }}">{{ j.source_display|default:j.source }}</span>
@@ -216,10 +255,34 @@
                 <button type="button" id="pipelineInterviewPrepClose" class="rounded-concierge px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100">Close</button>
             </header>
             <div class="min-h-0 flex-1 overflow-y-auto bg-white px-4 py-3">
-                <p id="interview-prep-heading" class="mb-2 text-sm font-semibold text-concierge-slate"></p>
+                <p id="interview-prep-heading" class="mb-2.5 text-sm font-semibold text-concierge-slate"></p>
+
+                <!-- Interview Round Tabs -->
+                <div class="mb-2 flex flex-wrap items-center gap-1.5 border-b border-slate-200 pb-2.5">
+                    <span class="mr-1 text-xs font-semibold text-slate-500">Round:</span>
+                    <button type="button" class="interview-type-tab inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition-colors" data-type="recruiter">
+                        <span>Recruiter Screen</span>
+                        <span class="tab-badge hidden h-1.5 w-1.5 rounded-full bg-emerald-500" title="Prep generated"></span>
+                    </button>
+                    <button type="button" class="interview-type-tab inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition-colors" data-type="hiring_manager">
+                        <span>Hiring Manager</span>
+                        <span class="tab-badge hidden h-1.5 w-1.5 rounded-full bg-emerald-500" title="Prep generated"></span>
+                    </button>
+                    <button type="button" class="interview-type-tab inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition-colors" data-type="behavioral">
+                        <span>Behavioral (STAR)</span>
+                        <span class="tab-badge hidden h-1.5 w-1.5 rounded-full bg-emerald-500" title="Prep generated"></span>
+                    </button>
+                    <button type="button" class="interview-type-tab inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition-colors" data-type="technical">
+                        <span>Technical</span>
+                        <span class="tab-badge hidden h-1.5 w-1.5 rounded-full bg-emerald-500" title="Prep generated"></span>
+                    </button>
+                </div>
+
+                <p id="interview-round-description" class="mb-3 text-xs text-slate-500 italic"></p>
+
                 <div class="mb-3 flex flex-wrap items-center gap-2">
                     <button type="button" id="interview-prep-generate-btn" class="inline-flex items-center gap-1.5 rounded-concierge bg-brand px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-hover">
-                        <span id="interview-prep-btn-text">Generate interview questions</span>
+                        <span id="interview-prep-btn-text">Generate interview prep</span>
                         <span id="interview-prep-spinner" class="hidden h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-white/40 border-t-white" role="status" aria-hidden="true"></span>
                     </button>
                     <span id="interview-prep-status" class="text-xs text-slate-500" role="status" aria-live="polite"></span>
@@ -471,24 +534,55 @@
             var dlg = document.getElementById('pipelineInterviewPrepDialog');
             var closeBtn = document.getElementById('pipelineInterviewPrepClose');
             var heading = document.getElementById('interview-prep-heading');
+            var roundDescEl = document.getElementById('interview-round-description');
             var contentEl = document.getElementById('interview-prep-content');
             var genBtn = document.getElementById('interview-prep-generate-btn');
             var btnText = document.getElementById('interview-prep-btn-text');
             var spinner = document.getElementById('interview-prep-spinner');
             var statusEl = document.getElementById('interview-prep-status');
+            var tabBtns = document.querySelectorAll('.interview-type-tab');
             var apiBase = '/api/resume/jobs/pipeline-entry';
             var activeEntryId = null;
+
+            var ROUND_META = {
+                recruiter: {
+                    label: 'Recruiter Screen',
+                    description: 'Initial screening with HR or talent recruiter. Focuses on salary expectations, career history, motivation, and cultural fit.'
+                },
+                hiring_manager: {
+                    label: 'Hiring Manager',
+                    description: 'Strategic fit and team impact. Focuses on day-to-day role execution, problem-solving, and cross-functional leadership.'
+                },
+                behavioral: {
+                    label: 'Behavioral (STAR)',
+                    description: 'Situational questions structured in STAR format. Focuses on conflict resolution, failure/learning, and ownership.'
+                },
+                technical: {
+                    label: 'Technical',
+                    description: 'Deep dive into technical skills, architecture choices, stack knowledge, trade-offs, and practical execution.'
+                }
+            };
+
+            var currentRound = 'recruiter';
+            var roundPreps = {};
 
             function setBusy(busy) {
                 if (genBtn) genBtn.disabled = busy;
                 if (spinner) spinner.classList.toggle('hidden', !busy);
-                if (btnText) btnText.textContent = busy ? 'Generating…' : (contentEl && contentEl.textContent.trim() ? 'Regenerate' : 'Generate interview questions');
+                tabBtns.forEach(function(btn) { btn.disabled = busy; });
+                if (btnText) {
+                    var label = (ROUND_META[currentRound] && ROUND_META[currentRound].label) || 'Prep';
+                    var hasData = roundPreps[currentRound] && (roundPreps[currentRound].markdown || roundPreps[currentRound].content);
+                    btnText.textContent = busy ? 'Generating…' : (hasData ? 'Regenerate ' + label : 'Generate ' + label);
+                }
             }
+
             function renderMarkdown(md) {
                 if (!contentEl) return;
                 contentEl.classList.remove('interview-prep-md-fallback');
                 if (!md || !String(md).trim()) {
-                    contentEl.innerHTML = '<p class="text-slate-500">No interview prep yet. Click Generate when you have an interview scheduled.</p>';
+                    var label = (ROUND_META[currentRound] && ROUND_META[currentRound].label) || 'interview';
+                    contentEl.innerHTML = '<p class="text-slate-500">No ' + label + ' prep generated yet. Click Generate below to prepare for this round.</p>';
                     return;
                 }
                 if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
@@ -507,18 +601,76 @@
                 contentEl.classList.add('interview-prep-md-fallback');
                 contentEl.textContent = md;
             }
+
+            function updateRoundUI() {
+                var meta = ROUND_META[currentRound] || ROUND_META.recruiter;
+                if (roundDescEl) roundDescEl.textContent = meta.description || '';
+
+                tabBtns.forEach(function(tab) {
+                    var t = tab.getAttribute('data-type');
+                    var isActive = (t === currentRound);
+                    tab.className = 'interview-type-tab inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs transition-colors ' +
+                        (isActive ? 'font-semibold bg-brand text-white shadow-xs' : 'font-medium bg-slate-100 text-slate-700 hover:bg-slate-200');
+
+                    var badge = tab.querySelector('.tab-badge');
+                    if (badge) {
+                        var hasData = roundPreps[t] && (roundPreps[t].markdown || roundPreps[t].content);
+                        badge.classList.toggle('hidden', !hasData);
+                    }
+                });
+
+                var currentData = roundPreps[currentRound];
+                var hasContent = currentData && (currentData.markdown || currentData.content);
+                if (hasContent) {
+                    renderMarkdown(currentData.markdown || currentData.content);
+                    if (btnText) btnText.textContent = 'Regenerate ' + meta.label;
+                    if (statusEl) {
+                        if (currentData.generated_at) {
+                            try {
+                                var timeStr = new Date(currentData.generated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                                statusEl.textContent = 'Generated at ' + timeStr;
+                            } catch (e) {
+                                statusEl.textContent = 'Generated';
+                            }
+                        } else {
+                            statusEl.textContent = 'Ready';
+                        }
+                    }
+                } else {
+                    renderMarkdown('');
+                    if (btnText) btnText.textContent = 'Generate ' + meta.label;
+                    if (statusEl) statusEl.textContent = '';
+                }
+            }
+
+            tabBtns.forEach(function(tab) {
+                tab.addEventListener('click', function() {
+                    var t = tab.getAttribute('data-type');
+                    if (t && ROUND_META[t] && t !== currentRound) {
+                        currentRound = t;
+                        updateRoundUI();
+                    }
+                });
+            });
+
             function loadPrep(entryId) {
                 if (!entryId) return;
                 fetch(apiBase + '/' + entryId + '/interview-prep', { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
                     .then(function(r) { return r.ok ? r.json() : r.json().then(function(j) { throw new Error(j.detail || 'HTTP ' + r.status); }); })
                     .then(function(data) {
-                        renderMarkdown(data.markdown || data.content || '');
-                        if (btnText) btnText.textContent = (data.markdown || data.content) ? 'Regenerate' : 'Generate interview questions';
+                        roundPreps = data.types_data || {};
+                        if (data.interview_type && ROUND_META[data.interview_type]) {
+                            currentRound = data.interview_type;
+                        } else if (data.available_types && data.available_types.length > 0 && !roundPreps[currentRound]) {
+                            currentRound = data.available_types[0];
+                        }
+                        updateRoundUI();
                     })
                     .catch(function(err) {
                         if (statusEl) statusEl.textContent = err.message || 'Could not load prep.';
                     });
             }
+
             if (closeBtn && dlg) closeBtn.addEventListener('click', function() { if (dlg.open) dlg.close(); });
             document.querySelectorAll('.pipeline-interview-prep-btn').forEach(function(btn) {
                 btn.addEventListener('click', function() {
@@ -526,25 +678,53 @@
                     var title = btn.getAttribute('data-job-title') || 'Job';
                     if (heading) heading.textContent = title;
                     if (statusEl) statusEl.textContent = '';
-                    renderMarkdown('');
+                    currentRound = 'recruiter';
+                    roundPreps = {};
+                    updateRoundUI();
                     try { dlg.showModal(); } catch (e) {}
                     loadPrep(activeEntryId);
                 });
             });
+
+            function getCsrfToken() {
+                var meta = document.querySelector('meta[name="csrf-token"]');
+                if (meta && meta.getAttribute('content')) {
+                    return meta.getAttribute('content');
+                }
+                var input = document.querySelector('input[name="csrfmiddlewaretoken"]');
+                if (input && input.value) {
+                    return input.value;
+                }
+                var match = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+                return match ? decodeURIComponent(match[1]) : '';
+            }
+
             if (genBtn) {
                 genBtn.addEventListener('click', function() {
                     if (!activeEntryId) return;
                     setBusy(true);
-                    if (statusEl) statusEl.textContent = 'Calling LLM…';
+                    var meta = ROUND_META[currentRound] || ROUND_META.recruiter;
+                    if (statusEl) statusEl.textContent = 'Generating ' + meta.label + ' prep…';
+                    var csrf = getCsrfToken();
+                    var headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+                    if (csrf) headers['X-CSRFToken'] = csrf;
                     fetch(apiBase + '/' + activeEntryId + '/generate-interview-prep', {
                         method: 'POST',
                         credentials: 'same-origin',
-                        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-                        body: JSON.stringify({})
+                        headers: headers,
+                        body: JSON.stringify({ interview_type: currentRound })
                     })
                     .then(function(r) { return r.ok ? r.json() : r.json().then(function(j) { throw new Error(j.detail || 'HTTP ' + r.status); }); })
                     .then(function(data) {
-                        renderMarkdown(data.markdown || data.content || '');
+                        roundPreps = data.types_data || {};
+                        if (data.markdown || data.content) {
+                            roundPreps[currentRound] = {
+                                markdown: data.markdown,
+                                content: data.content,
+                                generated_at: data.generated_at
+                            };
+                        }
+                        updateRoundUI();
                         if (statusEl) statusEl.textContent = 'Done.';
                         setBusy(false);
                     })

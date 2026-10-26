@@ -10,7 +10,7 @@ class JobSearchRequest(Schema):
     site_name: Optional[List[str]] = None
     results_wanted: Optional[int] = 50
     resume_id: Optional[int] = None
-    sort: Optional[str] = "focus"  # "focus" = by fit to liked jobs
+    sort: Optional[str] = "match"  # "match"/"focus" (% match), "latest"/"freshness" (date posted)
     llm_provider: Optional[str] = None  # for Matching step; uses configured provider if omitted
     llm_model: Optional[str] = None  # for Matching step; uses provider default if omitted
     track: Optional[str] = None  # "ic" or "mgmt" preference track
@@ -219,15 +219,26 @@ class DisqualifierPayload(Schema):
     phrase: str
 
 
+class InterviewPrepTypeInfo(Schema):
+    interview_type: str
+    content: str = ""
+    markdown: str = ""
+    generated_at: Optional[str] = None
+
+
 class InterviewPrepGenerateRequest(Schema):
+    interview_type: str = "recruiter"
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
 
 
 class InterviewPrepResponse(Schema):
+    interview_type: str = "recruiter"
     content: str = ""
     markdown: str = ""
     generated_at: Optional[str] = None
+    available_types: List[str] = []
+    types_data: dict[str, Any] = {}
     provider: str = ""
     model: str = ""
     prompt: Optional[str] = None
@@ -235,4 +246,6 @@ class InterviewPrepResponse(Schema):
 
 class InterviewPrepSaveRequest(Schema):
     interview_prep: str
+    interview_type: Optional[str] = None
+
 

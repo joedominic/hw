@@ -1,3 +1,5 @@
-# JobSpy package only — install after requirements.txt with --no-deps to bypass the
-# stale markdownify<0.14 pin (speedyapply/JobSpy#349). Runtime deps are in requirements.txt.
+# JobSpy package only — MUST install with --no-deps after requirements.txt:
+#   pip install --no-deps -r requirements-jobspy.txt
+# A plain `pip install -r requirements-jobspy.txt` downgrades markdownify/numpy and
+# breaks browser-use + scipy (speedyapply/JobSpy#349). Runtime deps live in requirements.txt.
 python-jobspy==1.1.82

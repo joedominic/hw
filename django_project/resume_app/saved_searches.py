@@ -310,6 +310,7 @@ def build_jobs_search_url(
     site_names: list[str] | None = None,
     llm_model: str = "",
     preset_id: int | None = None,
+    sort: str = "",
     view: str = "results",
     from_save: bool = False,
 ) -> str:
@@ -333,6 +334,8 @@ def build_jobs_search_url(
         params.append(("llm_model", llm_model))
     if preset_id:
         params.append(("preset", str(preset_id)))
+    if sort:
+        params.append(("sort", sort))
     if from_save:
         params.append(("from_save", "1"))
     for site in site_names or []:

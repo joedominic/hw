@@ -49,21 +49,7 @@ from .search_profile_scope import (
 )
 from .services import parse_pdf
 from .crypto import decrypt_api_key
-from .agents import (
-    get_llm,
-    run_fit_check,
-    run_matching,
-    _llm_invoke_with_retry,
-    build_llm_messages_for_prompt,
-)
-from .llm_gateway import (
-    LLMRequestsDisabled,
-    USAGE_QUERY_JOB_INSIGHTS,
-    USAGE_QUERY_JOBS_AI_MATCH,
-    USAGE_QUERY_JOBS_MATCH_API,
-    USAGE_QUERY_KEYWORD_SEARCH_FIT,
-)
-from . import embeddings as embedding_module
+from .llm import LLMEmailVerificationRequired, LLMRequestsDisabled
 from .preference import (
     get_preference_vectors,
     get_disliked_embeddings,
@@ -103,7 +89,7 @@ from .schemas import (
     InterviewPrepSaveRequest,
 )
 from .job_ranking import get_focus_breakdown, get_focus_sentence_alignment, rank_jobs_by_preference
-from .llm_services import LLM_PROVIDERS
+from .llm import LLM_PROVIDERS
 from .utils import format_job_source_label
 from .disqualifiers import (
     build_disqualifier_pattern,
@@ -167,6 +153,7 @@ def _get_llm_from_request(user, provider: Optional[str] = None, model: Optional[
         api_key = decrypt_api_key(config.encrypted_api_key)
         if not model:
             model = config.default_model
+    from .agents import get_llm
     return get_llm(provider, api_key, model)
 
 
@@ -487,7 +474,7 @@ def jobs_search(request, payload: JobSearchRequest):
     )
 
     if use_cache:
-        from .entitlements import METRIC_JOB_SEARCHES, QuotaExceeded, consume_quota
+        from .subscriptions import METRIC_JOB_SEARCHES, QuotaExceeded, consume_quota
 
         try:
             consume_quota(user, METRIC_JOB_SEARCHES, 1)
@@ -519,7 +506,7 @@ def jobs_search(request, payload: JobSearchRequest):
                 track=payload.track,
                 results_wanted=payload.results_wanted or 50,
                 site_name=normalize_site_names(payload.site_name),
-                sort=(payload.sort or "focus"),
+                sort=(payload.sort or "match"),
             )
         except ValueError as e:
             raise HttpError(400, str(e)) from e
@@ -538,7 +525,7 @@ def jobs_search(request, payload: JobSearchRequest):
         return JobSearchResponse(jobs=jobs_out, total=len(jobs_out))
 
     # Cache path: single ranking pipeline from job_search_core (preference + auto-dislike + penalty + sort)
-    jobs_out = rank_and_filter_jobs(jobs_with_meta, search_track, user=user)
+    jobs_out = rank_and_filter_jobs(jobs_with_meta, search_track, user=user, sort=(payload.sort or "match"))
 
     # Keep resume_id_for_match for AI Match step later
     resume_id_for_match = payload.resume_id
@@ -594,6 +581,7 @@ def jobs_ai_match(request, payload: AiMatchRequest):
     errors = []
     session = getattr(request, "session", None)
     stored = (session.get(JOB_LLM_MATCH_SESSION_KEY) or {}) if session else {}
+    from .agents import build_llm_messages_for_prompt, run_matching
     for jid in payload.job_listing_ids:
         job = job_map.get(jid)
         if not job or not (job.description or "").strip():
@@ -692,6 +680,7 @@ def jobs_insights(request, payload: InsightsRequest):
     job_descriptions = "\n\n---\n\n".join(parts) if parts else ""
     if not job_descriptions:
         raise HttpError(400, "No job descriptions found for the selected jobs.")
+    from .agents import build_llm_messages_for_prompt, _llm_invoke_with_retry
     try:
         messages = build_llm_messages_for_prompt(
             legacy_combined=is_leg or None,
@@ -719,6 +708,8 @@ def jobs_insights(request, payload: InsightsRequest):
             content = str(content)
     except LLMRequestsDisabled as e:
         raise HttpError(503, str(e)) from e
+    except LLMEmailVerificationRequired as e:
+        raise HttpError(403, str(e)) from e
     except Exception as e:
         logger.warning("Insights LLM invoke failed: %s", e)
         raise HttpError(502, str(e)) from e
@@ -731,25 +722,40 @@ def jobs_insights(request, payload: InsightsRequest):
 
 
 @router.get("/pipeline-entry/{pipeline_entry_id}/interview-prep", response=InterviewPrepResponse)
-def pipeline_interview_prep_get(request, pipeline_entry_id: int):
+def pipeline_interview_prep_get(request, pipeline_entry_id: int, interview_type: Optional[str] = None):
     """Return stored interview prep for a Done-stage pipeline entry."""
-    from .job_prep import interview_prep_to_markdown
+    from .job_prep import get_all_interview_preps, interview_prep_to_markdown
 
     user = api_user(request)
     entry = get_owned_or_404(PipelineEntry, user, id=pipeline_entry_id)
     stored = (entry.interview_prep or "").strip()
-    gen_at = entry.interview_prep_generated_at
+    all_preps = get_all_interview_preps(stored)
+    available_types = list(all_preps.keys())
+
+    active_type = interview_type or "recruiter"
+    if not interview_type and available_types and "recruiter" not in available_types:
+        active_type = available_types[0]
+
+    type_info = all_preps.get(active_type, {})
+    content = type_info.get("content", "")
+    markdown = type_info.get("markdown", "")
+    gen_at = type_info.get("generated_at") or (
+        entry.interview_prep_generated_at.isoformat() if entry.interview_prep_generated_at else None
+    )
     return InterviewPrepResponse(
-        content=stored,
-        markdown=interview_prep_to_markdown(stored) if stored else "",
-        generated_at=gen_at.isoformat() if gen_at else None,
+        interview_type=active_type,
+        content=content,
+        markdown=markdown,
+        generated_at=gen_at,
+        available_types=available_types,
+        types_data=all_preps,
     )
 
 
 @router.post("/pipeline-entry/{pipeline_entry_id}/generate-interview-prep", response=InterviewPrepResponse)
 def pipeline_interview_prep_generate(request, pipeline_entry_id: int, payload: InterviewPrepGenerateRequest):
     """On-demand interview prep for a Done-stage job."""
-    from .job_prep import JobPrepError, generate_interview_prep
+    from .job_prep import JobPrepError, generate_interview_prep, get_all_interview_preps
 
     user = api_user(request)
     entry = get_owned_or_404(PipelineEntry, user, id=pipeline_entry_id)
@@ -759,21 +765,31 @@ def pipeline_interview_prep_generate(request, pipeline_entry_id: int, payload: I
         raise
     except Exception as e:
         raise HttpError(400, str(e)) from e
+    target_type = payload.interview_type or "recruiter"
     try:
-        stored, markdown, prompt_text = generate_interview_prep(entry, llm=llm)
+        stored, markdown, prompt_text = generate_interview_prep(entry, llm=llm, interview_type=target_type)
     except JobPrepError as e:
         raise HttpError(e.status_code, e.message) from e
     except LLMRequestsDisabled as e:
         raise HttpError(503, str(e)) from e
+    except LLMEmailVerificationRequired as e:
+        raise HttpError(403, str(e)) from e
     except Exception as e:
         logger.warning("Interview prep generation failed for entry %s: %s", pipeline_entry_id, e)
         raise HttpError(502, str(e)) from e
     entry.refresh_from_db()
-    gen_at = entry.interview_prep_generated_at
+    all_preps = get_all_interview_preps(entry.interview_prep)
+    active_info = all_preps.get(target_type, {})
+    gen_at = active_info.get("generated_at") or (
+        entry.interview_prep_generated_at.isoformat() if entry.interview_prep_generated_at else None
+    )
     return InterviewPrepResponse(
+        interview_type=target_type,
         content=stored,
         markdown=markdown,
-        generated_at=gen_at.isoformat() if gen_at else None,
+        generated_at=gen_at,
+        available_types=list(all_preps.keys()),
+        types_data=all_preps,
         provider=payload.llm_provider or "",
         model=payload.llm_model or "",
         prompt=prompt_text,
@@ -783,13 +799,16 @@ def pipeline_interview_prep_generate(request, pipeline_entry_id: int, payload: I
 @router.post("/pipeline-entry/{pipeline_entry_id}/save-interview-prep")
 def pipeline_interview_prep_save(request, pipeline_entry_id: int, payload: InterviewPrepSaveRequest):
     """Save manual edits to interview prep content."""
+    from .job_prep import save_interview_prep_data
+
     user = api_user(request)
     entry = get_owned_or_404(PipelineEntry, user, id=pipeline_entry_id)
     if entry.stage != PipelineEntry.Stage.DONE:
         raise HttpError(400, "Interview prep can only be saved for Done-stage jobs.")
-    entry.interview_prep = payload.interview_prep or ""
-    entry.save(update_fields=["interview_prep"])
-    return {"ok": True, "interview_prep": entry.interview_prep or ""}
+    target_type = payload.interview_type or "recruiter"
+    save_interview_prep_data(entry, target_type, payload.interview_prep or "")
+    return {"ok": True, "interview_prep": entry.interview_prep or "", "interview_type": target_type}
+
 
 
 @router.post("/pipeline-resume-summary/start", response=PipelineResumeSummaryStartResponse)
@@ -1019,6 +1038,7 @@ def jobs_run_keyword_search(request, payload: RunKeywordSearchRequest):
             errors.append(f"Resume PDF read failed: {e}")
             resume_text = None
 
+        from .agents import run_fit_check
         for job, res, kw in candidates:
             if resume_text is None:
                 errors.append(f"Skipped job {job.id} (resume unreadable)")
@@ -1033,7 +1053,7 @@ def jobs_run_keyword_search(request, payload: RunKeywordSearchRequest):
                     job_cache_key=f"keyword-fit:{job.id}:{res.id}",
                     usage_query_kind=USAGE_QUERY_KEYWORD_SEARCH_FIT,
                 )
-            except LLMRequestsDisabled as e:
+            except (LLMRequestsDisabled, LLMEmailVerificationRequired) as e:
                 errors.append(f"Job {job.id}: {e}")
                 continue
             match_result, _ = JobMatchResult.objects.update_or_create(
@@ -1169,11 +1189,16 @@ def jobs_fetch_description(request, payload: FetchJobDescriptionRequest):
     if not url:
         raise HttpError(400, "url is required")
 
-    from .dice_client import extract_dice_guid, fetch_dice_job_detail, enrich_dice_job_listing_description
-    from .levels_client import (
+    from .sourcing.clients.dice_client import extract_dice_guid, fetch_dice_job_detail, enrich_dice_job_listing_description
+    from .sourcing.clients.levels_client import (
         extract_levels_job_id,
         fetch_levels_job_detail,
         enrich_levels_job_listing_description,
+    )
+    from .sourcing.clients.builtin_client import (
+        extract_builtin_job_id,
+        fetch_builtin_job_detail,
+        enrich_builtin_job_listing_description,
     )
 
     job = None
@@ -1255,11 +1280,51 @@ def jobs_fetch_description(request, payload: FetchJobDescriptionRequest):
             job_listing_id=job.id if job else None,
         )
 
+    builtin_job_id = extract_builtin_job_id(url) or (
+        extract_builtin_job_id(job.external_id or "") if job else None
+    )
+    if builtin_job_id or (job and (job.source or "").lower() == "builtin"):
+        try:
+            if job is not None:
+                if not (job.url or "").strip() and url:
+                    JobListing.objects.filter(pk=job.pk).update(url=url)
+                    job.url = url
+                description = enrich_builtin_job_listing_description(job)
+                job.refresh_from_db()
+                if not description:
+                    detail = fetch_builtin_job_detail(builtin_job_id or job.external_id or url)
+                    description = detail["description"]
+                else:
+                    detail = {
+                        "title": job.title,
+                        "company_name": job.company_name,
+                        "location": job.location or "",
+                        "job_url": job.url or url,
+                    }
+            else:
+                detail = fetch_builtin_job_detail(builtin_job_id or url)
+                description = detail["description"]
+        except ValueError as e:
+            raise HttpError(400, str(e)) from e
+        except RuntimeError as e:
+            raise HttpError(502, str(e)) from e
+
+        return FetchJobDescriptionResponse(
+            description=description,
+            title=detail.get("title"),
+            company_name=detail.get("company_name"),
+            location=detail.get("location"),
+            source="builtin",
+            url=detail.get("job_url") or url,
+            job_listing_id=job.id if job else None,
+        )
+
     raise HttpError(
         400,
         "Unsupported job URL. Currently Auto-fill supports Dice job-detail links "
-        "(https://www.dice.com/job-detail/...) and Levels.fyi job links "
-        "(https://www.levels.fyi/jobs?jobId=...).",
+        "(https://www.dice.com/job-detail/...), Levels.fyi job links "
+        "(https://www.levels.fyi/jobs?jobId=...), and BuiltIn job links "
+        "(https://builtin.com/job/...).",
     )
 
 
@@ -1285,12 +1350,15 @@ def jobs_focus_breakdown(request, job_listing_id: int, track: Optional[str] = No
 def jobs_get(request, job_listing_id: int):
     """Get a single job listing (full stored description + metadata; e.g. optimizer pre-fill, Local desc)."""
     job = get_object_or_404(JobListing, id=job_listing_id)
-    from .dice_client import enrich_dice_job_listing_description
-    from .levels_client import enrich_levels_job_listing_description
+    from .sourcing.clients.dice_client import enrich_dice_job_listing_description
+    from .sourcing.clients.levels_client import enrich_levels_job_listing_description
+    from .sourcing.clients.builtin_client import enrich_builtin_job_listing_description
 
     desc = enrich_dice_job_listing_description(job)
     if not desc:
         desc = enrich_levels_job_listing_description(job)
+    if not desc:
+        desc = enrich_builtin_job_listing_description(job)
     desc = desc or (job.description or "")
     job.refresh_from_db()
     return JobDetailPayload(
@@ -1328,6 +1396,7 @@ def jobs_match(request, job_listing_id: int, payload: MatchRequest):
     except Exception as e:
         raise HttpError(400, f"Could not read resume PDF: {e}") from e
 
+    from .agents import run_fit_check
     try:
         result = run_fit_check(
             resume_text,
@@ -1340,6 +1409,8 @@ def jobs_match(request, job_listing_id: int, payload: MatchRequest):
         )
     except LLMRequestsDisabled as e:
         raise HttpError(503, str(e)) from e
+    except LLMEmailVerificationRequired as e:
+        raise HttpError(403, str(e)) from e
     score = result.get("score", 0)
     reasoning = result.get("reasoning", "")
 
@@ -1403,6 +1474,7 @@ def jobs_like(request, job_listing_id: int, track: Optional[str] = None, profile
         ).filter(q_clear_on_sentiment_change(dw["track"])).delete()
     invalidate_preference_cache(user)
     invalidate_disliked_embeddings_cache(user)
+    from . import embeddings as embedding_module
     _store_feedback_embedding_async(
         user=user,
         job=job,
@@ -1479,7 +1551,7 @@ def jobs_unsave(request, job_listing_id: int, track: Optional[str] = None, profi
 def _enqueue_vetting_match_for_entry(request, user, entry: PipelineEntry) -> None:
     """Best-effort enqueue of vetting interview scoring for a newly Review-stage entry."""
     try:
-        from .llm_session import get_active_llm_provider
+        from .llm import get_active_llm_provider
         from .prompt_store import get_effective_prompts
         from .tasks import evaluate_vetting_matching_task
 
@@ -1540,6 +1612,7 @@ def jobs_dislike(request, job_listing_id: int, track: Optional[str] = None, prof
     if session is not None and session.get("job_search_cache"):
         session.pop("job_search_cache", None)
         session.modified = True
+    from . import embeddings as embedding_module
     _store_feedback_embedding_async(
         user=user,
         job=job,

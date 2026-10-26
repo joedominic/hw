@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from django.test import SimpleTestCase
 
-from resume_app.llm_rate_limit import RATE_LIMIT_BUCKET_TTL_SECONDS, _RateLimitReservation
+from resume_app.llm.rate_limit import RATE_LIMIT_BUCKET_TTL_SECONDS, _RateLimitReservation
 
 
 class _FakePipeline:

@@ -1,16 +1,15 @@
-# ResumeElite Knowledge Base
+# HireEdge Knowledge Base
 
 This directory is the agent-facing knowledge base for the site. Start here before changing product behavior, routes, data models, background jobs, or automation flows.
 
 ## What The Site Does
 
-ResumeElite is a Django application for managing a job search end to end:
+HireEdge is a Django application for managing a job search end to end:
 
-- Optimize resumes against job descriptions with a LangGraph writer/judge loop.
+- Optimize resumes against job descriptions with a LangGraph writer → ATS judge → Recruiter judge pipeline (single pass by default).
 - Search and rank jobs from external sources, then manage them through a pipeline.
 - Generate job prep artifacts such as cover letters and interview preparation.
-- Run scheduled search, vetting, cleanup, and apply-agent work through Huey.
-- Automate parts of job applications with a human-in-the-loop browser apply agent.
+- Run scheduled search, vetting, and cleanup work through Huey.
 - Support multiple users through owner-scoped data, session auth, and staff impersonation.
 
 ## Documents
@@ -22,6 +21,8 @@ ResumeElite is a Django application for managing a job search end to end:
 - [Operations](operations.md) - local setup, environment, workers, tests, and gotchas.
 - [Agent Guide](agent-guide.md) - conventions agents should follow when working in this repo.
 - [Docker Deployment](DOCKER.md) - container-specific operations.
+- Optimizer page detail: [`django_project/resume_app/docs/OPTIMIZER_PAGE.md`](../django_project/resume_app/docs/OPTIMIZER_PAGE.md) - context budgets, single-pass graph, hybrid local judges.
+- LLM gateway detail: [`django_project/resume_app/docs/LLM_GATEWAY.md`](../django_project/resume_app/docs/LLM_GATEWAY.md) - invoke path, quotas, rate limits, concurrency/timeouts, usage UI.
 
 ## Fast Orientation
 

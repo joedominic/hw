@@ -48,7 +48,7 @@ class Track(models.Model):
         """
         Ensure there is at least one track for this user.
 
-        If no Track rows exist yet for the user, seed a single default search profile.
+        If no Track rows exist yet for the user, seed a single default track.
         """
         qs = cls.objects.for_user(user)
         if not qs.exists():
@@ -473,6 +473,38 @@ class LLMProviderPreference(models.Model):
         return f"{self.provider_config.provider} / {self.model or '(default)'} @ {self.priority}"
 
 
+class TenantPromptModelPreference(models.Model):
+    """
+    Per-prompt / query-kind model preference for a tenant, plus tenant global default.
+    query_kind can be '__default__' (for tenant global default) or any USAGE_QUERY_* key.
+    """
+
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="prompt_model_preferences",
+    )
+    query_kind = models.CharField(
+        max_length=64,
+        help_text="Query kind e.g. 'optimizer_writer', 'matching', or '__default__' for tenant global default.",
+    )
+    provider = models.CharField(max_length=64)
+    model = models.CharField(max_length=128, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    objects = OwnedManager()
+
+    class Meta:
+        unique_together = [("owner", "query_kind")]
+        verbose_name = "Tenant Prompt Model Preference"
+        verbose_name_plural = "Tenant Prompt Model Preferences"
+
+    def __str__(self):
+        return f"{self.owner}: {self.query_kind} -> {self.provider}/{self.model or '(default)'}"
+
+
 class LLMAppUsageTotals(models.Model):
     """Per-user aggregate LLM token usage."""
 
@@ -566,6 +598,42 @@ class LLMUsageByQuery(models.Model):
         return f"{self.query_kind} / {self.provider} / {self.model}"
 
 
+class LLMDailyUsageBreakdown(models.Model):
+    """Granular daily usage ledger by provider, model, and logical query use-case."""
+
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="llm_daily_usage_breakdowns",
+    )
+    period_date = models.DateField(db_index=True)
+    query_kind = models.CharField(max_length=64, db_index=True)
+    provider = models.CharField(max_length=64, db_index=True)
+    model = models.CharField(
+        max_length=128,
+        db_index=True,
+        help_text="Resolved model name, or __default__ when empty.",
+    )
+    request_count = models.PositiveIntegerField(default=0)
+    sum_input_tokens = models.BigIntegerField(default=0)
+    sum_output_tokens = models.BigIntegerField(default=0)
+    sum_cached_tokens = models.BigIntegerField(default=0)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    objects = OwnedManager()
+
+    class Meta:
+        verbose_name = "LLM daily usage breakdown"
+        verbose_name_plural = "LLM daily usage breakdowns"
+        unique_together = [("owner", "period_date", "query_kind", "provider", "model")]
+        indexes = [
+            models.Index(fields=["owner", "period_date"]),
+        ]
+
+    def __str__(self):
+        return f"{self.period_date} {self.query_kind} / {self.provider} / {self.model}"
+
+
 class AppAutomationSettings(models.Model):
     """
     Per-user pipeline / vetting automation thresholds.
@@ -576,7 +644,7 @@ class AppAutomationSettings(models.Model):
         on_delete=models.CASCADE,
         related_name="automation_settings",
     )
-    pipeline_to_vetting_enabled = models.BooleanField(default=False)
+    pipeline_to_vetting_enabled = models.BooleanField(default=True)
     pipeline_preference_margin_min = models.IntegerField(
         default=0,
         help_text="Promote Pipeline → Vetting when Pref margin (same as pipeline badge) is >= this value.",
@@ -598,16 +666,20 @@ class AppAutomationSettings(models.Model):
         default=False,
         help_text="When set, the app will not send any LLM API requests (kill switch).",
     )
+    cleanup_job_retention_days = models.PositiveSmallIntegerField(
+        default=14,
+        help_text="Cleanup Manager: remove non-applied jobs older than this many days (default 14 days / 2 weeks; 0 = off).",
+    )
     cleanup_pipeline_retention_days = models.PositiveSmallIntegerField(
-        default=2,
+        default=14,
         help_text="Cleanup Manager: remove Pipeline-stage rows older than this many days (0 = off).",
     )
     cleanup_vetting_retention_days = models.PositiveSmallIntegerField(
-        default=6,
+        default=14,
         help_text="Cleanup Manager: remove Vetting-stage rows older than this many days (0 = off).",
     )
     cleanup_applying_retention_days = models.PositiveSmallIntegerField(
-        default=10,
+        default=14,
         help_text="Cleanup Manager: remove Applying-stage rows older than this many days (0 = off).",
     )
     cleanup_done_retention_days = models.PositiveSmallIntegerField(
@@ -634,56 +706,6 @@ class AppAutomationSettings(models.Model):
         help_text="Default supplemental accomplishments for the Resume Optimizer.",
     )
 
-    # --- Autonomous Apply Agent ---
-    apply_agent_enabled = models.BooleanField(
-        default=False,
-        help_text="Master switch for the Autonomous Apply Agent (browser automation).",
-    )
-    apply_automation_mode = models.CharField(
-        max_length=16,
-        choices=[("semi_auto", "Semi-auto (review before submit)"), ("full_auto", "Full-auto (submit without review)")],
-        default="semi_auto",
-        help_text="Semi-auto pauses for human approval before submitting; full-auto submits autonomously for graduated ATS adapters only.",
-    )
-    apply_min_optimizer_score = models.PositiveSmallIntegerField(
-        default=0,
-        help_text="Require optimized resume avg (ATS+recruiter) >= this before applying (0 = no gate).",
-    )
-    apply_allowed_ats = models.JSONField(
-        default=list,
-        blank=True,
-        help_text="ATS slugs the agent is allowed to apply to (e.g. ['greenhouse', 'lever']). Empty = greenhouse + lever defaults.",
-    )
-    apply_generic_fallback_enabled = models.BooleanField(
-        default=True,
-        help_text="Use the browser-use generic agent for unknown ATS (always requires review; never auto-submits).",
-    )
-    apply_resume_upload_format = models.CharField(
-        max_length=8,
-        choices=[("pdf", "PDF"), ("docx", "Word (DOCX)")],
-        default="pdf",
-        help_text="File format used when the agent uploads the optimized resume. PDF is the stable default for v1.",
-    )
-    apply_full_auto_min_clean_submits = models.PositiveSmallIntegerField(
-        default=10,
-        help_text="An ATS may graduate to full-auto only after this many approved submissions with zero human corrections.",
-    )
-    apply_agent_llm_provider = models.CharField(
-        max_length=32,
-        blank=True,
-        default="",
-        help_text="Dedicated LLM provider for browser-use generic form fill. Blank = global active provider.",
-    )
-    apply_agent_llm_model = models.CharField(
-        max_length=128,
-        blank=True,
-        default="",
-        help_text="Model for the apply-agent LLM. Blank = provider default from Settings.",
-    )
-    apply_browser_show_window = models.BooleanField(
-        default=False,
-        help_text="When True, show a visible Chromium window during apply-agent browser steps (dev; requires Huey on this machine).",
-    )
     export_replacements = models.JSONField(
         default=list,
         blank=True,
@@ -704,14 +726,15 @@ class AppAutomationSettings(models.Model):
         obj, _created = cls.objects.get_or_create(
             owner=user,
             defaults={
-                "pipeline_to_vetting_enabled": False,
+                "pipeline_to_vetting_enabled": True,
                 "pipeline_preference_margin_min": 0,
                 "vetting_to_applying_enabled": False,
                 "vetting_interview_probability_min": 70,
                 "stop_llm_requests": False,
-                "cleanup_pipeline_retention_days": 2,
-                "cleanup_vetting_retention_days": 6,
-                "cleanup_applying_retention_days": 10,
+                "cleanup_job_retention_days": 14,
+                "cleanup_pipeline_retention_days": 14,
+                "cleanup_vetting_retention_days": 14,
+                "cleanup_applying_retention_days": 14,
                 "cleanup_done_retention_days": 0,
                 "cleanup_generated_resume_retention_days": 7,
             },
@@ -934,6 +957,11 @@ class OptimizerWorkflow(models.Model):
     steps = models.JSONField(
         help_text="Ordered list of step ids, e.g. ['writer', 'ats_judge', 'recruiter_judge']"
     )
+    step_llm_config = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Step-specific LLM config mapping step ids ('writer', 'jd_cleanse', etc.) to {'provider': '...', 'model': '...'}"
+    )
     loop_to = models.CharField(max_length=64, blank=True)
     max_iterations = models.PositiveSmallIntegerField(default=3)
     score_threshold = models.PositiveSmallIntegerField(default=85)
@@ -1073,6 +1101,52 @@ class SearchProfile(models.Model):
             self.profile_slug = slug
         super().save(*args, **kwargs)
 
+    @classmethod
+    def ensure_baseline(cls, user):
+        """
+        Aggregate root baseline initialization:
+        Ensure there is at least one active SearchProfile for this user.
+        If no SearchProfile exists yet for the user, seed a default 'General' profile.
+        """
+        qs = cls.objects.for_user(user)
+        if not qs.exists():
+            cls.objects.get_or_create(
+                owner=user,
+                slug="general",
+                defaults={"name": "General", "search_term": "Software", "is_default": True},
+            )
+        elif not qs.filter(is_default=True).exists():
+            first = qs.order_by("id").first()
+            if first:
+                qs.update(is_default=False)
+                first.is_default = True
+                first.save(update_fields=["is_default"])
+        return qs.all()
+
+    @classmethod
+    def get_default_slug(cls, user) -> str:
+        """Best-effort default SearchProfile slug for a user."""
+        qs = cls.objects.for_user(user)
+        default = qs.filter(is_default=True).first()
+        if default:
+            return default.slug
+        first = qs.order_by("id").first()
+        if first:
+            return first.slug
+        obj, _created = cls.objects.get_or_create(
+            owner=user,
+            slug="general",
+            defaults={"name": "General", "search_term": "Software", "is_default": True},
+        )
+        return obj.slug
+
+    @classmethod
+    def get_by_slug(cls, user, slug: str | None) -> "SearchProfile | None":
+        """Retrieve a user's SearchProfile by its unique slug."""
+        if not slug or not str(slug).strip():
+            return None
+        return cls.objects.for_user(user).filter(slug=str(slug).strip().lower()).first()
+
     def to_query_params(self) -> dict[str, str]:
         """Build GET query params for jobs_search from this profile."""
         params: dict[str, str] = {}
@@ -1091,11 +1165,27 @@ class SearchProfile(models.Model):
             params["results_wanted"] = str(self.results_wanted)
         if self.llm_model:
             params["llm_model"] = self.llm_model
-        for site in self.site_names or []:
+        from .job_sources import normalize_site_names
+
+        for site in normalize_site_names(self.site_names):
             params.setdefault("site_name", [])
             if isinstance(params["site_name"], list):
                 params["site_name"].append(site)
         return params
+
+    def clean(self):
+        super().clean()
+        if self.site_names is not None:
+            from .job_sources import normalize_site_names
+
+            self.site_names = normalize_site_names(self.site_names)
+
+    def save(self, *args, **kwargs):
+        if self.site_names is not None:
+            from .job_sources import normalize_site_names
+
+            self.site_names = normalize_site_names(self.site_names)
+        super().save(*args, **kwargs)
 
 
 # Backward-compatible alias during consolidation.
@@ -1148,6 +1238,10 @@ class JobSearchTask(models.Model):
 
     def clean(self):
         super().clean()
+        if self.site_name is not None:
+            from .job_sources import normalize_site_names
+
+            self.site_name = normalize_site_names(self.site_name)
         if self.frequency:
             try:
                 import croniter
@@ -1155,6 +1249,13 @@ class JobSearchTask(models.Model):
             except Exception as e:
                 from django.core.exceptions import ValidationError
                 raise ValidationError({"frequency": f"Invalid cron expression: expected 5 fields (minute hour day month weekday). {e}"})
+
+    def save(self, *args, **kwargs):
+        if self.site_name is not None:
+            from .job_sources import normalize_site_names
+
+            self.site_name = normalize_site_names(self.site_name)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.name or f"{self.search_term} ({self.track})"
@@ -1220,6 +1321,39 @@ class PipelineEntry(models.Model):
     def __str__(self):
         return f"{self.job_listing_id} @ {self.track}"
 
+    # --- Domain State & Predicates ---
+
+    @property
+    def is_in_pipeline_stage(self) -> bool:
+        return self.stage in ("", self.Stage.PIPELINE)
+
+    @property
+    def is_in_vetting_stage(self) -> bool:
+        return self.stage == self.Stage.VETTING
+
+    @property
+    def is_in_applying_stage(self) -> bool:
+        return self.stage == self.Stage.APPLYING
+
+    @property
+    def is_in_done_stage(self) -> bool:
+        return self.stage == self.Stage.DONE
+
+    @property
+    def is_active(self) -> bool:
+        return self.removed_at is None and self.stage != self.Stage.DELETED
+
+    def can_move_to_vetting(self) -> bool:
+        return self.is_in_pipeline_stage and self.is_active
+
+    def can_move_to_applying(self) -> bool:
+        return (self.is_in_pipeline_stage or self.is_in_vetting_stage) and self.is_active
+
+    def can_mark_done(self) -> bool:
+        return self.is_active
+
+    # --- Domain Stage Transitions ---
+
     def move_to_pipeline(self, save: bool = True):
         self.stage = self.Stage.PIPELINE
         if save:
@@ -1227,15 +1361,15 @@ class PipelineEntry(models.Model):
 
     def move_to_vetting(self, save: bool = True):
         # Allow moving into vetting only from blank/default or pipeline stage.
-        if self.stage not in ("", self.Stage.PIPELINE):
+        if not self.can_move_to_vetting():
             return
         self.stage = self.Stage.VETTING
         if save:
             self.save(update_fields=["stage"])
 
     def move_to_applying(self, save: bool = True):
-        # Allow moving into applying only from vetting.
-        if self.stage not in ("", self.Stage.PIPELINE, self.Stage.VETTING):
+        # Allow moving into applying from pipeline or vetting.
+        if not self.can_move_to_applying():
             return
         self.stage = self.Stage.APPLYING
         if save:
@@ -1243,6 +1377,8 @@ class PipelineEntry(models.Model):
 
     def mark_done(self, save: bool = True):
         # Mark as fully applied.
+        if not self.can_mark_done():
+            return
         self.stage = self.Stage.DONE
         if save:
             self.save(update_fields=["stage"])
@@ -1257,6 +1393,78 @@ class PipelineEntry(models.Model):
             update_fields = ["stage"]
         if save:
             self.save(update_fields=update_fields)
+
+    # --- Vetting & Promotion Domain Rules ---
+
+    def has_matching_interview_evaluation(self, resume_id: int | None) -> bool:
+        """True if this entry was already evaluated using the given resume ID."""
+        if resume_id is None:
+            return False
+        return (
+            self.vetting_interview_probability is not None
+            and self.vetting_interview_resume_id == resume_id
+        )
+
+    def record_vetting_interview_result(
+        self,
+        probability: int | None,
+        reasoning: str | None = None,
+        resume_id: int | None = None,
+        scored_at=None,
+        save: bool = True,
+    ) -> None:
+        """Encapsulate recording of interview matching evaluation results."""
+        norm_prob = None
+        if probability is not None:
+            try:
+                norm_prob = max(0, min(100, int(probability)))
+            except (TypeError, ValueError):
+                norm_prob = None
+
+        self.vetting_interview_probability = norm_prob
+        self.vetting_interview_reasoning = (reasoning or "").strip()[:2000] if reasoning else ""
+        if resume_id is not None:
+            self.vetting_interview_resume_id = resume_id
+        self.vetting_interview_scored_at = scored_at or timezone.now()
+        if save:
+            self.save(
+                update_fields=[
+                    "vetting_interview_probability",
+                    "vetting_interview_reasoning",
+                    "vetting_interview_resume_id",
+                    "vetting_interview_scored_at",
+                ]
+            )
+
+    def meets_vetting_promotion_threshold(self, settings=None) -> bool:
+        """Domain rule: check if entry in Vetting satisfies threshold for auto-promotion to Applying."""
+        if not self.is_in_vetting_stage or not self.is_active:
+            return False
+        if self.vetting_interview_probability is None:
+            return False
+        cfg = settings or AppAutomationSettings.get_for_user(self.owner)
+        if not cfg.vetting_to_applying_enabled:
+            return False
+        return self.vetting_interview_probability >= int(cfg.vetting_interview_probability_min)
+
+    def meets_pipeline_auto_promotion_threshold(self, preference_margin: int | None, settings=None) -> bool:
+        """Domain rule: check if entry in Pipeline satisfies threshold for auto-promotion to Vetting."""
+        if not self.is_in_pipeline_stage or not self.is_active:
+            return False
+        if preference_margin is None:
+            return False
+        cfg = settings or AppAutomationSettings.get_for_user(self.owner)
+        if not cfg.pipeline_to_vetting_enabled:
+            return False
+        return preference_margin >= int(cfg.pipeline_preference_margin_min)
+
+    def is_fast_track_eligible(self, preference_margin: int | None, threshold: int = 50) -> bool:
+        """Domain rule: check if high-confidence preference score qualifies for fast-tracking directly to Applying."""
+        if not self.is_in_pipeline_stage or not self.is_active:
+            return False
+        if preference_margin is None:
+            return False
+        return preference_margin > threshold
 
 
 class JobSearchTaskRun(models.Model):
@@ -1278,6 +1486,12 @@ class JobSearchTaskRun(models.Model):
     jobs_after_filter = models.PositiveIntegerField(default=0)
     jobs_added_to_pipeline = models.PositiveIntegerField(default=0)
     error_message = models.TextField(blank=True)
+    details = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Itemized audit log of fetched jobs and their elimination/saved status for recent runs.",
+    )
+
 
     class Meta:
         ordering = ["-started_at"]
@@ -1340,258 +1554,6 @@ class ApplicantProfile(models.Model):
     def get_for_user(cls, user):
         obj, _created = cls.objects.get_or_create(owner=user)
         return obj
-
-
-class SiteCredential(models.Model):
-    """
-    Encrypted login credentials and/or saved session cookies for a career-site
-    domain or ATS. Reused across application attempts so the agent does not have
-    to create accounts repeatedly. Secrets are encrypted at rest (Fernet).
-    """
-
-    owner = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="site_credentials",
-    )
-    domain = models.CharField(
-        max_length=255,
-        help_text="Host the credential applies to, e.g. 'boards.greenhouse.io' or 'acme.com'.",
-    )
-    label = models.CharField(max_length=255, blank=True, default="")
-    username = models.CharField(max_length=255, blank=True, default="")
-    encrypted_password = models.TextField(blank=True, default="")
-    encrypted_session_cookies = models.TextField(
-        blank=True,
-        default="",
-        help_text="Encrypted JSON blob of cookies for explicit injection into a fresh browser context.",
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    objects = OwnedManager()
-
-    class Meta:
-        ordering = ["domain"]
-        unique_together = [("owner", "domain")]
-
-    def __str__(self):
-        return self.label or self.domain
-
-    def set_password(self, plain: str) -> None:
-        from .crypto import encrypt_api_key
-
-        self.encrypted_password = encrypt_api_key(plain or "")
-
-    def get_password(self) -> str:
-        from .crypto import decrypt_api_key
-
-        return decrypt_api_key(self.encrypted_password or "")
-
-    def set_session_cookies(self, cookies: list | dict) -> None:
-        import json
-
-        from .crypto import encrypt_api_key
-
-        self.encrypted_session_cookies = encrypt_api_key(json.dumps(cookies or []))
-
-    def get_session_cookies(self) -> list:
-        import json
-
-        from .crypto import decrypt_api_key
-
-        raw = decrypt_api_key(self.encrypted_session_cookies or "")
-        if not raw:
-            return []
-        try:
-            data = json.loads(raw)
-        except (ValueError, TypeError):
-            return []
-        return data if isinstance(data, list) else []
-
-
-class ApplicationAttempt(models.Model):
-    """
-    One run of the Autonomous Apply Agent for a single Applying-stage pipeline entry.
-
-    The agent advances this row through a state machine (see Status). Every step
-    persists resumable context to the DB so stateless Huey workers can resume after
-    a restart; the browser session itself is never kept alive between tasks.
-    """
-
-    class Status(models.TextChoices):
-        QUEUED = "queued", "Queued"
-        OPTIMIZING = "optimizing", "Optimizing resume"
-        WAITING_OPTIMIZER = "waiting_optimizer", "Waiting for optimizer"
-        RESOLVE_AND_DETECT = "resolve_and_detect", "Resolving URL"
-        DRY_RUN_FILL = "dry_run_fill", "Dry-run fill"
-        AWAITING_APPROVAL = "awaiting_approval", "Awaiting approval"
-        SUBMITTING = "submitting", "Submitting"
-        SUCCEEDED = "succeeded", "Succeeded"
-        FAILED = "failed", "Failed"
-
-    # Non-terminal statuses the heartbeat sweeper should keep nudging forward.
-    ACTIVE_STATUSES = (
-        Status.QUEUED,
-        Status.OPTIMIZING,
-        Status.WAITING_OPTIMIZER,
-        Status.RESOLVE_AND_DETECT,
-        Status.DRY_RUN_FILL,
-        Status.SUBMITTING,
-    )
-
-    class Mode(models.TextChoices):
-        SEMI_AUTO = "semi_auto", "Semi-auto"
-        FULL_AUTO = "full_auto", "Full-auto"
-
-    # Error codes for failed attempts (drives UI messaging).
-    ERROR_AUTOMATION_TIMEOUT = "automation_timeout"
-    ERROR_SUBMIT_AMBIGUOUS = "submit_ambiguous"
-    ERROR_UNRESOLVED_URL = "unresolved_url"
-    ERROR_CAPTCHA = "captcha"
-    ERROR_NO_RESUME = "no_resume"
-    ERROR_NO_ADAPTER = "no_adapter"
-    ERROR_FILL_FAILED = "fill_failed"
-    ERROR_REJECTED = "rejected"
-    ERROR_OPTIMIZER_FAILED = "optimizer_failed"
-
-    pipeline_entry = models.ForeignKey(
-        "PipelineEntry",
-        on_delete=models.CASCADE,
-        related_name="application_attempts",
-    )
-    optimized_resume = models.ForeignKey(
-        "OptimizedResume",
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="application_attempts",
-    )
-    status = models.CharField(max_length=24, choices=Status.choices, default=Status.QUEUED)
-    automation_mode = models.CharField(max_length=16, choices=Mode.choices, default=Mode.SEMI_AUTO)
-    apply_url = models.URLField(max_length=2048, blank=True, default="")
-    ats_type = models.CharField(
-        max_length=32,
-        blank=True,
-        default="",
-        help_text="Detected ATS slug, e.g. greenhouse, lever, workday, unknown.",
-    )
-    confidence = models.FloatField(
-        null=True,
-        blank=True,
-        help_text="Adapter/agent confidence (0.0–1.0) that the form was filled correctly.",
-    )
-    fill_payload_json = models.JSONField(
-        null=True,
-        blank=True,
-        help_text="Semantic answer key captured in the dry run (field label -> value). Never stores CSRF/hidden tokens.",
-    )
-    session_state_json = models.JSONField(
-        null=True,
-        blank=True,
-        help_text="Optional login cookies/storage for explicit injection into a fresh context (not form anti-fraud tokens).",
-    )
-    resume_file_path = models.CharField(
-        max_length=1024,
-        blank=True,
-        default="",
-        help_text="Path to the exported optimized resume (PDF/DOCX) used for upload.",
-    )
-    error_code = models.CharField(max_length=32, blank=True, default="")
-    error_message = models.TextField(blank=True, default="")
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    started_at = models.DateTimeField(null=True, blank=True)
-    submitted_at = models.DateTimeField(null=True, blank=True)
-    last_heartbeat_at = models.DateTimeField(
-        null=True,
-        blank=True,
-        help_text="Set when a worker begins processing a step; used to detect stuck attempts.",
-    )
-
-    class Meta:
-        ordering = ["-created_at"]
-        indexes = [
-            models.Index(fields=["status", "-created_at"]),
-        ]
-
-    def __str__(self):
-        return f"ApplicationAttempt {self.id} ({self.status})"
-
-    @property
-    def is_terminal(self) -> bool:
-        return self.status in (self.Status.SUCCEEDED, self.Status.FAILED)
-
-    def mark_failed(self, error_code: str, message: str = "", save: bool = True) -> None:
-        self.status = self.Status.FAILED
-        self.error_code = error_code or ""
-        self.error_message = (message or "")[:4000]
-        if save:
-            self.save(update_fields=["status", "error_code", "error_message", "updated_at"])
-
-
-class ApplicationAttemptStep(models.Model):
-    """Audit log row for one step of an ApplicationAttempt (screenshots, actions, network)."""
-
-    attempt = models.ForeignKey(
-        ApplicationAttempt,
-        on_delete=models.CASCADE,
-        related_name="steps",
-    )
-    step_name = models.CharField(max_length=64)
-    message = models.TextField(blank=True, default="")
-    screenshot_path = models.CharField(max_length=1024, blank=True, default="")
-    action_snapshot = models.JSONField(
-        null=True,
-        blank=True,
-        help_text="Structured snapshot of actions taken / fields filled in this step.",
-    )
-    network_log = models.JSONField(
-        default=list,
-        blank=True,
-        help_text="XHR/fetch responses observed during this step (catches silent ATS validation errors).",
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        ordering = ["created_at", "id"]
-
-    def __str__(self):
-        return f"{self.attempt_id}: {self.step_name}"
-
-
-class AtsAutoSubmitStats(models.Model):
-    """
-    Per-user per-ATS counters that gate graduation from semi-auto to full-auto.
-    """
-
-    owner = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
-        related_name="ats_auto_submit_stats",
-    )
-    ats_type = models.CharField(max_length=32)
-    clean_submit_streak = models.PositiveIntegerField(
-        default=0,
-        help_text="Consecutive approved submissions with no human corrections. Resets to 0 on any correction.",
-    )
-    total_submits = models.PositiveIntegerField(default=0)
-    total_corrections = models.PositiveIntegerField(default=0)
-    full_auto_enabled = models.BooleanField(
-        default=False,
-        help_text="When true (and global mode allows), this ATS may submit without review.",
-    )
-    updated_at = models.DateTimeField(auto_now=True)
-
-    objects = OwnedManager()
-
-    class Meta:
-        verbose_name = "ATS auto-submit stats"
-        verbose_name_plural = "ATS auto-submit stats"
-        unique_together = [("owner", "ats_type")]
-
-    def __str__(self):
-        return f"{self.ats_type}: streak={self.clean_submit_streak} full_auto={self.full_auto_enabled}"
 
 
 class UserExperienceSettings(models.Model):
@@ -1679,9 +1641,19 @@ class Plan(models.Model):
     slug = models.SlugField(max_length=64, unique=True)
     name = models.CharField(max_length=128)
     description = models.TextField(blank=True, default="")
+    price_display = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        help_text="Commercial price display (e.g. $0, $29/mo, $99/mo).",
+    )
     llm_requests_per_day = models.PositiveIntegerField(
         default=50,
         help_text="Daily LLM invoke cap. 0 = unlimited.",
+    )
+    llm_tokens_per_day = models.PositiveIntegerField(
+        default=0,
+        help_text="Daily LLM token cap. 0 = unlimited or env default.",
     )
     job_searches_per_day = models.PositiveIntegerField(
         default=20,
