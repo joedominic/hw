@@ -179,7 +179,9 @@ def ensure_pipeline_entry_on_manual_save(
 
     if entry.removed_at is not None:
         entry.removed_at = None
-        entry.stage = PipelineEntry.Stage.VETTING
+        # Monotonic save: protect candidate progress (APPLYING / DONE) from regressing to Vetting
+        if entry.stage not in (PipelineEntry.Stage.APPLYING, PipelineEntry.Stage.DONE):
+            entry.stage = PipelineEntry.Stage.VETTING
         if dw["search_profile"] is not None and entry.search_profile_id is None:
             entry.search_profile = dw["search_profile"]
             entry.save(update_fields=["removed_at", "stage", "search_profile"])
@@ -196,7 +198,9 @@ def remove_pipeline_entry_on_unsave(
     job_listing_id: int,
     slug: str,
 ) -> int:
-    """Soft-delete active pipeline rows for this job + profile on Unsave. Returns count removed."""
+    """Soft-delete active Review/Vetting pipeline rows for this job + profile on Unsave. Returns count removed.
+    Protects applied or in-flight applications (APPLYING or DONE) so interview & application records are never wiped.
+    """
     track = (slug or "").strip().lower() or Track.get_default_slug(user)
     entries = list(
         PipelineEntry.objects.for_user(user).filter(
@@ -205,6 +209,10 @@ def remove_pipeline_entry_on_unsave(
             removed_at__isnull=True,
         )
     )
+    removed_count = 0
     for entry in entries:
+        if entry.stage in (PipelineEntry.Stage.APPLYING, PipelineEntry.Stage.DONE):
+            continue
         entry.mark_deleted(save=True)
-    return len(entries)
+        removed_count += 1
+    return removed_count

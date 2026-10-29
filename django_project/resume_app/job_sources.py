@@ -441,20 +441,43 @@ def fetch_jobs(
     max_retries: int = 3,
 ) -> list[dict]:
     """
-    Fetch jobs from configured boards. Returns list of dicts with keys:
+    Fetch jobs from configured boards with circuit-breaker protection and graceful partial aggregation.
+    Returns list of dicts with keys:
     title, company_name, location, description, job_url, source, external_id.
     """
-    sites = normalize_site_names(site_name)
+    from .sourcing.circuit_breaker import get_circuit_breaker, is_source_enabled
+
+    requested_sites = normalize_site_names(site_name)
     if hours_old is None:
         hours_old = getattr(settings, "JOB_SEARCH_HOURS_OLD", None)
 
-    per_cap = _per_site_results_cap(results_wanted, len(sites))
-    jobspy_sites, use_dice, use_levels, use_builtin, use_greenhouse = _partition_sites(sites)
+    # Filter out sources that are administratively disabled or tripped OPEN
+    available_sites: list[str] = []
+    for s in requested_sites:
+        if is_source_enabled(s):
+            available_sites.append(s)
+        else:
+            cb = get_circuit_breaker(s)
+            status = cb.get_status()
+            logger.warning(
+                "[fetch_jobs] Skipping source '%s' (admin_disabled=%s, state=%s, cooldown_remaining=%.1fs)",
+                s,
+                status.get("is_admin_disabled"),
+                status.get("state"),
+                status.get("cooldown_remaining_seconds", 0.0),
+            )
+
+    if not available_sites:
+        logger.warning("[fetch_jobs] Zero available sources among requested: %s", requested_sites)
+        return []
+
+    per_cap = _per_site_results_cap(results_wanted, len(available_sites))
+    jobspy_sites, use_dice, use_levels, use_builtin, use_greenhouse = _partition_sites(available_sites)
     merged: List[dict] = []
 
     if jobspy_sites:
-        merged.extend(
-            _fetch_jobs_jobspy(
+        try:
+            res = _fetch_jobs_jobspy(
                 search_term,
                 location,
                 jobspy_sites,
@@ -464,58 +487,80 @@ def fetch_jobs(
                 timeout_seconds=timeout_seconds,
                 max_retries=max_retries,
             )
-        )
+            merged.extend(res)
+            for s in jobspy_sites:
+                get_circuit_breaker(s).record_success()
+        except Exception as exc:
+            logger.warning("[fetch_jobs] JobSpy source(s) %s failed: %s", jobspy_sites, exc)
+            for s in jobspy_sites:
+                get_circuit_breaker(s).record_failure(exc)
 
     if use_dice:
-        from .sourcing.clients.dice_client import fetch_dice_jobs
+        try:
+            from .sourcing.clients.dice_client import fetch_dice_jobs
 
-        merged.extend(
-            fetch_dice_jobs(
+            res = fetch_dice_jobs(
                 search_term,
                 location=location,
                 results_wanted=per_cap,
                 hours_old=hours_old,
                 timeout_seconds=timeout_seconds,
             )
-        )
+            merged.extend(res)
+            get_circuit_breaker("dice").record_success()
+        except Exception as exc:
+            logger.warning("[fetch_jobs] Dice source failed: %s", exc)
+            get_circuit_breaker("dice").record_failure(exc)
 
     if use_levels:
-        from .sourcing.clients.levels_client import fetch_levels_jobs
+        try:
+            from .sourcing.clients.levels_client import fetch_levels_jobs
 
-        merged.extend(
-            fetch_levels_jobs(
+            res = fetch_levels_jobs(
                 search_term,
                 location=location,
                 results_wanted=per_cap,
                 hours_old=hours_old,
                 timeout_seconds=timeout_seconds,
             )
-        )
+            merged.extend(res)
+            get_circuit_breaker("levels").record_success()
+        except Exception as exc:
+            logger.warning("[fetch_jobs] Levels source failed: %s", exc)
+            get_circuit_breaker("levels").record_failure(exc)
 
     if use_builtin:
-        from .sourcing.clients.builtin_client import fetch_builtin_jobs
+        try:
+            from .sourcing.clients.builtin_client import fetch_builtin_jobs
 
-        merged.extend(
-            fetch_builtin_jobs(
+            res = fetch_builtin_jobs(
                 search_term,
                 location=location,
                 results_wanted=per_cap,
                 timeout_seconds=timeout_seconds,
             )
-        )
+            merged.extend(res)
+            get_circuit_breaker("builtin").record_success()
+        except Exception as exc:
+            logger.warning("[fetch_jobs] BuiltIn source failed: %s", exc)
+            get_circuit_breaker("builtin").record_failure(exc)
 
     if use_greenhouse:
-        from .sourcing.clients.greenhouse_client import fetch_greenhouse_jobs
+        try:
+            from .sourcing.clients.greenhouse_client import fetch_greenhouse_jobs
 
-        merged.extend(
-            fetch_greenhouse_jobs(
+            res = fetch_greenhouse_jobs(
                 search_term,
                 location=location,
                 results_wanted=per_cap,
                 hours_old=hours_old,
                 timeout_seconds=timeout_seconds,
             )
-        )
+            merged.extend(res)
+            get_circuit_breaker("greenhouse").record_success()
+        except Exception as exc:
+            logger.warning("[fetch_jobs] Greenhouse source failed: %s", exc)
+            get_circuit_breaker("greenhouse").record_failure(exc)
 
     out = _dedupe_fetch_rows(merged)
     if hours_old is not None and hours_old > 0:

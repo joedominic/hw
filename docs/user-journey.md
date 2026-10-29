@@ -44,7 +44,7 @@ sequenceDiagram
     Web->>Worker: Enqueue evaluate_vetting_matching_task
     Worker->>Redis: Check/Set KV prefix cache & Ollama radar
     Worker->>DB: Update PipelineEntry(prob=85, fit_summary=...)
-    User->>Browser: Press E to advance from Review to Applying (Start Tailoring)
+    User->>Browser: Press E to advance from Review to Applying (Move to Applying)
     Browser->>Web: POST /jobs/cockpit/ (action="ready")
     Web->>DB: Update PipelineEntry(stage='applying')
 
@@ -121,11 +121,10 @@ sequenceDiagram
   - Candidate navigates with `J`/`K` keys and presses `E` (Move to Review).
   - Form action submits `action="shortlist"`.
   - **Database Rows Updated:** `PipelineEntry.stage = 'vetting'`, `PipelineEntry.shortlisted_at = now()`.
-- **Two-Pass Review Evaluation:**
-  - **Pass 1 (Posting Authenticity Audit):** Evaluates `JobListing` against 10 deterministic compliance checks, extracting `posted_date` and `application_window` to detect artificial $\le 4$-day closing windows or statutory clauses. Persists verdict (`GENUINE_EXTERNAL`, `INTERNAL_PRESELECT`, `PHANTOM_PIPELINE`, `PERM_COMPLIANCE`) and score to `JobListing`.
-  - **Pass 2 (Candidate Match & Skill Radar):** Huey task `evaluate_vetting_matching_task` runs for Review cards. Structures Candidate Resume before Job Description to leverage Ollama KV prefix cache (~2.06s inference). Extracts match score, stretch skills, and fit summary.
+- **Review Stage Evaluation:**
+  - **Candidate Match & Skill Radar:** Huey task `evaluate_vetting_matching_task` runs for Review cards. Structures Candidate Resume before Job Description to leverage Ollama KV prefix cache (~2.06s inference). Extracts match score, stretch skills, and fit summary.
   - **Cache & Persistence:**
-    - Redis Cache: `cockpit_ollama_skill_radar_{user_id}_{resume_id}_{job_id}` (7d TTL) and `job_authenticity_{job_id}` (7d TTL).
+    - Redis Cache: `cockpit_ollama_skill_radar_{user_id}_{resume_id}_{job_id}` (7d TTL).
     - Database Fallback: `PipelineEntry.vetting_interview_probability = 85`, `PipelineEntry.vetting_interview_reasoning = "Strong Python and Kubernetes fit..."`.
 - **Advancement to Applying:**
   - Candidate presses `E` (or `T`) on the Review card.
@@ -135,7 +134,7 @@ sequenceDiagram
 ---
 
 ### Step 4: In-Funnel Resume Tailoring Studio (`/resume/optimizer/`)
-- **User Action:** Candidate presses `T` (Start Tailoring) on the applying card.
+- **User Action:** Candidate presses `T` (Tailor Resume) on the applying card.
 - **View:** Navigates directly to:
   ```text
   GET /resume/optimizer/?job_id={job_id}&track=py-lead&resume_id={resume_id}

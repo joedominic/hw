@@ -493,9 +493,69 @@ class LevelsClientTestCase(TestCase):
             "Staff Software Engineer",
             location="United States",
             results_wanted=2,
+            enrich_descriptions=False,
         )
         self.assertEqual(len(rows), 2)
         self.assertEqual(mock_request.call_count, 2)
+
+    @patch("resume_app.sourcing.clients.levels_client._levels_request")
+    def test_fetch_levels_jobs_enriches_descriptions(self, mock_request):
+        from resume_app.sourcing.clients.levels_client import fetch_levels_jobs
+
+        mock_request.side_effect = [
+            {
+                "results": [
+                    {
+                        "companyName": "Acme",
+                        "jobs": [
+                            {
+                                "id": "123",
+                                "title": "Staff Engineer",
+                                "locations": ["San Francisco, CA"],
+                            }
+                        ],
+                    }
+                ],
+            },
+            {
+                "id": "123",
+                "title": "Staff Software Engineer, Backend",
+                "companyInfo": {"name": "Acme Corp"},
+                "locations": ["San Francisco, CA, USA"],
+                "description": "<p>Build scalable backend systems.</p><ul><li>Python</li><li>Go</li></ul>",
+                "applicationUrl": "https://example.com/apply/123",
+            },
+        ]
+        rows = fetch_levels_jobs("Staff Engineer", results_wanted=1, enrich_descriptions=True)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["company_name"], "Acme Corp")
+        self.assertEqual(rows[0]["title"], "Staff Software Engineer, Backend")
+        self.assertIn("Build scalable backend systems.", rows[0]["description"])
+        self.assertIn("- Python", rows[0]["description"])
+
+    @patch("resume_app.sourcing.clients.levels_client.fetch_levels_job_detail")
+    def test_jobs_get_enriches_levels_job(self, mock_detail):
+        from resume_app.models import JobListing
+        from resume_app.jobs_api import jobs_get
+
+        mock_detail.return_value = {
+            "title": "Senior Systems Engineer",
+            "company_name": "LevelCo",
+            "location": "New York, NY",
+            "description": "Full rich description with architecture and requirements exceeding threshold.",
+            "job_url": "https://www.levels.fyi/jobs?jobId=456",
+        }
+        job = JobListing.objects.create(
+            source="levels",
+            external_id="levels:456",
+            title="Senior Systems Engineer",
+            company_name="LevelCo",
+            description="NYC. Hybrid. Salary: USD 180k. Company: LevelCo",
+        )
+        payload = jobs_get(None, job.id)
+        self.assertIn("Full rich description with architecture", payload.description)
+        job.refresh_from_db()
+        self.assertIn("Full rich description with architecture", job.description)
 
 
 class BuiltInClientTestCase(TestCase):
@@ -2057,6 +2117,41 @@ class FindJobsSavePipelineTestCase(TenantTestCase):
         self.assertContains(response, "Engineer")
         self.assertContains(response, "ACME")
 
+    @patch("resume_app.jobs_api._enqueue_vetting_match_for_entry")
+    def test_save_clears_conflicting_dislike_and_hidden_actions(self, _mock_enqueue):
+        from resume_app.models import JobListingAction
+
+        job = self._create_job("dislike-rescue-1")
+        track = Track.get_default_slug(self.user)
+        # 1. Mark job as disliked
+        JobListingAction.objects.create(
+            owner=self.user,
+            job_listing=job,
+            action=JobListingAction.ActionType.DISLIKED,
+            track=track,
+        )
+        self.assertTrue(
+            JobListingAction.objects.filter(
+                owner=self.user, job_listing=job, action=JobListingAction.ActionType.DISLIKED, track=track
+            ).exists()
+        )
+        # 2. Rescuing / saving the job clears the dislike and lands it in Review
+        response = self.client.post(f"/api/resume/jobs/{job.id}/save?track={track}")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(
+            JobListingAction.objects.filter(
+                owner=self.user, job_listing=job, action=JobListingAction.ActionType.DISLIKED, track=track
+            ).exists()
+        )
+        self.assertTrue(
+            JobListingAction.objects.filter(
+                owner=self.user, job_listing=job, action=JobListingAction.ActionType.SAVED, track=track
+            ).exists()
+        )
+        pe = PipelineEntry.objects.get(owner=self.user, job_listing=job, track=track)
+        self.assertEqual(pe.stage, PipelineEntry.Stage.VETTING)
+        self.assertIsNone(pe.removed_at)
+
 
 class PipelineResumeEnqueueTestCase(TestCase):
     def setUp(self):
@@ -2390,6 +2485,11 @@ class PipelineAutomationTestCase(TestCase):
         # Test 4: Explicit distinct raw_interview_probability from LLM is preserved
         raw_ip = calibrate_interview_probability(85, ["Java"], ["Go"], job_title="Engineer", resume_text=resume, raw_interview_probability=64)
         self.assertEqual(raw_ip, 64)
+
+        # Test 5: Decimal probability (0.0 < x <= 1.0) is converted to 0-100 percentage and calibrated
+        dec_ip = calibrate_interview_probability(88, ["GCP", "Java", "API Design & Governance", "Cloud Architecture"], ["SOC 2 Type II", "HIPAA", "FedRAMP"], job_title="Principal Engineer", resume_text=resume, raw_interview_probability=0.92)
+        self.assertGreater(dec_ip, 70)
+        self.assertNotEqual(dec_ip, 5)
 
 
 class FitPrefScoringTestCase(TestCase):
@@ -4580,3 +4680,1275 @@ class FindJobsSortingTestCase(TenantTestCase):
         self.assertEqual(res_match.status_code, 200)
         self.assertEqual(res_match.context["sort_param"], "match")
 
+
+
+class SkillRadarRoutingTestCase(TestCase):
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        self.user = User.objects.create_user(username="radar_test_user", password="secretpassword")
+        self.job = JobListing.objects.create(
+            source="test",
+            external_id="routing-job-1",
+            title="Senior Python Architect",
+            company_name="Acme Tech",
+            description="Looking for Python, Django, AWS, Kubernetes expertise.",
+        )
+        self.resume_text = "Senior Software Architect with 10 years experience in Python, Django, AWS."
+
+    @patch("resume_app.skill_radar.invoke_llm_messages")
+    def test_skill_radar_dual_scoring_slm_ignores_numbers_uses_deterministic(self, mock_invoke):
+        from resume_app.skill_radar import SkillRadarService
+        from unittest.mock import MagicMock
+
+        # SLM returns hallucinated high numbers (99/98) despite missing skills
+        mock_resp = MagicMock()
+        mock_resp.content = '{"match_score": 99, "interview_probability": 98, "domain_alignment": "DIRECT_MATCH", "seniority_alignment": "MATCH", "core_competencies": ["Python", "AWS"], "stretch_skills": ["Rust", "Kubernetes"], "fit_summary": "SLM analysis"}'
+        mock_invoke.return_value = mock_resp
+
+        result = SkillRadarService.analyze(
+            self.job,
+            self.resume_text,
+            user=self.user,
+            target_tier="slm",
+            force_refresh=True,
+        )
+
+        self.assertEqual(result["source"], "local_slm")
+        # SLM numbers (99/98) are ignored, deterministic formula governs
+        self.assertNotEqual(result["match_score"], 99)
+        self.assertNotEqual(result["interview_probability"], 98)
+        self.assertIsNone(result["llm_match_score"])
+        self.assertIsNone(result["llm_interview_probability"])
+        self.assertEqual(result["match_score"], result["deterministic_match_score"])
+        self.assertEqual(result["interview_probability"], result["deterministic_interview_probability"])
+
+    @patch("resume_app.skill_radar.invoke_llm_messages")
+    def test_skill_radar_strictly_local_even_on_manual_click(self, mock_invoke):
+        from resume_app.skill_radar import SkillRadarService
+        from unittest.mock import MagicMock
+
+        mock_resp = MagicMock()
+        mock_resp.content = '{"match_score": 85, "interview_probability": 80, "core_competencies": ["Python", "Django"], "stretch_skills": ["Kubernetes"], "fit_summary": "Great match"}'
+        mock_invoke.return_value = mock_resp
+
+        result = SkillRadarService.analyze(
+            self.job,
+            self.resume_text,
+            user=self.user,
+            is_manual_invocation=True,
+            force_refresh=True,
+        )
+
+        self.assertEqual(result["source"], "local_slm")
+        self.assertEqual(result["match_score"], 85)
+        mock_invoke.assert_called_once()
+        _, kwargs = mock_invoke.call_args
+        self.assertTrue(kwargs.get("only_local"), "Deep skill diagnosis must remain strictly on local models even on manual click")
+        self.assertTrue(kwargs.get("prefer_local"))
+        self.assertTrue(kwargs.get("allow_local"))
+        self.assertEqual(kwargs.get("usage_query_kind"), "skill_radar")
+
+    @patch("resume_app.skill_radar.invoke_llm_messages")
+    def test_skill_radar_cloud_frontier_tier_routing(self, mock_invoke):
+        from resume_app.skill_radar import SkillRadarService
+        from resume_app.llm import MODEL_TIER_FRONTIER
+        from unittest.mock import MagicMock
+
+        mock_resp = MagicMock()
+        mock_resp.content = '{"match_score": 90, "interview_probability": 85, "core_competencies": ["Python", "AWS"], "stretch_skills": ["Rust"], "fit_summary": "Frontier cloud analysis"}'
+        mock_invoke.return_value = mock_resp
+
+        result = SkillRadarService.analyze(
+            self.job,
+            self.resume_text,
+            user=self.user,
+            target_tier="frontier",
+            force_refresh=True,
+        )
+
+        self.assertEqual(result["source"], "cloud_llm")
+        self.assertEqual(result["match_score"], 90)
+        # Stub job description in setUp caps interview_probability at 58
+        self.assertEqual(result["interview_probability"], 58)
+        self.assertEqual(result["llm_match_score"], 90)
+        self.assertEqual(result["llm_interview_probability"], 58)
+        self.assertIsNotNone(result.get("deterministic_match_score"))
+        self.assertIsNotNone(result.get("deterministic_interview_probability"))
+        self.assertEqual(result["score_delta_match"], 90 - result["deterministic_match_score"])
+        self.assertEqual(result["score_delta_interview"], 58 - result["deterministic_interview_probability"])
+        mock_invoke.assert_called_once()
+        _, kwargs = mock_invoke.call_args
+        self.assertFalse(kwargs.get("only_local"))
+        self.assertFalse(kwargs.get("prefer_local"))
+        self.assertFalse(kwargs.get("allow_local"))
+        self.assertEqual(kwargs.get("max_model_tier"), MODEL_TIER_FRONTIER)
+        self.assertEqual(kwargs.get("usage_query_kind"), "skill_radar")
+
+    @patch("resume_app.skill_radar.SkillRadarService.analyze")
+    def test_cockpit_skill_radar_api_dual_tier_parameter(self, mock_analyze):
+        from django.test import RequestFactory
+        from resume_app.pipeline_board import cockpit_skill_radar_api
+
+        mock_analyze.return_value = {
+            "match_score": 95,
+            "interview_probability": 90,
+            "core_competencies": ["Python", "Django"],
+            "stretch_skills": [],
+            "fit_summary": "Top match",
+            "source": "cloud_llm",
+        }
+
+        factory = RequestFactory()
+        req = factory.get(f"/jobs/cockpit/api/skill-radar/?job_id={self.job.id}&track=ic&force=1&tier=frontier")
+        req.user = self.user
+        resp = cockpit_skill_radar_api(req)
+
+        self.assertEqual(resp.status_code, 200)
+        mock_analyze.assert_called_once()
+        args, kwargs = mock_analyze.call_args
+        self.assertEqual(kwargs.get("target_tier"), "frontier")
+
+
+    def test_skill_radar_parses_nested_assistant_content_envelope(self):
+        from resume_app.skill_radar import SkillRadarService
+
+        payload = json.dumps({
+            "content": {
+                "match_score": 92,
+                "interview_probability": 88,
+                "core_competencies": [
+                    "Generative AI Strategy & Prototyping",
+                    "Cloud Architecture (GCP & Azure)",
+                    "API Design & Governance"
+                ],
+                "stretch_skills": [
+                    "Snowflake",
+                    "Azure",
+                    "RAG",
+                    "Vector Search"
+                ],
+                "fit_summary": "Strong alignment in generative AI and cloud architecture with a stretch gap in Snowflake and vector search"
+            },
+            "role": "assistant",
+            "tool_calls": None,
+            "function_call": None,
+            "provider_specific_fields": None,
+            "reasoning_content": None
+        })
+
+        parsed = SkillRadarService._parse_llm_response(payload)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.get("match_score"), 92)
+        self.assertEqual(parsed.get("interview_probability"), 88)
+
+    def test_skill_radar_parses_decimal_float_interview_probability(self):
+        from resume_app.skill_radar import SkillRadarService
+
+        payload = json.dumps({
+            "content": {
+                "match_score": 88,
+                "interview_probability": 0.92,
+                "core_competencies": ["GCP", "Java", "API Design & Governance", "Cloud Architecture"],
+                "stretch_skills": ["SOC 2 Type II", "HIPAA", "FedRAMP"],
+                "fit_summary": "Strong background"
+            }
+        })
+
+        parsed = SkillRadarService._parse_llm_response(payload)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.get("match_score"), 88)
+        self.assertEqual(parsed.get("interview_probability"), 92)
+
+    def test_fit_check_parses_decimal_interview_probability(self):
+        from resume_app.parsers import parse_fit_check_fallback
+
+        text = '{"score": 88, "interview_probability": 0.92, "reasoning": "Strong background", "thoughts": "Great candidate"}'
+        result = parse_fit_check_fallback(text)
+        self.assertEqual(result.score, 88)
+        self.assertEqual(result.interview_probability, 92)
+
+    def test_skill_radar_parses_repeated_key_loop_output(self):
+        from resume_app.skill_radar import SkillRadarService
+
+        # Simulates the Nemotron duplicate key loop failure (Log 2)
+        payload = '''{
+  "match_score": 88,
+  "interview_probability": 85,
+  "core_competencies": ["GCP", "Java", "API Design & Governance", "Cloud Architecture"],
+  "stretch_skills": ["SOC 2 Type II", "HIPAA", "FedRAMP"],
+  "fit_summary": "Transferable background in cloud-native compliance architecture, but lacks required domain background in FedRAMP.",
+  "core_competencies": ["GCP", "Java", "API Design & Governance", "Cloud Architecture"],
+  "stretch_skills": ["SOC 2 Type II", "HIPAA", "FedRAMP"],
+  "fit_summary": "Transferable background in cloud-native compliance architecture, but lacks required domain background in FedRAMP."
+}'''
+        parsed = SkillRadarService._parse_llm_response(payload)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.get("match_score"), 88)
+        self.assertEqual(parsed.get("interview_probability"), 85)
+        self.assertEqual(len(parsed.get("core_competencies", [])), 4)
+        self.assertIn("FedRAMP", parsed.get("stretch_skills", []))
+        self.assertIn("Transferable background", parsed.get("fit_summary", ""))
+
+    def test_skill_radar_repairs_unclosed_json_from_stop_token(self):
+        from resume_app.skill_radar import SkillRadarService
+
+        # Simulates a stop token cutting generation right before or at closing brace
+        payload = '''{
+  "match_score": 85,
+  "interview_probability": 80,
+  "core_competencies": ["Python", "AWS"],
+  "stretch_skills": ["Rust"],
+  "fit_summary": "Solid cloud match."'''
+        parsed = SkillRadarService._parse_llm_response(payload)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.get("match_score"), 85)
+        self.assertEqual(parsed.get("interview_probability"), 80)
+        self.assertIn("Python", parsed.get("core_competencies", []))
+
+    def test_jd_cleanse_strips_whats_in_it_for_you_and_corporate_fluff(self):
+        from resume_app.jd_cleanser import JDCleanserService
+
+        jd_text = '''**About The Role**
+* Own the compliance architecture: understand SOC 2 Type II and FedRAMP controls.
+* Build automated evidence collection pipelines.
+
+**About You**
+* Direct experience building systems for ISO 27001 and HIPAA.
+* Deep backend engineering expertise in Java or Python.
+
+**What’s in it For You?**
+* Hybrid Work Model: We have adopted a flexible hybrid working environment.
+* Industry Competitive Benefits: Comprehensive benefit plans.
+* Headspace app, retirement savings, tuition reimbursement.
+
+Our use of AI within the recruitment process Thomson Reuters utilizes Artificial Intelligence...
+Thomson Reuters complies with local laws that require upfront disclosure of the expected pay range.
+The base compensation range for this role is $158,900 USD - $295,100 USD.
+'''
+        cleansed = JDCleanserService.cleanse_heuristically(jd_text, title="Principal Engineer", max_chars=3500)
+        self.assertIn("SOC 2 Type II", cleansed)
+        self.assertIn("ISO 27001 and HIPAA", cleansed)
+        self.assertNotIn("What’s in it For You?", cleansed)
+        self.assertNotIn("Headspace app", cleansed)
+        self.assertNotIn("Our use of AI within the recruitment process", cleansed)
+        self.assertNotIn("base compensation range for this role", cleansed)
+
+    def test_calculate_categorical_scores_rubric(self):
+        from resume_app.skill_radar import calculate_categorical_scores
+
+        # DIRECT_MATCH: strong scores
+        m_direct, ip_direct = calculate_categorical_scores("DIRECT_MATCH", "MATCH", core_count=4, stretch_count=2)
+        self.assertEqual(m_direct, 82)
+        self.assertEqual(ip_direct, 74)
+
+        # ADJACENT_DOMAIN: middle tier
+        m_adj, ip_adj = calculate_categorical_scores("ADJACENT_DOMAIN", "MATCH", core_count=4, stretch_count=2)
+        self.assertEqual(m_adj, 62)
+        self.assertEqual(ip_adj, 50)
+
+        # CROSS_INDUSTRY_MISMATCH: strictly below 45% / 25%
+        m_cross, ip_cross = calculate_categorical_scores("CROSS_INDUSTRY_MISMATCH", "MATCH", core_count=4, stretch_count=2)
+        self.assertLessEqual(m_cross, 42)
+        self.assertLessEqual(ip_cross, 25)
+        self.assertEqual(m_cross, 31)
+        self.assertEqual(ip_cross, 14)
+
+        # Seniority adjustments
+        m_over, ip_over = calculate_categorical_scores("DIRECT_MATCH", "OVERQUALIFIED", core_count=4, stretch_count=1)
+        self.assertEqual(m_over, 77)
+        self.assertEqual(ip_over, 68)
+
+    def test_calculate_categorical_scores_knockout_gaps_and_scope_mismatch(self):
+        from resume_app.skill_radar import calculate_categorical_scores
+
+        # Scenario 1: One knockout gap + Scope Mismatch (Senior Executive applying to hands-on role with missing core runtime)
+        m_ko1, ip_ko1 = calculate_categorical_scores(
+            domain_alignment="DIRECT_MATCH",
+            seniority_alignment="SCOPE_MISMATCH",
+            core_count=4,
+            knockout_gaps=["NET Core Framework"],
+            secondary_gaps=["Azure Platform Delta"],
+        )
+        self.assertLessEqual(m_ko1, 62)
+        self.assertLessEqual(ip_ko1, 35)
+        self.assertEqual(m_ko1, 62)
+        self.assertEqual(ip_ko1, 35)
+
+        # Scenario 2: Two knockout gaps triggers severe structural cap <= 45% and <= 22%
+        m_ko2, ip_ko2 = calculate_categorical_scores(
+            domain_alignment="ADJACENT_DOMAIN",
+            seniority_alignment="SCOPE_MISMATCH",
+            core_count=4,
+            knockout_gaps=["Figma UI Design Systems", "User Research Prototyping"],
+            secondary_gaps=[],
+        )
+        self.assertLessEqual(m_ko2, 45)
+        self.assertLessEqual(ip_ko2, 22)
+        self.assertEqual(m_ko2, 34)
+        self.assertEqual(ip_ko2, 11)
+
+    def test_skill_radar_parses_domain_agnostic_qualification_gaps_schema(self):
+        from resume_app.skill_radar import SkillRadarService
+
+        payload = json.dumps({
+            "domain_alignment": "DIRECT_MATCH",
+            "seniority_alignment": "SCOPE_MISMATCH",
+            "core_competencies": [
+                "Distributed Systems Architecture",
+                "High-Throughput API Platforms",
+                "Generative AI Strategy",
+                "Enterprise Platform Governance"
+            ],
+            "qualification_gaps": {
+                "knockout_gaps": [
+                    "NET Ecosystem & Core Development"
+                ],
+                "secondary_gaps": [
+                    "Azure Cloud Platform Architecture"
+                ]
+            },
+            "fit_summary": "Distinguished enterprise leader with deep financial scale, but lacks .NET execution experience."
+        })
+
+        parsed = SkillRadarService._parse_llm_response(payload)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.get("domain_alignment"), "DIRECT_MATCH")
+        self.assertEqual(parsed.get("seniority_alignment"), "SCOPE_MISMATCH")
+        self.assertEqual(parsed.get("match_score"), 62)
+        self.assertEqual(parsed.get("interview_probability"), 35)
+        self.assertIn("NET Ecosystem & Core Development", parsed.get("knockout_gaps", []))
+        self.assertIn("Azure Cloud Platform Architecture", parsed.get("secondary_gaps", []))
+        self.assertEqual(len(parsed.get("stretch_skills", [])), 2)
+
+    def test_skill_radar_parses_categorical_schema(self):
+        from resume_app.skill_radar import SkillRadarService
+
+        payload = json.dumps({
+            "domain_alignment": "CROSS_INDUSTRY_MISMATCH",
+            "seniority_alignment": "MATCH",
+            "core_competencies": [
+                "Cloud Architecture (GCP & Azure)",
+                "API Design & Governance",
+                "Distributed Event Streaming (Kafka)",
+                "Java / Spring Boot"
+            ],
+            "stretch_skills": [
+                "Embedded Firmware Development",
+                "Thermal Management Systems"
+            ],
+            "fit_summary": "Transferable background in Cloud Architecture, but lacks required domain background in Embedded Firmware Development."
+        })
+
+        parsed = SkillRadarService._parse_llm_response(payload)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.get("domain_alignment"), "CROSS_INDUSTRY_MISMATCH")
+        self.assertEqual(parsed.get("seniority_alignment"), "MATCH")
+        self.assertLessEqual(parsed.get("match_score"), 42)
+        self.assertLessEqual(parsed.get("interview_probability"), 25)
+        self.assertEqual(len(parsed.get("core_competencies")), 4)
+        self.assertEqual(len(parsed.get("stretch_skills")), 2)
+
+    def test_cross_industry_mismatch_caps_inflated_slm_scores(self):
+        from resume_app.skill_radar import SkillRadarService
+
+        # Simulates an SLM hallucinating inflated integers (70/60) despite classifying CROSS_INDUSTRY_MISMATCH
+        payload = json.dumps({
+            "match_score": 70,
+            "interview_probability": 60,
+            "domain_alignment": "CROSS_INDUSTRY_MISMATCH",
+            "seniority_alignment": "MATCH",
+            "core_competencies": ["Java", "GCP"],
+            "stretch_skills": ["Semiconductor Packaging", "Thermal Simulation"],
+            "fit_summary": "Mismatch."
+        })
+
+        parsed = SkillRadarService._parse_llm_response(payload)
+        self.assertIsNotNone(parsed)
+        self.assertLessEqual(parsed.get("match_score"), 42)
+        self.assertLessEqual(parsed.get("interview_probability"), 25)
+
+    def test_reconcile_skills_detects_hardware_firmware_domain_mismatch(self):
+        from resume_app.skill_radar import reconcile_skills_with_ground_truth
+
+        fintech_resume = """
+        Distinguished Architect with 20 years in Enterprise FinTech, Payment Gateways,
+        Distributed Event Streaming (Kafka), Java, Spring Boot, GCP, and SOC 2 compliance.
+        """
+        amd_hardware_jd = """
+        TMS Solution Architect - AMD.
+        Lead thermal management system architectures for next-gen silicon packaging.
+        Requires embedded firmware development, semiconductor physical validation, and RTL emulation.
+        """
+
+        raw_parsed = {
+            "match_score": 75,
+            "interview_probability": 65,
+            "core_competencies": ["Distributed Systems", "Cloud Architecture (GCP)", "Java", "Enterprise Architecture"],
+            "stretch_skills": ["Embedded Firmware Development", "Thermal Management Systems"],
+            "fit_summary": "Strong engineering background with gaps in firmware."
+        }
+
+        reconciled = reconcile_skills_with_ground_truth(
+            raw_parsed,
+            resume_text=fintech_resume,
+            job_description=amd_hardware_jd,
+        )
+
+        self.assertEqual(reconciled.get("domain_alignment"), "CROSS_INDUSTRY_MISMATCH")
+        self.assertLessEqual(reconciled.get("match_score"), 40)
+        self.assertLessEqual(reconciled.get("interview_probability"), 20)
+        self.assertIn("Transferable background in Distributed Systems", reconciled.get("fit_summary"))
+
+    def test_reconcile_skills_does_not_falsely_promote_hardware_firmware_on_generic_token_match(self):
+        from resume_app.skill_radar import reconcile_skills_with_ground_truth
+
+        # Candidate has generic "integration" in FinTech resume
+        fintech_resume = "Distinguished Architect. Architected enterprise API integration and microservices for FinTech. GCP, Java, Generative AI."
+        amd_hardware_jd = "TMS Solution Architect - AMD. Thermal and hardware packaging."
+
+        raw_parsed = {
+            "domain_alignment": "CROSS_INDUSTRY_MISMATCH",
+            "seniority_alignment": "OVERQUALIFIED",
+            "core_competencies": ["GCP", "Java", "Generative AI", "API Design & Governance"],
+            "stretch_skills": [
+                "TMS (Transportation Management System) Platform Architecture",
+                "Hardware-Specific Firmware Integration",
+            ],
+            "fit_summary": "Mismatch.",
+        }
+
+        reconciled = reconcile_skills_with_ground_truth(
+            raw_parsed,
+            resume_text=fintech_resume,
+            job_description=amd_hardware_jd,
+        )
+
+        # "Hardware-Specific Firmware Integration" MUST stay in stretch_skills and NOT be moved to core_competencies
+        self.assertIn("Hardware-Specific Firmware Integration", reconciled["stretch_skills"])
+        self.assertNotIn("Hardware-Specific Firmware Integration", reconciled["core_competencies"])
+
+    def test_reconcile_skills_reanchors_falsely_mismatched_enterprise_ai_solution_architect(self):
+        from resume_app.skill_radar import reconcile_skills_with_ground_truth
+
+        resume_text = """
+        Distinguished Architect with 20 years in enterprise architecture, GCP, Java,
+        Generative AI platform with LangChain, Gemini, RAG, and API Design & Governance.
+        """
+        ntt_data_jd = """
+        AI Service-as-Software Solutions Architect - NTT DATA.
+        Requires 15+ years enterprise architecture, Agentic AI, GenAI patterns, LLM orchestration,
+        observability, and customer solutioning.
+        """
+
+        raw_parsed = {
+            "domain_alignment": "CROSS_INDUSTRY_MISMATCH",
+            "seniority_alignment": "OVERQUALIFIED",
+            "core_competencies": ["GCP", "Java", "Generative AI", "API Design & Governance"],
+            "stretch_skills": [
+                "Enterprise AI Platform Integration",
+                "AI Agent Orchestration",
+            ],
+            "fit_summary": "Transferable background in enterprise FinTech and cloud architecture, but lacks required domain background in AI-native service-as-software solutions.",
+        }
+
+        reconciled = reconcile_skills_with_ground_truth(
+            raw_parsed,
+            resume_text=resume_text,
+            job_description=ntt_data_jd,
+        )
+
+        self.assertEqual(reconciled["domain_alignment"], "DIRECT_MATCH")
+        self.assertEqual(reconciled["seniority_alignment"], "MATCH")
+        self.assertGreaterEqual(reconciled["match_score"], 78)
+        self.assertGreaterEqual(reconciled["interview_probability"], 70)
+
+
+
+
+
+
+
+    def test_evaluate_skill_gap_severity_tiers(self):
+        from resume_app.skill_radar import evaluate_skill_gap_severity
+
+        # Tier 1: CRITICAL_HEADLINE - skill in job title
+        m_pen, ip_pen, tier = evaluate_skill_gap_severity(
+            "Power BI",
+            job_title="Lead Power BI Developer",
+            job_description="Build executive dashboards and reports using Power BI.",
+        )
+        self.assertEqual(tier, "CRITICAL_HEADLINE")
+        self.assertEqual(m_pen, 6)
+        self.assertEqual(ip_pen, 8)
+
+        # Tier 2: INCIDENTAL_TOOL - incidental workflow tool in a cloud architecture role with low mentions
+        m_pen, ip_pen, tier = evaluate_skill_gap_severity(
+            "Power BI",
+            job_title="Enterprise Cloud Solutions Architect",
+            job_description="Lead enterprise cloud migrations on GCP. Work with teams using Jira and Power BI.",
+        )
+        self.assertEqual(tier, "INCIDENTAL_TOOL")
+        self.assertEqual(m_pen, 1)
+        self.assertEqual(ip_pen, 1)
+
+        # Tier 3: STRUCTURAL_REQUIREMENT - high frequency domain requirement (>=3 mentions)
+        cyber_jd = """
+        Enterprise cybersecurity is central to our mission.
+        Candidates will architect enterprise cybersecurity frameworks, implement cybersecurity standards,
+        and manage cybersecurity assessments across distributed systems.
+        """
+        m_pen, ip_pen, tier = evaluate_skill_gap_severity(
+            "Enterprise Cybersecurity",
+            job_title="Cloud Solutions Architect",
+            job_description=cyber_jd,
+        )
+        self.assertEqual(tier, "STRUCTURAL_REQUIREMENT")
+        self.assertEqual(m_pen, 4)
+        self.assertEqual(ip_pen, 5)
+
+        # Tier 4: SECONDARY_GAP - standard domain discipline with 1 mention
+        m_pen, ip_pen, tier = evaluate_skill_gap_severity(
+            "Kafka Streaming",
+            job_title="Cloud Solutions Architect",
+            job_description="Occasional integration with Kafka Streaming messaging platform.",
+        )
+        self.assertEqual(tier, "SECONDARY_GAP")
+        self.assertEqual(m_pen, 3)
+        self.assertEqual(ip_pen, 4)
+
+    def test_contextual_scoring_differentiates_incidental_tools_from_domain_gap(self):
+        from resume_app.skill_radar import calculate_categorical_scores
+
+        # Scenario A: Candidate missing incidental productivity tools (Jira, Power BI) on Cloud Architect role
+        m_incidental, ip_incidental = calculate_categorical_scores(
+            domain_alignment="DIRECT_MATCH",
+            seniority_alignment="MATCH",
+            core_count=4,
+            stretch_skills=["Jira", "Power BI"],
+            job_title="Principal Cloud Architect",
+            job_description="Architect GCP microservices, API platforms, and distributed systems. Track deliverables in Jira and Power BI.",
+        )
+        # Base 88/82 - (1+1 match penalty, 1+1 ip penalty) = 86% match, 80% interview probability
+        self.assertEqual(m_incidental, 86)
+        self.assertEqual(ip_incidental, 80)
+
+        # Scenario B: Candidate missing heavy domain disciplines (Enterprise cybersecurity, AI Security Test Harness)
+        cyber_jd = """
+        AI Platform Security Architect.
+        Requires enterprise cybersecurity architecture, threat modeling, and defense.
+        Build and deploy an automated AI Security Test Harness for vulnerability fuzzing.
+        The AI Security Test Harness must validate enterprise cybersecurity compliance continuously.
+        """
+        m_domain, ip_domain = calculate_categorical_scores(
+            domain_alignment="DIRECT_MATCH",
+            seniority_alignment="MATCH",
+            core_count=4,
+            stretch_skills=["Enterprise Cybersecurity", "AI Security Test Harness"],
+            job_title="AI Platform Security Architect",
+            job_description=cyber_jd,
+        )
+        # AI Security Test Harness is headline (title has Security: -6 match, -8 ip)
+        # Enterprise Cybersecurity is secondary gap (2 mentions: -3 match, -4 ip)
+        # Total deduction: -9 match, -12 ip => 88 - 9 = 79 match, 82 - 12 = 70 callback probability
+        self.assertEqual(m_domain, 79)
+        self.assertEqual(ip_domain, 70)
+
+        # Verified: Scenario A scores higher than Scenario B because Jira/Power BI are recognized as incidental
+        self.assertGreater(m_incidental, m_domain)
+        self.assertGreater(ip_incidental, ip_domain)
+
+        # Scenario C: Candidate missing Power BI when applying for "Lead Power BI Specialist"
+        m_headline, ip_headline = calculate_categorical_scores(
+            domain_alignment="DIRECT_MATCH",
+            seniority_alignment="MATCH",
+            core_count=4,
+            stretch_skills=["Power BI"],
+            job_title="Lead Power BI Specialist",
+            job_description="Lead the enterprise Power BI reporting initiatives.",
+        )
+        # Headline penalty: -6 match, -8 ip => 88 - 6 = 82 match, 82 - 8 = 74 ip
+        self.assertEqual(m_headline, 82)
+        self.assertEqual(ip_headline, 74)
+
+    def test_is_skill_covered_by_core_deduplication(self):
+        from resume_app.skill_radar import is_skill_covered_by_core
+
+        core_skills = [
+            "Cloud Architecture (GCP & Azure)",
+            "RAG & Hybrid Vector Retrieval",
+            "Kubernetes & Container Orchestration",
+            "Distributed Event Streaming (Kafka)"
+        ]
+
+        # Should detect containment
+        self.assertTrue(is_skill_covered_by_core("Azure", core_skills))
+        self.assertTrue(is_skill_covered_by_core("gcp", core_skills))
+        self.assertTrue(is_skill_covered_by_core("Vector Retrieval", core_skills))
+        self.assertTrue(is_skill_covered_by_core("Kubernetes", core_skills))
+        self.assertTrue(is_skill_covered_by_core("Kafka", core_skills))
+
+        # Should NOT detect false collisions for distinct missing skills
+        self.assertFalse(is_skill_covered_by_core("Snowflake", core_skills))
+        self.assertFalse(is_skill_covered_by_core("Terraform", core_skills))
+        self.assertFalse(is_skill_covered_by_core("GraphQL", core_skills))
+
+    def test_skill_radar_strips_stretch_skills_colliding_with_core(self):
+        from resume_app.skill_radar import SkillRadarService
+
+        raw_payload = json.dumps({
+            "match_score": 90,
+            "interview_probability": 85,
+            "core_competencies": [
+                "Generative AI Strategy & Prototyping",
+                "Cloud Architecture (GCP & Azure)",
+                "API Design & Governance",
+                "Kubernetes"
+            ],
+            "stretch_skills": [
+                "Azure",          # Collision with "Cloud Architecture (GCP & Azure)"
+                "Snowflake",      # Genuine gap
+                "Vector Search"   # Genuine gap
+            ],
+            "fit_summary": "Strong cloud alignment with a stretch gap in Snowflake."
+        })
+
+        parsed = SkillRadarService._parse_llm_response(raw_payload)
+        self.assertIsNotNone(parsed)
+        # "Azure" MUST be stripped from stretch_skills because it is covered by core_competencies
+        self.assertNotIn("Azure", parsed.get("stretch_skills", []))
+
+
+
+    def test_reconcile_skills_with_ground_truth_fixes_inverted_hallucination(self):
+        from resume_app.skill_radar import reconcile_skills_with_ground_truth
+
+        resume_text = """
+        Executive Principal Engineer. Architected LLM orchestration using LangChain and Gemini.
+        Enterprise cloud platform on GCP with Kubernetes, Docker, and Terraform.
+        Built event-driven data streaming with Java, Spring Boot, Kafka, and MongoDB.
+        """
+        job_desc = """
+        AI Software Engineer - Staff/Principal.
+        Requires deep expertise in Python and backend distributed systems.
+        Kubernetes, Kafka, GCP, LangChain, and RAG architectures.
+        """
+
+        raw_parsed = {
+            "match_score": 92,
+            "interview_probability": 90,
+            "core_competencies": ["Kubernetes", "Python", "Kafka", "GCP"],
+            "stretch_skills": ["LangChain", "RAG"],
+            "fit_summary": "Strong alignment in Kubernetes and Python, with a gap in LangChain."
+        }
+
+        reconciled = reconcile_skills_with_ground_truth(
+            raw_parsed,
+            resume_text=resume_text,
+            job_description=job_desc,
+        )
+
+        self.assertIn("LangChain", reconciled["core_competencies"])
+        self.assertNotIn("LangChain", reconciled["stretch_skills"])
+        self.assertNotIn("Python", reconciled["core_competencies"])
+        self.assertIn("Python", reconciled["stretch_skills"])
+        self.assertLessEqual(reconciled["match_score"], 75)
+        self.assertGreaterEqual(reconciled["match_score"], 65)
+
+    def test_reconcile_skills_universal_healthcare_and_finance(self):
+        from resume_app.skill_radar import reconcile_skills_with_ground_truth
+
+        # Healthcare scenario
+        nurse_resume = "Clinical Nurse Specialist with 10 years in ICU, Cerner EHR, BSN, ACLS, BLS."
+        nurse_job = "Nurse Manager - Requires EPIC EHR, MSN, ACLS, BLS."
+
+        nurse_parsed = {
+            "match_score": 88,
+            "core_competencies": ["ICU", "EPIC EHR", "BLS"],
+            "stretch_skills": ["ACLS", "MSN"],
+        }
+
+        reconciled_nurse = reconcile_skills_with_ground_truth(
+            nurse_parsed,
+            resume_text=nurse_resume,
+            job_description=nurse_job,
+        )
+
+        self.assertIn("ACLS", reconciled_nurse["core_competencies"])
+        self.assertNotIn("ACLS", reconciled_nurse["stretch_skills"])
+        self.assertNotIn("EPIC EHR", reconciled_nurse["core_competencies"])
+        self.assertIn("EPIC EHR", reconciled_nurse["stretch_skills"])
+        self.assertLessEqual(reconciled_nurse["match_score"], 76)
+
+        # Finance scenario
+        finance_resume = "VP Controller with extensive US GAAP, SOX Compliance, SEC 10-K, and SAP ERP."
+        finance_job = "Corporate Controller - NetSuite, CPA, US GAAP, SOX."
+
+        finance_parsed = {
+            "match_score": 90,
+            "core_competencies": ["US GAAP", "NetSuite"],
+            "stretch_skills": ["SOX", "CPA"],
+        }
+
+        reconciled_finance = reconcile_skills_with_ground_truth(
+            finance_parsed,
+            resume_text=finance_resume,
+            job_description=finance_job,
+        )
+
+        self.assertIn("SOX", reconciled_finance["core_competencies"])
+        self.assertNotIn("SOX", reconciled_finance["stretch_skills"])
+        self.assertNotIn("NetSuite", reconciled_finance["core_competencies"])
+        self.assertIn("NetSuite", reconciled_finance["stretch_skills"])
+        self.assertLessEqual(reconciled_finance["match_score"], 78)
+
+    @patch("resume_app.skill_radar.invoke_llm_messages")
+    def test_skill_radar_stub_job_description_handling(self, mock_invoke):
+        from resume_app.skill_radar import SkillRadarService
+        from unittest.mock import MagicMock
+
+        stub_job = MagicMock()
+        stub_job.id = 9999
+        stub_job.title = "Senior Software Engineer, Metrics and Evaluation - Autonomous Vehicles"
+        stub_job.company_name = "Nvidia"
+        stub_job.description = "District of Columbia, United States. Salary: USD 294,500 - 470,000. Company: Nvidia"
+        stub_job.snippet = stub_job.description
+
+        mock_resp = MagicMock()
+        mock_resp.content = json.dumps({
+            "match_score": 65,
+            "interview_probability": 55,
+            "core_competencies": ["Distributed Systems", "Cloud Architecture (GCP & Azure)", "API Design & Governance", "Generative AI Strategy & Prototyping"],
+            "stretch_skills": ["Autonomous Vehicle Sensor Data Processing", "Real-Time Path Planning Algorithms"],
+            "fit_summary": "Strong domain background in Cloud Architecture and Generative AI Strategy, with an addressable gap in Autonomous Vehicle Sensor Data Processing."
+        })
+        mock_invoke.return_value = mock_resp
+
+        result = SkillRadarService.analyze(
+            stub_job,
+            self.resume_text,
+            user=self.user,
+            force_refresh=True,
+            is_manual_invocation=True,
+        )
+
+        self.assertTrue(result.get("is_stub_description"), "Must flag is_stub_description=True when job description is a stub")
+        mock_invoke.assert_called_once()
+        messages = mock_invoke.call_args[0][0]
+        user_msg = [m for m in messages if hasattr(m, "content") and "[TARGET JOB:" in m.content][0]
+        self.assertIn("Full job description text was not provided", user_msg.content)
+        self.assertIn("Nvidia", user_msg.content)
+
+    def test_skill_radar_deduplicates_repeated_stretch_and_qualification_gaps(self):
+        from resume_app.skill_radar import SkillRadarService
+
+        payload = json.dumps({
+            "domain_alignment": "DIRECT_MATCH",
+            "seniority_alignment": "MATCH",
+            "qualification_gaps": {
+                "knockout_gaps": [],
+                "secondary_gaps": [
+                    "Broadcom-specific R&D domain context",
+                    "Broadcom-specific R&D domain context"
+                ]
+            },
+            "core_competencies": [
+                "Enterprise Cloud-Native Architecture",
+                "Distributed Event-Driven Systems",
+                "AI/LLM Integration & Agentic Workflows",
+                "DevSecOps & CI/CD Automation at Scale"
+            ],
+            "stretch_skills": [
+                "Broadcom-specific R&D domain context",
+                "Broadcom-specific R&D domain context"
+            ],
+            "fit_summary": "Enterprise cloud-native architect with proven delivery at scale."
+        })
+
+        parsed = SkillRadarService._parse_llm_response(payload)
+        self.assertIsNotNone(parsed)
+        # Must deduplicate repeated entries down to 1 distinct item
+        self.assertEqual(len(parsed.get("stretch_skills", [])), 1)
+        self.assertEqual(parsed["stretch_skills"][0], "Broadcom-specific R&D domain context")
+        sec_gaps = parsed.get("qualification_gaps", {}).get("secondary_gaps", [])
+        self.assertEqual(len(sec_gaps), 1)
+
+    def test_skill_radar_broadcom_hardware_company_reanchors_to_adjacent_domain(self):
+        from resume_app.skill_radar import reconcile_skills_with_ground_truth
+
+        # Financial services resume with zero hardware background
+        fintech_resume = """
+        Executive Director - AI Enablement at Wells Fargo.
+        Delivered GenAI platform using LangGraph, Python/Django, Redis.
+        Consolidated CDD systems into API-first platform.
+        Kafka, Spring Boot, MongoDB enterprise architecture.
+        """
+
+        raw_parsed = {
+            "domain_alignment": "DIRECT_MATCH",
+            "seniority_alignment": "MATCH",
+            "core_competencies": [
+                "Enterprise Architecture",
+                "AI Enablement & LLM Integration",
+                "Distributed Event-Driven Systems",
+                "DevSecOps & CI/CD Automation"
+            ],
+            "stretch_skills": ["Broadcom-specific R&D domain context"],
+            "qualification_gaps": {
+                "knockout_gaps": [],
+                "secondary_gaps": ["Broadcom-specific R&D domain context"]
+            },
+            "fit_summary": "Enterprise architect with strong cloud background."
+        }
+
+        reconciled = reconcile_skills_with_ground_truth(
+            raw_parsed,
+            resume_text=fintech_resume,
+            job_description="San Jose, CA. Office. Salary: USD 273,800 - 820,000. Company: Broadcom",
+            job_title="R&D Engineer Software 5",
+        )
+
+        # Broadcom is a hardware/systems OEM; fintech candidate without hardware must be re-anchored to ADJACENT_DOMAIN
+        self.assertEqual(reconciled["domain_alignment"], "ADJACENT_DOMAIN")
+        self.assertLessEqual(reconciled["match_score"], 68)
+        self.assertLessEqual(reconciled["interview_probability"], 58)
+
+    def test_extract_seniority_tier_tech_ic_level_5(self):
+        from resume_app.skill_radar import _extract_seniority_tier
+
+        # Tech IC level 5/6/7 maps to staff_principal
+        self.assertEqual(_extract_seniority_tier("R&D Engineer Software 5"), "staff_principal")
+        self.assertEqual(_extract_seniority_tier("Software Engineer 5"), "staff_principal")
+        self.assertEqual(_extract_seniority_tier("Staff Systems Engineer"), "staff_principal")
+        self.assertEqual(_extract_seniority_tier("SWE Level 5"), "staff_principal")
+
+    def test_banking_executive_director_with_architecture_aligns_to_staff_ic(self):
+        from resume_app.skill_radar import _detect_candidate_seniority, calibrate_interview_probability
+
+        resume = """
+        Executive Director - AI Enablement.
+        Vice President - Enterprise Architecture.
+        Architected distributed systems with Kafka and Kubernetes.
+        """
+        tiers = _detect_candidate_seniority(resume)
+        self.assertIn("executive", tiers)
+        self.assertIn("architect", tiers)
+
+        # When matching with a staff/principal role (Engineer Software 5), candidate's architect tier prevents penalty
+        ip = calibrate_interview_probability(
+            match_score=68,
+            core_competencies=["Architecture", "Python", "Kubernetes", "Kafka"],
+            stretch_skills=["Broadcom Domain"],
+            job_title="R&D Engineer Software 5",
+            resume_text=resume,
+        )
+        self.assertGreaterEqual(ip, 50)
+
+    def test_reconcile_skills_avoids_false_recovery_from_acquisition_parenthetical(self):
+        from resume_app.skill_radar import reconcile_skills_with_ground_truth
+
+        resume = """
+        Executive Director - Financial Crimes Engineering at Wells Fargo.
+        Plateau Systems (Acquired by SAP) - Arlington, VA
+        Led an eight-engineer team building analytics and backend services using Java and REST APIs.
+        Banking compliance and FinCEN SAR reporting.
+        """
+
+        raw_parsed = {
+            "domain_alignment": "DIRECT_MATCH",
+            "seniority_alignment": "MATCH",
+            "core_competencies": ["Java", "Cloud Architecture", "REST APIs"],
+            "stretch_skills": ["Supply Chain domain expertise", "SAP/ERP backend systems experience"],
+            "fit_summary": "Strong backend candidate with stretch gaps in supply chain and SAP."
+        }
+
+        reconciled = reconcile_skills_with_ground_truth(
+            raw_parsed,
+            resume_text=resume,
+            job_description="Director, Software Engineering - Supply Chain. Requires SAP/ERP backend systems and warehouse logistics.",
+            job_title="Director, Software Engineering - Supply Chain",
+        )
+
+        self.assertIn("SAP/ERP backend systems experience", reconciled["stretch_skills"])
+        self.assertNotIn("SAP/ERP backend systems experience", reconciled["core_competencies"])
+        self.assertEqual(reconciled["domain_alignment"], "ADJACENT_DOMAIN")
+
+    def test_reconcile_skills_protects_engineering_leadership_for_executive(self):
+        from resume_app.skill_radar import reconcile_skills_with_ground_truth
+
+        resume = """
+        Executive Director - Financial Crimes Engineering.
+        Directed a 95-member cross-functional organization overseeing a $45M annual technology portfolio.
+        Directed a team of fifteen engineers and two managers delivering GCP-based data platforms.
+        Leads globally distributed teams to modernize cloud architectures.
+        """
+
+        raw_parsed = {
+            "domain_alignment": "DIRECT_MATCH",
+            "seniority_alignment": "MATCH",
+            "core_competencies": [
+                "Enterprise Cloud Architecture (GCP, Azure, Kubernetes)",
+                "Distributed Event-Driven Systems",
+                "DevSecOps & CI/CD Pipeline Design",
+                "Engineering Organization Leadership & Talent Development"
+            ],
+            "stretch_skills": ["Supply Chain domain expertise"],
+            "fit_summary": "Enterprise cloud architect with 20+ years leading engineering orgs."
+        }
+
+        reconciled = reconcile_skills_with_ground_truth(
+            raw_parsed,
+            resume_text=resume,
+            job_description="Director, Software Engineering - Talent Development & Organizational Capability. Lead software engineering teams.",
+            job_title="Director, Software Engineering",
+        )
+
+        self.assertIn(
+            "Engineering Organization Leadership & Talent Development",
+            reconciled["core_competencies"],
+        )
+        self.assertNotIn(
+            "Engineering Organization Leadership & Talent Development",
+            reconciled["stretch_skills"],
+        )
+        self.assertIn("Enterprise cloud architect", reconciled["fit_summary"])
+
+    def test_reconcile_skills_tiered_frontier_preserves_knockout_gap(self):
+        from resume_app.skill_radar import reconcile_skills_with_ground_truth
+
+        resume = """
+        Executive Director - AI Enablement at Wells Fargo.
+        Master of Business Administration (MBA), Virginia Tech
+        Bachelor of Science, Electrical Engineering, University of Mumbai
+        Google Cloud (GCP) - Professional Cloud Architect
+        Oracle Cloud Infrastructure - Generative AI Professional Certification
+        """
+
+        raw_parsed = {
+            "domain_alignment": "DIRECT_MATCH",
+            "seniority_alignment": "MATCH",
+            "qualification_gaps": {
+                "knockout_gaps": ["Software Engineering Certification"],
+                "secondary_gaps": ["Enterprise‑Authorized AI Tool Experience"]
+            },
+            "core_competencies": [
+                "Agentic AI Engineering & Governance",
+                "Cloud‑Native Architecture & Infrastructure Automation",
+                "Distributed Event‑Driven System Design",
+                "Financial Compliance Engineering"
+            ],
+            "stretch_skills": [
+                "Software Engineering Certification",
+                "Enterprise‑Authorized AI Tool Experience"
+            ],
+            "fit_summary": "Financial‑services AI‑enabled enterprise architect with extensive governance experience, missing a formal software‑engineering certification."
+        }
+
+        # 1. When evaluated by Cloud Frontier LLM (is_frontier=True):
+        reconciled_cloud = reconcile_skills_with_ground_truth(
+            raw_parsed,
+            resume_text=resume,
+            is_frontier=True,
+        )
+
+        # Knockout gap must REMAIN in stretch_skills and knockout_gaps, NOT promoted to core_competencies
+        self.assertNotIn("Software Engineering Certification", reconciled_cloud["core_competencies"])
+        self.assertIn("Software Engineering Certification", reconciled_cloud["stretch_skills"])
+        self.assertIn("Software Engineering Certification", reconciled_cloud["knockout_gaps"])
+        self.assertEqual(reconciled_cloud["match_score"], 62)
+        self.assertEqual(reconciled_cloud["interview_probability"], 35)
+        self.assertEqual(
+            reconciled_cloud["fit_summary"],
+            "Financial‑services AI‑enabled enterprise architect with extensive governance experience, missing a formal software‑engineering certification."
+        )
+
+        # 2. When evaluated by Local SLM (is_frontier=False):
+        # Even with heuristic reconciliation, the multi-word credential must not be promoted solely on 'certification' token
+        reconciled_slm = reconcile_skills_with_ground_truth(
+            raw_parsed,
+            resume_text=resume,
+            is_frontier=False,
+        )
+        self.assertNotIn("Software Engineering Certification", reconciled_slm["core_competencies"])
+        self.assertIn("Software Engineering Certification", reconciled_slm["stretch_skills"])
+        self.assertEqual(reconciled_slm["match_score"], 62)
+        self.assertEqual(reconciled_slm["interview_probability"], 35)
+
+    def test_reconcile_skills_cloud_parity_reclassifies_aws_as_secondary_for_gcp_architect(self):
+        from resume_app.skill_radar import reconcile_skills_with_ground_truth
+
+        # Financial services architect with GCP & Azure background
+        resume = """
+        Executive Director - Financial Crimes Engineering.
+        Modernize cloud-native architectures on GCP and Azure.
+        Built event-driven systems with Kafka and Java.
+        Google Cloud (GCP) - Professional Cloud Architect.
+        """
+
+        raw_parsed = {
+            "domain_alignment": "DIRECT_MATCH",
+            "seniority_alignment": "OVERQUALIFIED",
+            "qualification_gaps": {
+                "knockout_gaps": [
+                    "Apache Flink",
+                    "AWS infrastructure"
+                ],
+                "secondary_gaps": [
+                    "Splunk & AppDynamics observability"
+                ]
+            },
+            "core_competencies": [
+                "Java & Spring Boot development",
+                "Apache Kafka event streaming",
+                "Enterprise Architecture & Cloud Migration",
+                "Financial Risk & Compliance Engineering"
+            ],
+            "stretch_skills": [
+                "Apache Flink",
+                "Splunk & AppDynamics observability"
+            ],
+            "fit_summary": "Enterprise architecture leader in financial risk platforms, but lacks proven Apache Flink expertise."
+        }
+
+        reconciled = reconcile_skills_with_ground_truth(
+            raw_parsed,
+            resume_text=resume,
+            is_frontier=True,
+        )
+
+        # AWS infrastructure reclassified to secondary gaps because candidate has verified GCP/Azure cloud architecture
+        self.assertEqual(reconciled["knockout_gaps"], ["Apache Flink"])
+        self.assertIn("AWS infrastructure", reconciled["secondary_gaps"])
+        self.assertIn("Splunk & AppDynamics observability", reconciled["secondary_gaps"])
+        # Score calibrated with 1 knockout gap and 2 secondary gaps on DIRECT_MATCH:
+        # Yields realistic ~58-62% match instead of overly conservative 45%/22%
+        self.assertEqual(reconciled["match_score"], 62)
+        self.assertEqual(reconciled["interview_probability"], 35)
+
+    def test_calculate_categorical_scores_direct_match_2_knockouts_soft_ceiling(self):
+        from resume_app.skill_radar import calculate_categorical_scores
+
+        # When candidate has 2 true non-cloud knockouts on a DIRECT_MATCH role:
+        # Ceiling is calibrated to 52% match / 28% probability (rather than 45% / 22%)
+        m_dm, ip_dm = calculate_categorical_scores(
+            domain_alignment="DIRECT_MATCH",
+            seniority_alignment="MATCH",
+            core_count=4,
+            knockout_gaps=["Apache Flink", "Golang Distributed Runtime"],
+            secondary_gaps=["Splunk Observability"],
+        )
+        self.assertEqual(m_dm, 52)
+        self.assertEqual(ip_dm, 28)
+
+        # For non-direct matches (ADJACENT_DOMAIN / CROSS_INDUSTRY), the stricter 45% / 22% ceiling remains enforced
+        m_adj, ip_adj = calculate_categorical_scores(
+            domain_alignment="ADJACENT_DOMAIN",
+            seniority_alignment="MATCH",
+            core_count=4,
+            knockout_gaps=["Apache Flink", "Golang Distributed Runtime"],
+            secondary_gaps=["Splunk Observability"],
+        )
+        self.assertLessEqual(m_adj, 45)
+        self.assertLessEqual(ip_adj, 22)
+
+    @patch("resume_app.skill_radar.invoke_llm_messages", side_effect=RuntimeError("Local Ollama offline"))
+    def test_skill_radar_automated_falls_back_to_heuristic_on_ollama_failure(self, mock_invoke):
+        from resume_app.skill_radar import SkillRadarService
+
+        result = SkillRadarService.analyze(
+            self.job,
+            self.resume_text,
+            user=self.user,
+            is_manual_invocation=False,
+            force_refresh=True,
+        )
+
+        self.assertEqual(result["source"], "heuristic")
+        self.assertTrue(any("Python" in c for c in result.get("core_competencies", [])))
+
+    def test_resume_judge_and_skill_radar_separation(self):
+        from resume_app.prompt_store import DEFAULT_PROMPTS, PROMPT_TO_QUERY_KIND_MAP
+        from resume_app.prompts import DEFAULT_RESUME_JUDGE_PROMPT, DEFAULT_SKILL_RADAR_PROMPT
+
+        self.assertNotEqual(DEFAULT_RESUME_JUDGE_PROMPT, DEFAULT_SKILL_RADAR_PROMPT)
+        self.assertEqual(DEFAULT_PROMPTS["skill_radar"], DEFAULT_SKILL_RADAR_PROMPT)
+        self.assertEqual(DEFAULT_PROMPTS["resume_judge"], DEFAULT_RESUME_JUDGE_PROMPT)
+        self.assertEqual(PROMPT_TO_QUERY_KIND_MAP["skill_radar"], "skill_radar")
+        self.assertEqual(PROMPT_TO_QUERY_KIND_MAP["resume_judge"], "resume_judge")
+
+    @patch("resume_app.llm.gateway._ordered_eligible_candidates")
+    def test_resume_judge_strictly_disallows_local(self, mock_candidates):
+        from resume_app.llm.gateway import invoke_llm_messages, USAGE_QUERY_RESUME_JUDGE
+        from langchain_core.messages import HumanMessage
+
+        mock_candidates.return_value = []
+        messages = [HumanMessage(content="test")]
+
+        try:
+            invoke_llm_messages(
+                messages,
+                user=self.user,
+                usage_query_kind=USAGE_QUERY_RESUME_JUDGE,
+            )
+        except Exception:
+            pass
+
+        mock_candidates.assert_called_once()
+        _, kwargs = mock_candidates.call_args
+        self.assertFalse(kwargs.get("allow_local"), "resume_judge must NEVER allow local models")
+        self.assertFalse(kwargs.get("prefer_local"), "resume_judge must NEVER prefer local models")
+
+    def test_cockpit_skill_radar_api_persists_to_db_and_rehydrates_on_refresh(self):
+        from django.test import RequestFactory
+        from django.core.cache import cache
+        from resume_app.pipeline_board import cockpit_skill_radar_api
+        from resume_app.models import PipelineEntry, SearchProfile
+        from resume_app.skill_radar import SkillRadarService
+
+        SearchProfile.objects.create(
+            owner=self.user,
+            name="IC Profile",
+            slug="ic",
+            is_default=True,
+        )
+
+        factory = RequestFactory()
+        pe = PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=self.job,
+            track="ic",
+            stage=PipelineEntry.Stage.PIPELINE,
+        )
+
+        mock_radar_payload = {
+            "match_score": 88,
+            "interview_probability": 85,
+            "core_competencies": ["Python", "Django", "Kubernetes", "PostgreSQL"],
+            "stretch_skills": ["Snowflake", "Golang"],
+            "fit_summary": "Strong alignment in backend systems with gaps in Snowflake.",
+            "source": "local_slm",
+        }
+
+        with patch.object(SkillRadarService, "analyze", return_value=mock_radar_payload):
+            req = factory.get(f"/jobs/cockpit/api/skill-radar/?job_id={self.job.id}&track=ic&force=1")
+            req.user = self.user
+            resp = cockpit_skill_radar_api(req)
+
+        self.assertEqual(resp.status_code, 200)
+
+        # Verify DB persistence on PipelineEntry
+        pe.refresh_from_db()
+        self.assertEqual(pe.vetting_match_score, 88)
+        self.assertEqual(pe.vetting_interview_probability, 85)
+        self.assertEqual(pe.vetting_interview_reasoning, "Strong alignment in backend systems with gaps in Snowflake.")
+        self.assertEqual(pe.vetting_core_competencies, ["Python", "Django", "Kubernetes", "PostgreSQL"])
+        self.assertEqual(pe.vetting_stretch_skills, ["Snowflake", "Golang"])
+
+        # Now simulate cold page refresh: completely clear memory cache
+        cache.clear()
+
+        self.client.force_login(self.user)
+        view_resp = self.client.get("/jobs/cockpit/?track=ic&stage=pipeline")
+        self.assertEqual(view_resp.status_code, 200)
+
+        # Verify job in context has rehydrated diagnostics from DB despite empty cache
+        jobs = view_resp.context["pipeline_jobs"]
+        matched_job = [j for j in jobs if j.id == self.job.id][0]
+        self.assertEqual(matched_job.zero_llm_match_pct, 88)
+        self.assertEqual(matched_job.zero_llm_core_matches, ["Python", "Django", "Kubernetes", "PostgreSQL"])
+        self.assertEqual(matched_job.zero_llm_stretch_skills, ["Snowflake", "Golang"])
+        self.assertEqual(matched_job.skill_radar_source, "local_slm")
+        self.assertEqual(matched_job.zero_llm_fit_summary, "Strong alignment in backend systems with gaps in Snowflake.")
+
+        # Verify HTML rendered attributes on row
+        html = view_resp.content.decode("utf-8")
+        self.assertIn('data-radar-source="local_slm"', html)
+        self.assertIn('data-match-score="88"', html)
+        self.assertIn('4 Verified', html)
+
+    def test_cockpit_skill_radar_api_auto_creates_entry_if_missing(self):
+        from django.test import RequestFactory
+        from resume_app.pipeline_board import cockpit_skill_radar_api
+        from resume_app.models import JobListing, PipelineEntry
+        from resume_app.skill_radar import SkillRadarService
+
+        factory = RequestFactory()
+        untracked_job = JobListing.objects.create(
+            source="test",
+            external_id="untracked-persisted-1",
+            title="DevOps Engineer",
+            company_name="Cloud Corp",
+            description="Terraform, AWS, CI/CD, Ansible.",
+        )
+
+        mock_payload = {
+            "match_score": 75,
+            "interview_probability": 70,
+            "core_competencies": ["AWS", "CI/CD"],
+            "stretch_skills": ["Terraform"],
+            "fit_summary": "Solid cloud fundamentals.",
+            "source": "local_slm",
+        }
+
+        with patch.object(SkillRadarService, "analyze", return_value=mock_payload):
+            req = factory.get(f"/jobs/cockpit/api/skill-radar/?job_id={untracked_job.id}&track=ic&force=1")
+            req.user = self.user
+            resp = cockpit_skill_radar_api(req)
+
+        self.assertEqual(resp.status_code, 200)
+
+        # Verify PipelineEntry was automatically created and persisted
+        entry = PipelineEntry.objects.filter(owner=self.user, job_listing=untracked_job).first()
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.vetting_match_score, 75)
+        self.assertEqual(entry.vetting_core_competencies, ["AWS", "CI/CD"])
+        self.assertEqual(entry.vetting_stretch_skills, ["Terraform"])
+
+    def test_database_persistence_fallback_with_zero_core_matches(self):
+        from django.core.cache import cache
+        from resume_app.models import JobListing, PipelineEntry, SearchProfile
+
+        SearchProfile.objects.create(
+            owner=self.user,
+            name="IC Profile",
+            slug="ic",
+            is_default=True,
+        )
+
+        mismatch_job = JobListing.objects.create(
+            source="test",
+            external_id="divergent-domain-1",
+            title="Principal Autonomous Robotics Engineer",
+            company_name="AutoDrive Inc",
+            description="LiDAR, SLAM, ROS2, embedded C++ control systems.",
+        )
+
+        pe = PipelineEntry.objects.create(
+            owner=self.user,
+            job_listing=mismatch_job,
+            track="ic",
+            stage=PipelineEntry.Stage.PIPELINE,
+            vetting_match_score=25,
+            vetting_interview_probability=20,
+            vetting_interview_reasoning="Complete domain divergence from cloud/web to robotics.",
+            vetting_core_competencies=[],
+            vetting_stretch_skills=["ROS2", "SLAM", "LiDAR"],
+        )
+
+        # Clear cache completely
+        cache.clear()
+
+        self.client.force_login(self.user)
+        resp = self.client.get("/jobs/cockpit/?track=ic&stage=pipeline")
+        self.assertEqual(resp.status_code, 200)
+
+        jobs = resp.context["pipeline_jobs"]
+        j = [x for x in jobs if x.id == mismatch_job.id][0]
+        self.assertEqual(j.zero_llm_match_pct, 25)
+        self.assertEqual(j.zero_llm_core_matches, [])
+        self.assertEqual(j.zero_llm_stretch_skills, ["ROS2", "SLAM", "LiDAR"])
+        self.assertEqual(j.skill_radar_source, "local_slm")
+        self.assertEqual(j.zero_llm_fit_summary, "Complete domain divergence from cloud/web to robotics.")
+
+        html = resp.content.decode("utf-8")
+        self.assertIn('3 Gaps', html)

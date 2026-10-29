@@ -23,7 +23,6 @@ TRACE_NAME_MAPPINGS: dict[str, tuple[str, str]] = {
     "pipeline_vetting_matching": ("pipeline_vetting", "pipeline_vetting_matching"),
     "pipeline_resume_refine": ("pipeline_refine", "pipeline_resume_refine"),
     "pipeline_skill_extract": ("pipeline_skill_extract", "pipeline_skill_extract"),
-    "job_authenticity": ("job_authenticity", "job_authenticity"),
     "skill_radar": ("skill_radar", "skill_radar"),
     "career_profiler": ("career_profiler", "career_profiler"),
 
@@ -51,8 +50,6 @@ def _infer_names_from_caller() -> Tuple[Optional[str], Optional[str]]:
                     return "settings_llm_test", "test_connection"
                 if "jobs_api" in base:
                     return "jobs_api", f"jobs_{func_name}"
-                if "authenticity" in base:
-                    return "job_authenticity", f"auth_{func_name}"
                 if "skill_radar" in base:
                     return "skill_radar", f"radar_{func_name}"
                 if "career_profiler" in base:

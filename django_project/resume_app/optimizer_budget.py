@@ -5,7 +5,7 @@ import re
 from django.conf import settings
 
 
-_OMITTED_DUPLICATE_NOTE = "(omitted — already shown above; saves tokens)"
+_OMITTED_DUPLICATE_NOTE = "(omitted - already shown above; saves tokens)"
 
 
 def _truncate(text: str | None, max_chars: int) -> str:

@@ -1,3 +1,4 @@
+import sys
 import time
 from typing import Dict
 from django.core.management.base import BaseCommand
@@ -31,9 +32,11 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             "--track",
+            "--tracks",
+            dest="track",
             type=str,
             default="",
-            help="Specific track slug to target (optional).",
+            help="Specific track slug or comma-separated track slugs to target (optional).",
         )
         parser.add_argument(
             "--limit",
@@ -51,8 +54,21 @@ class Command(BaseCommand):
             action="store_true",
             help="Skip pipeline entries that have already been scored within the last 24 hours.",
         )
+        parser.add_argument(
+            "--allow-cloud",
+            action="store_true",
+            help="Allow Cloud LLM fallback (strictly disabled by default; auto calculations must run on Local SLM).",
+        )
 
     def handle(self, *args, **options):
+        try:
+            if hasattr(sys.stdout, "reconfigure"):
+                sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            if hasattr(sys.stderr, "reconfigure"):
+                sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
         username = options["user"]
         stages_str = options["stages"]
         track_filter = options["track"]
@@ -60,11 +76,30 @@ class Command(BaseCommand):
         dry_run = options["dry_run"]
         skip_recent = options["skip_recent"]
 
-        stages = [s.strip().lower() for s in stages_str.split(",") if s.strip()]
+        STAGE_ALIASES = {
+            "review": "vetting",
+            "vet": "vetting",
+            "apply": "applying",
+            "new": "pipeline",
+            "applied": "done",
+        }
+        stages = [
+            STAGE_ALIASES.get(s.strip().lower(), s.strip().lower())
+            for s in stages_str.split(",")
+            if s.strip()
+        ]
+
+        tracks = [
+            t.strip().lower()
+            for t in track_filter.replace(";", ",").split(",")
+            if t.strip()
+        ]
 
         qs = PipelineEntry.objects.filter(removed_at__isnull=True).exclude(stage="deleted")
         if username.lower() != "all":
-            user = User.objects.filter(username=username).first()
+            user = User.objects.filter(username__iexact=username).first()
+            if not user and username.lower() == "joedhut":
+                user = User.objects.filter(username="joedhunt").first()
             if not user:
                 self.stderr.write(self.style.ERROR(f"User '{username}' not found."))
                 return
@@ -75,8 +110,8 @@ class Command(BaseCommand):
         if stages:
             qs = qs.filter(stage__in=stages)
 
-        if track_filter:
-            qs = qs.filter(track=track_filter)
+        if tracks:
+            qs = qs.filter(track__in=tracks)
 
         qs = qs.select_related("owner", "job_listing").order_by("added_at")
         total_count = qs.count()
@@ -92,8 +127,8 @@ class Command(BaseCommand):
             )
         )
         self.stdout.write(f"Target stages: {', '.join(stages)}")
-        if track_filter:
-            self.stdout.write(f"Target track: {track_filter}")
+        if tracks:
+            self.stdout.write(f"Target tracks: {', '.join(tracks)}")
 
         if dry_run:
             self.stdout.write(self.style.WARNING("DRY RUN mode: No LLM calls will be made."))
@@ -166,6 +201,7 @@ class Command(BaseCommand):
                     user=owner,
                     resume_id=r_id,
                     force_refresh=True,
+                    is_manual_invocation=options.get("allow_cloud", False),
                 )
                 elapsed = time.time() - t0
 

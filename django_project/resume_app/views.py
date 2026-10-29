@@ -335,13 +335,17 @@ def optimizer_view(request):
         from .sourcing.clients.levels_client import enrich_levels_job_listing_description
 
         job = target_job
-        prefill_job_description = enrich_dice_job_listing_description(job)
-        if not prefill_job_description:
+        src = (job.source or "").strip().lower()
+        if src == "levels":
             prefill_job_description = enrich_levels_job_listing_description(job)
-        if not prefill_job_description:
+        elif src == "dice":
+            prefill_job_description = enrich_dice_job_listing_description(job)
+        elif src == "builtin":
             prefill_job_description = enrich_builtin_job_listing_description(job)
-        if not prefill_job_description:
+        elif src == "greenhouse":
             prefill_job_description = enrich_greenhouse_job_listing_description(job)
+        else:
+            prefill_job_description = (job.description or "").strip()
         if not prefill_job_description:
             prefill_job_description = (job.description or "").strip()
         request.session["optimizer_prefill_job_description"] = prefill_job_description
@@ -3000,17 +3004,15 @@ def fit_inspector_view(request):
 def performance_dashboard_view(request):
     """
     Motivational Career Performance & Momentum Dashboard.
-    Renders immediately with cached data or fast skeleton placeholders,
-    progressively hydrated by client-side telemetry fetch.
+    Instant App Shell Architecture:
+    Renders immediately with cached data if available (< 5ms),
+    or returns an immediate lightweight HTML shell with calm skeleton loaders (< 15ms),
+    progressively hydrated by the client-side telemetry fetch (/performance/api/metrics/).
     """
     user = get_active_user(request)
     from django.core.cache import cache
     cache_key = f"perf_stats_{user.id}"
     cached_stats = cache.get(cache_key)
-    if not cached_stats:
-        from .dashboard_stats import get_performance_dashboard_stats
-        cached_stats = get_performance_dashboard_stats(user)
-        cache.set(cache_key, cached_stats, timeout=120)
 
     return render(request, "resume_app/performance_dashboard.html", {
         "stats": cached_stats,
@@ -3023,13 +3025,41 @@ def performance_dashboard_view(request):
 def dashboard_metrics_api(request):
     """
     Asynchronous JSON telemetry endpoint for progressive dashboard hydration.
+    Supports granular section hydration (?section=hero, interviews, pulse, journey)
+    or complete aggregated stats.
     """
     user = get_active_user(request)
+    section = (request.GET.get("section") or "").strip().lower()
+    refresh = request.GET.get("refresh") == "1"
+
     from django.core.cache import cache
-    from .dashboard_stats import get_performance_dashboard_stats
+    from .dashboard_stats import (
+        get_hero_stats,
+        get_interviews_stats,
+        get_pulse_stats,
+        get_journey_stats,
+        get_performance_dashboard_stats,
+    )
+
+    if section in ("hero", "interviews", "pulse", "journey"):
+        cache_key = f"perf_stats_{user.id}_{section}"
+        if refresh:
+            cache.delete(cache_key)
+        stats = cache.get(cache_key)
+        if not stats:
+            if section == "hero":
+                stats = get_hero_stats(user)
+            elif section == "interviews":
+                stats = get_interviews_stats(user)
+            elif section == "pulse":
+                stats = get_pulse_stats(user)
+            elif section == "journey":
+                stats = get_journey_stats(user)
+            cache.set(cache_key, stats, timeout=120)
+        return JsonResponse({"status": "ok", "section": section, "stats": stats})
 
     cache_key = f"perf_stats_{user.id}"
-    if request.GET.get("refresh") == "1":
+    if refresh:
         cache.delete(cache_key)
 
     stats = cache.get(cache_key)

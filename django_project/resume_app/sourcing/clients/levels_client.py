@@ -457,7 +457,11 @@ def _job_to_dict(job: dict, company: dict) -> dict:
         location = str(locations or "").strip()
     application_url = str(job.get("applicationUrl") or "").strip()
     job_url = application_url or LEVELS_JOB_URL_TEMPLATE.format(job_id=job_id)
-    description = _build_list_snippet(job, company_name)
+    raw_desc = job.get("description")
+    if raw_desc and str(raw_desc).strip():
+        description = _html_to_text(str(raw_desc))
+    else:
+        description = _build_list_snippet(job, company_name)
     out = {
         "title": title,
         "company_name": company_name,
@@ -538,6 +542,7 @@ def fetch_levels_jobs(
     *,
     hours_old: Optional[int] = None,
     timeout_seconds: float = 10.0,
+    enrich_descriptions: Optional[bool] = None,
 ) -> List[dict]:
     """
     Query Levels.fyi job search API and return normalized rows.
@@ -622,7 +627,51 @@ def fetch_levels_jobs(
         job_title_slug or "-",
         pages_scanned,
     )
-    return merged[:wanted]
+    top_candidates = merged[:wanted]
+    should_enrich = (
+        getattr(settings, "LEVELS_FYI_ENRICH_DESCRIPTIONS", True)
+        if enrich_descriptions is None
+        else enrich_descriptions
+    )
+    if should_enrich and top_candidates:
+        max_workers = int(getattr(settings, "LEVELS_FYI_ENRICH_MAX_WORKERS", 8) or 8)
+        workers = min(max_workers, len(top_candidates))
+
+        def _enrich_candidate(row: dict) -> dict:
+            current_desc = (row.get("description") or "").strip()
+            if len(current_desc) >= LEVELS_SUMMARY_ENRICH_THRESHOLD:
+                return row
+            jid = extract_levels_job_id(row.get("external_id") or "") or extract_levels_job_id(row.get("job_url") or "")
+            if not jid:
+                return row
+            try:
+                detail = fetch_levels_job_detail(jid, timeout_seconds=timeout_seconds)
+                full = (detail.get("description") or "").strip()
+                if full:
+                    row["description"] = full
+                if detail.get("title") and detail["title"] != "Untitled":
+                    row["title"] = detail["title"]
+                if detail.get("company_name") and detail["company_name"] != "Unknown":
+                    row["company_name"] = detail["company_name"]
+                if detail.get("location"):
+                    row["location"] = detail["location"]
+                if detail.get("date_posted") and not row.get("date_posted"):
+                    row["date_posted"] = detail["date_posted"]
+                if detail.get("job_url") and not row.get("job_url"):
+                    row["job_url"] = detail["job_url"]
+            except Exception as e:
+                logger.debug("[levels_client] Detail enrich skipped for %s: %s", jid, e)
+            return row
+
+        if workers > 1:
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                top_candidates = list(executor.map(_enrich_candidate, top_candidates))
+        else:
+            top_candidates = [_enrich_candidate(c) for c in top_candidates]
+
+    return top_candidates
 
 
 def fetch_levels_job_detail(
@@ -690,7 +739,7 @@ def enrich_levels_job_listing_description(job, *, timeout_seconds: float = 15.0)
         return ""
     current = (job.description or "").strip()
     if (job.source or "").strip().lower() != "levels":
-        return current
+        return ""
     if len(current) >= LEVELS_SUMMARY_ENRICH_THRESHOLD:
         return current
 

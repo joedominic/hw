@@ -679,7 +679,7 @@ def enrich_dice_job_listing_description(job, *, timeout_seconds: float = 15.0) -
         return ""
     current = (job.description or "").strip()
     if (job.source or "").strip().lower() != "dice":
-        return current
+        return ""
     if len(current) >= DICE_SUMMARY_ENRICH_THRESHOLD:
         return current
 

@@ -4,6 +4,8 @@ Encapsulates LLM provider routing, candidate fallbacks, rate limiting, kill swit
 """
 from .factory import get_llm
 from .gateway import (
+    MODEL_TIER_SLM,
+    MODEL_TIER_FRONTIER,
     LLMConcurrencyLimitExceeded,
     LLMEmailVerificationRequired,
     LLMRequestsDisabled,
@@ -29,6 +31,7 @@ from .gateway import (
     USAGE_QUERY_OPTIMIZER_ATS_JUDGE,
     USAGE_QUERY_OPTIMIZER_RECRUITER_JUDGE,
     USAGE_QUERY_OPTIMIZER_WRITER,
+    USAGE_QUERY_RESUME_JUDGE,
     USAGE_QUERY_PIPELINE_RESUME_REFINE,
     USAGE_QUERY_PIPELINE_SKILL_EXTRACT,
     USAGE_QUERY_PIPELINE_VETTING,
@@ -141,6 +144,8 @@ __all__ = [
     "USAGE_QUERY_API_LLM_COMPLETE",
     "USAGE_QUERY_API_RESUME_FIT",
     "USAGE_QUERY_SKILL_RADAR",
+    "MODEL_TIER_SLM",
+    "MODEL_TIER_FRONTIER",
     "USAGE_QUERY_UNSPECIFIED",
     "USAGE_QUERY_LABELS",
 ]

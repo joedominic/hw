@@ -108,7 +108,29 @@ The Huey worker process (`manage.py run_huey`) consumes background tasks and exe
 
 ---
 
-## 5. Automated Test Suites
+## 5. Automated Release Gate & Test Suites
+
+### Automated CI Pipeline (`.github/workflows/ci.yml`)
+
+HireEdge uses a mandatory automated GitHub Actions release gate triggered on every push and pull request to `main`:
+1. **Deployment Security & Migration Gate (`security-and-lint`):**
+   - Model migration checks (`python manage.py makemigrations --check --dry-run`).
+   - Django system checks (`python manage.py check`).
+   - Fail-closed production deployment checks (`python manage.py check --deploy`).
+2. **Matrix Test Suite (`test-suite`):**
+   - Runs across both `sqlite` and `mysql` matrix environments with active Redis services.
+   - Zero-data truth-in-advertising, legal page integrity, and OpenTelemetry toggle tests (`resume_app.test_zero_data_dashboard`).
+   - Multi-tenant isolation, protected media scoping, and Stripe webhook handling (`resume_app.test_multi_tenant`, `resume_app.test_saas_phase01`, `resume_app.test_saas_phase2`).
+   - 3-Tab Model & candidate onboarding journey smoke tests (`resume_app.test_tenant_journey_e2e`).
+   - Prompt library, employer responses, and saved search suites.
+3. **Disaster Recovery Drill (`backup-recovery-drill`):**
+   - Automated hot backup generation (`manage.py dbbackup`).
+   - Cryptographic SHA-256 integrity verification (`sha256sum -c`).
+   - Verified non-interactive restore test (`manage.py dbrestore --verify --no-input`).
+4. **Docker Container Smoke Test (`docker-build`):**
+   - Production Docker image build and health check verification.
+
+### Local Test Execution
 
 Run Django unit and integration tests using the repo-relative virtualenv from `django_project/`:
 
@@ -117,15 +139,13 @@ Run Django unit and integration tests using the repo-relative virtualenv from `d
 ..\env\Scripts\python.exe manage.py test resume_app
 
 # Run specific functional & tenant journey suites
+..\env\Scripts\python.exe manage.py test resume_app.test_zero_data_dashboard
+..\env\Scripts\python.exe manage.py test resume_app.test_multi_tenant
+..\env\Scripts\python.exe manage.py test resume_app.test_saas_phase01 resume_app.test_saas_phase2
+..\env\Scripts\python.exe manage.py test resume_app.test_tenant_journey_e2e
 ..\env\Scripts\python.exe manage.py test resume_app.test_career_profiler
 ..\env\Scripts\python.exe manage.py test resume_app.test_prompt_studio
-..\env\Scripts\python.exe manage.py test resume_app.test_tenant_journey_e2e
-..\env\Scripts\python.exe manage.py test resume_app.test_job_automation_cockpit
-..\env\Scripts\python.exe manage.py test resume_app.test_employer_responses
-..\env\Scripts\python.exe manage.py test resume_app.test_multi_tenant
 ..\env\Scripts\python.exe manage.py test resume_app.test_saved_searches
-..\env\Scripts\python.exe manage.py test resume_app.test_llm_gateway_routing
-..\env\Scripts\python.exe manage.py test resume_app.test_langfuse_telemetry
 ```
 
 ---

@@ -69,10 +69,10 @@ class FactCheckerTestCase(TestCase):
         raw = (
             "## PROFESSIONAL EXPERIENCE\n"
             "### Wells Fargo - Dallas, TX\n"
-            "#### Principal Architect – AI Enablement | 05/2025 - Present\n"
-            "- Built enterprise‑scale, cloud‑native platform with latency <250ms.\n"
-            "- Championed “Devin” and “GE Genius” iOS app.\n"
-            "• **Governing a $55MM portfolio**, delivered CDD screening platform >10 years ahead.\n"
+            "#### Principal Architect \u2013 AI Enablement | 05/2025 - Present\n"
+            "- Built enterprise\u2011scale, cloud\u2011native platform with latency <250\u202Fms.\n"
+            "- Championed \u201cDevin\u201d and \u201cGE Genius\u201d iOS app across $45\u202Fmillion portfolio with 80\u00A0percent gain.\n"
+            "\u2022 **Governing a $55MM portfolio**, delivered CDD screening platform >10 years ahead.\n"
         )
         cleaned = sanitize_ats_text(raw)
 
@@ -81,16 +81,23 @@ class FactCheckerTestCase(TestCase):
         self.assertIn("enterprise-scale", cleaned)
         self.assertIn("cloud-native", cleaned)
 
+        # 1b. No non-breaking or narrow spaces (U+00A0, U+202F)
+        self.assertNotIn("\u202F", cleaned)
+        self.assertNotIn("\u00A0", cleaned)
+        self.assertIn("250 ms", cleaned)
+        self.assertIn("$45 million", cleaned)
+        self.assertIn("80 percent", cleaned)
+
         # 2. No curly double quotes
-        self.assertNotIn("“", cleaned)
-        self.assertNotIn("”", cleaned)
+        self.assertNotIn("\u201C", cleaned)
+        self.assertNotIn("\u201D", cleaned)
         self.assertIn("'Devin'", cleaned)
         self.assertIn("'GE Genius'", cleaned)
 
         # 3. No angle brackets
         self.assertNotIn("<", cleaned)
         self.assertNotIn(">", cleaned)
-        self.assertIn("under 250ms", cleaned)
+        self.assertIn("under 250 ms", cleaned)
         self.assertIn("over 10 years", cleaned)
 
         # 4. Bullet point normalization and bold stripping

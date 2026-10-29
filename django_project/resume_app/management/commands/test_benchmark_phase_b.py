@@ -87,6 +87,7 @@ class Command(BaseCommand):
                 user=user,
                 resume_id=resume.id,
                 force_refresh=True,
+                is_manual_invocation=False,
             )
             elapsed = time.perf_counter() - t0
             timings.append((job.title, elapsed, res))

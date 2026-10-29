@@ -34,9 +34,6 @@ from .prompts import (
     DEFAULT_JD_CLEANSE_PROMPT,
     DEFAULT_JD_CLEANSE_SYSTEM,
     DEFAULT_JD_CLEANSE_USER,
-    DEFAULT_JOB_AUTHENTICITY_PROMPT,
-    DEFAULT_JOB_AUTHENTICITY_SYSTEM,
-    DEFAULT_JOB_AUTHENTICITY_USER,
     DEFAULT_MATCHING_PROMPT,
     DEFAULT_MATCHING_SYSTEM,
     DEFAULT_MATCHING_USER,
@@ -71,13 +68,12 @@ DEFAULT_PROMPTS: Dict[str, str] = {
     "cover_letter": DEFAULT_COVER_LETTER_PROMPT,
     "interview_prep": DEFAULT_INTERVIEW_PREP_PROMPT,
     "jd_cleanse": DEFAULT_JD_CLEANSE_PROMPT,
-    "skill_radar": DEFAULT_SKILL_RADAR_PROMPT,
     "career_profiler": DEFAULT_CAREER_PROFILER_PROMPT,
-    "job_authenticity": DEFAULT_JOB_AUTHENTICITY_PROMPT,
     "pipeline_skill_extract": DEFAULT_PIPELINE_SKILL_EXTRACT_PROMPT,
     "fit_check": DEFAULT_FIT_CHECK_PROMPT,
     "pipeline_resume_refine": DEFAULT_PIPELINE_RESUME_REFINE_PROMPT,
     "resume_judge": DEFAULT_RESUME_JUDGE_PROMPT,
+    "skill_radar": DEFAULT_SKILL_RADAR_PROMPT,
 }
 
 _LEGACY_FIELDS = (
@@ -89,13 +85,12 @@ _LEGACY_FIELDS = (
     "cover_letter",
     "interview_prep",
     "jd_cleanse",
-    "skill_radar",
     "career_profiler",
-    "job_authenticity",
     "pipeline_skill_extract",
     "fit_check",
     "pipeline_resume_refine",
     "resume_judge",
+    "skill_radar",
 )
 
 _PROMPT_SPEC = {
@@ -131,26 +126,12 @@ _PROMPT_SPEC = {
         DEFAULT_JD_CLEANSE_SYSTEM,
         DEFAULT_JD_CLEANSE_USER,
     ),
-    "skill_radar": (
-        "skill_radar",
-        "skill_radar_system",
-        "skill_radar_user",
-        DEFAULT_SKILL_RADAR_SYSTEM,
-        DEFAULT_SKILL_RADAR_USER,
-    ),
     "career_profiler": (
         "career_profiler",
         "career_profiler_system",
         "career_profiler_user",
         DEFAULT_CAREER_PROFILER_SYSTEM,
         DEFAULT_CAREER_PROFILER_USER,
-    ),
-    "job_authenticity": (
-        "job_authenticity",
-        "job_authenticity_system",
-        "job_authenticity_user",
-        DEFAULT_JOB_AUTHENTICITY_SYSTEM,
-        DEFAULT_JOB_AUTHENTICITY_USER,
     ),
     "pipeline_skill_extract": (
         "pipeline_skill_extract",
@@ -180,6 +161,13 @@ _PROMPT_SPEC = {
         DEFAULT_RESUME_JUDGE_SYSTEM,
         DEFAULT_RESUME_JUDGE_USER,
     ),
+    "skill_radar": (
+        "skill_radar",
+        "skill_radar_system",
+        "skill_radar_user",
+        DEFAULT_SKILL_RADAR_SYSTEM,
+        DEFAULT_SKILL_RADAR_USER,
+    ),
 }
 
 PROMPT_DEFINITIONS: List[Dict[str, Any]] = [
@@ -189,6 +177,8 @@ PROMPT_DEFINITIONS: List[Dict[str, Any]] = [
         "category": "Optimization Pipeline",
         "description": "Synthesizes resume revisions incorporating job descriptions, feedback, and skill keywords.",
         "default_engine": "cloud",
+        "recommended_tier": "frontier",
+        "recommended_tier_label": "Frontier LLM",
         "icon": "edit_note",
         "known_vars": [
             "resume_text",
@@ -209,6 +199,8 @@ PROMPT_DEFINITIONS: List[Dict[str, Any]] = [
         "category": "Optimization Pipeline",
         "description": "Dual-lens evaluation assessing technical ATS keyword parseability and recruiter executive impact in a single turn.",
         "default_engine": "cloud",
+        "recommended_tier": "frontier",
+        "recommended_tier_label": "Frontier LLM",
         "icon": "gavel",
         "known_vars": [
             "optimized_resume",
@@ -225,26 +217,10 @@ PROMPT_DEFINITIONS: List[Dict[str, Any]] = [
         "category": "Optimization Pipeline",
         "description": "Groups and polishes shortlisted pipeline keyword themes into tailored resume bullet stems.",
         "default_engine": "local",
+        "recommended_tier": "slm",
+        "recommended_tier_label": "SLM",
         "icon": "tune",
         "known_vars": ["job_titles", "ranked_keywords", "job_count"],
-    },
-    {
-        "key": "job_authenticity",
-        "name": "Labor Compliance & Authenticity Auditor",
-        "category": "Evaluation & Vetting",
-        "description": "Deterministic 7-point labor compliance auditor detecting DOL ETA-9089 PERM testing, salary locks, and internal placeholders.",
-        "default_engine": "local",
-        "icon": "verified_user",
-        "known_vars": ["title", "company", "location", "job_description"],
-    },
-    {
-        "key": "matching",
-        "name": "Job Matching Scorer",
-        "category": "Evaluation & Vetting",
-        "description": "Evaluates interview probability and semantic alignment between resume and vetted job.",
-        "default_engine": "local",
-        "icon": "compare_arrows",
-        "known_vars": ["resume_text", "job_description", "title", "company"],
     },
     {
         "key": "pipeline_skill_extract",
@@ -252,6 +228,8 @@ PROMPT_DEFINITIONS: List[Dict[str, Any]] = [
         "category": "Evaluation & Vetting",
         "description": "Extracts discrete hard skills, methodologies, soft skills, outcomes, and action verbs from job batches into strict JSON.",
         "default_engine": "local",
+        "recommended_tier": "slm",
+        "recommended_tier_label": "SLM",
         "icon": "playlist_add_check",
         "known_vars": ["job_descriptions"],
     },
@@ -261,6 +239,8 @@ PROMPT_DEFINITIONS: List[Dict[str, Any]] = [
         "category": "Evaluation & Vetting",
         "description": "Extracts highlights, key requirements, and quick evaluation metrics from job descriptions.",
         "default_engine": "cloud",
+        "recommended_tier": "slm",
+        "recommended_tier_label": "SLM",
         "icon": "insights",
         "known_vars": ["job_description", "title", "company"],
     },
@@ -270,6 +250,8 @@ PROMPT_DEFINITIONS: List[Dict[str, Any]] = [
         "category": "Evaluation & Vetting",
         "description": "Strips recruiter boilerplate, EEO statements, and cleans messy job postings into pure requirements.",
         "default_engine": "local",
+        "recommended_tier": "slm",
+        "recommended_tier_label": "SLM",
         "icon": "cleaning_services",
         "known_vars": ["title", "job_description"],
     },
@@ -279,16 +261,9 @@ PROMPT_DEFINITIONS: List[Dict[str, Any]] = [
         "category": "Candidate & Career Tools",
         "description": "Synthesizes universal career archetypes across industries and provisions search profiles.",
         "default_engine": "cloud",
+        "recommended_tier": "frontier",
+        "recommended_tier_label": "Frontier LLM",
         "icon": "psychology",
-        "known_vars": ["resume_text"],
-    },
-    {
-        "key": "skill_radar",
-        "name": "Skill Radar Analyzer",
-        "category": "Candidate & Career Tools",
-        "description": "Audits candidate skill profile against market demand and identifies strategic gaps.",
-        "default_engine": "cloud",
-        "icon": "radar",
         "known_vars": ["resume_text"],
     },
     {
@@ -297,6 +272,8 @@ PROMPT_DEFINITIONS: List[Dict[str, Any]] = [
         "category": "Candidate & Career Tools",
         "description": "Generates tailored, persuasive cover letters bridging resume experience to target role.",
         "default_engine": "cloud",
+        "recommended_tier": "frontier",
+        "recommended_tier_label": "Frontier LLM",
         "icon": "mail",
         "known_vars": ["resume_text", "job_description", "company_name", "role_title"],
     },
@@ -306,28 +283,56 @@ PROMPT_DEFINITIONS: List[Dict[str, Any]] = [
         "category": "Candidate & Career Tools",
         "description": "Generates high-yield behavioral and technical interview questions with STAR coaching points.",
         "default_engine": "cloud",
+        "recommended_tier": "frontier",
+        "recommended_tier_label": "Frontier LLM",
         "icon": "quiz",
         "known_vars": ["resume_text", "job_description", "company_name", "role_title"],
     },
+    {
+        "key": "skill_radar",
+        "name": "Skill Radar & Fit Diagnostics",
+        "category": "Evaluation & Vetting",
+        "description": "Extracts concrete verified core competencies, stretch skill gaps, and interview probability for pipeline jobs.",
+        "default_engine": "local",
+        "recommended_tier": "slm",
+        "recommended_tier_label": "SLM",
+        "icon": "radar",
+        "known_vars": ["resume_text", "job_description", "job_title"],
+    },
 ]
+
 
 PROMPT_TO_QUERY_KIND_MAP: Dict[str, str] = {
     "writer": "optimizer_writer",
-    "resume_judge": "optimizer_ats_judge",
+    "resume_judge": "resume_judge",
     "ats_judge": "optimizer_ats_judge",
     "recruiter_judge": "optimizer_recruiter_judge",
     "matching": "matching",
     "insights": "job_insights",
     "jd_cleanse": "jd_cleanse",
     "career_profiler": "career_profiler",
-    "skill_radar": "pipeline_skill_extract",
     "cover_letter": "cover_letter",
     "interview_prep": "interview_prep",
-    "job_authenticity": "job_authenticity",
     "pipeline_skill_extract": "pipeline_skill_extract",
     "fit_check": "fit_check",
     "pipeline_resume_refine": "pipeline_resume_refine",
+    "skill_radar": "skill_radar",
 }
+
+
+QUERY_KIND_TO_PROMPT_MAP: Dict[str, str] = {v: k for k, v in PROMPT_TO_QUERY_KIND_MAP.items()}
+
+
+def get_recommended_tier_for_query_kind(query_kind: str) -> str:
+    """Returns the out-of-the-box recommended tier ('slm' vs 'frontier') for a given query kind."""
+    qk = (query_kind or "").strip()
+    p_key = QUERY_KIND_TO_PROMPT_MAP.get(qk, qk)
+    for defn in PROMPT_DEFINITIONS:
+        if defn["key"] == p_key:
+            return defn.get("recommended_tier", "slm")
+    if any(x in qk for x in ("writer", "judge", "profiler", "cover_letter", "interview")):
+        return "frontier"
+    return "slm" 
 
 
 def get_available_model_options(user, request=None) -> List[Dict[str, Any]]:
@@ -422,17 +427,27 @@ def get_available_model_options(user, request=None) -> List[Dict[str, Any]]:
     return available
 
 
-def set_prompt_model_preference(user, prompt_key: str, provider: str, model: str) -> None:
+def set_prompt_model_preference(
+    user,
+    prompt_key: str,
+    provider: str = "",
+    model: str = "",
+    target_tier: str = "slm",
+) -> None:
     """
-    Persists per-prompt model routing to TenantPromptModelPreference.
-    Synchronizes aliases (e.g. matching aliases). If provider is blank, clears override.
+    Persists per-prompt model tier (strictly 'slm' vs 'frontier' / 'llm').
+    Specific model overrides are deprecated; routing selects tenant's configured
+    models for that tier (Settings) and falls back to system defaults.
     """
     from .models import TenantPromptModelPreference
 
-    provider = (provider or "").strip()
-    model = (model or "").strip()
-    qk = PROMPT_TO_QUERY_KIND_MAP.get(prompt_key, prompt_key)
+    raw_tier = (target_tier or "").strip().lower()
+    if raw_tier in ("frontier", "llm", "tier:frontier"):
+        resolved_tier = "frontier"
+    else:
+        resolved_tier = "slm"
 
+    qk = PROMPT_TO_QUERY_KIND_MAP.get(prompt_key, prompt_key)
     target_keys = {qk, prompt_key}
     if prompt_key == "matching" or qk == "matching":
         target_keys.update({
@@ -441,22 +456,22 @@ def set_prompt_model_preference(user, prompt_key: str, provider: str, model: str
             "jobs_ai_match",
             "keyword_search_fit",
             "jobs_match_api",
+            "skill_radar",
         })
-    elif prompt_key == "skill_radar":
-        target_keys.update({"pipeline_skill_extract", "skill_radar"})
     elif prompt_key == "insights":
         target_keys.update({"job_insights", "insights"})
 
-    if provider:
-        for k in target_keys:
-            TenantPromptModelPreference.objects.update_or_create(
-                owner=user,
-                query_kind=k,
-                defaults={"provider": provider, "model": model, "is_active": True},
-            )
-    else:
-        for k in target_keys:
-            TenantPromptModelPreference.objects.for_user(user).filter(query_kind=k).delete()
+    for k in target_keys:
+        TenantPromptModelPreference.objects.update_or_create(
+            owner=user,
+            query_kind=k,
+            defaults={
+                "target_tier": resolved_tier,
+                "provider": "",
+                "model": "",
+                "is_active": True,
+            },
+        )
 
 
 def get_prompt_model_preference(user, prompt_key: str) -> Tuple[str, str]:
@@ -488,23 +503,52 @@ def get_prompt_model_preference(user, prompt_key: str) -> Tuple[str, str]:
     return "", ""
 
 
-def get_all_prompt_model_preferences(user) -> Dict[str, str]:
+def get_all_prompt_model_preferences(user) -> Dict[str, Dict[str, Any]]:
     """
-    Returns a mapping of prompt_key -> 'Provider::Model' for all prompt definitions and ATS profiles.
+    Returns a mapping of prompt_key -> { 'target_tier': str, 'assigned_model': str, 'short_label': str }
+    strictly resolved to 'slm' or 'frontier' (LLM).
     """
     from .models import TenantPromptModelPreference
 
     prefs = (
         TenantPromptModelPreference.objects.for_user(user)
         .filter(is_active=True)
-        .values("query_kind", "provider", "model")
+        .values("query_kind", "target_tier")
     )
-    pref_map = {p["query_kind"]: f"{p['provider']}::{p['model']}" for p in prefs}
+    pref_map = {}
+    for p in prefs:
+        tier = (p.get("target_tier") or "").strip().lower()
+        if tier in ("frontier", "llm", "tier:frontier"):
+            resolved = "frontier"
+            short = "LLM"
+        else:
+            resolved = "slm"
+            short = "SLM"
 
-    out: Dict[str, str] = {}
+        pref_map[p["query_kind"]] = {
+            "target_tier": resolved,
+            "assigned_model": resolved,
+            "short_label": short,
+            "provider": "",
+            "model": "",
+        }
+
+    out: Dict[str, Dict[str, Any]] = {}
     for p_key, qk in PROMPT_TO_QUERY_KIND_MAP.items():
-        val = pref_map.get(qk) or pref_map.get(p_key) or ""
-        out[p_key] = val
+        if qk in pref_map:
+            out[p_key] = pref_map[qk]
+        elif p_key in pref_map:
+            out[p_key] = pref_map[p_key]
+        else:
+            rec = get_recommended_tier_for_query_kind(qk)
+            out[p_key] = {
+                "target_tier": rec,
+                "assigned_model": rec,
+                "short_label": "LLM" if rec == "frontier" else "SLM",
+                "provider": "",
+                "model": "",
+            }
+
     for k, v in pref_map.items():
         if k not in out:
             out[k] = v

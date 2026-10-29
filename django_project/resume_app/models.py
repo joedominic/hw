@@ -507,6 +507,18 @@ class LLMProviderPreference(models.Model):
         default=False,
         help_text="If true, this provider+model is treated as local (prioritized or required).",
     )
+    MODEL_TIER_SLM = "slm"
+    MODEL_TIER_FRONTIER = "frontier"
+    MODEL_TIER_CHOICES = (
+        (MODEL_TIER_SLM, "SLM (Flash / Bulk / Low-Cost)"),
+        (MODEL_TIER_FRONTIER, "Frontier (Heavy / Deep Reasoning)"),
+    )
+    model_tier = models.CharField(
+        max_length=16,
+        choices=MODEL_TIER_CHOICES,
+        default=MODEL_TIER_SLM,
+        help_text="Tier: SLM for fast, low-cost vetting and bulk operations; Frontier for deep synthesis and writing.",
+    )
     priority = models.PositiveSmallIntegerField(default=100)
     rate_limit_rpm = models.PositiveIntegerField(
         null=True,
@@ -548,7 +560,23 @@ class TenantPromptModelPreference(models.Model):
         max_length=64,
         help_text="Query kind e.g. 'optimizer_writer', 'matching', or '__default__' for tenant global default.",
     )
-    provider = models.CharField(max_length=64)
+    TARGET_TIER_AUTO = "auto"
+    TARGET_TIER_SLM = "slm"
+    TARGET_TIER_FRONTIER = "frontier"
+    TARGET_TIER_SPECIFIC = "specific"
+    TARGET_TIER_CHOICES = (
+        (TARGET_TIER_AUTO, "System Default / Auto"),
+        (TARGET_TIER_SLM, "SLM Tier (Fast / Bulk)"),
+        (TARGET_TIER_FRONTIER, "Frontier LLM Tier (Deep Reasoning)"),
+        (TARGET_TIER_SPECIFIC, "Specific Model Override"),
+    )
+    target_tier = models.CharField(
+        max_length=16,
+        choices=TARGET_TIER_CHOICES,
+        default=TARGET_TIER_AUTO,
+        help_text="Model routing strategy: SLM (bulk/vetting), Frontier (reasoning/writing), specific model, or auto.",
+    )
+    provider = models.CharField(max_length=64, blank=True)
     model = models.CharField(max_length=128, blank=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -855,7 +883,7 @@ class JobListing(models.Model):
         blank=True,
         help_text="When the job was posted on the source board (from JobSpy date_posted).",
     )
-    fetched_at = models.DateTimeField(auto_now_add=True)
+    fetched_at = models.DateTimeField(auto_now_add=True, db_index=True)
     raw_json = models.JSONField(null=True, blank=True)
     # Cached preference metrics for pipeline/saved jobs (per track) live in JobListingTrackMetrics.
     pipeline_last_scored_at = models.DateTimeField(null=True, blank=True)
@@ -2155,3 +2183,36 @@ class CareerProfileAnalysis(models.Model):
     def __str__(self):
         return f"CareerAnalysis for {self.owner_id} - Resume {self.resume_id} ({self.updated_at})"
 
+
+
+class FailedTaskQuarantine(models.Model):
+    """Quarantine Dead-Letter Queue (DLQ) for failed background tasks."""
+
+    class Status(models.TextChoices):
+        QUARANTINED = "quarantined", "Quarantined"
+        REPLAYED = "replayed", "Replayed"
+        DISMISSED = "dismissed", "Dismissed"
+
+    task_id = models.CharField(max_length=128, db_index=True)
+    task_name = models.CharField(max_length=255, db_index=True)
+    args_repr = models.TextField(blank=True, default="")
+    kwargs_repr = models.TextField(blank=True, default="")
+    error_class = models.CharField(max_length=255, blank=True, default="")
+    error_message = models.TextField(blank=True, default="")
+    traceback = models.TextField(blank=True, default="")
+    status = models.CharField(
+        max_length=32,
+        choices=Status.choices,
+        default=Status.QUARANTINED,
+        db_index=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Failed Task Quarantine"
+        verbose_name_plural = "Failed Task Quarantines"
+
+    def __str__(self):
+        return f"{self.task_name} ({self.task_id}) [{self.status}]"

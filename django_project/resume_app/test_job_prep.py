@@ -45,6 +45,93 @@ class InterviewPrepMarkdownTests(TestCase):
     def test_plain_text_passthrough(self):
         self.assertEqual(interview_prep_to_markdown("Raw notes"), "Raw notes")
 
+    def test_renders_json_with_empty_resume_evidence_without_evidence_block(self):
+        payload = InterviewPrepResult(
+            likely_questions=["What are your salary expectations?"],
+            themes_to_emphasize=["Compensation"],
+            suggested_answers=[
+                {
+                    "question": "What are your salary expectations?",
+                    "question_type": "logistical_or_behavioral",
+                    "talking_points": ["Market rate for Principal Architect"],
+                    "resume_evidence": [],
+                    "sample_answer": "My target range is $180k-$200k base based on market alignment.",
+                }
+            ],
+            questions_to_ask=["What does the team roadmap look like?"],
+        )
+        md = interview_prep_to_markdown(payload.model_dump_json())
+        self.assertIn("What are your salary expectations?", md)
+        self.assertIn("Questions to ask the interviewer", md)
+        self.assertNotIn("**Resume evidence**", md)
+
+    def test_alias_questions_for_candidate_to_ask(self):
+        raw_dict = {
+            "likely_questions": ["Why GM Financial?"],
+            "themes_to_emphasize": ["FinTech"],
+            "suggested_answers": [
+                {
+                    "question": "Why GM Financial?",
+                    "question_type": "logistical_or_behavioral",
+                    "talking_points": ["Strong scale and modern stack"],
+                    "resume_evidence": [],
+                    "sample_answer": "GM Financial offers a unique opportunity to scale distributed systems.",
+                }
+            ],
+            "questions_for_candidate_to_ask": [
+                "What are the biggest challenges facing the team in the next 6 months?"
+            ],
+        }
+        res = InterviewPrepResult.model_validate(raw_dict)
+        self.assertEqual(len(res.questions_to_ask), 1)
+        self.assertIn("biggest challenges", res.questions_to_ask[0])
+        md = interview_prep_to_markdown(res.model_dump_json())
+        self.assertIn("Questions to ask the interviewer", md)
+        self.assertIn("biggest challenges", md)
+
+    def test_renders_keyword_only_and_gap_evidence(self):
+        payload = InterviewPrepResult(
+            likely_questions=[
+                "Do you have experience with Azure?",
+                "Do you have Genesys contact center experience?",
+            ],
+            themes_to_emphasize=["Cloud Migration", "Telephony Ramp-up"],
+            suggested_answers=[
+                {
+                    "question": "Do you have experience with Azure?",
+                    "question_type": "technical_or_experience",
+                    "talking_points": [
+                        "Acknowledge hands-on depth is primarily GCP",
+                        "Pivot to architectural equivalence (event streaming, IAM)",
+                        "Reference Azure foundational certification / competencies",
+                    ],
+                    "resume_evidence": [
+                        "Listed under Core Competencies / Skills only; no project metrics provided in resume."
+                    ],
+                    "sample_answer": "My primary production cloud footprint has been GCP at Wells Fargo, but Azure is in my core competencies and the distributed systems principles map directly.",
+                },
+                {
+                    "question": "Do you have Genesys contact center experience?",
+                    "question_type": "technical_or_experience",
+                    "talking_points": [
+                        "Acknowledge no direct Genesys tenure",
+                        "Bridge from proprietary event-driven streaming telephony",
+                        "Highlight rapid adoption curve",
+                    ],
+                    "resume_evidence": [
+                        "Not found in resume text (Qualification Gap)."
+                    ],
+                    "sample_answer": "While I have not built on Genesys directly, I have deep experience with real-time distributed voice and streaming pipelines...",
+                },
+            ],
+            questions_to_ask=["How is the Genesys integration staged with the existing voice stack?"],
+        )
+        md = interview_prep_to_markdown(payload.model_dump_json())
+        self.assertIn("Do you have experience with Azure?", md)
+        self.assertIn("Listed under Core Competencies / Skills only", md)
+        self.assertIn("Not found in resume text (Qualification Gap).", md)
+        self.assertIn("Questions to ask the interviewer", md)
+
 
 class ResolveInterviewPrepInputsTests(TestCase):
     def setUp(self):
@@ -172,6 +259,46 @@ class GenerateInterviewPrepTests(TestCase):
         self.entry.refresh_from_db()
         self.assertTrue(self.entry.interview_prep)
         self.assertIsNotNone(self.entry.interview_prep_generated_at)
+
+    @patch("resume_app.job_prep._llm_invoke_with_retry")
+    def test_routes_to_cloud_llm_and_enforces_no_local(self, mock_invoke):
+        mock_invoke.return_value = MagicMock(content=json.dumps({
+            "likely_questions": ["What is your experience with Kubernetes?"],
+            "themes_to_emphasize": ["Cloud Architecture"],
+            "suggested_answers": [
+                {
+                    "question": "What is your experience with Kubernetes?",
+                    "question_type": "technical_or_experience",
+                    "talking_points": ["Production EKS clusters"],
+                    "resume_evidence": ["Managed 50-node Kubernetes cluster"],
+                    "sample_answer": "I led the migration of our monolith to Kubernetes...",
+                }
+            ],
+            "questions_to_ask": ["How is CI/CD managed across clusters?"],
+        }))
+        self.entry.stage = PipelineEntry.Stage.DONE
+        self.entry.save(update_fields=["stage"])
+        jd = JobDescription.objects.create(content="Need Kubernetes architect.")
+        resume = UserResume.objects.create(
+            owner=self.user, file="r2.pdf", original_filename="r2.pdf", track="ic", is_library=True
+        )
+        OptimizedResume.objects.create(
+            owner=self.user,
+            original_resume=resume,
+            job_description=jd,
+            optimized_content="Experienced in Kubernetes.",
+            status=OptimizedResume.STATUS_COMPLETED,
+            pipeline_entry=self.entry,
+        )
+        stored, md, prompt = generate_interview_prep(self.entry, interview_type="technical")
+        mock_invoke.assert_called_once()
+        _, kwargs = mock_invoke.call_args
+        self.assertEqual(kwargs.get("prefer_local"), False)
+        self.assertEqual(kwargs.get("allow_local"), False)
+        self.assertEqual(kwargs.get("usage_query_kind"), "interview_prep")
+        self.assertIn("ANTI-HALLUCINATION & FACTUAL EVIDENCE", prompt)
+        self.assertIn("VERBATIM / DIRECT FACTUAL RESUME EVIDENCE", prompt)
+        self.assertIn("TECHNICAL / ARCHITECTURE", prompt.upper())
 
 
 class CoverLetterSizingAndExportTests(TestCase):

@@ -782,6 +782,12 @@
                      data-pref-score="{{ job.preference_margin_percent|default:'0' }}"
                      data-interview-probability="{{ job.interview_probability|default:'-1' }}"
                      data-interview-reasoning="{{ job.interview_reasoning|default:'' }}"
+                     data-det-match-score="{{ job.deterministic_match_score|default:'' }}"
+                     data-det-interview-probability="{{ job.deterministic_interview_probability|default:'' }}"
+                     data-llm-match-score="{{ job.llm_match_score|default:'' }}"
+                     data-llm-interview-probability="{{ job.llm_interview_probability|default:'' }}"
+                     data-score-delta-match="{{ job.score_delta_match|default:'' }}"
+                     data-score-delta-interview="{{ job.score_delta_interview|default:'' }}"
                      data-timestamp="{% if job.fetched_at %}{{ job.fetched_at|date:'U' }}{% elif job.posted_at %}{{ job.posted_at|date:'U' }}{% else %}0{% endif %}"
                      data-source="{{ job.source_display|default:job.source }}"
                      data-core-matches="{{ job.zero_llm_core_json|default:'[]' }}"
@@ -794,10 +800,7 @@
                      data-age="{{ job.combined_age|default:'Recently' }}"
                      data-salary="{{ job.extracted_salary|default:'' }}"
                      data-is-liked="{% if job.is_liked %}1{% else %}0{% endif %}"
-                     data-authenticity-verdict="{{ job.authenticity_verdict|default:'' }}"
-                     data-authenticity-score="{{ job.authenticity_score|default:'0' }}"
-                     data-authenticity-confidence="{{ job.authenticity_confidence|default:'' }}"
-                     data-authenticity-rationale="{{ job.authenticity_rationale|default:'' }}"
+
                      data-description="{{ job.description|default:job.snippet }}">
                     
                     <!-- Selection Indicator Accent Stripe -->
@@ -844,13 +847,17 @@
                         <!-- Match & Interview Badges -->
                         <div class="flex flex-col items-end gap-1 shrink-0">
                             <!-- Match Pill Badge -->
-                            <div class="opportunity-match-pill flex items-center rounded border overflow-hidden shrink-0 font-mono text-xs {% if job.skill_radar_source == 'ollama_local' and job.zero_llm_core_matches %}border-emerald-300 bg-emerald-50{% else %}border-slate-200 bg-slate-50{% endif %}" title="Role Match Score (title & role alignment)">
-                                <span class="{% if job.skill_radar_source == 'ollama_local' and job.zero_llm_core_matches %}bg-brand text-white{% else %}bg-slate-700 text-white{% endif %} text-[11px] px-2 py-0.5 font-bold">
+                            <div class="opportunity-match-pill flex items-center rounded border overflow-hidden shrink-0 font-mono text-xs {% if job.skill_radar_source in 'ollama_local,local_slm,cloud_llm' and job.zero_llm_core_matches %}border-emerald-300 bg-emerald-50{% elif job.skill_radar_source in 'ollama_local,local_slm,cloud_llm' and job.zero_llm_stretch_skills %}border-amber-300 bg-amber-50{% else %}border-slate-200 bg-slate-50{% endif %}" title="Role Match Score (title & role alignment)">
+                                <span class="{% if job.skill_radar_source in 'ollama_local,local_slm,cloud_llm' and job.zero_llm_core_matches %}bg-brand text-white{% elif job.skill_radar_source in 'ollama_local,local_slm,cloud_llm' and job.zero_llm_stretch_skills %}bg-amber-600 text-white{% else %}bg-slate-700 text-white{% endif %} text-[11px] px-2 py-0.5 font-bold">
                                     {% if job.zero_llm_match_pct is not None %}{{ job.zero_llm_match_pct }}%{% elif job.focus_percent is not None %}{{ job.focus_percent }}%{% else %}Unscored{% endif %}
                                 </span>
-                                {% if job.skill_radar_source == 'ollama_local' and job.zero_llm_core_matches %}
+                                {% if job.skill_radar_source in 'ollama_local,local_slm,cloud_llm' and job.zero_llm_core_matches %}
                                 <span class="text-emerald-800 text-[10px] px-1.5 py-0.5 font-semibold">
                                     {{ job.zero_llm_core_matches|length }} Verified
+                                </span>
+                                {% elif job.skill_radar_source in 'ollama_local,local_slm,cloud_llm' and job.zero_llm_stretch_skills %}
+                                <span class="text-amber-800 text-[10px] px-1.5 py-0.5 font-semibold">
+                                    {{ job.zero_llm_stretch_skills|length }} Gaps
                                 </span>
                                 {% else %}
                                 <span class="text-slate-500 text-[10px] px-1.5 py-0.5 font-medium">
@@ -951,7 +958,7 @@
                                 <input type="hidden" name="next" value="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage=vetting"/>
                                 <button type="submit" class="shortlist-btn h-7 px-2.5 rounded bg-brand text-white text-xs font-semibold flex items-center gap-1 hover:bg-brand/90 transition">
                                     <span class="material-symbols-outlined text-[14px]">send</span>
-                                    <span>Start Tailoring</span>
+                                    <span>Move to Applying</span>
                                 </button>
                             </form>
                             {% elif board_stage == 'applying' %}
@@ -1203,7 +1210,7 @@
                             </span>
                             <span id="inspector-action-label">
                                 {% if board_stage == 'pipeline' %}Move to Review
-                                {% elif board_stage == 'vetting' %}Start Tailoring
+                                {% elif board_stage == 'vetting' %}Move to Applying
                                 {% elif board_stage == 'applying' %}Mark Submitted
                                 {% elif board_stage == 'done' %}Log Next Step
                                 {% else %}Saved{% endif %}
@@ -1486,6 +1493,7 @@ Select an opportunity to read the full job description.
                             <span id="inspect-match-badge" class="font-mono text-xs font-bold text-emerald-800 bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded shadow-xs hidden">
                                 85% Match
                             </span>
+                            <span id="inspect-comparison-badge" class="font-mono text-[10px] font-semibold text-sky-800 bg-sky-50 border border-sky-200 px-1.5 py-0.5 rounded shadow-xs hidden cursor-help" title="Comparative evaluation between Cloud LLM and deterministic rubric"></span>
                         </div>
 
                         <!-- Source Status & Re-Analyze Action Sub-bar (Re-Analyze safely contained on the right) -->
@@ -1496,14 +1504,20 @@ Select an opportunity to read the full job description.
                                 </span>
                             </div>
 
-                            <button type="button" id="trigger-ollama-radar-btn" onclick="promptDeepAnalysisConfirmation()" class="h-6 sm:h-7 px-2.5 sm:px-3 text-[11px] font-bold bg-brand text-white rounded-md hover:bg-brand-dark flex items-center gap-1.5 transition shadow-xs cursor-pointer shrink-0 hidden" title="Re-run deep skill diagnosis via local AI">
-                                <span class="material-symbols-outlined text-[13px]">refresh</span>
-                                <span id="deep-analyze-btn-text">Re-Analyze</span>
-                            </button>
+                            <div id="radar-action-buttons-group" class="flex items-center gap-1.5 shrink-0 hidden">
+                                <button type="button" id="trigger-slm-radar-btn" onclick="executeDeepAnalysis('slm')" class="h-6 sm:h-7 px-2 text-[11px] font-bold bg-emerald-700 hover:bg-emerald-800 text-white rounded-md flex items-center gap-1 transition shadow-xs cursor-pointer" title="Re-analyze using local SLM (Free • ~45s)">
+                                    <span class="material-symbols-outlined text-[13px]">terminal</span>
+                                    <span>SLM</span>
+                                </button>
+                                <button type="button" id="trigger-cloud-radar-btn" onclick="promptCloudAnalysisConfirmation()" class="h-6 sm:h-7 px-2 text-[11px] font-bold bg-sky-700 hover:bg-sky-800 text-white rounded-md flex items-center gap-1 transition shadow-xs cursor-pointer" title="Re-analyze using Cloud LLM (~15-20s • Quota)">
+                                    <span class="material-symbols-outlined text-[13px]">bolt</span>
+                                    <span>Cloud LLM</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
 
-                    <!-- STATE 1: UNANALYZED PLACEHOLDER (Single clear primary CTA) -->
+                    <!-- STATE 1: UNANALYZED PLACEHOLDER (Dual Tier CTAs) -->
                     <div id="radar-unanalyzed-placeholder" class="bg-white rounded-lg border border-slate-200 p-4 text-center space-y-2.5">
                         <div class="w-9 h-9 rounded-full bg-emerald-50 text-brand flex items-center justify-center mx-auto border border-emerald-100">
                             <span class="material-symbols-outlined text-[18px]">bolt</span>
@@ -1511,18 +1525,22 @@ Select an opportunity to read the full job description.
                         <div class="space-y-1">
                             <h4 class="text-xs font-bold text-slate-900">Deep Analysis Not Yet Run</h4>
                             <p class="text-[11px] text-slate-500 max-w-sm mx-auto leading-relaxed">
-                                Evaluate role gaps and stretch skills against your active resume (<strong class="text-slate-700 font-mono">{{ bound_resume.original_filename|default:"resume.pdf" }}</strong>), and generate an executive diagnosis using local AI.
+                                Evaluate role gaps and stretch skills against your active resume (<strong class="text-slate-700 font-mono">{{ bound_resume.original_filename|default:"resume.pdf" }}</strong>), and generate an executive diagnosis.
                             </p>
                         </div>
-                        <div class="pt-1">
-                            <button type="button" onclick="promptDeepAnalysisConfirmation()" class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-brand text-white text-xs font-bold hover:bg-brand-dark transition shadow-sm cursor-pointer">
-                                <span class="material-symbols-outlined text-[14px]">bolt</span>
-                                <span>Run Deep Analysis</span>
+                        <div class="pt-1 flex flex-wrap items-center justify-center gap-2">
+                            <button type="button" onclick="executeDeepAnalysis('slm')" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold transition shadow-sm cursor-pointer" title="Free on-prem inference on Ollama (~45s)">
+                                <span class="material-symbols-outlined text-[14px]">terminal</span>
+                                <span>Local SLM (Free • ~45s)</span>
                             </button>
-                            <div class="text-[10px] text-slate-400 mt-1.5 font-mono flex items-center justify-center gap-1">
-                                <span class="material-symbols-outlined text-[11px] text-slate-400">lock</span>
-                                <span>Private • 100% local inference</span>
-                            </div>
+                            <button type="button" onclick="promptCloudAnalysisConfirmation()" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-800 text-white text-xs font-bold transition shadow-sm cursor-pointer" title="Evaluation using Cloud Frontier LLM (~15-20s • uses token quota)">
+                                <span class="material-symbols-outlined text-[14px]">bolt</span>
+                                <span>Cloud LLM (~15-20s • Quota)</span>
+                            </button>
+                        </div>
+                        <div class="text-[10px] text-slate-400 mt-1 font-mono flex items-center justify-center gap-1">
+                            <span class="material-symbols-outlined text-[11px] text-slate-400">info</span>
+                            <span>Local SLM is free & private • Cloud LLM evaluates in ~15–20s via API quota</span>
                         </div>
                     </div>
 
@@ -1534,10 +1552,10 @@ Select an opportunity to read the full job description.
                         </div>
                         <div class="space-y-1">
                             <h4 class="text-xs font-bold text-slate-900 flex items-center justify-center gap-1.5">
-                                <span>Analyzing with local AI...</span>
-                                <span id="analysis-timer-display" class="font-mono text-[11px] text-brand font-semibold">0s (est. ~1 min)</span>
+                                <span id="radar-loading-title">Analyzing with local SLM...</span>
+                                <span id="analysis-timer-display" class="font-mono text-[11px] text-brand font-semibold">0s (est. ~45s)</span>
                             </h4>
-                            <p class="text-[11px] text-slate-500 max-w-xs mx-auto leading-relaxed">
+                            <p id="radar-loading-subtitle" class="text-[11px] text-slate-500 max-w-xs mx-auto leading-relaxed">
                                 Evaluating requirements using <strong class="text-slate-700 font-medium">{{ local_model_name|default:"Local AI Model" }}</strong>.
                             </p>
                         </div>
@@ -1585,64 +1603,9 @@ Select an opportunity to read the full job description.
                     </p>
                 </div>
 
-                <!-- 4. Posting Authenticity & Labor Audit Bento -->
-                <div id="inspect-authenticity-card" class="bg-slate-50/90 rounded-xl p-3.5 sm:p-4 border border-cockpit-border space-y-3">
-                    <!-- Header: Icon, Full-Width Title & Subtitle -->
-                    <div class="flex items-start gap-2.5">
-                        <div class="w-8 h-8 rounded-lg bg-blue-100 text-blue-900 flex items-center justify-center shrink-0 mt-0.5">
-                            <span class="material-symbols-outlined text-[18px]">verified_user</span>
-                        </div>
-                        <div class="min-w-0 flex-1">
-                            <h3 class="font-display text-sm font-bold text-cockpit-textMain leading-snug">
-                                Posting Authenticity &amp; Labor Audit
-                            </h3>
-                            <p class="text-[11px] text-slate-500 mt-0.5">
-                                DOL ETA-9089 PERM detection &amp; internal pre-selection risk
-                            </p>
-                        </div>
-                    </div>
 
-                    <!-- Verdict & Risk Badges Subrow -->
-                    <div id="authenticity-badge-container" class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/80">
-                        <div class="flex flex-wrap items-center gap-1.5">
-                            <span id="inspect-authenticity-verdict-pill" class="font-mono text-xs font-bold px-2.5 py-0.5 rounded shadow-xs hidden"></span>
-                            <span id="inspect-authenticity-score-pill" class="font-mono text-xs font-bold px-2 py-0.5 rounded shadow-xs hidden"></span>
-                        </div>
-                    </div>
 
-                    <!-- State 1: Active Audit Results -->
-                    <div id="authenticity-results-container" class="space-y-3 hidden">
-                        <!-- Primary Rationale Narrative (Audit Assessment from Prompt Output) -->
-                        <div id="inspect-authenticity-rationale-box" class="p-3.5 bg-white border border-slate-200 rounded-xl text-xs leading-relaxed font-sans shadow-2xs space-y-1.5 transition-colors">
-                            <div class="flex items-center gap-1.5">
-                                <span id="inspect-authenticity-rationale-icon" class="material-symbols-outlined text-[16px] text-blue-600 shrink-0">gavel</span>
-                                <span class="font-bold text-slate-900 text-xs">Audit Assessment:</span>
-                            </div>
-                            <p id="inspect-authenticity-rationale-text" class="text-xs text-slate-700 font-normal leading-relaxed pl-5"></p>
-                        </div>
-                    </div>
-
-                    <!-- State 2: Unanalyzed / Pending -->
-                    <div id="authenticity-pending-container" class="bg-white rounded-lg border border-dashed border-slate-200 p-4 text-center space-y-2">
-                        <span class="material-symbols-outlined text-[20px] text-slate-400">gavel</span>
-                        <div class="text-xs font-semibold text-slate-700">Compliance Audit Pending</div>
-                        <p class="text-[11px] text-slate-500 max-w-sm mx-auto leading-relaxed">
-                            Evaluates statutory PERM labor phrasing (DOL ETA-9089), degree equations, salary spread, and internal promotion markers.
-                        </p>
-                        <div class="pt-1">
-                            <button type="button" id="trigger-audit-btn" onclick="runOnDemandAuthenticityAudit()" class="inline-flex items-center gap-1 px-3 py-1.5 rounded bg-brand text-white text-xs font-bold hover:bg-brand/90 transition cursor-pointer shadow-2xs">
-                                <span class="material-symbols-outlined text-[14px]">play_arrow</span>
-                                <span id="trigger-audit-btn-label">Run Audit Now</span>
-                            </button>
-                        </div>
-                    </div>
-
-                    <p class="text-[10px] text-slate-400 leading-tight">
-                        Evaluated with 100% deterministic local compliance heuristics &amp; local AI. No cloud API tokens consumed.
-                    </p>
-                </div>
-
-                <!-- 5. Ranking Influences & Preference Memory -->
+                <!-- 4. Ranking Influences & Preference Memory -->
                 <div class="bg-white rounded-xl p-4 border border-cockpit-border space-y-3">
                     <div class="flex items-center justify-between">
                         <div class="flex items-center gap-2">
@@ -2053,6 +2016,7 @@ Select an opportunity to read the full job description.
                 const interviewBadge = document.getElementById('inspect-interview-badge');
                 const sourceBadge = document.getElementById('radar-source-badge');
                 const triggerBtn = document.getElementById('trigger-ollama-radar-btn');
+                const actionGroup = document.getElementById('radar-action-buttons-group');
                 const deepAnalyzeBtnText = document.getElementById('deep-analyze-btn-text');
 
                 // Render Top-Right Interview Badge
@@ -2086,6 +2050,26 @@ Select an opportunity to read the full job description.
                     }
                 }
 
+                // Render Comparative Rubric Badge when Cloud LLM evaluated
+                const comparisonBadge = document.getElementById('inspect-comparison-badge');
+                if (comparisonBadge) {
+                    const detProb = parseInt(row.dataset.detInterviewProbability, 10);
+                    const detMatch = parseInt(row.dataset.detMatchScore, 10);
+                    const deltaProb = row.dataset.scoreDeltaInterview;
+                    if (radarSource === 'cloud_llm' && !isNaN(detProb) && detProb >= 0) {
+                        const deltaNum = parseInt(deltaProb, 10);
+                        let deltaText = '';
+                        if (!isNaN(deltaNum)) {
+                            deltaText = deltaNum > 0 ? ` (Δ +${deltaNum}%)` : (deltaNum < 0 ? ` (Δ ${deltaNum}%)` : ' (Δ 0%)');
+                        }
+                        comparisonBadge.textContent = `Det. Rubric: ${detProb}%${deltaText}`;
+                        comparisonBadge.title = `Comparative Evaluation:\n• Cloud LLM Callback: ${interviewProb}%\n• Deterministic Rubric: ${detProb}%\n• Cloud LLM Match: ${score}%\n• Deterministic Match: ${!isNaN(detMatch) ? detMatch + '%' : 'N/A'}`;
+                        comparisonBadge.classList.remove('hidden');
+                    } else {
+                        comparisonBadge.classList.add('hidden');
+                    }
+                }
+
                 // Update Inspector Like Button state
                 const isLiked = row.dataset.isLiked === '1';
                 const inspectorLikeBtn = document.getElementById('inspector-like-btn');
@@ -2103,18 +2087,23 @@ Select an opportunity to read the full job description.
                     }
                 }
 
-                if (radarSource === 'ollama_local' && (coreMatches.length > 0 || fitSummary)) {
+                const isAnalyzed = (radarSource === 'cloud_llm' || radarSource === 'ollama_local' || radarSource === 'local_slm');
+
+                if (isAnalyzed && (coreMatches.length > 0 || fitSummary)) {
                     if (unanalyzedBox) unanalyzedBox.classList.add('hidden');
                     if (loadingBox) loadingBox.classList.add('hidden');
                     if (resultsBox) resultsBox.classList.remove('hidden');
+                    if (actionGroup) actionGroup.classList.remove('hidden');
                     if (triggerBtn) triggerBtn.classList.remove('hidden');
 
                     if (sourceBadge) {
-                        sourceBadge.textContent = 'Ollama Local • Verified';
-                        sourceBadge.className = 'font-mono text-[10px] px-2 py-0.5 rounded font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200';
-                    }
-                    if (deepAnalyzeBtnText) {
-                        deepAnalyzeBtnText.textContent = 'Re-Analyze';
+                        if (radarSource === 'cloud_llm') {
+                            sourceBadge.textContent = 'Cloud LLM • Verified';
+                            sourceBadge.className = 'font-mono text-[10px] px-2 py-0.5 rounded font-semibold bg-sky-100 text-sky-800 border border-sky-300';
+                        } else {
+                            sourceBadge.textContent = 'Local SLM • Verified';
+                            sourceBadge.className = 'font-mono text-[10px] px-2 py-0.5 rounded font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200';
+                        }
                     }
 
                     // Populate Fit Summary
@@ -2167,14 +2156,12 @@ Select an opportunity to read the full job description.
                     if (unanalyzedBox) unanalyzedBox.classList.add('hidden');
                     if (loadingBox) loadingBox.classList.add('hidden');
                     if (resultsBox) resultsBox.classList.remove('hidden');
+                    if (actionGroup) actionGroup.classList.remove('hidden');
                     if (triggerBtn) triggerBtn.classList.remove('hidden');
 
                     if (sourceBadge) {
                         sourceBadge.textContent = 'Vetting Evaluated • Local AI';
                         sourceBadge.className = 'font-mono text-[10px] px-2 py-0.5 rounded font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200';
-                    }
-                    if (deepAnalyzeBtnText) {
-                        deepAnalyzeBtnText.textContent = 'Extract Deep Skills';
                     }
 
                     const summaryBox = document.getElementById('inspect-fit-summary-box');
@@ -2187,7 +2174,7 @@ Select an opportunity to read the full job description.
                     const coreContainer = document.getElementById('inspect-core-competencies');
                     const stretchContainer = document.getElementById('inspect-stretch-skills');
                     if (coreContainer) {
-                        coreContainer.innerHTML = '<span class="text-xs text-slate-400 italic">Skill breakdown not yet extracted (click Extract Deep Skills above)</span>';
+                        coreContainer.innerHTML = '<span class="text-xs text-slate-400 italic">Skill breakdown not yet extracted (re-analyze to extract deep skills)</span>';
                     }
                     if (stretchContainer) {
                         stretchContainer.innerHTML = '<span class="text-xs text-slate-400 italic">Run deep analysis to extract stretch gaps</span>';
@@ -2197,14 +2184,12 @@ Select an opportunity to read the full job description.
                     if (unanalyzedBox) unanalyzedBox.classList.remove('hidden');
                     if (loadingBox) loadingBox.classList.add('hidden');
                     if (resultsBox) resultsBox.classList.add('hidden');
+                    if (actionGroup) actionGroup.classList.add('hidden');
                     if (triggerBtn) triggerBtn.classList.add('hidden');
 
                     if (sourceBadge) {
                         sourceBadge.textContent = 'Unanalyzed';
                         sourceBadge.className = 'font-mono text-[10px] px-2 py-0.5 rounded font-semibold bg-slate-100 text-slate-500 border border-slate-200';
-                    }
-                    if (deepAnalyzeBtnText) {
-                        deepAnalyzeBtnText.textContent = 'Deep Analyze';
                     }
                 }
 
@@ -2374,194 +2359,13 @@ Select an opportunity to read the full job description.
                     loadInterviewPrepForEntry(entryId);
                 }
 
-                // Update Authenticity & Labor Audit Card
-                updateAuthenticityInspector(row);
+
 
                 row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
             }
             window.selectJob = selectJob;
 
-            const CHECK_TITLES = {
-                'perm_legal_phrasing': 'Statutory DOL ETA-9089 PERM Phrasing (+40)',
-                'rigid_degree_equation': 'Inflexible Degree Equation (+20)',
-                'flat_salary_range': 'Flat / Rigid Single Salary Band (+15)',
-                'statutory_minimum_window_clause': 'Statutory Minimum Window Clause (+25)',
-                'hyper_specific_okrs': 'Hyper-Specific OKRs / Internal Codename (+25)',
-                'title_scope_mismatch': 'Director Title with Enterprise Scope (+20)',
-                'flexible_general_req': 'Broad Interchangeable Requirements (-30)'
-            };
-
-            function updateAuthenticityInspector(row) {
-                const card = document.getElementById('inspect-authenticity-card');
-                if (!card) return;
-
-                const verdictPill = document.getElementById('inspect-authenticity-verdict-pill');
-                const scorePill = document.getElementById('inspect-authenticity-score-pill');
-                const resultsBox = document.getElementById('authenticity-results-container');
-                const pendingBox = document.getElementById('authenticity-pending-container');
-                const rationaleBox = document.getElementById('inspect-authenticity-rationale-box');
-                const rationaleIcon = document.getElementById('inspect-authenticity-rationale-icon');
-                const rationaleText = document.getElementById('inspect-authenticity-rationale-text');
-                const btnLabel = document.getElementById('trigger-audit-btn-label');
-
-                if (btnLabel) btnLabel.textContent = 'Run Audit Now';
-
-                const authVerdict = row.dataset.authenticityVerdict || '';
-                const authScore = parseInt(row.dataset.authenticityScore || '0', 10);
-                const authRationale = decodeUnicodeEscapes(row.dataset.authenticityRationale || '');
-
-                if (authVerdict) {
-                    if (pendingBox) pendingBox.classList.add('hidden');
-                    if (resultsBox) resultsBox.classList.remove('hidden');
-
-                    if (verdictPill) {
-                        verdictPill.classList.remove('hidden');
-                        if (authVerdict === 'PERM_COMPLIANCE') {
-                            verdictPill.textContent = 'PERM Compliance Filing';
-                            verdictPill.className = 'font-mono text-xs font-bold px-2.5 py-1 rounded-md shadow-xs bg-amber-100 text-amber-900 border border-amber-300';
-                        } else if (authVerdict === 'INTERNAL_PRESELECT') {
-                            verdictPill.textContent = 'Internal Placeholder Risk';
-                            verdictPill.className = 'font-mono text-xs font-bold px-2.5 py-1 rounded-md shadow-xs bg-rose-100 text-rose-900 border border-rose-300';
-                        } else if (authVerdict === 'PHANTOM_PIPELINE') {
-                            verdictPill.textContent = 'Phantom / Talent Pool';
-                            verdictPill.className = 'font-mono text-xs font-bold px-2.5 py-1 rounded-md shadow-xs bg-purple-100 text-purple-900 border border-purple-300';
-                        } else if (authVerdict === 'GENUINE_EXTERNAL') {
-                            verdictPill.textContent = 'Genuine External Opening';
-                            verdictPill.className = 'font-mono text-xs font-bold px-2.5 py-1 rounded-md shadow-xs bg-emerald-100 text-emerald-900 border border-emerald-300';
-                        } else {
-                            verdictPill.textContent = authVerdict;
-                            verdictPill.className = 'font-mono text-xs font-bold px-2.5 py-1 rounded-md shadow-xs bg-slate-100 text-slate-800 border border-slate-300';
-                        }
-                    }
-
-                    if (scorePill) {
-                        scorePill.classList.remove('hidden');
-                        scorePill.textContent = `Risk Score: ${authScore}/100`;
-                        if (authScore >= 40) {
-                            scorePill.className = 'font-mono text-xs font-bold px-2 py-0.5 rounded shadow-xs bg-rose-50 text-rose-800 border border-rose-200';
-                        } else if (authScore > 0) {
-                            scorePill.className = 'font-mono text-xs font-bold px-2 py-0.5 rounded shadow-xs bg-amber-50 text-amber-800 border border-amber-200';
-                        } else {
-                            scorePill.className = 'font-mono text-xs font-bold px-2 py-0.5 rounded shadow-xs bg-slate-100 text-slate-700 border border-slate-200';
-                        }
-                    }
-
-                    // Display prompt narrative in Audit Assessment container with thematic accent
-                    if (rationaleText) {
-                        rationaleText.textContent = authRationale || 'Deterministic compliance checks passed with no statutory DOL or internal placeholder markers detected.';
-                    }
-
-                    if (rationaleBox && rationaleIcon) {
-                        if (authVerdict === 'PERM_COMPLIANCE') {
-                            rationaleBox.className = 'p-3.5 bg-amber-50/70 border border-amber-200 rounded-xl text-xs leading-relaxed font-sans shadow-2xs space-y-1.5 transition-colors';
-                            rationaleIcon.className = 'material-symbols-outlined text-[16px] text-amber-600 shrink-0';
-                            rationaleIcon.textContent = 'gavel';
-                        } else if (authVerdict === 'INTERNAL_PRESELECT') {
-                            rationaleBox.className = 'p-3.5 bg-rose-50/70 border border-rose-200 rounded-xl text-xs leading-relaxed font-sans shadow-2xs space-y-1.5 transition-colors';
-                            rationaleIcon.className = 'material-symbols-outlined text-[16px] text-rose-600 shrink-0';
-                            rationaleIcon.textContent = 'warning';
-                        } else if (authVerdict === 'PHANTOM_PIPELINE') {
-                            rationaleBox.className = 'p-3.5 bg-purple-50/70 border border-purple-200 rounded-xl text-xs leading-relaxed font-sans shadow-2xs space-y-1.5 transition-colors';
-                            rationaleIcon.className = 'material-symbols-outlined text-[16px] text-purple-600 shrink-0';
-                            rationaleIcon.textContent = 'group_off';
-                        } else {
-                            rationaleBox.className = 'p-3.5 bg-white border border-emerald-200/80 rounded-xl text-xs leading-relaxed font-sans shadow-2xs space-y-1.5 transition-colors';
-                            rationaleIcon.className = 'material-symbols-outlined text-[16px] text-emerald-600 shrink-0';
-                            rationaleIcon.textContent = 'verified';
-                        }
-                    }
-                } else {
-                    if (pendingBox) pendingBox.classList.remove('hidden');
-                    if (resultsBox) resultsBox.classList.add('hidden');
-                    if (verdictPill) verdictPill.classList.add('hidden');
-                    if (scorePill) scorePill.classList.add('hidden');
-                }
-            }
-
-            function runOnDemandAuthenticityAudit() {
-                const activeRow = rows[activeIndex];
-                if (!activeRow) return;
-                const jobId = activeRow.dataset.jobId;
-                if (!jobId) return;
-
-                const btn = document.getElementById('trigger-audit-btn');
-                const btnLabel = document.getElementById('trigger-audit-btn-label');
-                if (btn) btn.disabled = true;
-                if (btnLabel) btnLabel.textContent = 'Auditing Compliance...';
-
-                fetch(`/api/resume/jobs/${jobId}/audit-authenticity`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRFToken': getCookie('csrftoken') || ''
-                    }
-                })
-                .then(res => res.json())
-                .then(data => {
-                    if (btn) btn.disabled = false;
-                    if (btnLabel) btnLabel.textContent = 'Run Audit Now';
-
-                    if (data.success && data.authenticity) {
-                        const auth = data.authenticity;
-                        activeRow.dataset.authenticityVerdict = auth.authenticity_verdict || '';
-                        activeRow.dataset.authenticityScore = auth.authenticity_score ?? '0';
-                        activeRow.dataset.authenticityConfidence = auth.authenticity_confidence || '';
-                        activeRow.dataset.authenticityRationale = auth.authenticity_rationale || '';
-
-                        const badgeWrapper = activeRow.querySelector('.authenticity-badge-wrapper');
-                        if (badgeWrapper) {
-                            if (auth.authenticity_verdict === 'PERM_COMPLIANCE') {
-                                badgeWrapper.innerHTML = `
-                                    <span class="inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-200/90 px-2.5 py-1 text-xs font-semibold text-amber-800 shrink-0"
-                                          title="PERM Labor Cert (Risk: ${auth.authenticity_score}/100): Statutory immigrant visa recruitment filing (DOL ETA-9089).">
-                                        <span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-                                        <span>PERM Filing</span>
-                                    </span>
-                                `;
-                            } else if (auth.authenticity_verdict === 'INTERNAL_PRESELECT') {
-                                badgeWrapper.innerHTML = `
-                                    <span class="inline-flex items-center gap-1 rounded-full bg-rose-50 border border-rose-200/90 px-2.5 py-1 text-xs font-semibold text-rose-800 shrink-0"
-                                          title="Internal Pre-Select (Risk: ${auth.authenticity_score}/100): Hyper-specific constraints or locked salary indicate pre-wired candidate.">
-                                        <span class="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
-                                        <span>Likely Internal</span>
-                                    </span>
-                                `;
-                            } else if (auth.authenticity_verdict === 'PHANTOM_PIPELINE') {
-                                badgeWrapper.innerHTML = `
-                                    <span class="inline-flex items-center gap-1 rounded-full bg-purple-50 border border-purple-200/90 px-2.5 py-1 text-xs font-semibold text-purple-800 shrink-0"
-                                          title="Phantom Requisition: Evergreen talent community or pipeline without active open headcount.">
-                                        <span class="w-1.5 h-1.5 rounded-full bg-purple-500"></span>
-                                        <span>Phantom / Talent Pool</span>
-                                    </span>
-                                `;
-                            } else if (auth.authenticity_verdict === 'GENUINE_EXTERNAL') {
-                                badgeWrapper.innerHTML = `
-                                    <span class="inline-flex items-center gap-1 rounded-full bg-slate-100 border border-slate-200/80 px-2.5 py-1 text-xs font-semibold text-slate-700 shrink-0"
-                                          title="Verified External (Risk: ${auth.authenticity_score}/100): Standard open-market recruitment competition.">
-                                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                                        <span>External Hire</span>
-                                    </span>
-                                `;
-                            }
-                        }
-
-                        updateAuthenticityInspector(activeRow);
-                        if (typeof showToast === 'function') {
-                            showToast('Compliance & authenticity audit complete.');
-                        }
-                    } else {
-                        alert(data.error || 'Authenticity audit failed to complete.');
-                    }
-                })
-                .catch(err => {
-                    console.error('Authenticity audit request failed:', err);
-                    if (btn) btn.disabled = false;
-                    if (btnLabel) btnLabel.textContent = 'Run Audit Now';
-                    alert('Network error while requesting authenticity audit.');
-                });
-            }
-            window.runOnDemandAuthenticityAudit = runOnDemandAuthenticityAudit;
-
+            
             // AI Interview Prep Kit Engine
             const PREP_ROUND_META = {
                 recruiter: {
@@ -3037,11 +2841,11 @@ Select an opportunity to read the full job description.
             });
 
             // ==========================================
-            // DEEP ANALYZE WITH OLLAMA LOCAL & CONFIRMATION
+            // DEEP ANALYZE WITH DUAL TIER (SLM & CLOUD LLM)
             // ==========================================
             let analysisTimerInterval = null;
 
-            window.promptDeepAnalysisConfirmation = function() {
+            window.promptCloudAnalysisConfirmation = function() {
                 if (!rows[activeIndex]) return;
                 const row = rows[activeIndex];
                 const title = row.dataset.jobTitle || 'Role';
@@ -3056,6 +2860,8 @@ Select an opportunity to read the full job description.
                 }
             };
 
+            window.promptDeepAnalysisConfirmation = window.promptCloudAnalysisConfirmation;
+
             window.closeDeepAnalysisConfirm = function() {
                 const modal = document.getElementById('deep-analysis-modal');
                 if (modal) {
@@ -3063,7 +2869,7 @@ Select an opportunity to read the full job description.
                 }
             };
 
-            window.executeDeepAnalysis = async function() {
+            window.executeDeepAnalysis = async function(tier = 'slm') {
                 closeDeepAnalysisConfirm();
                 if (!rows[activeIndex]) return;
                 const row = rows[activeIndex];
@@ -3073,37 +2879,48 @@ Select an opportunity to read the full job description.
                 const unanalyzedBox = document.getElementById('radar-unanalyzed-placeholder');
                 const loadingBox = document.getElementById('radar-loading-container');
                 const resultsBox = document.getElementById('radar-results-container');
-                const triggerBtn = document.getElementById('trigger-ollama-radar-btn');
+                const actionGroup = document.getElementById('radar-action-buttons-group');
                 const timerDisplay = document.getElementById('analysis-timer-display');
                 const progressBar = document.getElementById('analysis-progress-bar');
+                const loadingTitle = document.getElementById('radar-loading-title');
+                const loadingSub = document.getElementById('radar-loading-subtitle');
 
                 if (unanalyzedBox) unanalyzedBox.classList.add('hidden');
                 if (resultsBox) resultsBox.classList.add('hidden');
                 if (loadingBox) loadingBox.classList.remove('hidden');
-                if (triggerBtn) {
-                    triggerBtn.disabled = true;
-                    triggerBtn.classList.add('hidden', 'opacity-50', 'pointer-events-none');
+                if (actionGroup) actionGroup.classList.add('hidden');
+
+                const isCloud = (tier === 'frontier' || tier === 'cloud');
+                if (loadingTitle) {
+                    loadingTitle.textContent = isCloud ? 'Analyzing with Cloud LLM...' : 'Analyzing with local SLM...';
+                }
+                if (loadingSub) {
+                    loadingSub.innerHTML = isCloud 
+                        ? 'Evaluating requirements with <strong class="text-slate-700 font-medium">Cloud Frontier Model</strong>.'
+                        : 'Evaluating requirements using <strong class="text-slate-700 font-medium">{{ local_model_name|default:"Local AI Model" }}</strong>.';
                 }
 
                 let elapsedSeconds = 0;
-                if (timerDisplay) timerDisplay.textContent = '0s (est. ~1 min)';
-                if (progressBar) progressBar.style.width = '8%';
+                const estTimeText = isCloud ? '~15-20s' : '~45s';
+                const estDurationSec = isCloud ? 18 : 45;
+                if (timerDisplay) timerDisplay.textContent = `0s (est. ${estTimeText})`;
+                if (progressBar) progressBar.style.width = '10%';
                 
                 clearInterval(analysisTimerInterval);
                 analysisTimerInterval = setInterval(() => {
                     elapsedSeconds++;
                     if (timerDisplay) {
-                        timerDisplay.textContent = `${elapsedSeconds}s (est. ~1 min)`;
+                        timerDisplay.textContent = `${elapsedSeconds}s (est. ${estTimeText})`;
                     }
                     if (progressBar) {
-                        const pct = Math.min(94, 8 + Math.round((elapsedSeconds / 60) * 86));
+                        const pct = Math.min(94, 10 + Math.round((elapsedSeconds / estDurationSec) * 84));
                         progressBar.style.width = `${pct}%`;
                     }
                 }, 1000);
 
                 try {
-                    showToast('Running deep analysis with local AI (~1 min)...');
-                    const resp = await fetch(`/jobs/cockpit/api/skill-radar/?job_id=${jobId}&track=${track}&force=1`);
+                    showToast(isCloud ? 'Running deep analysis with Cloud LLM (~15-20s)...' : 'Running deep analysis with local SLM (~45s)...');
+                    const resp = await fetch(`/jobs/cockpit/api/skill-radar/?job_id=${jobId}&track=${track}&force=1&tier=${tier}`);
                     const data = await resp.json();
                     
                     clearInterval(analysisTimerInterval);
@@ -3117,24 +2934,33 @@ Select an opportunity to read the full job description.
                         if (res.interview_probability !== undefined && res.interview_probability !== null) {
                             row.dataset.interviewProbability = res.interview_probability;
                         }
+                        row.dataset.detMatchScore = (res.deterministic_match_score !== undefined && res.deterministic_match_score !== null) ? res.deterministic_match_score : '';
+                        row.dataset.detInterviewProbability = (res.deterministic_interview_probability !== undefined && res.deterministic_interview_probability !== null) ? res.deterministic_interview_probability : '';
+                        row.dataset.llmMatchScore = (res.llm_match_score !== undefined && res.llm_match_score !== null) ? res.llm_match_score : '';
+                        row.dataset.llmInterviewProbability = (res.llm_interview_probability !== undefined && res.llm_interview_probability !== null) ? res.llm_interview_probability : '';
+                        row.dataset.scoreDeltaMatch = (res.score_delta_match !== undefined && res.score_delta_match !== null) ? res.score_delta_match : '';
+                        row.dataset.scoreDeltaInterview = (res.score_delta_interview !== undefined && res.score_delta_interview !== null) ? res.score_delta_interview : '';
                         row.dataset.fitSummary = res.fit_summary || '';
-                        row.dataset.radarSource = 'ollama_local';
+                        row.dataset.radarSource = res.source_tag || (isCloud ? 'cloud_llm' : 'local_slm');
 
                         // Update the card's badge in the middle feed
                         const cardPill = row.querySelector('.opportunity-match-pill');
                         if (cardPill) {
-                            cardPill.className = 'opportunity-match-pill flex items-center rounded border overflow-hidden shrink-0 font-mono text-xs border-emerald-300 bg-emerald-50';
+                            const borderCls = isCloud ? 'border-sky-300 bg-sky-50' : 'border-emerald-300 bg-emerald-50';
+                            const scoreBg = isCloud ? 'bg-sky-700' : 'bg-brand';
+                            const textCls = isCloud ? 'text-sky-800' : 'text-emerald-800';
+                            cardPill.className = `opportunity-match-pill flex items-center rounded border overflow-hidden shrink-0 font-mono text-xs ${borderCls}`;
                             cardPill.innerHTML = `
-                                <span class="bg-brand text-white text-[11px] px-2 py-0.5 font-bold">${res.match_score}%</span>
+                                <span class="${scoreBg} text-white text-[11px] px-2 py-0.5 font-bold">${res.match_score}%</span>
                                 ${(res.core_competencies && res.core_competencies.length > 0)
-                                    ? `<span class="text-emerald-800 text-[10px] px-1.5 py-0.5 font-semibold">${res.core_competencies.length} Verified</span>`
+                                    ? `<span class="${textCls} text-[10px] px-1.5 py-0.5 font-semibold">${res.core_competencies.length} Verified</span>`
                                     : `<span class="text-slate-500 text-[10px] px-1.5 py-0.5 font-medium">Score</span>`
                                 }
                             `;
                         }
 
                         selectJob(row);
-                        showToast('Local deep analysis complete!');
+                        showToast(isCloud ? 'Cloud LLM analysis complete!' : 'Local SLM analysis complete!');
                     } else {
                         const err = (data.data && data.data.error) || data.error || 'Failed to complete analysis';
                         showToast(`Analysis notice: ${err}`);
@@ -3143,24 +2969,18 @@ Select an opportunity to read the full job description.
                 } catch (err) {
                     clearInterval(analysisTimerInterval);
                     console.error(err);
-                    showToast('Could not complete local analysis.');
+                    showToast('Could not complete analysis.');
                     selectJob(row);
                 } finally {
-                    if (triggerBtn) {
-                        triggerBtn.disabled = false;
-                        triggerBtn.classList.remove('opacity-50', 'pointer-events-none');
+                    if (actionGroup) {
+                        actionGroup.classList.remove('hidden');
                     }
                 }
             };
 
-            const triggerRadarBtn = document.getElementById('trigger-ollama-radar-btn');
-            if (triggerRadarBtn) {
-                triggerRadarBtn.addEventListener('click', promptDeepAnalysisConfirmation);
-            }
-
             const confirmAnalysisBtn = document.getElementById('confirm-run-analysis-btn');
             if (confirmAnalysisBtn) {
-                confirmAnalysisBtn.addEventListener('click', executeDeepAnalysis);
+                confirmAnalysisBtn.addEventListener('click', () => executeDeepAnalysis('frontier'));
             }
 
             // Trigger tailor button in inspector
@@ -4045,31 +3865,31 @@ Select an opportunity to read the full job description.
         </div>
     </div>
 
-    <!-- Deep Analysis Confirmation Modal (~1 min advisory) -->
+    <!-- Cloud LLM Quota Warning Confirmation Modal -->
     <div id="deep-analysis-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 hidden">
         <div class="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95 duration-150">
             <div class="p-5 space-y-4">
                 <div class="flex items-center gap-3">
-                    <div class="w-10 h-10 rounded-full bg-emerald-100 text-brand flex items-center justify-center shrink-0">
+                    <div class="w-10 h-10 rounded-full bg-sky-100 text-sky-700 flex items-center justify-center shrink-0">
                         <span class="material-symbols-outlined text-[22px]">bolt</span>
                     </div>
                     <div>
-                        <h3 class="text-sm font-bold text-slate-900">Run Deep Skill Analysis?</h3>
-                        <p class="text-[11px] text-slate-500">Local AI inference via Ollama</p>
+                        <h3 class="text-sm font-bold text-slate-900">Run Cloud LLM Analysis?</h3>
+                        <p class="text-[11px] text-slate-500">Fast Cloud Frontier Model</p>
                     </div>
                 </div>
 
-                <div class="p-3.5 bg-slate-50 rounded-lg border border-slate-200 space-y-2 text-xs text-slate-700">
+                <div class="p-3.5 bg-slate-50 rounded-lg border border-slate-200 space-y-2.5 text-xs text-slate-700">
                     <div class="font-semibold text-slate-900 flex items-center justify-between">
                         <span id="modal-analysis-job-title" class="truncate max-w-[280px]">Selected Opportunity</span>
-                        <span class="text-[10px] text-brand bg-brand-soft px-1.5 py-0.5 rounded font-mono font-bold shrink-0">{{ local_model_name|default:"Local AI Model" }}</span>
+                        <span class="text-[10px] text-sky-800 bg-sky-100 border border-sky-200 px-1.5 py-0.5 rounded font-mono font-bold shrink-0">Cloud Quota</span>
                     </div>
-                    <div class="text-[11px] text-amber-800 bg-amber-50 border border-amber-200/80 p-2.5 rounded-md flex items-start gap-2">
-                        <span class="material-symbols-outlined text-[16px] text-amber-600 shrink-0 mt-0.5">timer</span>
-                        <span>This semantic evaluation will take approximately <strong>a minute</strong> to process.</span>
+                    <div class="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 p-2.5 rounded-md flex items-start gap-2">
+                        <span class="material-symbols-outlined text-[16px] text-amber-700 shrink-0 mt-0.5">warning</span>
+                        <span>This request will be processed using your <strong>Cloud LLM provider quota</strong> (e.g. OpenAI / Claude / Gemini). Cloud evaluations execute rapidly (~15–20 seconds).</span>
                     </div>
                     <p class="text-[11px] text-slate-500 leading-normal">
-                        Evaluates required technical skills against your active resume (<strong class="text-slate-700 font-mono">{{ bound_resume.original_filename|default:"resume.pdf" }}</strong>), extracts verified competencies, and highlights role gaps with zero cloud token cost.
+                        Deeply evaluates technical requirements against your active resume (<strong class="text-slate-700 font-mono">{{ bound_resume.original_filename|default:"resume.pdf" }}</strong>) and returns verified competencies and interview stretch diagnosis.
                     </p>
                 </div>
 
@@ -4077,9 +3897,9 @@ Select an opportunity to read the full job description.
                     <button type="button" onclick="closeDeepAnalysisConfirm()" class="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 rounded-lg hover:bg-slate-100 transition cursor-pointer">
                         Cancel
                     </button>
-                    <button type="button" id="confirm-run-analysis-btn" class="px-4 py-2 text-xs font-bold text-white bg-brand hover:bg-brand-dark rounded-lg flex items-center gap-1.5 shadow-sm transition cursor-pointer">
-                        <span class="material-symbols-outlined text-[15px]">play_arrow</span>
-                        <span>Proceed with Analysis</span>
+                    <button type="button" id="confirm-run-analysis-btn" onclick="executeDeepAnalysis('frontier')" class="px-4 py-2 text-xs font-bold text-white bg-sky-700 hover:bg-sky-800 rounded-lg flex items-center gap-1.5 shadow-sm transition cursor-pointer">
+                        <span class="material-symbols-outlined text-[15px]">bolt</span>
+                        <span>Proceed with Cloud LLM</span>
                     </button>
                 </div>
             </div>

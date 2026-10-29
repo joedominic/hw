@@ -194,7 +194,7 @@
 - `getting_started.html` — onboarding checklist (resume → LLM → search profile → find jobs)
 - `_onboarding_banner.html` — contextual "complete setup" nudge in app
 - Email verification flow with resend ability
-- `legal/terms.html` and `legal/privacy.html` — placeholder pages with counsel note
+- `legal/terms.html` and `legal/privacy.html` — full SaaS Terms of Service and Privacy Policy with fixed effective dates, subprocessor disclosures, retention/deletion mechanics, and 14-day refund policy
 - `billing.html` — plan selection page with Stripe Checkout integration
 - `getting_started.html` tracks completion progress per step
 
@@ -216,8 +216,8 @@
 ### What Exists ✅
 - `export_account_json()` — GDPR data portability: exports resumes, job pipeline, API keys, settings to JSON
 - `delete_user_account()` with username + password confirmation — right to erasure
-- Privacy policy page (placeholder, requires legal review)
-- Terms of service page (placeholder, requires legal review)
+- Privacy policy page (complete v1.0 specification with AI & subprocessor disclosures)
+- Terms of service page (complete v1.0 specification with 14-day refund guarantee and mandatory human review)
 - Stripe only stores billing identifiers, not full card data
 
 ### What Is Missing / Incomplete ⚠️

@@ -40,16 +40,9 @@ erDiagram
 ```
 
 ### 2.1 Shared Global Models (No Tenant Owner)
-- **`JobListing`**: Deduplicated catalog of external job postings aggregated across JobSpy (Indeed, LinkedIn), Greenhouse, BuiltIn, Levels.fyi, and Dice. Contains posting title, company, location, salary, description, and labor compliance audit fields:
-  - `posted_at`: Datetime stamp of original job publication; used by `JobAuthenticityService.extract_window_and_deadline` to calculate active application lifespan and detect artificial $\le 4$-calendar-day compliance windows.
-  - `authenticity_verdict`: Text choice (`GENUINE_EXTERNAL`, `INTERNAL_PRESELECT`, `PHANTOM_PIPELINE`, `PERM_COMPLIANCE`). Evaluated deterministically to filter out fake/placeholder listings, evergreen talent pools, internal promotion place-markers, and DOL ETA-9089 immigrant labor certification filings.
-  - `authenticity_score`: Small integer risk/compliance score clamped to [0, 100].
-  - `authenticity_confidence`: Assessment confidence level (`HIGH`, `MEDIUM`, `LOW`).
-  - `authenticity_rationale`: Concise assessment rationale string summarizing the classification verdict.
-  - `authenticity_audit_trail`: JSON list of 10 deterministic compliance check evaluations (`perm_legal_phrasing`, `phantom_pipeline_or_talent_pool`, `short_lifespan_or_compliance_window`, `generic_jfa_template_only`, `senior_promotion_or_scope_mismatch`, `bespoke_contractor_conversion_stack`, `hyper_specific_okrs`, `rigid_degree_equation`, `flat_salary_range`, `flexible_general_req`). Kept confidential on candidate-facing UI surfaces.
-  - `authenticity_audited_at`: Datetime stamp of the last completed compliance audit.
+- **`JobListing`**: Deduplicated catalog of external job postings aggregated across JobSpy (Indeed, LinkedIn), Greenhouse, BuiltIn, Levels.fyi, and Dice. Contains posting title, company, location, salary, description, posted date, source URL, and hash fingerprints.
 - **`JobDescription`**: Reusable job description text for optimizer runs.
-- **`SystemPromptProfile`**: Singleton admin-managed prompt templates (empty fields fall back to `prompts.py` defaults). Templates support safe interpolation via `inject_variables_into_template` (e.g. `job_authenticity_user` binds `{title}`, `{company}`, `{location}`, `{posted_date}`, `{application_window}`, `{job_description}`).
+- **`SystemPromptProfile`**: Singleton admin-managed prompt templates (empty fields fall back to `prompts.py` defaults). Templates support safe interpolation via `inject_variables_into_template`.
 - **`AtsJudgeProfile`**: Reusable ATS scoring prompt templates (`owner = null` for global presets).
 
 ---
@@ -78,7 +71,13 @@ erDiagram
 ---
 
 ### 2.4 Pipeline, Matching & Interview Tracking
-- **`PipelineEntry`**: Core Kanban board entry linking a tenant `User` to a global `JobListing`. Stores current stage (`pipeline`, `vetting`, `applying`, `done`), fit score, interview probability, and generated interview prep.
+- **`PipelineEntry`**: Core Kanban board entry linking a tenant `User` to a global `JobListing`. Stores current stage (`pipeline`, `vetting`, `applying`, `done`), fit score, interview probability, generated interview prep, and persistent Skill Radar diagnostics:
+  - `vetting_match_score` (Integer): Reconciled technical requirements match percentage (0–100%).
+  - `vetting_interview_probability` (Integer): Calibrated screening callback odds (0–100%).
+  - `vetting_interview_reasoning` (TextField): 1-sentence executive fit diagnosis.
+  - `vetting_core_competencies` (JSONField): Substantiated candidate core competencies verified against resume text.
+  - `vetting_stretch_skills` (JSONField): Reconciled job requirements missing from candidate history.
+  - `vetting_interview_resume_id` / `vetting_interview_scored_at`: Associated resume and evaluation timestamp.
 - **`JobMatchResult`**: Semantic and keyword fit score between a specific resume and job description.
 - **`EmployerInterviewEvent`**: Tracks real-world interview progression for a pipeline opportunity:
   - `round_type`: Screenings, hiring manager interview, technical assessment, on-site, offer, rejection (`PipelineEntry.PostApplySubstatus`).
@@ -91,16 +90,16 @@ erDiagram
 ### 2.5 LLM Configuration, Governance & Prompts
 - **`LLMProviderConfig`**: Stores user-encrypted API keys (Fernet) and default model choices for OpenAI, Anthropic, Groq, Google, and Ollama.
 - **`LLMProviderPreference`**: Ordered list of fallback models and optional RPM/TPM limits.
-- **`TenantPromptModelPreference`**: Per-tenant model assignments for specific prompts (e.g. assigning local `ollama::qwen2.5:7b` to `job_authenticity` or `matching`).
-- **`SystemPromptProfile`**: Global singleton storing customizable system, user, and legacy combined prompts across all 14 platform prompts:
-  - *Optimization Pipeline:* `writer` (Resume Writer), `ats_judge` (ATS Gatekeeper), `recruiter_judge` (Recruiter Judge), `pipeline_resume_refine` (Pipeline Resume Refine).
-  - *Evaluation & Vetting:* `matching` (Job Matching Scorer), `insights` (Batch Job Insights), `jd_cleanse` (JD Cleanser & Parser), `job_authenticity` (DOL ETA-9089 PERM labor compliance and internal promotion auditor), `fit_check` (Fit Check Quick Scorer).
-  - *Candidate & Career Tools:* `career_profiler` (Universal Career Profiler), `skill_radar` (Skill Radar Analyzer), `pipeline_skill_extract` (Pipeline LLM Skill Extractor), `cover_letter` (Cover Letter Architect), `interview_prep` (Interview Prep Coach).
+- **`TenantPromptModelPreference`**: Per-tenant model assignments for specific prompts (e.g. assigning local `ollama::qwen2.5:7b` to `resume_judge` or `matching`).
+- **`SystemPromptProfile`**: Global singleton storing customizable system, user, and legacy combined prompts across active platform prompts:
+  - *Optimization Pipeline:* `writer` (Resume Writer), `resume_judge` (Unified Resume Judge), `pipeline_resume_refine` (Pipeline Resume Refine).
+  - *Evaluation & Vetting:* `skill_radar` (Dedicated Pipeline Skill Radar & Fit Diagnostics), `matching` (Job Matching Scorer), `insights` (Batch Job Insights), `jd_cleanse` (JD Cleanser & Parser).
+  - *Candidate & Career Tools:* `career_profiler` (Universal Career Profiler), `pipeline_skill_extract` (Pipeline LLM Skill Extractor), `cover_letter` (Cover Letter Architect), `interview_prep` (Interview Prep Coach).
 - **`AtsJudgeProfile`**: Customizable ATS evaluation rule profiles with custom scoring weights and system/user prompts.
 - **`PromptVersionHistory`**: Version control audit log for prompt modifications made in Prompt Studio (`/resume/prompts/`). Stores `prompt_key`, `version_number`, `system_prompt`, `user_prompt`, `legacy_combined`, and `change_summary`.
 - **`LLMAppUsageTotals`**: Lifetime token and request count rollups per user.
 - **`LLMUsageByModel`**: Token consumption aggregated by provider and model.
-- **`LLMUsageByQuery`**: Token consumption aggregated by functional query type (e.g. `optimizer_writer`, `job_authenticity`, `job_vetting`).
+- **`LLMUsageByQuery`**: Token consumption aggregated by functional query type (e.g. `optimizer_writer`, `resume_judge`, `pipeline_vetting`).
 - **`LLMDailyUsageBreakdown`**: Daily token ledger segmented by date and model.
 
 ---

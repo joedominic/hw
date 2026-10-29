@@ -5,37 +5,101 @@
 <a href="{% url 'privacy' %}" class="rounded-concierge px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100">Privacy</a>
 {% endblock %}
 {% block content %}
-<article class="mx-auto max-w-2xl prose prose-slate">
+<article class="mx-auto max-w-3xl prose prose-slate">
     <h1 class="text-3xl font-bold text-concierge-slate">Terms of Service</h1>
-    <p class="mt-2 text-sm text-slate-500">Last updated: {% now "F j, Y" %}</p>
+    <p class="mt-2 text-sm text-slate-500 font-mono">Effective Date: October 22, 2026 • Version 1.0</p>
+    
     <div class="mt-8 space-y-6 text-sm leading-relaxed text-slate-700">
         <p>
-            These Terms govern use of HireEdge. This is a product placeholder — have counsel review and
-            replace it before offering paid plans to the public.
+            Welcome to HireEdge. These Terms of Service (“Terms”) constitute a legally binding agreement 
+            between you (“Customer”, “you”) and HireEdge (“we”, “us”, “our”) governing your access to 
+            and use of the HireEdge platform, websites, APIs, and associated services.
         </p>
-        <h2 class="text-lg font-semibold text-concierge-slate">The service</h2>
+
+        <h2 class="text-lg font-semibold text-concierge-slate">1. Acceptance & Eligibility</h2>
         <p>
-            HireEdge helps you search for jobs, tailor resumes, track your pipeline, and prepare for interviews.
-            Features and quotas depend on your plan. We may change or discontinue features with reasonable notice.
+            By creating an account, accessing, or using HireEdge, you agree to be bound by these Terms and our Privacy Policy. 
+            You must be at least 18 years of age or the age of majority in your jurisdiction to use the service.
         </p>
-        <h2 class="text-lg font-semibold text-concierge-slate">Your responsibilities</h2>
-        <ul class="list-disc space-y-1 pl-5">
-            <li>Provide accurate account information and keep credentials secure.</li>
-            <li>Use the service lawfully and only for your own job search (or accounts you are authorized to manage).</li>
-            <li>Do not abuse automation, scrape in violation of third-party terms, or attempt to bypass quotas or security controls.</li>
+
+        <h2 class="text-lg font-semibold text-concierge-slate">2. The Service & Human-in-the-Loop Philosophy</h2>
+        <p>
+            HireEdge provides an intelligent career operating system designed to accelerate job discovery, ATS fit evaluation, 
+            resume tailoring, and interview milestone tracking. 
+        </p>
+        <p>
+            <strong>Mandatory Human Oversight:</strong> HireEdge enforces a strict human-in-the-loop workflow. 
+            Autonomous, unsupervised application submissions are intentionally disabled. You are responsible for reviewing, 
+            approving, and directly submitting all tailored application materials to prospective employers.
+        </p>
+
+        <h2 class="text-lg font-semibold text-concierge-slate">3. User Responsibilities & Acceptable Use</h2>
+        <ul class="list-disc space-y-1.5 pl-5">
+            <li><strong>Accuracy:</strong> You agree to provide true, current career information and not fabricate academic credentials, employment dates, or certifications.</li>
+            <li><strong>Authorized Use:</strong> You may use the service only for your own job search or on behalf of individuals who have explicitly authorized you.</li>
+            <li><strong>System Integrity:</strong> You must not reverse-engineer, decompile, launch denial-of-service attempts, bypass quota constraints, or scrape HireEdge services without explicit written authorization.</li>
+            <li><strong>Security:</strong> You are responsible for safeguarding your login credentials and API keys.</li>
         </ul>
-        <h2 class="text-lg font-semibold text-concierge-slate">Billing</h2>
+
+        <h2 class="text-lg font-semibold text-concierge-slate">4. Subscription Billing, Quotas & Upgrades</h2>
         <p>
-            Paid plans are billed through Stripe. Failed payments may reduce entitlements to the Free plan until
-            payment succeeds. You can manage or cancel via the billing portal when Stripe is configured.
+            HireEdge offers free and paid subscription plans with tiered feature allocations and daily LLM quota boundaries:
         </p>
-        <h2 class="text-lg font-semibold text-concierge-slate">Disclaimer</h2>
+        <ul class="list-disc space-y-1.5 pl-5">
+            <li><strong>Recurring Billing:</strong> Paid plans are billed on a recurring monthly or annual basis via Stripe. Billing cycles renew automatically unless cancelled prior to the renewal date.</li>
+            <li><strong>Quota Enforcement:</strong> Plan entitlements (such as daily tailored resumes, search runs, and LLM requests) reset daily. Unused daily quotas do not roll over.</li>
+            <li><strong>Failed Charges:</strong> If payment cannot be processed, account entitlements default to the Free plan tier until payment succeeds.</li>
+        </ul>
+
+        <h2 class="text-lg font-semibold text-concierge-slate">5. Cancellation & 14-Day Refund Guarantee</h2>
         <p>
-            The service is provided “as is.” Job listings and AI outputs may be
-            incomplete or incorrect; you are responsible for reviewing materials before submitting them to employers.
+            <strong>Cancellation:</strong> You may cancel your subscription at any time directly through <em>Settings → Account → Billing Portal</em>. 
+            Your premium entitlements will remain active until the end of your current paid billing period.
         </p>
-        <h2 class="text-lg font-semibold text-concierge-slate">Contact</h2>
-        <p>Questions about these terms: use the support channel for your deployment.</p>
+        <p>
+            <strong>14-Day Money-Back Guarantee:</strong> If you are dissatisfied with your first paid subscription, you may request a 100% refund 
+            within 14 calendar days of your initial purchase by emailing <a href="mailto:support@hireedge.com" class="text-brand hover:underline">support@hireedge.com</a>.
+        </p>
+
+        <h2 class="text-lg font-semibold text-concierge-slate">6. Intellectual Property & Ownership</h2>
+        <p>
+            <strong>Your Data:</strong> You retain complete ownership of all resumes, cover letters, and notes uploaded to or created by you on HireEdge. 
+            You grant HireEdge a limited, non-exclusive license solely to process and display this content to provide our services.
+        </p>
+        <p>
+            <strong>Platform Rights:</strong> All software, designs, algorithms, user interfaces, and trademarks associated with HireEdge remain the exclusive intellectual property of HireEdge and its licensors.
+        </p>
+
+        <h2 class="text-lg font-semibold text-concierge-slate">7. Warranty Disclaimer & AI Output Advisory</h2>
+        <p>
+            HireEdge is provided on an “AS IS” and “AS AVAILABLE” basis without warranties of any kind. 
+            While our AI models and heuristic engines strive for high precision, job listings from external boards may change, expire, or contain inaccuracies. 
+            Furthermore, HireEdge does not guarantee interviews, job offers, or employment placement. 
+            You are solely responsible for verifying the accuracy of all submitted materials.
+        </p>
+
+        <h2 class="text-lg font-semibold text-concierge-slate">8. Limitation of Liability</h2>
+        <p>
+            To the maximum extent permitted by applicable law, in no event shall HireEdge, its officers, directors, or employees be liable 
+            for any indirect, incidental, special, consequential, or punitive damages. HireEdge’s total aggregate liability for all claims 
+            under these Terms shall not exceed the amount paid by you to HireEdge during the twelve (12) months preceding the claim.
+        </p>
+
+        <h2 class="text-lg font-semibold text-concierge-slate">9. Governing Law & Dispute Resolution</h2>
+        <p>
+            These Terms shall be governed by and construed in accordance with the laws of the State of Delaware, without regard to its conflict of law principles. 
+            Any dispute arising out of or relating to these Terms shall be resolved through binding individual arbitration, rather than in court.
+        </p>
+
+        <h2 class="text-lg font-semibold text-concierge-slate">10. Contact Us</h2>
+        <p>
+            For inquiries regarding these Terms or legal notices, please reach out to:
+        </p>
+        <div class="p-3 bg-slate-50 border border-slate-200 rounded-md font-mono text-xs">
+            HireEdge Legal Operations<br>
+            Email: <a href="mailto:legal@hireedge.com" class="text-brand hover:underline">legal@hireedge.com</a><br>
+            Support: <a href="mailto:support@hireedge.com" class="text-brand hover:underline">support@hireedge.com</a>
+        </div>
     </div>
 </article>
 {% endblock %}

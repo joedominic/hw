@@ -289,7 +289,7 @@ def enrich_greenhouse_job_listing_description(job, *, timeout_seconds: Optional[
         return ""
     current = (job.description or "").strip()
     if (job.source or "").strip().lower() != "greenhouse":
-        return current
+        return ""
     if len(current) >= GREENHOUSE_SUMMARY_ENRICH_THRESHOLD:
         return current
 

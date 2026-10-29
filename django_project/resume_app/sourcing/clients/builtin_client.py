@@ -387,7 +387,7 @@ def enrich_builtin_job_listing_description(job, *, timeout_seconds: float = 15.0
         return ""
     current = (job.description or "").strip()
     if (job.source or "").strip().lower() != "builtin":
-        return current
+        return ""
     if len(current) >= BUILTIN_SUMMARY_ENRICH_THRESHOLD:
         return current
 

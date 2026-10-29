@@ -120,18 +120,7 @@
             <textarea id="drawer-notes" rows="3" placeholder="Key competencies to highlight, salary band discussed, or team notes..." class="w-full text-xs font-medium bg-white border border-slate-300 rounded-lg p-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0F382A] focus:border-[#0F382A] transition"></textarea>
         </div>
 
-        <!-- Auto-Generate Prep Kit Checkbox -->
-        <div class="p-3 rounded-lg bg-emerald-50/70 border border-emerald-200 flex items-start gap-2.5">
-            <input type="checkbox" id="drawer-generate-prep" checked class="mt-0.5 text-[#0F382A] focus:ring-[#0F382A] rounded border-slate-300"/>
-            <div>
-                <label for="drawer-generate-prep" class="text-xs font-bold text-slate-900 block cursor-pointer">
-                    Auto-generate STAR Interview Prep Kit
-                </label>
-                <span class="text-[11px] text-slate-600 block mt-0.5">
-                    Synthesizes tailored situational questions, architectural deep dives, and talking points matched to this job.
-                </span>
-            </div>
-        </div>
+
 
         <div id="drawer-error-alert" class="hidden p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700"></div>
     </form>
@@ -329,7 +318,7 @@
         const interviewers = document.getElementById('drawer-interviewers').value || '';
         const locationLink = document.getElementById('drawer-location').value || '';
         const notes = document.getElementById('drawer-notes').value || '';
-        const generatePrep = document.getElementById('drawer-generate-prep')?.checked || false;
+        // Note: Interview prep is on-demand via the Cockpit inspector card, decoupled from milestone logging.
 
         if (submitBtn) {
             submitBtn.disabled = true;
@@ -347,7 +336,7 @@
                 interviewer_names: interviewers,
                 location_or_link: locationLink,
                 notes: notes,
-                generate_prep: generatePrep,
+                generate_prep: false,
             };
 
             const res = await fetch(`/api/resume/jobs/pipeline-entry/${peId}/log-interview`, {

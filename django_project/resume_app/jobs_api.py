@@ -951,21 +951,6 @@ def pipeline_log_interview_event(request, pipeline_entry_id: int, payload: LogIn
     # Invalidate dashboard telemetry cache so performance dashboard reflects immediately
     cache.delete(f"perf_stats_{user.id}")
 
-    # Optionally trigger interview prep if requested
-    if payload.generate_prep:
-        try:
-            from .job_prep import generate_interview_prep
-            prep_type = "recruiter"
-            if payload.round_type in ("panel_interview", "tech_deep_dive"):
-                prep_type = "technical"
-            elif payload.round_type == "hiring_manager":
-                prep_type = "hiring_manager"
-            elif payload.round_type == "behavioral":
-                prep_type = "behavioral"
-            generate_interview_prep(entry, llm=None, interview_type=prep_type)
-        except Exception as exc:
-            logger.warning("Auto-generating interview prep during event log failed: %s", exc)
-
     entry.refresh_from_db()
 
     return LogInterviewEventResponse(
@@ -1275,7 +1260,7 @@ def jobs_saved(request, track: Optional[str] = None):
     saved = (
         JobListingAction.objects.for_user(user)
         .filter(action=JobListingAction.ActionType.SAVED)
-        .filter(q_saved_rows_for_track(slug))
+        .filter(q_saved_rows_for_track(slug, user=user))
         .select_related("job_listing")
         .order_by("-created_at")
     )
@@ -1305,7 +1290,7 @@ def jobs_disliked(request, track: Optional[str] = None):
                 JobListingAction.ActionType.HIDDEN,
             ]
         )
-        .filter(q_disliked_rows_for_search(slug))
+        .filter(q_disliked_rows_for_search(slug, user=user))
         .select_related("job_listing")
         .order_by("-created_at")
     )
@@ -1577,13 +1562,17 @@ def jobs_get(request, job_listing_id: int):
     from .sourcing.clients.greenhouse_client import enrich_greenhouse_job_listing_description
     from .sourcing.clients.levels_client import enrich_levels_job_listing_description
 
-    desc = enrich_dice_job_listing_description(job)
-    if not desc:
+    src = (job.source or "").strip().lower()
+    if src == "levels":
         desc = enrich_levels_job_listing_description(job)
-    if not desc:
+    elif src == "dice":
+        desc = enrich_dice_job_listing_description(job)
+    elif src == "builtin":
         desc = enrich_builtin_job_listing_description(job)
-    if not desc:
+    elif src == "greenhouse":
         desc = enrich_greenhouse_job_listing_description(job)
+    else:
+        desc = (job.description or "").strip()
     desc = desc or (job.description or "")
     job.refresh_from_db()
     return JobDetailPayload(
@@ -1718,6 +1707,18 @@ def jobs_save(request, job_listing_id: int, track: Optional[str] = None, profile
     raw_track = _resolve_track_from_request(user, request, track=track, profile=profile)
     dw = dual_write_track_fields(user=user, slug=raw_track)
     with transaction.atomic():
+        # Clear any conflicting negative actions (disliked/hidden) on this track when manually saving/rescuing
+        JobListingAction.objects.for_user(user).filter(
+            job_listing=job,
+            action__in=[
+                JobListingAction.ActionType.DISLIKED,
+                JobListingAction.ActionType.HIDDEN,
+            ],
+        ).filter(q_clear_on_sentiment_change(dw["track"])).delete()
+        JobListingEmbedding.objects.for_user(user).filter(job_listing=job).filter(
+            q_clear_on_sentiment_change(dw["track"])
+        ).delete()
+
         JobListingAction.objects.get_or_create(
             owner=user,
             job_listing=job,
@@ -1730,6 +1731,12 @@ def jobs_save(request, job_listing_id: int, track: Optional[str] = None, profile
             job_listing_id=job.id,
             slug=dw["track"],
         )
+    invalidate_preference_cache(user)
+    invalidate_disliked_embeddings_cache(user)
+    session = getattr(request, "session", None)
+    if session is not None and session.get("job_search_cache"):
+        session.pop("job_search_cache", None)
+        session.modified = True
     if landed_in_review:
         _enqueue_vetting_match_for_entry(request, user, entry)
     return {"success": True}
@@ -1746,7 +1753,7 @@ def jobs_unsave(request, job_listing_id: int, track: Optional[str] = None, profi
     with transaction.atomic():
         JobListingAction.objects.for_user(user).filter(
             job_listing_id=job_listing_id, action=JobListingAction.ActionType.SAVED
-        ).filter(q_saved_rows_for_track(slug)).delete()
+        ).filter(q_saved_rows_for_track(slug, user=user)).delete()
         remove_pipeline_entry_on_unsave(user, job_listing_id=job_listing_id, slug=slug)
     return {"success": True}
 
@@ -1876,52 +1883,4 @@ def jobs_unhide(request, job_listing_id: int, track: Optional[str] = None, profi
     invalidate_preference_cache(user)
     invalidate_disliked_embeddings_cache(user)
     return {"success": True}
-
-
-@router.post("/{job_listing_id}/audit-authenticity")
-def audit_job_authenticity_endpoint(request, job_listing_id: int):
-    """
-    On-demand labor compliance & posting authenticity audit for a job listing.
-    """
-    user = api_user(request)
-    job = get_object_or_404(JobListing, id=job_listing_id)
-    from .authenticity import JobAuthenticityService
-
-    result = JobAuthenticityService.audit(job, user=user, force_refresh=True)
-    payload = dict(result)
-    if not (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)):
-        payload.pop("audit_trail", None)
-        payload.pop("authenticity_audit_trail", None)
-        payload.pop("scoring_calculation", None)
-
-    return {
-        "status": "success",
-        "success": True,
-        "job_id": job.id,
-        "authenticity": payload,
-    }
-
-
-@router.get("/{job_listing_id}/authenticity")
-def get_job_authenticity_endpoint(request, job_listing_id: int):
-    """
-    Retrieve cached or persisted authenticity audit for a job listing.
-    """
-    user = api_user(request)
-    job = get_object_or_404(JobListing, id=job_listing_id)
-    from .authenticity import JobAuthenticityService
-
-    result = JobAuthenticityService.audit(job, user=user, force_refresh=False)
-    payload = dict(result)
-    if not (getattr(user, "is_staff", False) or getattr(user, "is_superuser", False)):
-        payload.pop("audit_trail", None)
-        payload.pop("authenticity_audit_trail", None)
-        payload.pop("scoring_calculation", None)
-
-    return {
-        "status": "success",
-        "success": True,
-        "job_id": job.id,
-        "authenticity": payload,
-    }
 

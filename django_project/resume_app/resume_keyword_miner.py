@@ -331,11 +331,13 @@ def mine_keywords_from_jobs(
 
     for title, description in jobs:
         text = _mining_text(title, description)
-        tokens = _tokenize(text)
-        for p in _bigrams_trigrams_for_doc(tokens):
-            df_multi[p] += 1
-        for u in _strict_unigrams_for_doc(tokens):
-            df_uni[u] += 1
+        clauses = [s.strip() for s in re.split(r"[\n\r\.\;\:\!\?\*\•\|\(\)]+", text) if s.strip()]
+        for clause in clauses:
+            tokens = _tokenize(clause)
+            for p in _bigrams_trigrams_for_doc(tokens):
+                df_multi[p] += 1
+            for u in _strict_unigrams_for_doc(tokens):
+                df_uni[u] += 1
 
     if not df_multi and not df_uni:
         return []

@@ -134,11 +134,17 @@ class LiteLLMChatModel(BaseChatModel):
             if not generation_name:
                 call_metadata["generation_name"] = resolved_gen
 
+            from ..otel import get_current_trace_context
+            otel_ctx = get_current_trace_context()
+            if otel_ctx.get("trace_id"):
+                call_metadata["otel_trace_id"] = otel_ctx["trace_id"]
+                call_metadata["otel_span_id"] = otel_ctx.get("span_id", "")
+
         # Inject PII privacy guardrails for Langfuse telemetry
-        mask_pii_enabled = getattr(settings, "LANGFUSE_MASK_PII", True)
-        drop_all_content = getattr(settings, "LANGFUSE_DROP_ALL_CONTENT", False) or (
-            getattr(settings, "LANGFUSE_REDACT_CONTENT", False) and not mask_pii_enabled
+        drop_all_content = getattr(settings, "LANGFUSE_DROP_ALL_CONTENT", False) or getattr(
+            settings, "LANGFUSE_REDACT_CONTENT", False
         )
+        mask_pii_enabled = getattr(settings, "LANGFUSE_MASK_PII", True)
 
         if drop_all_content:
             call_metadata["mask_input"] = True
@@ -153,8 +159,19 @@ class LiteLLMChatModel(BaseChatModel):
         extra_completion_kwargs = {}
         if "ollama" in self.model:
             enable_thinking = kwargs.get("think", getattr(settings, "OLLAMA_ENABLE_THINKING", True))
+            # Skill Radar is an extraction/classification task; disable speculative thinking when supported.
+            # Use max_tokens=2048 so reasoning models (e.g. gpt-oss, DeepSeek-R1) have room for both reasoning & JSON.
+            if call_metadata.get("query_kind") == "skill_radar":
+                enable_thinking = False
+                extra_completion_kwargs["max_tokens"] = 2048
+                if not stop:
+                    stop = ["<|im_end|>", "<|end_of_text|>", "<|eot_id|>", "<|im_start|>"]
             if not enable_thinking:
                 extra_completion_kwargs["think"] = False
+                extra_completion_kwargs["reasoning_effort"] = "none"
+                extra_body = dict(extra_completion_kwargs.get("extra_body") or {})
+                extra_body["think"] = False
+                extra_completion_kwargs["extra_body"] = extra_body
 
         t0 = time.monotonic()
         try:
@@ -345,6 +362,22 @@ def get_llm(provider: str, api_key: str = None, model: str = None, user=None, me
     if provider == "Ollama Local":
         api_base = _normalize_ollama_local_host(key)
         key = None
+        if api_base:
+            import os
+            os.environ.setdefault("OLLAMA_API_BASE", api_base)
+        if litellm_model not in litellm.model_cost:
+            try:
+                litellm.register_model({
+                    litellm_model: {
+                        "max_tokens": 4096,
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                        "litellm_provider": "ollama",
+                        "mode": "chat",
+                    }
+                })
+            except Exception:
+                pass
     elif provider == "Ollama Cloud":
         api_base = "https://ollama.com"
     elif provider == "OpenRouter":

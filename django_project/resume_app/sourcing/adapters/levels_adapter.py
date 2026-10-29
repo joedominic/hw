@@ -24,12 +24,14 @@ class LevelsJobAdapter(JobSourcePort):
         **kwargs: Any,
     ) -> list[RawJobDTO]:
         timeout = kwargs.get("timeout_seconds", 10.0)
+        enrich_descriptions = kwargs.get("enrich_descriptions", None)
         raw_rows = fetch_levels_jobs(
             search_term=search_term,
             location=location,
             results_wanted=limit,
             hours_old=hours_old,
             timeout_seconds=timeout,
+            enrich_descriptions=enrich_descriptions,
         )
         dtos: list[RawJobDTO] = []
         for r in raw_rows:

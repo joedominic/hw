@@ -131,12 +131,12 @@ def detect_resume_discrepancies(
                 "message": f"Technology '{tech}' introduced with hedging verb '{verb}' was not found in your original resume.",
             })
 
-    # 5. High-Risk Technologies & Certifications frequently requested by ATS/Recruiters
+    # 5. Tier 1 High-Risk Technologies & Certifications (Strict Red Zone)
     high_risk_techs = [
         "AWS", "GCP", "TOGAF", "Kubernetes", "Docker", "Terraform",
         "Snowflake", "Databricks", "GraphQL", "gRPC", "Kafka",
         "Redis", "Cassandra", "Hadoop", "Spark", "Golang", "Rust",
-        "PMP", "CISA", "CISSP", "DevSecOps", "AIDLC", "AI DLC", "MCP"
+        "PMP", "CISA", "CISSP"
     ]
     for tech in high_risk_techs:
         key = ("high_risk_tech", tech.lower())

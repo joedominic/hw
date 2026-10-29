@@ -27,27 +27,50 @@ def normalize_track_slug(track: Optional[str], user) -> str:
     return t if t else Track.get_default_slug(user)
 
 
-def q_disliked_rows_for_search(slug: str) -> Q:
-    """Track scope for actions that exclude a job from search results."""
-    return Q(track=slug) | Q(track="")
+def q_disliked_rows_for_search(slug: str, user=None) -> Q:
+    """Track scope for actions that exclude a job from search results (Phase 2 dual-read)."""
+    q = Q(track=slug) | Q(track="")
+    if user is not None:
+        from .models import SearchProfile
+        sp = SearchProfile.objects.for_user(user).filter(slug=slug).first()
+        if sp is not None:
+            q |= Q(search_profile=sp)
+    return q
 
 
-def q_saved_rows_for_track(slug: str) -> Q:
-    """Saved rows associated with this pipeline / favourites context."""
-    return Q(track=slug) | Q(track="")
+def q_saved_rows_for_track(slug: str, user=None) -> Q:
+    """Saved rows associated with this pipeline / favourites context (Phase 2 dual-read)."""
+    q = Q(track=slug) | Q(track="")
+    if user is not None:
+        from .models import SearchProfile
+        sp = SearchProfile.objects.for_user(user).filter(slug=slug).first()
+        if sp is not None:
+            q |= Q(search_profile=sp)
+    return q
 
 
 def q_preference_embedding_track(slug: str, user) -> Q:
-    """Embedding rows that contribute to preference vectors for this track."""
-    q = Q(track=slug)
+    """Embedding rows that contribute to preference vectors for this track (Phase 2 dual-read)."""
+    from .models import SearchProfile
+    sp = SearchProfile.objects.for_user(user).filter(slug=slug).first() if user else None
+    if sp is not None:
+        q = Q(search_profile=sp) | Q(track=slug)
+    else:
+        q = Q(track=slug)
     if slug == Track.get_default_slug(user):
         q |= Q(track="")
     return q
 
 
-def q_clear_on_sentiment_change(slug: str) -> Q:
+def q_clear_on_sentiment_change(slug: str, user=None) -> Q:
     """Track scope for clearing opposing actions/embeddings (per-track + legacy global)."""
-    return Q(track=slug) | Q(track="")
+    q = Q(track=slug) | Q(track="")
+    if user is not None:
+        from .models import SearchProfile
+        sp = SearchProfile.objects.for_user(user).filter(slug=slug).first()
+        if sp is not None:
+            q |= Q(search_profile=sp)
+    return q
 
 
 def disliked_listing_id_set(user, track: Optional[str]) -> Set[int]:
@@ -58,7 +81,7 @@ def disliked_listing_id_set(user, track: Optional[str]) -> Set[int]:
     return set(
         JobListingAction.objects.for_user(user)
         .filter(action=JobListingAction.ActionType.DISLIKED)
-        .filter(q_disliked_rows_for_search(slug))
+        .filter(q_disliked_rows_for_search(slug, user=user))
         .values_list("job_listing_id", flat=True)
     )
 
@@ -76,7 +99,7 @@ def hidden_listing_id_set(user, track: Optional[str], cooldown_days: Optional[in
     qs = (
         JobListingAction.objects.for_user(user)
         .filter(action=JobListingAction.ActionType.HIDDEN)
-        .filter(q_disliked_rows_for_search(slug))
+        .filter(q_disliked_rows_for_search(slug, user=user))
     )
     if cooldown_days is None:
         from django.conf import settings

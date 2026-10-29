@@ -40,8 +40,6 @@ To enable grouping and granular analysis in Langfuse, the LLM gateway and `LiteL
 | `pipeline_vetting_matching` | `pipeline_vetting` | `pipeline_vetting_matching` | Scraper Intake |
 | `pipeline_resume_refine` | `pipeline_refine` | `pipeline_resume_refine` | Resume Refinement |
 | `pipeline_skill_extract` | `pipeline_skill_extract` | `pipeline_skill_extract` | Background Ingestion |
-| `job_authenticity` | `job_authenticity` | `job_authenticity` | Fraud Guardrail |
-| `skill_radar` | `skill_radar` | `skill_radar` | Skill Taxonomy |
 | `career_profiler` | `career_profiler` | `career_profiler` | Onboarding Profiler |
 | `prompt_studio` | `prompt_studio` | `prompt_studio_eval` | Test Sandbox |
 | `api_llm_complete` | `api_completion` | `api_llm_complete` | Commercial API |
@@ -102,9 +100,10 @@ Non-PII context is 100% preserved in telemetry:
 | `LANGFUSE_SECRET_KEY` | string | `""` | Secret API key from Langfuse Cloud project settings |
 | `LANGFUSE_BASE_URL` | string | `https://cloud.langfuse.com` | Langfuse host URL (e.g., `https://us.cloud.langfuse.com`) |
 | `LANGFUSE_ENABLED` | boolean | Auto | Enables telemetry export (defaults to `True` when keys are set) |
-| `LANGFUSE_MASK_PII` | boolean | `True` | **Primary privacy guardrail.** Scrubs PII (name, address, email, phone) before telemetry export while preserving full prompt/response transparency. |
-| `LANGFUSE_REDACT_CONTENT` | boolean | `False` | **Emergency zero-content mode.** When `True`, completely replaces prompt and output text with `"redacted-by-litellm"`. Use only for extreme compliance requirements. |
-| `LANGFUSE_DROP_ALL_CONTENT` | boolean | `False` | Alias for emergency zero-content mode. |
+| `LANGFUSE_MASK_PII` | boolean | `True` | **PII scrubbing guardrail.** Scrubs direct PII (name, address, email, phone) with placeholders. |
+| `LANGFUSE_REDACT_CONTENT` | boolean | `not DEBUG` | **Zero-content privacy guardrail.** In production (`DEBUG=False`), defaults to `True` so that input prompts and candidate resume bullets are masked in telemetry. Only metadata (token counts, latency, model names) is exported. |
+| `LANGFUSE_EXPORT_PROMPT_CONTENT` | boolean | `False` | Explicit opt-in flag required to export unredacted prompt/response content to Langfuse in production. |
+| `LANGFUSE_DROP_ALL_CONTENT` | boolean | `LANGFUSE_REDACT_CONTENT` | Alias for zero-content mode. |
 | `OLLAMA_ENABLE_THINKING` | boolean | `True` | When `True` (default), allows Ollama models with reasoning capabilities (e.g., Nemotron, DeepSeek-R1) to utilize their full chain-of-thought scratchpad for accurate evaluation. When `False`, forces `think=False` for maximum speed. |
 | `LLM_INVOKE_TIMEOUT_SECONDS` | integer | `300` | Wall-clock deadline for LLM invocations across LiteLLM and HTTP transports (default increased to 300s to support local thinking models on long inputs). |
 

@@ -113,40 +113,32 @@ To guarantee multi-tenant scalability, prevent duplicate scrapes, and safeguard 
    - **Automatic Failure Recovery:** If a task fails due to a network error, exception, or timeout, the worker and the status views immediately delete this key, allowing the user to retry without waiting for cooldown expiry.
 4. **Vetting Matching Concurrency Lock (`vetting_matching_task_running:u{user_id}`):**
    - 1,800s TTL. Enforces sequential execution of deep analysis per user so local Ollama reuses KV cache prefixes across consecutive jobs.
+5. **Distributed Periodic Leader Election (`periodic_leader_lock:{task_name}`):**
+   - Acquired via atomic `cache.add()` with bounded TTLs (45s–300s).
+   - In multi-replica container deployments (e.g. Docker Compose or Kubernetes with multiple worker instances), guarantees that exactly one worker replica acts as execution leader per periodic tick, preventing duplicate scheduled runs of `pipeline_manager`, `cleanup_manager`, and search queues.
+6. **Dead-Letter Queue (DLQ) Quarantine (`FailedTaskQuarantine`):**
+   - Automatically connected to Huey's `SIGNAL_ERROR` lifecycle hook.
+   - When a task exhausts retries and crashes, its task name, execution arguments, error class, error message, and full stack traceback are quarantined in the database.
+   - Operators can inspect, replay, or purge quarantined tasks using `python manage.py task_dlq`.
 
 ---
 
 ## 6. Review-Stage Deep Analysis & Two-Pass Batch Architecture
 
-To eliminate runaway compute costs while providing deep semantic insights, LLM diagnostics run **only for opportunities in Review (`vetting`) and Applying (`applying`) stages** in an optimized **Two-Pass Batch Architecture**:
+To eliminate runaway compute costs while providing deep semantic insights, LLM diagnostics run **only for opportunities in Review (`vetting`) and Applying (`applying`) stages** via the optimized Candidate Fit & Skill Radar architecture:
 
 ```mermaid
 flowchart TD
-    subgraph Pass1 ["Pass 1: Labor Compliance & Authenticity Audit (Global Posting Context)"]
-        P1_Jobs["Un-audited JobListings"] --> P1_Extract["Date & Window Extraction<br>(posted_date, application_window)"]
-        P1_Extract --> P1_Ollama["JobAuthenticityService<br>(10-Point Deterministic Rules)"]
-        P1_Ollama --> P1_DB["Global Catalog Write: JobListing<br>(verdict, score, rationale, trail)"]
-        P1_Ollama --> P1_Redis["Redis: job_authenticity_{id} (7d)"]
+    subgraph MatchRadar ["Resume Match Radar (Candidate Context)"]
+        P_Jobs["Review-Stage PipelineEntries"] --> P_Cleanse["Heuristic Cleanser<br>(0ms regex, no LLM)"]
+        P_Cleanse --> P_Ollama["SkillRadarService.analyze<br>(Candidate Resume Prefix Cached)"]
+        P_Ollama --> P_DB["Tenant Write: PipelineEntry<br>(prob, reasoning, stretch_skills)"]
+        P_Ollama --> P_Redis["Redis: cockpit_ollama_skill_radar_... (7d)"]
     end
-
-    subgraph Pass2 ["Pass 2: Resume Match Radar (Candidate Context)"]
-        P2_Jobs["Review-Stage PipelineEntries"] --> P2_Cleanse["Heuristic Cleanser<br>(0ms regex, no LLM)"]
-        P2_Cleanse --> P2_Ollama["SkillRadarService.analyze<br>(Candidate Resume Prefix Cached)"]
-        P2_Ollama --> P2_DB["Tenant Write: PipelineEntry<br>(prob, reasoning, stretch_skills)"]
-        P2_Ollama --> P2_Redis["Redis: cockpit_ollama_skill_radar_... (7d)"]
-    end
-
-    Pass1 --> Pass2
 ```
 
-1. **Pass 1: Labor Compliance & Authenticity Audit (`JobAuthenticityService.audit`):**
-   - **System Prefix Cache Warmth:** All listings in Pass 1 share the exact same system prompt prefix. Running Pass 1 sequentially across the batch maintains 100% warm KV cache in local Ollama, avoiding prompt thrashing ("ping-ponging").
-   - **Lifespan & Date Intelligence:** Extracts `posted_date` and computes `application_window` (detecting statutory corporate minimums such as 5 business days and calendar deltas $\le 4$ days).
-   - **Deterministic 10-Point Classifier:** Assigns verdicts: `PERM_COMPLIANCE`, `PHANTOM_PIPELINE`, `INTERNAL_PRESELECT` ($\ge 40$), or `GENUINE_EXTERNAL` ($< 40$).
-   - **Global Intrinsic Persistence:** Posting authenticity is an intrinsic property of the job listing, audited once across all tenants and stored on `JobListing`.
-   - **Confidentiality Sanitization:** Raw 10-point audit checklist evidence and arithmetic sums are withheld from non-staff client responses to protect proprietary evaluation IP.
-2. **Pass 2: Resume Match Radar (`SkillRadarService.analyze`):**
-   - **Candidate Resume KV Alignment:** Once Pass 1 finishes, the worker switches to the candidate context. Ordering Candidate Resume ahead of the Job Description allows Ollama to reuse the candidate KV prefix, cutting latency from ~6.95s to ~2.06s (~70% speedup).
+1. **Resume Match Radar (`SkillRadarService.analyze`):**
+   - **Candidate Resume KV Alignment:** Ordering Candidate Resume ahead of the Job Description allows Ollama to reuse the candidate KV prefix, cutting latency from ~6.95s to ~2.06s (~70% speedup).
    - **Heuristic JD Cleansing:** Zero-latency regex section-stripping (`use_llm=False`) cleans boilerplate without eviction.
    - **Dual Persistence:** Instant modal loading via Redis cache with fallback persistence in `PipelineEntry`.
 

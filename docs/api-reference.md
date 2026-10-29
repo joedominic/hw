@@ -47,7 +47,8 @@ This document catalogs the complete route surface for HireEdge, registered acros
 
 ### 2.3 Tab 2: Career Cockpit & Job Automation
 - `GET /jobs/cockpit/` — **Career Cockpit Tri-Pane Workstation**; primary triage hub for search profiles, 4-stage pipeline, and off-canvas slide-over Automation Drawer (`openAutomationDrawer()`).
-- `GET /jobs/cockpit/api/skill-radar/` — Skill frequency radar JSON for the active search profile.
+- `POST /jobs/cockpit/api/skill-radar/` — Run or force deep Ollama Local Skill Radar & Fit Diagnostics on-demand with CSRF protection (`job_id`, `track`, `force`). Returns match score, callback probability, verified core competencies, contextual stretch gaps, and executive fit summary.
+- `GET /jobs/cockpit/api/skill-radar/?job_id=<id>&track=<slug>` — Idempotent, read-only retrieval of existing cached/persisted Skill Radar diagnostics. See [Skill Radar Diagnostics](features/skill-radar-diagnostics.md).
 - `POST /jobs/tasks/<task_id>/run/` — Trigger manual search run immediately (sets atomic pending key + 3m cooldown).
 - `GET /jobs/tasks/<task_id>/status/` — JSON status endpoint polled by browser during active search.
 - `POST /jobs/tasks/<task_id>/toggle/` — Toggle task active/inactive status.
@@ -83,7 +84,7 @@ This document catalogs the complete route surface for HireEdge, registered acros
 - `GET /resume/status/<resume_id>/` — Polling status endpoint for active optimization runs.
 - `POST /resume/status/<resume_id>/draft/` — Save edited resume text draft.
 - `GET /resume/optimizer/context/<resume_id>/` — Inspect `optimizer_context_snapshot` token budgets.
-- `GET/POST /resume/prompts/` — **Prompt Studio & Library Workstation**; comprehensive prompt IDE for inspecting, versioning, routing, and testing all 14 system/user prompt definitions across the platform (`writer`, `ats_judge`, `recruiter_judge`, `matching`, `insights`, `jd_cleanse`, `job_authenticity`, `fit_check`, `cover_letter`, `interview_prep`, `skill_radar`, `career_profiler`, `pipeline_skill_extract`, `pipeline_resume_refine`) and custom `AtsJudgeProfile` entries. Designed with a 3-pane responsive layout that adapts to vertical/portrait displays (left navigation rail, stacked editor, and in-authoring test bench) and mobile viewport drawers (`< lg`).
+- `GET/POST /resume/prompts/` — **Prompt Studio & Library Workstation**; comprehensive prompt IDE for inspecting, versioning, routing, and testing prompt definitions across the platform (`writer`, `resume_judge`, `matching`, `insights`, `jd_cleanse`, `cover_letter`, `interview_prep`, `skill_radar`, `career_profiler`, `pipeline_skill_extract`, `pipeline_resume_refine`) and custom `AtsJudgeProfile` entries. Designed with a 3-pane responsive layout that adapts to vertical/portrait displays (left navigation rail, stacked editor, and in-authoring test bench) and mobile viewport drawers (`< lg`).
 - `POST /resume/prompts/api/save/` — Persists prompt modifications and writes revision record to `PromptVersionHistory`.
 - `POST /resume/prompts/api/set-model/` — Saves user provider and model preference to `TenantPromptModelPreference`.
 - `POST /resume/prompts/api/test-run/` — Executes test completion of an edited prompt via `resume_app/llm/gateway.py`.
@@ -141,7 +142,7 @@ Mounted in `resume_app/jobs_api.py`.
 
 - `GET /api/resume/jobs/pipeline` — Retrieve user's pipeline jobs for active stage/profile.
 - `POST /api/resume/jobs/pipeline/delete` — Soft-delete pipeline entry (`PipelineEntry.delete()`).
-- `POST /api/resume/jobs/search` — Execute multi-board search query across external sources without database writes.
+- `POST /api/resume/jobs/search` — Execute multi-board search query across external sources. Ingests and upserts global `JobListing` records into the catalog (assigning durable integer IDs and deduplication URLs), but performs ZERO writes to the candidate's personal pipeline or preference centroid.
 - `POST /api/resume/jobs/ai-match` — Run batch LLM fit evaluations and return candidate match probabilities.
 - `POST /api/resume/jobs/insights` — Extract aggregated skill insights across multiple jobs.
 - `GET /api/resume/jobs/{job_listing_id}` — Retrieve global job listing details.
@@ -149,7 +150,7 @@ Mounted in `resume_app/jobs_api.py`.
 - `POST /api/resume/jobs/{job_listing_id}/save?track={slug}` — **Sandbox to Cockpit Bridge**:
   - *Side Effect:* Creates or updates `PipelineEntry(owner, job, track, stage='vetting', is_saved=True, saved_at=now())` and writes `JobListingAction(action_type='save')`. Binds the opportunity directly into the active `SearchProfile` slug.
 - `POST /api/resume/jobs/{job_listing_id}/unsave` — **Unsave Job**:
-  - *Side Effect:* Deletes the corresponding `PipelineEntry` and deletes `JobListingAction(action_type='save')`.
+  - *Side Effect:* Deletes `JobListingAction(action_type='save')` and soft-deletes the active `PipelineEntry` only if it is in Review (`vetting` or legacy blank) stage. Protects candidate applications in `applying` or `done` stages to ensure submission and interview records are never deleted on unsave.
 - `POST /api/resume/jobs/{job_listing_id}/like` — **Like Job**:
   - *Side Effect:* Creates `JobListingAction(action_type='like')`, removes any opposing dislike action, and triggers recalculation of the tenant's preference centroid (`JobListingTrackMetrics.centroid_embedding`).
 - `POST /api/resume/jobs/{job_listing_id}/unlike` — **Unlike Job**:
@@ -168,5 +169,3 @@ Mounted in `resume_app/jobs_api.py`.
 - `GET /api/resume/jobs/disqualifiers` — List user exclusion keyword rules from `UserDisqualifier`.
 - `POST /api/resume/jobs/disqualifiers` — Create exclusion keyword rule in `UserDisqualifier`.
 - `DELETE /api/resume/jobs/disqualifiers/{id}` — Delete exclusion rule from `UserDisqualifier`.
-- `GET /api/resume/jobs/{job_listing_id}/authenticity` — Retrieve cached or persisted labor compliance & posting authenticity audit for a job listing (`authenticity_verdict`, `authenticity_score`, `authenticity_confidence`, `authenticity_rationale`). For confidentiality and IP protection, the detailed 10-point audit checklist is sanitized for non-staff callers while available to staff.
-- `POST /api/resume/jobs/{job_listing_id}/audit-authenticity` — Trigger on-demand 10-point labor compliance and authenticity audit (statutory DOL ETA-9089 PERM phrasing, phantom pipelines, short lifespan $\le 4$ calendar days delta, statutory minimum compliance windows, generic JFA boilerplate, internal promotions, contractor conversions, hyper-specific OKRs, degree equations, flat salary bands, and flexible skill requirements); persists verdict, score, confidence, rationale, and audit trail to `JobListing`.

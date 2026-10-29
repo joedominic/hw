@@ -181,27 +181,24 @@
 
             <!-- Model Routing Sub-Bar -->
             <div class="px-4 py-2 border-b border-slate-200 bg-slate-50/70 flex items-center justify-between gap-3 text-xs shrink-0">
-                <div class="flex items-center space-x-2 min-w-0">
+                <div class="flex items-center space-x-2.5 min-w-0">
                     <span class="material-symbols-outlined text-slate-500 text-sm">alt_route</span>
-                    <span class="font-semibold text-slate-700 whitespace-nowrap">Production Model:</span>
+                    <span class="font-semibold text-slate-700 whitespace-nowrap">Model Engine:</span>
                     <select id="prompt-assigned-model-select"
-                            class="text-xs font-medium bg-white border border-slate-200 rounded-lg px-2.5 py-1 text-slate-800 focus:outline-none focus:border-brand shadow-sm truncate max-w-xs">
-                        <option value="">⚡ Platform Default Gateway</option>
-                        {% if available_model_options %}
-                        <optgroup label="Configured LLM Models">
-                            {% for opt in available_model_options %}
-                            <option value="{{ opt.value }}">{{ opt.label }}{% if opt.is_local %} [Local]{% endif %}</option>
-                            {% endfor %}
-                        </optgroup>
-                        {% endif %}
+                            class="text-xs font-semibold bg-white border border-slate-200 rounded-lg px-2.5 py-1 text-slate-800 focus:outline-none focus:border-brand shadow-sm">
+                        <option value="slm">⚡ SLM (Small Language Model — Fast / Bulk / Zero-Cost)</option>
+                        <option value="frontier">🧠 LLM (Large Language Model — Deep Reasoning & Writing)</option>
                     </select>
+                    <span id="prompt-recommended-tier-badge" class="px-2 py-0.5 text-[10px] rounded-full bg-slate-100 text-slate-600 font-mono font-medium hidden">
+                        Recommended: <span id="prompt-recommended-tier-text">LLM</span>
+                    </span>
                     <span id="model-saved-indicator" class="hidden text-[11px] text-emerald-600 font-semibold items-center space-x-1">
                         <span class="material-symbols-outlined text-xs">check_circle</span>
                         <span>Saved</span>
                     </span>
                 </div>
                 <div class="text-[11px] text-slate-500 hidden sm:block">
-                    Routed across optimizer, matching, and extraction pipelines.
+                    Uses tenant's configured model key (Settings), falling back to system SLM/LLM.
                 </div>
             </div>
 
@@ -269,18 +266,9 @@
                     <!-- Engine Selector -->
                     <select id="test-engine-select"
                             class="text-xs bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-slate-700 font-medium focus:outline-none focus:border-brand max-w-[210px] truncate">
-                        <option value="assigned" id="test-engine-assigned-opt">⚡ Assigned Model (Default)</option>
-                        {% if available_model_options %}
-                        <optgroup label="Configured LLMs">
-                            {% for opt in available_model_options %}
-                            <option value="{{ opt.value }}">{{ opt.label }}{% if opt.is_local %} [Local]{% endif %}</option>
-                            {% endfor %}
-                        </optgroup>
-                        {% endif %}
-                        <optgroup label="Fallback Defaults">
-                            <option value="cloud">Cloud (Default Gateway)</option>
-                            <option value="local">Local (Ollama Default)</option>
-                        </optgroup>
+                        <option value="assigned" id="test-engine-assigned-opt">⚡ Assigned Tier (Default)</option>
+                        <option value="slm">⚡ SLM Engine</option>
+                        <option value="frontier">🧠 LLM Engine</option>
                     </select>
 
                     <button type="button" id="run-test-btn"
@@ -393,9 +381,6 @@ Click "Run Test" above to evaluate this prompt with injected variables.
         <textarea name="prompt_jd_cleanse_system">{{ prompts.jd_cleanse_system }}</textarea>
         <textarea name="prompt_jd_cleanse_user">{{ prompts.jd_cleanse_user }}</textarea>
         <textarea name="prompt_jd_cleanse_combined">{{ prompts.jd_cleanse_legacy_combined }}</textarea>
-        <textarea name="prompt_job_authenticity_system">{{ prompts.job_authenticity_system }}</textarea>
-        <textarea name="prompt_job_authenticity_user">{{ prompts.job_authenticity_user }}</textarea>
-        <textarea name="prompt_job_authenticity_combined">{{ prompts.job_authenticity_legacy_combined }}</textarea>
         <textarea name="prompt_fit_check_system">{{ prompts.fit_check_system }}</textarea>
         <textarea name="prompt_fit_check_user">{{ prompts.fit_check_user }}</textarea>
         <textarea name="prompt_fit_check_combined">{{ prompts.fit_check_legacy_combined }}</textarea>
@@ -405,9 +390,6 @@ Click "Run Test" above to evaluate this prompt with injected variables.
         <textarea name="prompt_interview_prep_system">{{ prompts.interview_prep_system }}</textarea>
         <textarea name="prompt_interview_prep_user">{{ prompts.interview_prep_user }}</textarea>
         <textarea name="prompt_interview_prep_combined">{{ prompts.interview_prep_legacy_combined }}</textarea>
-        <textarea name="prompt_skill_radar_system">{{ prompts.skill_radar_system }}</textarea>
-        <textarea name="prompt_skill_radar_user">{{ prompts.skill_radar_user }}</textarea>
-        <textarea name="prompt_skill_radar_combined">{{ prompts.skill_radar_legacy_combined }}</textarea>
         <textarea name="prompt_career_profiler_system">{{ prompts.career_profiler_system }}</textarea>
         <textarea name="prompt_career_profiler_user">{{ prompts.career_profiler_user }}</textarea>
         <textarea name="prompt_career_profiler_combined">{{ prompts.career_profiler_legacy_combined }}</textarea>
@@ -420,6 +402,9 @@ Click "Run Test" above to evaluate this prompt with injected variables.
         <textarea name="prompt_resume_judge_system">{{ prompts.resume_judge_system }}</textarea>
         <textarea name="prompt_resume_judge_user">{{ prompts.resume_judge_user }}</textarea>
         <textarea name="prompt_resume_judge_combined">{{ prompts.resume_judge_legacy_combined }}</textarea>
+        <textarea name="prompt_skill_radar_system">{{ prompts.skill_radar_system }}</textarea>
+        <textarea name="prompt_skill_radar_user">{{ prompts.skill_radar_user }}</textarea>
+        <textarea name="prompt_skill_radar_combined">{{ prompts.skill_radar_legacy_combined }}</textarea>
     </form>
 </div>
 
@@ -545,25 +530,35 @@ Click "Run Test" above to evaluate this prompt with injected variables.
     // -----------------------------------------------------------------------
     function updateAssignedModelDisplay(key, assigned) {
         const badge = document.querySelector(`.prompt-model-badge[data-badge-for="${key}"]`);
-        let shortLabel = 'Default';
-        if (assigned && assigned.includes('::')) {
-            const parts = assigned.split('::');
-            shortLabel = parts[1] || parts[0];
-        } else if (assigned) {
-            shortLabel = assigned;
+        const buf = promptBuffers[key];
+        const recTier = (buf && buf.meta && buf.meta.recommended_tier) ? buf.meta.recommended_tier : 'slm';
+        let shortLabel = 'SLM';
+        let badgeColor = 'bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200';
+
+        const norm = (assigned || recTier || 'slm').toLowerCase();
+        if (norm === 'frontier' || norm === 'tier:frontier' || norm === 'llm') {
+            shortLabel = 'LLM';
+            badgeColor = 'bg-indigo-50 text-indigo-700 font-semibold border border-indigo-200';
+        } else {
+            shortLabel = 'SLM';
+            badgeColor = 'bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200';
         }
 
         if (badge) {
             badge.textContent = shortLabel;
-            if (assigned) {
-                badge.className = 'prompt-model-badge px-1.5 py-0.5 text-[10px] bg-brand/10 text-brand font-semibold rounded font-mono truncate max-w-[90px]';
-            } else {
-                badge.className = 'prompt-model-badge px-1.5 py-0.5 text-[10px] bg-slate-100 text-slate-600 rounded font-mono truncate max-w-[90px]';
-            }
+            badge.className = `prompt-model-badge px-1.5 py-0.5 text-[10px] ${badgeColor} rounded font-mono truncate max-w-[90px]`;
         }
 
-        if (key === activeKey && testEngineAssignedOpt) {
-            testEngineAssignedOpt.textContent = assigned ? `⚡ Assigned: ${shortLabel}` : '⚡ Assigned Model (Default)';
+        if (key === activeKey) {
+            const recBadge = document.getElementById('prompt-recommended-tier-badge');
+            const recText = document.getElementById('prompt-recommended-tier-text');
+            if (recBadge && recText) {
+                recText.textContent = recTier === 'frontier' ? 'LLM' : 'SLM';
+                recBadge.classList.remove('hidden');
+            }
+            if (testEngineAssignedOpt) {
+                testEngineAssignedOpt.textContent = `⚡ Assigned: ${shortLabel}`;
+            }
         }
     }
 
@@ -747,10 +742,20 @@ Click "Run Test" above to evaluate this prompt with injected variables.
         activeTitleCrumb.textContent = b.meta.name || key;
         activeKeyBadge.textContent = key;
 
-        // Assigned Model routing synchronization
-        const currentAssigned = b.assigned_model || '';
+        // Assigned Model routing synchronization (strictly SLM vs LLM)
+        let currentAssigned = (b.assigned_model || '').toLowerCase();
+        if (!currentAssigned) {
+            currentAssigned = (b.meta && b.meta.recommended_tier === 'frontier') ? 'frontier' : 'slm';
+        } else if (currentAssigned === 'tier:frontier' || currentAssigned === 'llm') {
+            currentAssigned = 'frontier';
+        } else if (currentAssigned === 'tier:slm') {
+            currentAssigned = 'slm';
+        }
         if (promptAssignedModelSelect) {
             promptAssignedModelSelect.value = currentAssigned;
+            if (!promptAssignedModelSelect.value) {
+                promptAssignedModelSelect.value = 'slm';
+            }
         }
         updateAssignedModelDisplay(key, currentAssigned);
 

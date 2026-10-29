@@ -82,12 +82,14 @@ ALLOWED_SITE_NAMES = JOBSPY_SITE_NAMES + CUSTOM_SCRAPER_SITE_NAMES
 
 ### 2.3 Levels.fyi (`levels`)
 - **Implementation:** `sourcing/clients/levels_client.py` and `sourcing/adapters/levels_adapter.py`.
-- **Mechanism:** Consumes Levels.fyi's encrypted jobs API endpoint. Decrypts payloads, maps seniorities (`LEVELS_FYI_STANDARD_LEVELS`), and traverses pages using offset steps.
+- **Mechanism:** Consumes Levels.fyi's internal API (`/v1/job/search`). The search endpoint yields summary metadata without the job description body; candidate listings are concurrently enriched via `/v1/job/{job_id}` to fetch full HTML descriptions (converting to clean Markdown/text) before ingestion.
 - **Configurable Settings:**
   - `LEVELS_FYI_STANDARD_LEVELS`: Seniority level filters.
   - `LEVELS_FYI_OFFSET_STEP`: Page step size.
   - `LEVELS_FYI_PAGE_DELAY`: Throttle between requests.
   - `LEVELS_FYI_MAX_SCAN_PAGES`: Maximum traversal depth per search run.
+  - `LEVELS_FYI_ENRICH_DESCRIPTIONS`: Concurrently enrich full HTML job descriptions on fetch (default: `True`).
+  - `LEVELS_FYI_ENRICH_MAX_WORKERS`: ThreadPoolExecutor pool size for concurrent job detail fetches (default: `8`).
 
 ### 2.4 Dice (`dice`)
 - **Implementation:** `sourcing/clients/dice_client.py` and `sourcing/adapters/dice_adapter.py`.

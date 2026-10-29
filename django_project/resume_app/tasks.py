@@ -62,6 +62,16 @@ from .prompt_store import (
     resolve_prompt_parts,
 )
 from .optimizer_budget import build_optimizer_context_state
+
+def acquire_periodic_leader_lock(task_name: str, lock_ttl_seconds: int = 120) -> bool:
+    """
+    Acquire a distributed leader election lock for a periodic task cycle.
+    Guarantees that across multi-replica worker deployments, exactly one worker executes
+    the periodic job per cycle, eliminating redundant execution.
+    """
+    lock_key = f"periodic_leader_lock:{task_name}"
+    return bool(cache.add(lock_key, 1, timeout=lock_ttl_seconds))
+
 import time
 import logging
 
@@ -680,7 +690,7 @@ def enqueue_applying_resume_optimization_task(
     return {"status": "success", "results": results}
 
 
-@db_task()
+@db_task(retries=2, retry_delay=10)
 def run_job_search_task(user_id, task_id):
     """
     Huey task: run one JobSearchTask (fetch, filter, rank, add to pipeline).
@@ -996,6 +1006,7 @@ def evaluate_vetting_matching_task(
     llm_provider: str | None = None,
     llm_model: str | None = None,
     matching_prompt: str | None = None,
+    invoke_skill_radar: bool = False,
 ):
     """
     Huey task: evaluate PipelineEntry rows in VETTING stage.
@@ -1096,28 +1107,7 @@ def evaluate_vetting_matching_task(
                 )
                 continue
 
-        # PASS 1: Sequential Labor Compliance & Authenticity Audit
-        # Evaluates all un-audited job postings in batch under the static Compliance Prompt to maximize local Ollama KV-cache prefix hits.
-        from .authenticity import JobAuthenticityService
-
-        unique_jobs_to_audit = {}
-        for entry in entries:
-            job = entry.job_listing
-            if job and (not job.authenticity_audited_at or not job.authenticity_verdict):
-                if job.id not in unique_jobs_to_audit:
-                    unique_jobs_to_audit[job.id] = job
-
-        for j_id, job_obj in unique_jobs_to_audit.items():
-            try:
-                JobAuthenticityService.audit(job_obj, user=user, force_refresh=False)
-            except Exception as e:
-                logger.warning(
-                    "[evaluate_vetting_matching_task] Authenticity audit failed for job %s: %s",
-                    j_id,
-                    e,
-                )
-
-        # PASS 2: Candidate Resume Fit & Skill Radar
+        # Candidate Resume Fit & Skill Radar
         updated = 0
         skipped = 0
         errors = []
@@ -1163,10 +1153,18 @@ def evaluate_vetting_matching_task(
                 core_skills = []
                 stretch_skills = []
 
-                # Default: Deep Analysis via consolidated SkillRadarService unless an explicit external llm_override is requested
-                if not llm_override:
-                    from .skill_radar import SkillRadarService, calibrate_interview_probability
+                # Check if Skill Radar was already run on-demand or cached for this job & resume
+                from .skill_radar import SkillRadarService, calibrate_interview_probability
 
+                cache_key = SkillRadarService.get_cache_key(getattr(user, "id", None), entry.job_listing_id, resume_obj.id)
+                radar_res = cache.get(cache_key)
+                if not radar_res:
+                    u_tag = str(getattr(user, "id", None)) if user else "anon"
+                    radar_res = cache.get(f"cockpit_ollama_skill_radar_{u_tag}_{resume_obj.id}_{entry.job_listing_id}")
+
+                # Deep Skill Radar is the unified evaluation engine for background vetting & auto-promotions
+                should_run_radar = True
+                if not radar_res and should_run_radar and not llm_override:
                     radar_res = SkillRadarService.analyze(
                         entry.job_listing,
                         full_resume_text,
@@ -1174,6 +1172,7 @@ def evaluate_vetting_matching_task(
                         resume_id=resume_obj.id,
                         job_description=jd,
                         force_refresh=False,
+                        is_manual_invocation=False,
                     )
                     if radar_res.get("source") != "error" and radar_res.get("match_score") is not None:
                         match_val = radar_res.get("match_score")
@@ -1197,42 +1196,29 @@ def evaluate_vetting_matching_task(
                         )
 
                 if ip is None:
-                    # Fallback to run_matching
+                    # Fallback to run_matching (delegates to SkillRadarService)
                     result = None
                     for _attempt in range(3):
-                        if matching_prompt and str(matching_prompt).strip():
-                            result = run_matching(
-                                resume_snippet,
-                                jd,
-                                llm_override,
-                                user=user,
-                                prompt_template=matching_prompt,
-                                job_cache_key=f"vetting:{entry.id}",
-                                job_id=entry.job_listing_id,
-                                resume_id=resume_obj.id,
-                                prefer_local=True,
-                                usage_query_kind=USAGE_QUERY_PIPELINE_VETTING,
-                            )
-                        else:
-                            result = run_matching(
-                                resume_snippet,
-                                jd,
-                                llm_override,
-                                user=user,
-                                prompt_system=ms,
-                                prompt_user=mu,
-                                prompt_legacy=ml or None,
-                                job_cache_key=f"vetting:{entry.id}",
-                                job_id=entry.job_listing_id,
-                                resume_id=resume_obj.id,
-                                prefer_local=True,
-                                usage_query_kind=USAGE_QUERY_PIPELINE_VETTING,
-                            )
+                        result = run_matching(
+                            resume_snippet,
+                            jd,
+                            llm_override,
+                            user=user,
+                            job_cache_key=f"vetting:{entry.id}",
+                            job_id=entry.job_listing_id,
+                            resume_id=resume_obj.id,
+                            prefer_local=True,
+                            usage_query_kind=USAGE_QUERY_PIPELINE_VETTING,
+                        )
                         if result.get("interview_probability") is not None:
                             break
                     ip = (result or {}).get("interview_probability")
                     match_val = (result or {}).get("score")
                     reasoning = ((result or {}).get("reasoning") or "").strip()
+                    if not core_skills:
+                        core_skills = (result or {}).get("core_competencies") or []
+                    if not stretch_skills:
+                        stretch_skills = (result or {}).get("stretch_skills") or []
 
                 entry.record_vetting_interview_result(
                     match_score=match_val,
@@ -1570,6 +1556,9 @@ def _evaluate_due_vetting_matching_for_user(user, max_to_enqueue: int = 20):
 
 @db_periodic_task(crontab(minute="*/20"))
 def enqueue_due_vetting_matching_tasks():
+    if not acquire_periodic_leader_lock("enqueue_due_vetting_matching_tasks", lock_ttl_seconds=60):
+        logger.info("[enqueue_due_vetting_matching_tasks] Another worker replica is execution leader; skipping.")
+        return {"status": "skipped", "reason": "not_leader"}
     """
     Periodic dispatcher (every 20 mins): Fans out vetting evaluation tasks per active user
     so background Huey workers process them concurrently.
@@ -1753,6 +1742,9 @@ def process_user_pipeline_manager_task(user_id: int):
 
 @db_periodic_task(crontab(minute="*/30"))
 def pipeline_manager():
+    if not acquire_periodic_leader_lock("pipeline_manager", lock_ttl_seconds=120):
+        logger.info("[pipeline_manager] Another worker replica is execution leader; skipping.")
+        return {"status": "skipped", "reason": "not_leader"}
     """
     Periodic dispatcher (every 30 mins): Fans out pipeline maintenance tasks
     to individual Huey worker tasks per active user for horizontal scalability.
@@ -1857,6 +1849,8 @@ MAX_DUE_JOB_SEARCH_TASKS_PER_TICK = 50
 
 @db_periodic_task(crontab(minute="*"))
 def enqueue_due_job_search_tasks():
+    if not acquire_periodic_leader_lock("enqueue_due_job_search_tasks", lock_ttl_seconds=45):
+        return {"status": "skipped", "reason": "not_leader"}
     """
     Runs every minute: find JobSearchTasks across all users where next_run_at <= now,
     enqueues individual run_job_search_task runs (isolated by per-user locks),
@@ -1893,6 +1887,8 @@ JOB_SEARCH_RUN_STALE_MINUTES = 60
 
 @db_periodic_task(crontab(minute="*/15"))
 def mark_stale_job_search_runs_failed():
+    if not acquire_periodic_leader_lock("mark_stale_job_search_runs_failed", lock_ttl_seconds=120):
+        return {"status": "skipped", "reason": "not_leader"}
     """
     Mark JobSearchTaskRun rows that have been RUNNING longer than JOB_SEARCH_RUN_STALE_MINUTES
     as FAILED. Jobs are only added when a run reaches COMPLETED; stuck RUNNING runs mean
@@ -1970,6 +1966,9 @@ def purge_inactive_pipeline_entries_task(limit: int = 400):
 
 @db_periodic_task(crontab(minute="30", hour="1"))
 def cleanup_manager():
+    if not acquire_periodic_leader_lock("cleanup_manager", lock_ttl_seconds=300):
+        logger.info("[cleanup_manager] Another worker replica is execution leader; skipping.")
+        return {"status": "skipped", "reason": "not_leader"}
     """
     Once daily (01:30): Fan out user-scoped cross-profile dedupe and 14-day retention purges across
     Huey workers for scalability. Uses streaming chunked iteration to avoid memory spikes.
@@ -2012,6 +2011,9 @@ def process_user_purge_generated_resumes_task(user_id: int):
 
 @db_periodic_task(crontab(minute="15", hour="*/6"))
 def purge_generated_resumes_periodic():
+    if not acquire_periodic_leader_lock("purge_generated_resumes_periodic", lock_ttl_seconds=300):
+        logger.info("[purge_generated_resumes_periodic] Another worker replica is execution leader; skipping.")
+        return {"status": "skipped", "reason": "not_leader"}
     """Every 6 hours: fan-out removal of old optimizer ephemeral UserResume PDFs per user."""
     User = get_user_model()
     count = 0

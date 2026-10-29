@@ -83,17 +83,45 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         db = settings.DATABASES["default"]
-        if "mysql" not in db.get("ENGINE", ""):
-            raise CommandError(
-                "dbbackup targets MySQL/MariaDB. Set MYSQL_DATABASE in .env first."
-            )
-
         out_dir = Path(options["out"]).resolve()
         out_dir.mkdir(parents=True, exist_ok=True)
         gzip_out = not options["no_gzip"]
+
+        if "sqlite" in db.get("ENGINE", ""):
+            import sqlite3
+            src_path = Path(db["NAME"])
+            if not src_path.exists():
+                raise CommandError(f"SQLite database file not found at {src_path}")
+            self.stdout.write("Backing up SQLite database using online backup API...")
+            temp_db = out_dir / f"temp-{_timestamp()}.sqlite3"
+            src_conn = sqlite3.connect(src_path)
+            dst_conn = sqlite3.connect(temp_db)
+            with dst_conn:
+                src_conn.backup(dst_conn)
+            dst_conn.close()
+            src_conn.close()
+
+            suffix = ".sql.gz" if gzip_out else ".sqlite3"
+            out_path = out_dir / f"backup-sqlite-{_timestamp()}{suffix}"
+            if gzip_out:
+                with open(temp_db, "rb") as f_in, gzip.open(out_path, "wb") as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+                temp_db.unlink()
+            else:
+                temp_db.rename(out_path)
+
+            size_mb = out_path.stat().st_size / 1024 / 1024
+            self.stdout.write(self.style.SUCCESS(f"Backup written: {out_path} ({size_mb:.2f} MB)"))
+            return
+
+        if "mysql" not in db.get("ENGINE", ""):
+            raise CommandError(
+                "dbbackup targets MySQL/MariaDB or SQLite. Configure DATABASES in settings/.env."
+            )
+
         name = db["NAME"]
         suffix = ".sql.gz" if gzip_out else ".sql"
-        out_path = out_dir / f"{name}-{_timestamp()}{suffix}"
+        out_path = out_dir / f"backup-{name}-{_timestamp()}{suffix}"
 
         dump_bin = None if options["python"] else _resolve_dump_bin(options["dump_bin"])
         if dump_bin:

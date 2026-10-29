@@ -379,6 +379,15 @@ JOB_SEARCH_FETCH_BUFFER = 150  # fetch this many from JobSpy; then filter and ta
 JOB_SEARCH_DISPLAY_LIMIT = 50  # max jobs returned per search (top N after sort)
 JOB_SEARCH_HOURS_OLD = 168  # only jobs posted within this many hours (7 days); passed to JobSpy + post-filter
 
+# Job sourcing resilience, circuit breakers & administrative controls
+DISABLED_JOB_SOURCES = [
+    s.strip().lower()
+    for s in env("DISABLED_JOB_SOURCES", default="").split(",")
+    if s.strip()
+]
+JOB_SOURCE_CB_FAILURE_THRESHOLD = env.int("JOB_SOURCE_CB_FAILURE_THRESHOLD", default=3)
+JOB_SOURCE_CB_COOLDOWN_SECONDS = env.int("JOB_SOURCE_CB_COOLDOWN_SECONDS", default=180)
+
 # Dice job search (JSON API used by dice.com; optional override of public browser key).
 DICE_API_KEY = env("DICE_API_KEY", default="")
 DICE_COUNTRY_CODE = env("DICE_COUNTRY_CODE", default="US")
@@ -389,6 +398,8 @@ LEVELS_FYI_STANDARD_LEVELS = env("LEVELS_FYI_STANDARD_LEVELS", default="")
 LEVELS_FYI_OFFSET_STEP = env.int("LEVELS_FYI_OFFSET_STEP", default=10)
 LEVELS_FYI_PAGE_DELAY = env.float("LEVELS_FYI_PAGE_DELAY", default=0.35)
 LEVELS_FYI_MAX_SCAN_PAGES = env.int("LEVELS_FYI_MAX_SCAN_PAGES", default=30)
+LEVELS_FYI_ENRICH_DESCRIPTIONS = env.bool("LEVELS_FYI_ENRICH_DESCRIPTIONS", default=True)
+LEVELS_FYI_ENRICH_MAX_WORKERS = env.int("LEVELS_FYI_ENRICH_MAX_WORKERS", default=8)
 
 # BuiltIn.com job search.
 BUILTIN_API_KEY = env("BUILTIN_API_KEY", default="")
@@ -551,16 +562,117 @@ LANGFUSE_SECRET_KEY = env("LANGFUSE_SECRET_KEY", default="")
 LANGFUSE_BASE_URL = env("LANGFUSE_BASE_URL", default=env("LANGFUSE_HOST", default="https://cloud.langfuse.com"))
 LANGFUSE_HOST = LANGFUSE_BASE_URL
 LANGFUSE_ENABLED = env.bool("LANGFUSE_ENABLED", default=bool(LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY))
-# Privacy & Telemetry Guardrails (default True for data privacy):
-# LANGFUSE_MASK_PII: scrub PII fields (names, addresses, emails, phone numbers, SSNs, URLs) with placeholders ([NAME], [ADDRESS], [EMAIL], [PHONE], etc.)
+# Privacy & Telemetry Guardrails:
+# In production (DEBUG=False), LANGFUSE_REDACT_CONTENT defaults to True (metadata-only telemetry; zero prompt/response leakage)
+# unless explicitly opted into via LANGFUSE_EXPORT_PROMPT_CONTENT=True or LANGFUSE_REDACT_CONTENT=False.
 LANGFUSE_MASK_PII = env.bool("LANGFUSE_MASK_PII", default=True)
-# LANGFUSE_REDACT_CONTENT: emergency zero-content mode; when True, completely replaces input prompt and output response with "redacted-by-litellm" in telemetry
-LANGFUSE_REDACT_CONTENT = env.bool("LANGFUSE_REDACT_CONTENT", default=False)
+LANGFUSE_REDACT_CONTENT = env.bool(
+    "LANGFUSE_REDACT_CONTENT",
+    default=(not DEBUG and not env.bool("LANGFUSE_EXPORT_PROMPT_CONTENT", default=False)),
+)
 LANGFUSE_DROP_ALL_CONTENT = env.bool("LANGFUSE_DROP_ALL_CONTENT", default=LANGFUSE_REDACT_CONTENT)
 
 # Ollama reasoning/thinking mode:
 # When True (default), allows Ollama models with reasoning capabilities (e.g. Nemotron, DeepSeek-R1)
 # to use their full chain-of-thought scratchpad for high accuracy evaluation.
 OLLAMA_ENABLE_THINKING = env.bool("OLLAMA_ENABLE_THINKING", default=True)
+
+# --- OpenTelemetry (OTel) Application Observability ---
+# Completely toggleable; when False or unconfigured, zero overhead/exporters run.
+OTEL_ENABLED = env.bool("OTEL_ENABLED", default=False)
+OTEL_SERVICE_NAME = env("OTEL_SERVICE_NAME", default="hireedge")
+OTEL_EXPORTER_OTLP_ENDPOINT = env("OTEL_EXPORTER_OTLP_ENDPOINT", default="")
+OTEL_EXPORTER_OTLP_HEADERS = env("OTEL_EXPORTER_OTLP_HEADERS", default="")
+
+# --- Structured Logging Configuration ---
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "[{asctime}] {levelname} [{name}:{lineno}] {message}",
+            "style": "{",
+        },
+        "simple": {
+            "format": "{levelname} {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
+    },
+    "root": {
+        "handlers": ["console"],
+        "level": env("DJANGO_LOG_LEVEL", default="INFO"),
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["console"],
+            "level": env("DJANGO_LOG_LEVEL", default="INFO"),
+            "propagate": False,
+        },
+        "django.server": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "resume_app": {
+            "handlers": ["console"],
+            "level": env("RESUME_APP_LOG_LEVEL", default="INFO"),
+            "propagate": False,
+        },
+        "huey": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+}
+
+
+# ==============================================================================
+# Production Startup Invariant Verification (Fail-Closed Safety Guardrails)
+# ==============================================================================
+if not DEBUG and not _IN_TEST:
+    _insecure_defaults = (
+        "django-insecure-+a#*@w#!qb+w*1_6vd4my0q2q^!ddes#&#%jueou)q7(5(=v*n",
+        "django-insecure-",
+    )
+    if not SECRET_KEY or any(SECRET_KEY.startswith(prefix) for prefix in _insecure_defaults):
+        raise ImproperlyConfigured(
+            "Production security failure: SECRET_KEY must be set to a unique, unpredictable secret in production."
+        )
+
+    if not ALLOWED_HOSTS:
+        raise ImproperlyConfigured(
+            "Production security failure: ALLOWED_HOSTS cannot be empty when DEBUG is False."
+        )
+
+    if (
+        DATABASES.get("default", {}).get("ENGINE") == "django.db.backends.sqlite3"
+        and not env.bool("ALLOW_SQLITE_IN_PRODUCTION", default=False)
+    ):
+        raise ImproperlyConfigured(
+            "Production database failure: Running SQLite in production leads to lock contention with background workers. "
+            "Configure MYSQL_DATABASE or explicitly set ALLOW_SQLITE_IN_PRODUCTION=1 if this is intentional."
+        )
+
+    if (
+        EMAIL_BACKEND == "django.core.mail.backends.console.EmailBackend"
+        and not env.bool("ALLOW_CONSOLE_EMAIL_IN_PRODUCTION", default=False)
+    ):
+        raise ImproperlyConfigured(
+            "Production email failure: EMAIL_BACKEND cannot be console in production. "
+            "Configure SMTP or set ALLOW_CONSOLE_EMAIL_IN_PRODUCTION=1 if intentional."
+        )
+
+    if STRIPE_SECRET_KEY and not STRIPE_WEBHOOK_SECRET and not env.bool("ALLOW_EMPTY_STRIPE_WEBHOOK_SECRET", default=False):
+        raise ImproperlyConfigured(
+            "Production billing failure: STRIPE_WEBHOOK_SECRET must be set when STRIPE_SECRET_KEY is configured."
+        )
+
 
 

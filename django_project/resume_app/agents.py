@@ -468,14 +468,58 @@ def run_matching(
                     "reasoning": radar_cached.get("fit_summary", ""),
                     "interview_probability": radar_cached.get("interview_probability"),
                     "thoughts": radar_cached.get("fit_summary", ""),
+                    "core_competencies": radar_cached.get("core_competencies", []),
+                    "stretch_skills": radar_cached.get("stretch_skills", []),
                 }
                 if unified_key:
                     cache.set(unified_key, res, 7 * 86400)
                 if return_debug:
                     res["raw_llm_content"] = "(from skill radar cache)"
                 return res
+
+            # Direct delegation to SkillRadarService for unified candidate-job fit
+            if not prompt_template and not prompt_legacy:
+                from .models import JobListing, JobMatchResult
+                job_obj = JobListing.objects.filter(id=job_id).first()
+                if job_obj:
+                    radar_res = SkillRadarService.analyze(
+                        job_obj,
+                        resume_text,
+                        user=user,
+                        resume_id=resume_id,
+                        job_description=job_description,
+                        only_local=only_local,
+                    )
+                    if radar_res.get("source") != "error" and radar_res.get("match_score") is not None:
+                        res = {
+                            "score": radar_res.get("match_score", 0),
+                            "reasoning": radar_res.get("fit_summary", ""),
+                            "interview_probability": radar_res.get("interview_probability"),
+                            "thoughts": radar_res.get("fit_summary", ""),
+                            "core_competencies": radar_res.get("core_competencies", []),
+                            "stretch_skills": radar_res.get("stretch_skills", []),
+                        }
+                        if unified_key:
+                            cache.set(unified_key, res, 7 * 86400)
+                        if return_debug:
+                            res["raw_llm_content"] = "(from SkillRadarService)"
+                        if user:
+                            try:
+                                JobMatchResult.objects.update_or_create(
+                                    owner=user,
+                                    job_listing_id=job_id,
+                                    resume_id=resume_id,
+                                    defaults={
+                                        "fit_score": res["score"],
+                                        "reasoning": res["reasoning"],
+                                        "status": JobMatchResult.STATUS_ANALYZED,
+                                    },
+                                )
+                            except Exception as ex_db:
+                                logger.debug("Could not sync JobMatchResult in delegation: %s", ex_db)
+                        return res
         except Exception as e:
-            logger.debug("[matching] Error checking SkillRadar cache: %s", e)
+            logger.warning("[matching] Error delegating to SkillRadarService: %s; falling back to legacy prompt", e)
 
     fmt = dict(resume_text=resume_text, job_description=job_description)
     if prompt_template and str(prompt_template).strip():
@@ -746,7 +790,7 @@ def format_judge_feedback_for_writer(state: dict) -> str:
         # 1. Priority Revision Directives
         priorities = syn.get("priority_revisions") or []
         if priorities:
-            lines = ["#### 1. PRIORITY REVISION COMMANDS (MANDATORY):"]
+            lines = ["#### 1. TARGET REVISIONS & CANDIDATE GAPS (APPLY ONLY WHERE GROUNDED IN CANDIDATE FACTS):"]
             for i, p in enumerate(priorities, 1):
                 lines.append(f"{i}. {p}")
             sections.append("\n".join(lines))
@@ -810,7 +854,7 @@ def format_judge_feedback_for_writer(state: dict) -> str:
 
     if sections:
         return "\n\n".join(sections)
-    return "(none — initial draft generation pass. Focus on tailoring to the job description while preserving all original facts, roles, and scope.)"
+    return "(none - initial draft generation pass. Focus on tailoring to the job description while preserving all original facts, roles, and scope.)"
 
 
 def writer_node(state: AgentState):
@@ -857,19 +901,21 @@ def writer_node(state: AgentState):
             "Preserve all career history, bullet points, and achievements without aggressive summarization."
         )
 
+    from .parsers import sanitize_ats_text
+
     fmt = dict(
-        resume_text=resume_body_this_step,
-        job_description=jd_writer,
-        full_job_description=full_jd_for_prompt,
-        feedback=format_judge_feedback_for_writer(state),
-        optimized_resume=prior,
-        source_resume_text=source_for_prompt,
+        resume_text=sanitize_ats_text(resume_body_this_step),
+        job_description=sanitize_ats_text(jd_writer),
+        full_job_description=sanitize_ats_text(full_jd_for_prompt),
+        feedback=sanitize_ats_text(format_judge_feedback_for_writer(state)),
+        optimized_resume=sanitize_ats_text(prior),
+        source_resume_text=sanitize_ats_text(source_for_prompt),
         source_word_count=source_words,
         length_guardrail=length_guardrail,
-        optimization_notes=_state_get(state, "optimization_notes") or "(none)",
-        pipeline_skills_json=_state_get(state, "pipeline_skills_json") or "(none)",
-        job_highlights=_state_get(state, "job_highlights") or "(none)",
-        retrieval_context=_state_get(state, "retrieval_context") or "(none)",
+        optimization_notes=sanitize_ats_text(_state_get(state, "optimization_notes") or "(none)"),
+        pipeline_skills_json=sanitize_ats_text(_state_get(state, "pipeline_skills_json") or "(none)"),
+        job_highlights=sanitize_ats_text(_state_get(state, "job_highlights") or "(none)"),
+        retrieval_context=sanitize_ats_text(_state_get(state, "retrieval_context") or "(none)"),
     )
     legacy = (_state_get(state, "writer_prompt_legacy") or "").strip()
     sys_t = (_state_get(state, "writer_prompt_system") or "").strip()
@@ -1393,7 +1439,7 @@ def resume_judge_node(state: AgentState):
         DEFAULT_RESUME_JUDGE_SYSTEM,
         DEFAULT_RESUME_JUDGE_USER,
     )
-    from .llm import USAGE_QUERY_OPTIMIZER_ATS_JUDGE
+    from .llm import USAGE_QUERY_OPTIMIZER_ATS_JUDGE, USAGE_QUERY_RESUME_JUDGE
 
     llm = _state_get(state, "llm")
     draft = (_state_get(state, "optimized_resume") or "").strip() or (_state_get(state, "resume_text") or "").strip()
@@ -1402,17 +1448,19 @@ def resume_judge_node(state: AgentState):
     job_title = (_state_get(state, "job_title") or "").strip() or "Target Role"
     score_threshold = int(_state_get(state, "score_threshold") or 85)
 
-    # Resolve active ATS profile directives if present
+    # Resolve active ATS profile directives if present (strip legacy competing JSON output formats)
     ats_directives = ""
     ats_sys = (_state_get(state, "ats_judge_prompt_system") or "").strip()
     if ats_sys and ats_sys != DEFAULT_ATS_JUDGE_SYSTEM:
-        ats_directives = f"\nCustom ATS Profile Directives:\n{ats_sys}\n"
+        cleaned_ats = re.split(r"(?i)\n\s*Output\s+Format\s*:", ats_sys)[0].strip()
+        ats_directives = f"\nCustom ATS Profile Directives:\n{cleaned_ats}\n"
 
-    # Resolve active Recruiter directives if present
+    # Resolve active Recruiter directives if present (strip legacy competing JSON output formats)
     recruiter_directives = ""
     rec_sys = (_state_get(state, "recruiter_judge_prompt_system") or "").strip()
     if rec_sys and rec_sys != DEFAULT_RECRUITER_JUDGE_SYSTEM:
-        recruiter_directives = f"\nCustom Recruiter Directives:\n{rec_sys}\n"
+        cleaned_rec = re.split(r"(?i)\n\s*Output\s+Format\s*:", rec_sys)[0].strip()
+        recruiter_directives = f"\nCustom Recruiter Directives:\n{cleaned_rec}\n"
 
     fmt = {
         "job_description": judge_jd,
@@ -1463,7 +1511,7 @@ def resume_judge_node(state: AgentState):
         messages,
         user=owner_user,
         job_cache_key=_state_get(state, "job_cache_key"),
-        usage_query_kind=USAGE_QUERY_OPTIMIZER_ATS_JUDGE,
+        usage_query_kind=USAGE_QUERY_RESUME_JUDGE,
         config=invoke_config,
         prefer_local=prefer_local,
         allow_local=False,

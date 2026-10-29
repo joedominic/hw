@@ -363,6 +363,7 @@ def _handle_save_provider_preferences(request, user):
     pref_tpms = request.POST.getlist("pref_rate_limit_tpm")
     pref_cooldowns = request.POST.getlist("pref_rate_limit_cooldown")
     pref_is_locals = request.POST.getlist("pref_is_local")
+    pref_model_tiers = request.POST.getlist("pref_model_tier")
     row_count = max(
         len(pref_ids),
         len(pref_providers),
@@ -372,6 +373,7 @@ def _handle_save_provider_preferences(request, user):
         len(pref_tpms),
         len(pref_cooldowns),
         len(pref_is_locals),
+        len(pref_model_tiers),
     )
 
     def _parse_rate_limit_field(raw: str):
@@ -406,6 +408,10 @@ def _handle_save_provider_preferences(request, user):
         rl_cd = _parse_cooldown_field(pref_cooldowns[i] if i < len(pref_cooldowns) else "")
         raw_local = (pref_is_locals[i] if i < len(pref_is_locals) else "0").strip()
         is_local = raw_local in ("1", "true", "on", "yes")
+        raw_tier = (pref_model_tiers[i] if i < len(pref_model_tiers) else "").strip().lower()
+        if raw_tier not in ("slm", "frontier"):
+            from .llm.gateway import classify_model_tier
+            raw_tier = classify_model_tier(provider, model)
         if not provider:
             continue
         try:
@@ -443,6 +449,7 @@ def _handle_save_provider_preferences(request, user):
         pref_obj.model = model
         pref_obj.priority = priority
         pref_obj.is_local = is_local
+        pref_obj.model_tier = raw_tier
         if rl_rpm is not None and rl_tpm is not None:
             pref_obj.rate_limit_rpm = rl_rpm
             pref_obj.rate_limit_tpm = rl_tpm

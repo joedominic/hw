@@ -224,4 +224,16 @@ class EmployerResponseTrackingTests(TestCase):
         self.assertEqual(item1["event"]["interviewer_names"], "Sarah Connor")
         self.assertEqual(item1["event"]["location_or_link"], "https://zoom.us/j/12345")
 
+    def test_cockpit_log_interview_buttons_render_safely(self):
+        self.client.force_login(self.user)
+        response = self.client.get(f"/jobs/cockpit/?track=default&stage=done")
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode("utf-8")
+        # Ensure openLogInterviewDrawerForActiveJob is defined and called
+        self.assertIn("openLogInterviewDrawerForActiveJob()", content)
+        self.assertIn("function openLogInterviewDrawerForActiveJob()", content)
+        # Ensure no broken 'rows[activeIndex]' in inline onclick attributes
+        self.assertNotIn('onclick="const peId = rows[activeIndex]', content)
+        self.assertNotIn('onclick="const jobId = rows[activeIndex]', content)
+
 

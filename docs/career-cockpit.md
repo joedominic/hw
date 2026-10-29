@@ -79,7 +79,7 @@ flowchart TD
    - Houses the **"⚙️ Search Automation"** button which opens the slide-over drawer.
 2. **Center Pane — 4-Stage Kanban Pipeline:**
    - **New (`stage=pipeline`):** Newly ingested listings waiting for candidate screening. Primary action: **"Move to Review"**.
-   - **Review (`stage=vetting`):** Curated opportunities undergoing deep fit deliberation and LLM skill matching. Primary action: **"Start Tailoring"**.
+   - **Review (`stage=vetting`):** Curated opportunities undergoing deep fit deliberation and LLM skill matching. Primary action: **"Move to Applying"**.
    - **Applying (`stage=applying`):** Active roles being tailored with the multi-agent AI resume optimizer. Primary action: **"Mark Submitted"**.
    - **Applied (`stage=done`):** Submitted applications feeding real-world interview loops (`EmployerInterviewEvent`). Primary action: **"Log Next Step"** (badges current milestone and opens drawer with next round pre-selected).
 3. **Right Rail / Slide-Over — Inspection & Details:**
@@ -128,12 +128,18 @@ The Cockpit registers a global `keydown` listener in `career_cockpit.html` (igno
 - `K` / `k` / `ArrowUp` — Move focus to the previous visible job card (`selectJob(prevIndex)`).
 - `E` / `e` — Submits the focused card's action form:
   - In **New**: Advances to **Review** ("Move to Review").
-  - In **Review**: Advances to **Applying** ("Start Tailoring").
+  - In **Review**: Advances to **Applying** ("Move to Applying").
   - In **Applying**: Advances to **Applied** ("Mark Submitted").
 - `L` / `l` — Toggles like/unlike on the focused card by submitting `action="like"` or `action="unlike"`, updating the preference centroid.
 - `X` / `x` — Submits the focused card's dislike form (`action="dislike"`), deprioritizing similar roles.
 - `T` / `t` — Opens the resume optimizer for the focused card.
 - `Escape` — Closes inspector (`closeInspector()`), active profile drawer (`closeProfileDrawer()`), and slide-over automation drawer (`closeAutomationDrawer()`).
+
+### 2.7 Sort Order Persistence Across Triage & Mutation Actions
+The Cockpit remembers the candidate's active sort criterion (`Highest Score`, `Latest / Fresh`, `Interview Prob.`, `Oldest`) across all card mutations, profile switches, and page refreshes:
+- **Session & URL State:** Sort choices are persisted in Django session (`request.session["pipeline_sort_by"]`) and reflected in URL parameters (`sort_by`).
+- **Mutation Resilience:** All action forms (Remove/Delete, Dislike, Like, Move to Review, Move to Applying, Bulk Actions) carry the active sort parameter (`sort_by` and in `next` redirect target).
+- **Client-Side Sync:** When selecting a sort criterion via `#cockpit-sort-select`, DOM cards reorder instantly, `history.replaceState` updates the address bar, `localStorage` caches the preference, and all action forms dynamically synchronize their `next` and `sort_by` inputs.
 
 ---
 
@@ -167,14 +173,24 @@ If a job run encounters an error, timeout, or concurrency skip:
 - The status API and Cockpit view check if the most recent run ended in `status == 'failed'`. If so, any lingering cooldown is purged and `task_cooldown_remaining_seconds = 0`.
 - **Result:** The user is **never locked out after a failed run** and can immediately retry.
 
-### 3.4 Run Inspection Modal & Disposition Analytics
+### 3.4 Run Inspection Modal, Disposition Analytics & Manual Rescue ("+ Add to Review")
 Clicking on the stats pill or "View Breakdown" button opens an interactive modal showing the exact disposition of every fetched job:
 - **Saved to Pipeline (New):** Fresh postings admitted to the user's pipeline.
 - **Reposted to Pipeline:** Previously expired roles revived after the 14-day cooldown.
 - **Already in Pipeline:** Skipped because they already exist in `Pipeline`, `Vetting`, `Applying`, or `Done`.
 - **Expired / Not Reposted:** Roles retired by retention policies.
-- **Eliminated (Duplicates / Preference):** Screened out by negative preference embeddings or duplicate detection.
+- **Eliminated (Duplicates / Preference / Disqualifiers / LLM Guard):** Screened out by negative preference embeddings, keyword disqualifiers, or duplicate detection.
 - **Previously Removed:** Explicitly archived/dismissed by the user in past sessions.
+
+#### Human-in-the-Loop Job Rescue ("+ Add to Review")
+To correct false-positive eliminations (e.g. over-aggressive preference margin filtering or keyword matches):
+- Every eliminated, skipped, or unsaved row provides an active **`+ Add to Review`** action button.
+- Clicking the button invokes `POST /api/resume/jobs/<id>/save?track=<slug>`, which:
+  1. Clears any conflicting legacy negative sentiment (`DISLIKED` or `HIDDEN` actions and embeddings) on the target track.
+  2. Creates or restores the `PipelineEntry` directly in the **Review (`stage="vetting"`)** stage.
+  3. Enqueues background Skill Radar fit evaluation (`evaluate_vetting_matching_task`).
+  4. Dynamically transitions the row button to **`✓ In Review`** and increments filter counts.
+  5. Upon closing the modal, automatically reloads the Cockpit board so rescued cards immediately populate the Review column.
 
 Users can also download the raw run breakdown as **CSV** (`/jobs/tracks/scheduled-runs/<run_id>/download-csv/`) or view the structured **JSON** (`/jobs/tracks/scheduled-runs/<run_id>/details-json/`).
 
@@ -182,48 +198,20 @@ Users can also download the raw run breakdown as **CSV** (`/jobs/tracks/schedule
 
 ## 5. Review-Stage Deep Analysis & Two-Pass Batch Architecture
 
-To optimize system responsiveness and eliminate GPU memory/KV-cache thrashing, deep evaluation runs **only for jobs in Review (`vetting`) and Applying (`applying`) stages** in an optimized **Two-Pass Batch Architecture**:
+To optimize system responsiveness and eliminate GPU memory/KV-cache thrashing, deep evaluation runs **only for jobs in Review (`vetting`) and Applying (`applying`) stages** via the optimized Candidate Fit & Skill Radar engine:
 
-### 5.1 Pass 1: Labor Compliance & Posting Authenticity Audit
-Before running candidate-specific match scoring, the worker runs Pass 1 sequentially across all un-audited unique `JobListing`s:
-- **KV-Cache Optimization:** Because all jobs in Pass 1 share the exact same system prompt prefix, local Ollama keeps the system prompt prefix 100% warm across the batch. This avoids alternating prompts ("ping-ponging") between compliance checks and candidate resumes.
-- **Intrinsic Catalog Persistence:** Post authenticity is an intrinsic property of the global posting, not tenant-specific. Results are persisted to `JobListing` (`authenticity_verdict`, `authenticity_score`, `authenticity_confidence`, `authenticity_rationale`, `authenticity_audit_trail`, `authenticity_audited_at`), auditing each unique posting once across all tenants.
-- **Posting Date & Lifespan Window Extraction (`JobAuthenticityService.extract_window_and_deadline`):**
-  - **`posted_date`:** Extracted from `JobListing.posted_at` and formatted as `YYYY-MM-DD`.
-  - **`application_window`:** Evaluates text and requisition metadata to determine the active application lifespan. Detects statutory corporate minimum clauses (e.g., *"accepting applications for a minimum of 5 business days"*), ongoing/open-ended postings (*"applications accepted on an ongoing basis"*, *"open until filled"*), or explicit closing dates (computing the calendar day delta from `posted_at`). Flagged as a short lifespan if the delta is $\le 4$ calendar days or contains statutory compliance minimum language.
-  - Injected directly into the audit prompt template (`DEFAULT_JOB_AUTHENTICITY_USER` and `SystemPromptProfile.job_authenticity_user`) and deterministic fallback heuristic.
-- **10-Point Deterministic Rule Engine:**
-  1. `perm_legal_phrasing` (+40 pts): Mandatory DOL ETA-9089 immigrant labor certification phrasing ("post-baccalaureate progressive experience", "in the alternative", "or foreign educational equivalent", instructions to mail a physical paper resume or legal compliance inbox). Automatically forces verdict `PERM_COMPLIANCE`. (Note: if text explicitly states the role is not eligible for visa sponsorship, this is evaluated as False / 0 pts).
-  2. `phantom_pipeline_or_talent_pool` (+50 pts): Requisition ID or title explicitly contains tokens like `PIPE`, `POOL`, `TALENT`, `COMMUNITY`, `EVERGREEN`, or description disclaims that no immediate funded role exists. Automatically forces verdict `PHANTOM_PIPELINE`.
-  3. `short_lifespan_or_compliance_window` (+35 pts): Posting delta to deadline is $\le 4$ calendar days (e.g. posted Friday, closing Monday), or states an artificial statutory compliance minimum (e.g., *"accepting applications for a minimum of 5 business days"*), or pairs volume disclaimers with an ultra-short window.
-  4. `generic_jfa_template_only` (+20 pts): Responsibilities consist entirely of generic Job Family Architecture (JFA) competencies with zero mention of a specific team, named product, or bounded engineering mission.
-  5. `senior_promotion_or_scope_mismatch` (+25 pts): High-grade leadership/IC tier (P5, Principal Engineer, Sr. Director, Enterprise Architect) posted with an ultra-short window ($\le 4$ days) indicating an in-band promotion or incumbent conversion; or Director/Sr. Director title with division CTO or multi-billion P&L scope.
-  6. `bespoke_contractor_conversion_stack` (+25 pts): Mandates an unusual, highly bespoke pairing of disparate legacy + modern enterprise systems or exact vendor certifications mirroring an existing incumbent contractor.
-  7. `hyper_specific_okrs` (+20 pts): Cites explicit numeric targets (e.g., "achieve 90%+ zero-touch", "$6.1B run-rate") or proprietary, non-public internal platform codenames.
-  8. `rigid_degree_equation` (+20 pts): Inflexible degree equations strictly enforced without alternative experience (e.g., "Master's + 3 years OR Bachelor's + 5 years" with no "or equivalent experience").
-  9. `flat_salary_range` (+15 pts): Single rigid number or delta between maximum and minimum base salary $\le \$15,000$.
-  10. `flexible_general_req` (-20 pts): Broad interchangeable skills separated by "or" (e.g., "Java, Python, or Go", "Computer Science or equivalent experience") with no proprietary version locks.
-- **Verdicts:**
-  - `PERM_COMPLIANCE` (statutory DOL ETA-9089 filing)
-  - `PHANTOM_PIPELINE` (evergreen talent community without an active funded opening)
-  - `INTERNAL_PRESELECT` (risk score $\ge 40$, clamped between 0 and 100)
-  - `GENUINE_EXTERNAL` (risk score $< 40$, normal open-market hiring competition)
-- **Cockpit UI & Slide Drawer Presentation:**
-  - **Card Badges:** Rendered on Kanban cards in Review and Applying: amber `PERM Filing`, rose `Likely Internal`, purple `Phantom Requisition`, and subtle slate `External Hire`.
-  - **Slide Drawer (Card 3):**
-    - **Audit Assessment Narrative Box:** Prominently displays the synthesized compliance narrative with color-coded badge styling reflecting the verdict.
-    - **Intellectual Property Protection:** The internal 10-point audit checklist and mathematical scoring arithmetic are strictly omitted from the candidate-facing DOM and non-staff REST responses, keeping proprietary classification rules confidential while providing actionable verdicts.
-    - **Focused Actionable Diagnostics:** Core Competencies are omitted from Card 3 to reduce cognitive load and focus the candidate on full-width **Stretch Skills** (actionable gaps).
-    - **Responsive Action Toolbar:** The `Re-Analyze` button and metadata pills are formatted on separated responsive rows (`flex flex-wrap`), eliminating horizontal button edge overflow on vertical/portrait and narrow viewports. An on-demand trigger is available via `POST /api/resume/jobs/{id}/audit-authenticity`.
-
-### 5.2 Pass 2: Resume Match Radar & Candidate Fit Probability
-Once Pass 1 concludes, the worker switches to the candidate resume context and processes Pass 2:
-- **Consolidated Analysis Service (`SkillRadarService.analyze`):** Extracts `match_score`, `core_competencies`, `stretch_skills`, and `fit_summary`.
+### 5.1 Resume Match Radar & Candidate Fit Probability
+The worker evaluates candidate resume fit using local LLM inference with prompt prefix caching:
+- **Consolidated Analysis Service (`SkillRadarService.analyze`):** Extracts `domain_alignment`, `seniority_alignment`, `match_score`, `interview_probability`, `core_competencies`, `stretch_skills`, and `fit_summary`. (For full details on the contextual 4-tier gap engine and incidental tool dampening, see [Skill Radar Diagnostics Spec](features/skill-radar-diagnostics.md)).
 - **KV Prefix Caching Speedup:** The prompt orders `Candidate Resume` ahead of `Job Description`. Across sequential calls for a candidate, Ollama reuses the cached prompt prefix, cutting per-job latency from ~6.95s (cold) to ~2.06s (warm—a ~70% speedup).
 - **Zero-Latency Heuristic JD Cleansing:** The vetting pipeline uses fast regex cleansing (`use_llm=False`) to strip EEO/boilerplate in 0ms, preventing extraneous free-form LLM queries from invalidating the warm Ollama KV cache.
 - **Dual-Tier Persistence:**
   1. **Redis Cache:** Stored at `cockpit_ollama_skill_radar_{user_id}_{resume_id}_{job_id}` with a 7-day TTL for instant modal loading.
-  2. **Database:** Persisted to `PipelineEntry` (`vetting_interview_probability`, `vetting_interview_reasoning`, `vetting_interview_resume_id`, `vetting_interview_scored_at`).
+  2. **Database:** Persisted to `PipelineEntry` (`vetting_match_score`, `vetting_interview_probability`, `vetting_interview_reasoning`, `vetting_core_competencies`, `vetting_stretch_skills`, `vetting_interview_resume_id`, `vetting_interview_scored_at`).
+- **Cockpit Slide Drawer Presentation:**
+  - **Match Score & Status Pills:** Clear visual display of candidate match percentage, callback probability, and verified count (`85% Match (4 Verified)`).
+  - **Core Competencies & Stretch Skills:** Pinpoints verified matching skills alongside targeted skill gaps.
+  - **Interview Prep Engine:** Instant generation and editing of STAR questions tailored to the role.
 
 ---
 
@@ -234,7 +222,6 @@ Once Pass 1 concludes, the worker switches to the candidate resume context and p
 | `job_task_pending:{task_id}` | Boolean string | 180s | Bridges HTTP enqueue to Huey execution; keeps UI polling active | `job_task_run_now_view` | `run_job_search_task` start/skip/fail, or 180s TTL |
 | `job_task_manual_cooldown:{task_id}` | Timestamp string | 180s | Enforces 3-minute wait between manual triggers | `job_task_run_now_view` | Auto-deleted on run failure; auto-expires after 3m |
 | `job_search_task_running:u{user_id}` | Integer lock | 3600s | Prevents overlapping concurrent searches for the same user | `run_job_search_task` | `finally: cache.delete(lock_key)` in worker |
-| `job_authenticity_{job_listing_id}` | JSON dict | 7 days (604800s) | Caches labor compliance and posting authenticity audit results | `JobAuthenticityService.audit` | Overwritten on on-demand refresh; auto-expires in 7 days |
 | `cockpit_ollama_skill_radar_{u}_{r}_{job_id}` | JSON dict | 7 days (604800s) | Caches consolidated deep analysis diagnostics & skill radar | `SkillRadarService.analyze` | Overwritten on force-refresh; auto-expires after 7 days |
 | `vetting_matching_task_running:u{user_id}` | Integer lock | 1800s | Enforces sequential vetting matching per user for prefix caching | `evaluate_vetting_matching_task` | `finally: cache.delete(lock_key)` in worker |
 
@@ -254,6 +241,4 @@ Once Pass 1 concludes, the worker switches to the candidate resume context and p
 | `GET` | `/jobs/tracks/scheduled-runs/<id>/details-json/` | `scheduled_run_details_json` | Ingestion breakdown JSON for inspection modal |
 | `GET` | `/jobs/tracks/scheduled-runs/<id>/download-csv/` | `download_scheduled_run_csv` | Export run job dispositions as CSV |
 | `POST` | `/api/resume/jobs/<id>/save` | `save_job` | Bridge job from Sandbox to Cockpit Review (`stage=vetting`) |
-| `GET` | `/api/resume/jobs/<id>/authenticity` | `get_authenticity` | Get cached/persisted labor compliance and authenticity audit |
-| `POST` | `/api/resume/jobs/<id>/audit-authenticity` | `audit_authenticity` | Trigger on-demand 10-point labor compliance & authenticity audit |
 | `GET` | `/jobs/automation/` | `job_automation` | Legacy URL; permanently redirects to `/jobs/cockpit/` |

@@ -59,11 +59,26 @@ class JobIngestionService:
         aggregated: list[RawJobDTO] = []
         seen_keys: set[tuple[str, str]] = set()
 
+        from .circuit_breaker import get_circuit_breaker, is_source_enabled
+
         for site in target_sites:
             adapter = self._adapters.get(site)
             if not adapter:
                 logger.warning("[JobIngestionService] No adapter registered for site '%s'", site)
                 continue
+
+            if not is_source_enabled(site):
+                cb = get_circuit_breaker(site)
+                status = cb.get_status()
+                logger.warning(
+                    "[JobIngestionService] Skipping source '%s' (admin_disabled=%s, state=%s, cooldown_remaining=%.1fs)",
+                    site,
+                    status.get("is_admin_disabled"),
+                    status.get("state"),
+                    status.get("cooldown_remaining_seconds", 0.0),
+                )
+                continue
+
             try:
                 results = adapter.fetch_jobs(
                     search_term=search_term,
@@ -77,8 +92,10 @@ class JobIngestionService:
                     if key not in seen_keys:
                         seen_keys.add(key)
                         aggregated.append(dto)
+                get_circuit_breaker(site).record_success()
             except Exception as exc:
                 logger.warning("[JobIngestionService] Adapter '%s' failed: %s", site, exc)
+                get_circuit_breaker(site).record_failure(exc)
 
         if hours_old is not None and hours_old > 0:
             cutoff = timezone.now() - timedelta(hours=hours_old)

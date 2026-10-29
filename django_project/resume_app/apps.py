@@ -11,10 +11,14 @@ class ResumeAppConfig(AppConfig):
         from resume_app.account import install_user_email_signals
         from resume_app.application.event_handlers import register_event_handlers
         from resume_app.llm.factory import configure_langfuse_telemetry
+        from resume_app.otel import init_opentelemetry
+        from resume_app.task_dlq import register_dlq_signals
 
         install_user_email_signals()
         register_event_handlers()
         configure_langfuse_telemetry()
+        init_opentelemetry()
+        register_dlq_signals()
 
         # Reduce "database is locked" when Huey and the dev server share SQLite.
         from django.db.backends.signals import connection_created

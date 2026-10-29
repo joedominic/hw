@@ -101,7 +101,24 @@ class JDCleanserService:
             "who we are", "life at", "perks", "compensation", "how to apply",
             "physical requirements", "work environment", "travel requirements",
             "diversity and inclusion",
+            # Modern corporate & ATS fluff headers
+            "what's in it for you", "what is in it for you", "what we offer",
+            "what you'll get", "what you get", "why work with us", "why work here",
+            "total rewards", "pay range", "salary range", "compensation range",
+            "base compensation", "base pay", "social impact", "making a real-world impact",
+            "our impact", "community", "our commitment", "our values",
+            "hybrid work model", "hybrid work", "remote work", "workplace model",
+            "career development and growth", "career development",
+            "use of ai within the recruitment process", "our use of ai", "ai in recruitment",
+            "recruitment process", "hiring process", "notice to applicants",
+            "eeo statement", "affirmative action", "privacy notice",
         )
+
+        def _normalize_header_text(h: str) -> str:
+            t = (h or "").strip().lower()
+            t = t.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"')
+            t = re.sub(r"[\?\:\!\.\*\_]+$", "", t).strip()
+            return t
 
         d = description.strip()
 
@@ -110,7 +127,7 @@ class JDCleanserService:
 
         # 1. Section-based filtering: scan for role headers vs fluff headers
         lines = d.split('\n')
-        header_pattern = re.compile(r"^(?:\*\*|##|###)?\s*([^*#:]+)(?:\*\*|:)?\s*$")
+        header_pattern = re.compile(r"^(?:\*\*|##|###)?\s*([^*#]+?)(?:\*\*|##|###)?\s*$")
         
         # Check if the document contains explicit role section headers
         has_role_header = False
@@ -121,8 +138,8 @@ class JDCleanserService:
                 continue
             match = header_pattern.match(stripped)
             if match:
-                header_text = match.group(1).strip().lower()
-                if len(header_text.split()) < 7 and any(kw in header_text for kw in ROLE_HEADER_KEYWORDS):
+                header_text = _normalize_header_text(match.group(1))
+                if len(header_text.split()) < 10 and any(kw in header_text for kw in ROLE_HEADER_KEYWORDS):
                     has_role_header = True
                     first_role_header_idx = idx
                     break
@@ -156,9 +173,9 @@ class JDCleanserService:
             # Check if line looks like a header
             match = header_pattern.match(stripped)
             if match:
-                header_text = match.group(1).strip().lower()
+                header_text = _normalize_header_text(match.group(1))
                 # Use a word-count heuristic to avoid false positives on long sentences
-                if len(header_text.split()) < 6:
+                if len(header_text.split()) < 10:
                     if any(kw in header_text for kw in FLUFF_HEADER_KEYWORDS):
                         is_fluff_section = True
                         continue
@@ -196,6 +213,13 @@ class JDCleanserService:
             "competitive salary", "medical, dental, vision", "401(k)", "401k",
             "unlimited pto", "flexible work", "work-life balance", "stipend",
             "competitive compensation", "comprehensive benefits", "paid time off",
+            # Modern corporate disclosures & legal fluff
+            "use of ai within the recruitment process", "utilizes artificial intelligence",
+            "complies with local laws that require upfront disclosure",
+            "base compensation range varies across locations",
+            "eligible office location(s) for this role include",
+            "total reward program which also includes flexible and supportive benefits",
+            "headspace app", "mental health days", "tuition reimbursement",
         )
         if len(text) < 15:
             return False

@@ -1008,20 +1008,38 @@ def parse_fit_check_fallback(content: str) -> FitCheckResult:
         )
         thoughts = _get_key(data, "thoughts", "feedback", "reasoning")
         try:
-            score = int(raw_score) if raw_score is not None else 50
-            score = max(0, min(100, score))
+            score = 50
+            if raw_score is not None:
+                try:
+                    clean_score = str(raw_score).strip().rstrip("%").strip()
+                    f_score = float(clean_score)
+                    if 0.0 < f_score <= 1.0:
+                        f_score = f_score * 100.0
+                    score = max(0, min(100, int(round(f_score))))
+                except (TypeError, ValueError):
+                    score = 50
+
             ip = None
             if raw_ip is not None:
                 try:
                     if isinstance(raw_ip, str):
-                        # Handle common formats like "72%", "Interview: 72/100", etc.
-                        m = re.search(r"(\d{1,3})", raw_ip)
-                        if m:
-                            ip_val = int(m.group(1))
-                            ip = max(0, min(100, ip_val))
+                        clean_ip = raw_ip.strip().rstrip("%").strip()
+                        try:
+                            f_val = float(clean_ip)
+                            if 0.0 < f_val <= 1.0:
+                                f_val = f_val * 100.0
+                            ip = max(0, min(100, int(round(f_val))))
+                        except ValueError:
+                            # Handle common formats like "Interview: 72/100", etc.
+                            m = re.search(r"(\d{1,3})", clean_ip)
+                            if m:
+                                ip_val = int(m.group(1))
+                                ip = max(0, min(100, ip_val))
                     else:
-                        ip_val = int(raw_ip)
-                        ip = max(0, min(100, ip_val))
+                        f_val = float(raw_ip)
+                        if 0.0 < f_val <= 1.0:
+                            f_val = f_val * 100.0
+                        ip = max(0, min(100, int(round(f_val))))
                 except (TypeError, ValueError):
                     ip = None
             # Fallback: sometimes the model includes interview probability in the
@@ -1144,6 +1162,12 @@ def sanitize_ats_text(text: str) -> str:
     # U+2010 (hyphen), U+2011 (non-breaking hyphen), U+2012 (figure dash),
     # U+2013 (en dash), U+2014 (em dash), U+2015 (horizontal bar), U+2212 (minus sign)
     text = re.sub(r"[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]", "-", text)
+
+    # 2. Unicode spaces & non-breaking spaces -> standard ASCII space (U+0020)
+    # \u00A0 (non-breaking space), \u202F (narrow no-break space), \u2000-\u200A (en/em/thin/hair space)
+    text = re.sub(r"[\u00A0\u202F\u2000-\u200A]", " ", text)
+    # Zero-width spaces, joiners, and BOM
+    text = re.sub(r"[\u200B-\u200D\uFEFF]", "", text)
 
     # 2. Quotes: curly quotes and double quotes -> single quote (')
     text = re.sub(r'["\u201C\u201D\u201E\u201F\u00AB\u00BB]', "'", text)

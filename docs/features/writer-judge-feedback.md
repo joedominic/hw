@@ -23,8 +23,8 @@ The solution implements a 3-part coordination pattern across the agent runtime a
 ### A. Structured Diagnostic Synthesis (`agents.py`)
 In [`django_project/resume_app/agents.py`](file:///D:/Workshop/JobApp-Main/django_project/resume_app/agents.py), the `format_judge_feedback_for_writer(state)` function extracts structured data from `state["last_resume_judge_json"]` (or fallback `feedback` lists) into a clean, markdown-formatted directive block:
 
-1. **Priority Revision Commands (Numbered):**
-   - Extracted directly from `synthesis.priority_revisions` to serve as the Writer's primary revision checklist.
+1. **Target Revisions & Candidate Gaps (Numbered):**
+   - Labeled as `#### 1. TARGET REVISIONS & CANDIDATE GAPS (APPLY ONLY WHERE GROUNDED IN CANDIDATE FACTS):` rather than "MANDATORY" commands. This resolves attention dissonance with Rule 1 (Zero Hallucination), directing the model to validate target gaps against candidate source facts before applying.
 2. **ATS Searchability & Keyword Directives:**
    - Missing Core Keywords to integrate.
    - Explicit Grounding Rule: *"Weave these keywords into existing accomplishments or technical skills summary where related work was performed. Do not fabricate false employers or degrees."*
@@ -44,12 +44,32 @@ In [`django_project/resume_app/prompts.py`](file:///D:/Workshop/JobApp-Main/djan
 - **Rule 4:** Close metric and scale indicators for flagged quantification gaps.
 - **Rule 5:** Enforce ATS date and formatting directives.
 
-### C. Elevated Prompt Prominence (`DEFAULT_WRITER_USER`)
-In [`django_project/resume_app/prompts.py`](file:///D:/Workshop/JobApp-Main/django_project/resume_app/prompts.py), `{feedback}` was moved from the bottom of the prompt to a prominent position directly after the Length & Scope Directive and immediately before the Job Description and supporting context, labeled as:
-```text
-Judge Feedback & Revision Directives (Apply All Actions When Present):
-{feedback}
-```
+### C. Executive Style, Active Voice & Strategic Architectural Bridging (`DEFAULT_WRITER_SYSTEM`)
+To eliminate the passive voice regressions caused by negative sentence-opener quotas and close the ATS ceiling on proprietary vendor platforms:
+1. **Absolute Prohibition on First Person:** Banned `"I"`, `"me"`, `"my"`, `"we"`, `"our"` across the entire document (including summaries) in favor of implied third-person executive phrasing.
+2. **Mandatory Active Voice & Direct Ownership:** Strictly forbidden passive auxiliary constructions (`was architected`, `were consolidated`, `was delivered`). All bullets must convey decisive leadership and technical ownership (`Architected and delivered...`, `Consolidated 5 disparate systems...`).
+3. **Natural Context Flow Over Quotas:** Replaced artificial negative percentage quotas (e.g. "33% non-verb opener" rules) with a structured narrative flow: Bullet 1 establishes context/mandate, while Bullets 2+ lead with high-impact action verbs.
+4. **Strategic Architectural Bridging:** For target roles demanding proprietary ecosystems absent from candidate history (e.g. Salesforce Agentforce, Snowflake), the Writer agent is instructed never to hallucinate the missing tool name, but instead foreground verified architectural equivalents (e.g., framing LangGraph/Devin as *"Autonomous Multi-Agent Orchestration & Enterprise AI Workflows"*; framing CRM unification as *"Enterprise Salesforce Ecosystem Architecture & Schema Harmonization"*).
+
+### D. Epistemic XML Input Architecture & Recency Bias Mitigation (`DEFAULT_WRITER_USER`)
+In [`django_project/resume_app/prompts.py`](file:///D:/Workshop/JobApp-Main/django_project/resume_app/prompts.py), inputs in `DEFAULT_WRITER_USER` are encapsulated in 10 semantic XML tags categorized into four explicit epistemic classes declared in `DEFAULT_WRITER_SYSTEM`:
+
+1. **Candidate Ground Truth (Immutable Facts):**
+   - `<candidate_source_facts>`: Uploaded resume history.
+   - `<candidate_supplemental_records>`: Verified supplementary accomplishments.
+   - `<retrieved_resume_bullets>`: RAG-retrieved semantic accomplishments from candidate history.
+2. **Target Benchmarks (Job Desires — NOT Candidate Facts):**
+   - `<target_job_description>`: Role summary and primary requirements.
+   - `<target_job_description_full>`: Complete unprocessed job description.
+   - `<pipeline_skills_benchmark>`: Extracted ATS skills list (directional gaps only).
+3. **Current Document State:**
+   - `<working_draft>`: The draft currently undergoing revision.
+4. **Directives & Constraints (Priming Output Generation):**
+   - `<user_guidance_notes>`: Tactical user guidance.
+   - `<judge_feedback_and_revisions>`: Automated Recruiter and ATS Judge feedback.
+   - `<length_and_scope_directive>`: Dynamically calculated word and bullet budgets.
+
+**Recency Bias Prevention:** Immutable ground truth and benchmark context are anchored early (cache-friendly prefix), while active revision directives and length guardrails sit directly above the `Optimized Resume:` trigger to prime the next-token sequence.
 
 ---
 

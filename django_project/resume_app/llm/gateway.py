@@ -60,7 +60,56 @@ __all__ = [
     "log_llm_invoke",
     "provider_is_local",
     "cloud_llm_available",
+    "MODEL_TIER_SLM",
+    "MODEL_TIER_FRONTIER",
+    "classify_model_tier",
 ]
+
+MODEL_TIER_SLM = "slm"
+MODEL_TIER_FRONTIER = "frontier"
+
+
+def classify_model_tier(provider: str, model: str | None) -> str:
+    """Classifies an LLM candidate as SLM (small/flash/local) or Frontier (large reasoning/writer).
+
+    Guarantees background evaluation & vetting runs never fall back to expensive Frontier models
+    (e.g., GPT-4o, Claude 3.5 Sonnet) and burn tokens/budget.
+    """
+    prov = (provider or "").strip()
+    m = (model or "").strip().lower()
+
+    if provider_is_local(prov):
+        return MODEL_TIER_SLM
+
+    if prov == "Google AI Studio":
+        if "flash" in m or "lite" in m or "8b" in m:
+            return MODEL_TIER_SLM
+        return MODEL_TIER_FRONTIER
+
+    if prov == "OpenAI":
+        if "mini" in m or "turbo" in m or "nano" in m:
+            return MODEL_TIER_SLM
+        return MODEL_TIER_FRONTIER
+
+    if prov == "Anthropic":
+        if "haiku" in m:
+            return MODEL_TIER_SLM
+        return MODEL_TIER_FRONTIER
+
+    if prov == "Groq":
+        if any(x in m for x in ("8b", "7b", "9b", "instant", "small", "mini")):
+            return MODEL_TIER_SLM
+        return MODEL_TIER_FRONTIER
+
+    if prov == "OpenRouter":
+        if any(x in m for x in ("mini", "flash", "haiku", "8b", "7b", "3b", "nano", "lite")):
+            return MODEL_TIER_SLM
+        return MODEL_TIER_FRONTIER
+
+    if any(x in m for x in ("mini", "flash", "haiku", "nano", "small", "8b", "7b", "3b", "lite")):
+        return MODEL_TIER_SLM
+
+    return MODEL_TIER_FRONTIER
 
 # Keys for `usage_query_kind` / `LLMUsageByQuery.query_kind` (Settings → Usage labels in USAGE_QUERY_LABELS).
 USAGE_QUERY_FIT_CHECK = "fit_check"
@@ -80,6 +129,7 @@ USAGE_QUERY_PIPELINE_SKILL_EXTRACT = "pipeline_skill_extract"
 USAGE_QUERY_JD_CLEANSE = "jd_cleanse"
 USAGE_QUERY_JOB_AUTHENTICITY = "job_authenticity"
 USAGE_QUERY_SKILL_RADAR = "skill_radar"
+USAGE_QUERY_RESUME_JUDGE = "resume_judge"
 USAGE_QUERY_CAREER_PROFILER = "career_profiler"
 USAGE_QUERY_PROMPT_STUDIO = "prompt_studio"
 USAGE_QUERY_API_LLM_COMPLETE = "api_llm_complete"
@@ -90,11 +140,11 @@ USAGE_QUERY_LABELS: dict[str, str] = {
     USAGE_QUERY_UNSPECIFIED: "Other / not labeled",
     USAGE_QUERY_PROMPT_STUDIO: "Prompt Studio — test playground",
     USAGE_QUERY_CAREER_PROFILER: "Career profiler — archetype mapping",
-    USAGE_QUERY_JOB_AUTHENTICITY: "Pipeline — job authenticity & compliance",
     USAGE_QUERY_SKILL_RADAR: "Pipeline — skill radar & deep fit",
     USAGE_QUERY_FIT_CHECK: "Fit check",
     USAGE_QUERY_MATCHING: "Job matching",
     USAGE_QUERY_OPTIMIZER_WRITER: "Resume optimizer — writer",
+    USAGE_QUERY_RESUME_JUDGE: "Resume Evaluator — Resume Judge (ATS + Recruiter)",
     USAGE_QUERY_OPTIMIZER_ATS_JUDGE: "Resume optimizer — ATS judge",
     USAGE_QUERY_OPTIMIZER_RECRUITER_JUDGE: "Resume optimizer — recruiter judge",
     USAGE_QUERY_JOB_INSIGHTS: "Job search — batch insights",
@@ -120,69 +170,71 @@ SYSTEM_DEFAULT_MODELS: dict[str, list[dict]] = {
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
         {"provider": "Anthropic", "model": "claude-3-5-haiku-latest"},
         {"provider": "Groq", "model": "llama-3.3-70b-versatile"},
-        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
+        {"provider": "Ollama Local", "model": "hf.co/empero-ai/Qwen3.8-4B-Distill-GGUF:Q4_K_M"},
     ],
     USAGE_QUERY_PROMPT_STUDIO: [
         {"provider": "Groq", "model": "llama-3.3-70b-versatile"},
         {"provider": "Google AI Studio", "model": "gemini-2.0-flash"},
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
         {"provider": "Anthropic", "model": "claude-3-5-haiku-latest"},
-        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
+        {"provider": "Ollama Local", "model": "hf.co/empero-ai/Qwen3.8-4B-Distill-GGUF:Q4_K_M"},
     ],
     # 1. Parsing & Cleansing
     USAGE_QUERY_JD_CLEANSE: [
-        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
+        {"provider": "Ollama Local", "model": "hf.co/empero-ai/Qwen3.8-4B-Distill-GGUF:Q4_K_M"},
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
         {"provider": "Anthropic", "model": "claude-3-5-haiku-latest"},
         {"provider": "Google AI Studio", "model": "gemini-1.5-flash"},
     ],
     USAGE_QUERY_PIPELINE_SKILL_EXTRACT: [
-        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
+        {"provider": "Ollama Local", "model": "hf.co/empero-ai/Qwen3.8-4B-Distill-GGUF:Q4_K_M"},
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
         {"provider": "Anthropic", "model": "claude-3-5-haiku-latest"},
         {"provider": "Google AI Studio", "model": "gemini-1.5-flash"},
     ],
     # 2. Search & Vetting
-    USAGE_QUERY_JOB_AUTHENTICITY: [
-        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
-        {"provider": "Groq", "model": "llama-3.3-70b-versatile"},
-        {"provider": "Google AI Studio", "model": "gemini-2.0-flash"},
-        {"provider": "OpenAI", "model": "gpt-4o-mini"},
-    ],
     USAGE_QUERY_SKILL_RADAR: [
-        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
-        {"provider": "OpenAI", "model": "gpt-4o-mini"},
+        {"provider": "Ollama Local", "model": "hf.co/empero-ai/Qwen3.8-4B-Distill-GGUF:Q4_K_M"},
+        {"provider": "Google AI Studio", "model": "gemini-2.0-flash"},
         {"provider": "Google AI Studio", "model": "gemini-1.5-flash"},
+        {"provider": "OpenAI", "model": "gpt-4o-mini"},
+        {"provider": "Anthropic", "model": "claude-3-5-haiku-latest"},
+        {"provider": "Groq", "model": "llama-3.1-8b-instant"},
+        # Frontier Cloud models for deep on-demand evaluations
+        {"provider": "OpenAI", "model": "gpt-4o"},
+        {"provider": "Anthropic", "model": "claude-3-5-sonnet-latest"},
+        {"provider": "Google AI Studio", "model": "gemini-1.5-pro"},
+        {"provider": "Groq", "model": "llama-3.3-70b-versatile"},
     ],
     USAGE_QUERY_MATCHING: [
-        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
+        {"provider": "Ollama Local", "model": "hf.co/empero-ai/Qwen3.8-4B-Distill-GGUF:Q4_K_M"},
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
         {"provider": "Google AI Studio", "model": "gemini-1.5-flash"},
     ],
     USAGE_QUERY_FIT_CHECK: [
-        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
+        {"provider": "Ollama Local", "model": "hf.co/empero-ai/Qwen3.8-4B-Distill-GGUF:Q4_K_M"},
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
         {"provider": "Google AI Studio", "model": "gemini-1.5-flash"},
     ],
     USAGE_QUERY_PIPELINE_VETTING: [
-        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
+        {"provider": "Ollama Local", "model": "hf.co/empero-ai/Qwen3.8-4B-Distill-GGUF:Q4_K_M"},
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
         {"provider": "Google AI Studio", "model": "gemini-1.5-flash"},
     ],
     USAGE_QUERY_JOBS_AI_MATCH: [
-        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
+        {"provider": "Ollama Local", "model": "hf.co/empero-ai/Qwen3.8-4B-Distill-GGUF:Q4_K_M"},
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
     ],
     USAGE_QUERY_KEYWORD_SEARCH_FIT: [
-        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
+        {"provider": "Ollama Local", "model": "hf.co/empero-ai/Qwen3.8-4B-Distill-GGUF:Q4_K_M"},
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
     ],
     USAGE_QUERY_JOBS_MATCH_API: [
-        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
+        {"provider": "Ollama Local", "model": "hf.co/empero-ai/Qwen3.8-4B-Distill-GGUF:Q4_K_M"},
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
     ],
     USAGE_QUERY_JOB_INSIGHTS: [
-        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
+        {"provider": "Ollama Local", "model": "hf.co/empero-ai/Qwen3.8-4B-Distill-GGUF:Q4_K_M"},
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
     ],
     # 3. Resume Writer
@@ -193,44 +245,54 @@ SYSTEM_DEFAULT_MODELS: dict[str, list[dict]] = {
         {"provider": "Groq", "model": "llama-3.3-70b-versatile"},
     ],
     # 4. Judges & Evaluators
+    USAGE_QUERY_RESUME_JUDGE: [
+        {"provider": "OpenAI", "model": "gpt-4o-mini"},
+        {"provider": "Anthropic", "model": "claude-3-5-haiku-latest"},
+        {"provider": "Google AI Studio", "model": "gemini-1.5-flash"},
+        {"provider": "Groq", "model": "llama-3.3-70b-versatile"},
+    ],
     USAGE_QUERY_OPTIMIZER_ATS_JUDGE: [
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
         {"provider": "Anthropic", "model": "claude-3-5-haiku-latest"},
         {"provider": "Google AI Studio", "model": "gemini-1.5-flash"},
-        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
+        {"provider": "Ollama Local", "model": "hf.co/empero-ai/Qwen3.8-4B-Distill-GGUF:Q4_K_M"},
     ],
     USAGE_QUERY_OPTIMIZER_RECRUITER_JUDGE: [
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
         {"provider": "Anthropic", "model": "claude-3-5-haiku-latest"},
         {"provider": "Google AI Studio", "model": "gemini-1.5-flash"},
-        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
+        {"provider": "Ollama Local", "model": "hf.co/empero-ai/Qwen3.8-4B-Distill-GGUF:Q4_K_M"},
     ],
     # 5. Career Prep
     USAGE_QUERY_COVER_LETTER: [
-        {"provider": "OpenAI", "model": "gpt-4o"},
         {"provider": "Anthropic", "model": "claude-3-5-sonnet-latest"},
+        {"provider": "OpenAI", "model": "gpt-4o"},
+        {"provider": "Groq", "model": "llama-3.3-70b-versatile"},
+        {"provider": "Google AI Studio", "model": "gemini-2.0-flash"},
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
     ],
     USAGE_QUERY_INTERVIEW_PREP: [
-        {"provider": "OpenAI", "model": "gpt-4o"},
         {"provider": "Anthropic", "model": "claude-3-5-sonnet-latest"},
+        {"provider": "OpenAI", "model": "gpt-4o"},
+        {"provider": "Groq", "model": "llama-3.3-70b-versatile"},
+        {"provider": "Google AI Studio", "model": "gemini-2.0-flash"},
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
     ],
     # 6. APIs
     USAGE_QUERY_API_LLM_COMPLETE: [
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
-        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
+        {"provider": "Ollama Local", "model": "hf.co/empero-ai/Qwen3.8-4B-Distill-GGUF:Q4_K_M"},
     ],
     USAGE_QUERY_API_RESUME_FIT: [
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
-        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
+        {"provider": "Ollama Local", "model": "hf.co/empero-ai/Qwen3.8-4B-Distill-GGUF:Q4_K_M"},
     ],
     # Universal fallback
     "*": [
         {"provider": "OpenAI", "model": "gpt-4o-mini"},
         {"provider": "Anthropic", "model": "claude-3-5-haiku-latest"},
         {"provider": "Google AI Studio", "model": "gemini-1.5-flash"},
-        {"provider": "Ollama Local", "model": "hf.co/nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF:Q4_K_M"},
+        {"provider": "Ollama Local", "model": "hf.co/empero-ai/Qwen3.8-4B-Distill-GGUF:Q4_K_M"},
         {"provider": "Groq", "model": "llama-3.3-70b-versatile"},
     ],
 }
@@ -438,6 +500,7 @@ def _preference_candidates(user) -> list[dict]:
                 "preference_id": row.id,
                 "config": cfg,
                 "api_key": api_key,
+                "model_tier": getattr(row, "model_tier", None) or classify_model_tier(prov, raw_model),
             }
         )
     return out
@@ -479,6 +542,7 @@ def _system_default_candidates(
     only_local: bool = False,
     allow_local: bool = True,
     prefer_local: bool = True,
+    max_model_tier: str | None = None,
 ) -> list[dict]:
     """
     Build platform system default candidate list for the given query kind.
@@ -504,6 +568,11 @@ def _system_default_candidates(
         if not platform_key_available_for_provider(prov):
             continue
         if is_llm_on_cooldown(prov, model, user=user):
+            continue
+        spec_tier = classify_model_tier(prov, model)
+        if max_model_tier == MODEL_TIER_SLM and spec_tier != MODEL_TIER_SLM:
+            continue
+        if max_model_tier == MODEL_TIER_FRONTIER and spec_tier != MODEL_TIER_FRONTIER:
             continue
 
         cand_key = None
@@ -650,6 +719,7 @@ def _ordered_eligible_candidates(
     prefer_local: bool = True,
     only_local: bool = False,
     allow_local: bool = True,
+    max_model_tier: str | None = None,
 ) -> list[dict]:
     raw = _preference_candidates(user)
     eligible = []
@@ -659,6 +729,11 @@ def _ordered_eligible_candidates(
         if only_local and not c.get("is_local"):
             continue
         if not allow_local and c.get("is_local"):
+            continue
+        cand_tier = c.get("model_tier") or classify_model_tier(c["provider"], c["model_get_llm"])
+        if max_model_tier == MODEL_TIER_SLM and cand_tier != MODEL_TIER_SLM:
+            continue
+        if max_model_tier == MODEL_TIER_FRONTIER and cand_tier != MODEL_TIER_FRONTIER:
             continue
         eligible.append(c)
 
@@ -683,72 +758,18 @@ def _ordered_eligible_candidates(
         else:
             ordered = _sort_and_rotate(remotes_in) + _sort_and_rotate(locals_in)
 
-    # --- Tier 1 & Tier 2: Tenant Prompt Preferences and Global Default ---
-    if user is not None and getattr(user, "is_authenticated", False):
-        try:
-            from ..models import TenantPromptModelPreference, LLMProviderConfig
-            from ..crypto import decrypt_api_key
-
-            target_pref = None
-            if usage_query_kind:
-                target_pref = TenantPromptModelPreference.objects.for_user(user).filter(
-                    query_kind=usage_query_kind, is_active=True
-                ).first()
-                if not target_pref and usage_query_kind in (
-                    USAGE_QUERY_FIT_CHECK,
-                    USAGE_QUERY_PIPELINE_VETTING,
-                    USAGE_QUERY_JOBS_AI_MATCH,
-                    USAGE_QUERY_KEYWORD_SEARCH_FIT,
-                    USAGE_QUERY_JOBS_MATCH_API,
-                    USAGE_QUERY_SKILL_RADAR,
-                ):
-                    target_pref = TenantPromptModelPreference.objects.for_user(user).filter(
-                        query_kind=USAGE_QUERY_MATCHING, is_active=True
-                    ).first()
-
-            if target_pref is None:
-                target_pref = TenantPromptModelPreference.objects.for_user(user).filter(
-                    query_kind="__default__", is_active=True
-                ).first()
-
-            if target_pref and target_pref.provider:
-                pref_prov = target_pref.provider.strip()
-                pref_model = (target_pref.model or "").strip()
-
-                matched = None
-                for c in ordered:
-                    if c["provider"] == pref_prov and (
-                        not pref_model
-                        or c["model_get_llm"] == pref_model
-                        or c["model_key"] == pref_model
-                    ):
-                        matched = c
-                        break
-
-                if not matched:
-                    cfg = LLMProviderConfig.objects.for_user(user).filter(provider=pref_prov).first()
-                    if cfg and cfg.encrypted_api_key:
-                        api_key = decrypt_api_key(cfg.encrypted_api_key or "")
-                        if api_key and not is_llm_on_cooldown(pref_prov, pref_model or None, user=user):
-                            is_loc = provider_is_local(pref_prov)
-                            if (not only_local or is_loc) and (allow_local or not is_loc):
-                                matched = {
-                                    "provider": pref_prov,
-                                    "model_get_llm": pref_model or None,
-                                    "model_key": pref_model or "__default__",
-                                    "priority": 0,
-                                    "is_local": is_loc,
-                                    "preference_id": None,
-                                    "config": cfg,
-                                    "api_key": api_key,
-                                }
-
-                if matched:
-                    if matched in ordered:
-                        ordered.remove(matched)
-                    ordered.insert(0, matched)
-        except Exception as e:
-            logger.debug("Prompt model preference resolution skipped: %s", e)
+    # System Platform Default Models Fallback
+    # If the tenant has configured their own key/model in this tier, use that;
+    # otherwise fall back to system default models in that tier.
+    if not ordered:
+        ordered = _system_default_candidates(
+            usage_query_kind=usage_query_kind,
+            user=user,
+            only_local=only_local,
+            allow_local=allow_local,
+            prefer_local=prefer_local,
+            max_model_tier=max_model_tier,
+        )
 
     pin_p, pin_m = _get_pin(job_cache_key)
     pinned = None
@@ -770,16 +791,6 @@ def _ordered_eligible_candidates(
         else:
             ordered.remove(pinned)
             ordered.insert(0, pinned)
-
-    # --- Tier 3: System Platform Default Models Fallback ---
-    if not ordered:
-        ordered = _system_default_candidates(
-            usage_query_kind=usage_query_kind,
-            user=user,
-            only_local=only_local,
-            allow_local=allow_local,
-            prefer_local=prefer_local,
-        )
 
     return ordered
 
@@ -856,6 +867,7 @@ def invoke_llm_messages(
     prefer_local: bool = True,
     only_local: bool = False,
     allow_local: bool = True,
+    max_model_tier: str | None = None,
 ) -> Any:
     """
     Invoke LangChain chat messages through the central gateway.
@@ -873,17 +885,31 @@ def invoke_llm_messages(
     assert_email_verified(user)
 
     est = estimate_tokens_from_messages(messages)
-    if usage_query_kind in (
-        USAGE_QUERY_MATCHING,
-        USAGE_QUERY_FIT_CHECK,
-        USAGE_QUERY_PIPELINE_VETTING,
-        USAGE_QUERY_JOBS_AI_MATCH,
-        USAGE_QUERY_KEYWORD_SEARCH_FIT,
-        USAGE_QUERY_JOBS_MATCH_API,
-        USAGE_QUERY_PIPELINE_SKILL_EXTRACT,
-        USAGE_QUERY_SKILL_RADAR,
-    ):
-        prefer_local = True
+    # Dynamic prompt routing: driven entirely by TenantPromptModelPreference / UI (no hardcoding in code!)
+    if usage_query_kind and max_model_tier is None:
+        try:
+            from ..models import TenantPromptModelPreference
+            from ..prompt_store import get_recommended_tier_for_query_kind
+
+            pref_row = None
+            if user is not None and getattr(user, "is_authenticated", False):
+                pref_row = TenantPromptModelPreference.objects.for_user(user).filter(
+                    query_kind=usage_query_kind, is_active=True
+                ).first()
+
+            p_tier = getattr(pref_row, "target_tier", "auto") if pref_row else "auto"
+            if p_tier == "auto" or not p_tier:
+                p_tier = get_recommended_tier_for_query_kind(usage_query_kind)
+
+            if p_tier == "slm":
+                max_model_tier = MODEL_TIER_SLM
+                prefer_local = True
+            elif p_tier == "frontier":
+                max_model_tier = MODEL_TIER_FRONTIER
+                prefer_local = False
+                allow_local = False
+        except Exception as e:
+            logger.debug("Dynamic prompt tier resolution fallback: %s", e)
 
     if llm_override is None and job_cache_key and job_cache_key.strip().isdigit() and usage_query_kind:
         try:
@@ -900,6 +926,7 @@ def invoke_llm_messages(
                     "optimizer_writer": "writer",
                     "optimizer_ats_judge": "ats_judge",
                     "optimizer_recruiter_judge": "recruiter_judge",
+                    "resume_judge": "resume_judge",
                 }
                 step_key = step_key_map.get(usage_query_kind)
                 if step_key and step_key in wf.step_llm_config:
@@ -953,6 +980,7 @@ def invoke_llm_messages(
         prefer_local=prefer_local,
         only_local=only_local,
         allow_local=allow_local,
+        max_model_tier=max_model_tier,
     )
     if not candidates:
         if not allow_local:

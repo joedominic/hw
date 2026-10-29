@@ -82,8 +82,8 @@ flowchart LR
   3. *Triage, Tailor & Track* (explains triage actions, AI tailoring, and outcome tracking).
 - **Explicit Card Action Destinations:** Opportunity cards show direct destination labels:
   - **New (`pipeline`):** "Move to Review" (`E`)
-  - **Review (`vetting`):** "Start Tailoring" (`E` or `T`)
-  - **Applying (`applying`):** "Start Tailoring" (`T`) or "Mark Submitted" (`E`)
+  - **Review (`vetting`):** "Move to Applying" (`E`) or "Tailor Resume" (`T`)
+  - **Applying (`applying`):** "Tailor Resume" (`T`) or "Mark Submitted" (`E`)
   - **Applied (`done`):** "Log Next Step" (opens interview logging drawer, pre-selecting the next logical interview round)
 - **Top Header Momentum Progress:** Displays weekly target progress (e.g. `2 / 5 targets this week · 3 to goal`) with a direct 1-click link to the oldest card in `Applying` when behind target.
 - **Fast Keyboard Navigation:** See complete behavior in [Career Cockpit Keyboard Hotkeys](career-cockpit.md#26-keyboard-triage-hotkeys):
@@ -98,17 +98,10 @@ flowchart LR
 Provides an accessible, zero-clutter slide drawer for deep evaluation of the selected opportunity:
 - **Card 1: Overview & Metadata:** Salary benchmarks, location, source board, posting date, application window lifespan, and quick triage actions.
 - **Card 2: Description:** Full job posting text with keyword highlights.
-- **Card 3: AI Match Verdict & Authenticity Audit:**
-  - **Match Score & Stretch Skills:** Displays match probability percentage and a full-width **Stretch Skills** block (Core Competencies are omitted to reduce visual noise and highlight actionable skill gaps).
-  - **Audit Assessment Narrative Box:** Synthesizes labor compliance and requisition authenticity findings into a prominent callout box with dynamic verdict styling:
-    - *`PERM_COMPLIANCE` (Amber):* DOL ETA-9089 immigrant labor certification filing.
-    - *`INTERNAL_PRESELECT` (Rose):* Artificial compliance window, rigid degree locks, or scope mismatch indicating a pre-identified candidate.
-    - *`PHANTOM_PIPELINE` (Purple):* Evergreen talent pool or future pipeline without an immediate funded headcount.
-    - *`GENUINE_EXTERNAL` (Slate):* Open-market competitive hiring opportunity.
-  - **Confidentiality Protection:** The detailed 10-point compliance checklist and mathematical scoring formula are strictly omitted from candidate-facing DOM and API views to protect proprietary classification IP.
+- **Card 3: AI Match Verdict & Diagnostics:**
+  - **Match Score & Stretch Skills:** Displays match probability percentage and a full-width **Stretch Skills** block highlighting actionable skill gaps.
   - **Responsive Action Toolbar:** The `Re-Analyze` button and metadata pills are rendered with flexible wrapping (`flex flex-wrap`), eliminating button cutoff on narrow and vertical screens.
 - **Card 4: Live Interview Prep:** Instant AI interview kit generating tailored screening questions and talking points.
-- **Kanban Card Badges:** Rendered on cards in Review and Applying: amber `PERM Filing`, rose `Likely Internal`, purple `Phantom Requisition`, and subtle slate `External Hire`.
 
 ---
 

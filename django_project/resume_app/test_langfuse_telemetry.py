@@ -92,7 +92,6 @@ class TelemetryNamingTests(SimpleTestCase):
             "cover_letter": ("cover_letter", "cover_letter"),
             "interview_prep": ("interview_prep", "interview_prep"),
             "pipeline_skill_extract": ("pipeline_skill_extract", "pipeline_skill_extract"),
-            "job_authenticity": ("job_authenticity", "job_authenticity"),
         }
         for qk, expected in cases.items():
             t_name, g_name = resolve_trace_names(query_kind=qk)

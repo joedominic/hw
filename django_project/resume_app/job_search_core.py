@@ -840,7 +840,15 @@ def pipeline_jobs_to_payloads(
             removed_at__isnull=True,
         )
         for e in entries_qs:
-            if e.job_listing_id not in entry_map or (track_slug and e.track == track_slug):
+            prev = entry_map.get(e.job_listing_id)
+            if prev is None:
+                entry_map[e.job_listing_id] = e
+            elif track_slug and e.track and e.track.lower() == track_slug.lower():
+                entry_map[e.job_listing_id] = e
+            elif (
+                (e.vetting_match_score is not None or (e.vetting_core_competencies and len(e.vetting_core_competencies) > 0))
+                and not (prev.vetting_match_score is not None or (prev.vetting_core_competencies and len(prev.vetting_core_competencies) > 0))
+            ):
                 entry_map[e.job_listing_id] = e
 
     jobs_with_meta: List[Tuple[JobListing, JobPayload]] = []
@@ -860,6 +868,7 @@ def pipeline_jobs_to_payloads(
             payload.interview_reasoning = interview_entry.vetting_interview_reasoning
             payload.zero_llm_core_matches = interview_entry.vetting_core_competencies or []
             payload.zero_llm_stretch_skills = interview_entry.vetting_stretch_skills or []
+            payload.pipeline_entry_id = interview_entry.id
         payload.interview_status = resolve_interview_display_status(
             description=job.description or "",
             interview_probability=payload.interview_probability,

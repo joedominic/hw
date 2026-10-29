@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from django.utils import timezone
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .agents import build_llm_messages_for_prompt, _llm_invoke_with_retry
 from .llm.gateway import USAGE_QUERY_COVER_LETTER, USAGE_QUERY_INTERVIEW_PREP
@@ -31,6 +31,7 @@ MAX_RESUME_CHARS = 40_000
 
 class InterviewPrepAnswer(BaseModel):
     question: str = ""
+    question_type: Optional[str] = "technical"
     talking_points: list[str] = Field(default_factory=list)
     resume_evidence: list[str] = Field(default_factory=list)
     sample_answer: Optional[str] = ""
@@ -42,6 +43,14 @@ class InterviewPrepResult(BaseModel):
     themes_to_emphasize: list[str] = Field(default_factory=list)
     suggested_answers: list[InterviewPrepAnswer] = Field(default_factory=list)
     questions_to_ask: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def handle_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "questions_for_candidate_to_ask" in data and not data.get("questions_to_ask"):
+                data["questions_to_ask"] = data["questions_for_candidate_to_ask"]
+        return data
 
 
 @dataclass
@@ -407,6 +416,8 @@ def generate_cover_letter(
         user=optimized.owner,
         job_cache_key=cache_key,
         usage_query_kind=USAGE_QUERY_COVER_LETTER,
+        prefer_local=False,
+        allow_local=False,
     )
     letter = _extract_llm_content(raw)
     if not letter:
@@ -495,6 +506,8 @@ def generate_interview_prep(
         user=entry.owner,
         job_cache_key=cache_key,
         usage_query_kind=USAGE_QUERY_INTERVIEW_PREP,
+        prefer_local=False,
+        allow_local=False,
     )
     stored = _parse_interview_prep_json(_extract_llm_content(raw))
     if not stored:

@@ -264,35 +264,54 @@ def prompt_library_view(request):
     available_model_options = get_available_model_options(request.user, request)
     prompt_model_preferences = get_all_prompt_model_preferences(request.user)
 
-    # Enrich prompt definitions with currently assigned production model
+    # Enrich prompt definitions with currently assigned production model tier (strictly SLM vs LLM)
     enriched_definitions = []
     for defn in PROMPT_DEFINITIONS:
         k = defn["key"]
-        assigned = prompt_model_preferences.get(k, "")
-        d_copy = dict(defn)
-        d_copy["assigned_model"] = assigned
-        if assigned and "::" in assigned:
-            prov, mod = assigned.split("::", 1)
-            d_copy["assigned_model_short"] = mod if mod else prov
+        pref_item = prompt_model_preferences.get(k, {})
+        raw_tier = pref_item.get("target_tier") if isinstance(pref_item, dict) else str(pref_item or "")
+        rec_tier = defn.get("recommended_tier", "slm")
+
+        if raw_tier in ("frontier", "llm", "tier:frontier"):
+            tier = "frontier"
+            short_lbl = "LLM"
+        elif raw_tier in ("slm", "tier:slm"):
+            tier = "slm"
+            short_lbl = "SLM"
         else:
-            d_copy["assigned_model_short"] = "Default"
+            tier = rec_tier
+            short_lbl = "LLM" if rec_tier == "frontier" else "SLM"
+
+        d_copy = dict(defn)
+        d_copy["assigned_model"] = tier
+        d_copy["assigned_model_short"] = short_lbl
+        d_copy["target_tier"] = tier
+        d_copy["recommended_tier"] = rec_tier
+        d_copy["recommended_tier_label"] = "LLM" if rec_tier == "frontier" else "SLM"
         enriched_definitions.append(d_copy)
 
-    # Enrich ATS profiles with currently assigned production model
+    # Enrich ATS profiles with currently assigned production model tier
     enriched_ats_profiles = []
     for prof in ats_profiles:
         prof_key = f"ats_profile_{prof.pk}"
-        assigned = prompt_model_preferences.get(prof_key, "")
-        short_lbl = "Default"
-        if assigned and "::" in assigned:
-            prov, mod = assigned.split("::", 1)
-            short_lbl = mod if mod else prov
+        pref_item = prompt_model_preferences.get(prof_key, {})
+        raw_tier = pref_item.get("target_tier") if isinstance(pref_item, dict) else str(pref_item or "")
+        if raw_tier in ("slm", "tier:slm"):
+            tier = "slm"
+            short_lbl = "SLM"
+        else:
+            tier = "frontier"
+            short_lbl = "LLM"
+
         enriched_ats_profiles.append({
             "pk": prof.pk,
             "name": prof.name,
             "is_default": prof.is_default,
-            "assigned_model": assigned,
+            "assigned_model": tier,
             "assigned_model_short": short_lbl,
+            "target_tier": tier,
+            "recommended_tier": "frontier",
+            "recommended_tier_label": "LLM",
             "ats_judge": getattr(prof, "ats_judge", ""),
             "ats_judge_system": getattr(prof, "ats_judge_system", ""),
             "ats_judge_user": getattr(prof, "ats_judge_user", ""),
@@ -388,14 +407,12 @@ def prompt_studio_save_api(request):
         setattr(profile, usr_a, usr_clean)
         profile.save()
 
-    # Optional assigned model persistence
+    # Optional assigned model persistence (strictly SLM vs LLM tier)
     assigned_model = payload.get("assigned_model")
     if assigned_model is not None:
-        if "::" in assigned_model:
-            p_prov, p_mod = assigned_model.split("::", 1)
-            set_prompt_model_preference(request.user, prompt_key, p_prov, p_mod)
-        elif not assigned_model.strip():
-            set_prompt_model_preference(request.user, prompt_key, "", "")
+        raw_val = str(assigned_model).strip().lower()
+        target_tier = "frontier" if raw_val in ("frontier", "llm", "tier:frontier") else "slm"
+        set_prompt_model_preference(request.user, prompt_key, target_tier=target_tier)
 
     # Record snapshot in history
     version_row = record_prompt_version(
@@ -441,19 +458,16 @@ def prompt_studio_set_model_preference_api(request):
     if not prompt_key:
         return JsonResponse({"status": "error", "message": "Missing prompt_key."}, status=400)
 
-    if model_choice and "::" in model_choice:
-        prov, mod = model_choice.split("::", 1)
-        set_prompt_model_preference(request.user, prompt_key, prov, mod)
-        msg = f"Assigned {prov} — {mod} to {prompt_key}."
-    else:
-        set_prompt_model_preference(request.user, prompt_key, "", "")
-        msg = f"Reset {prompt_key} to platform default model."
+    raw_mc = (model_choice or "").strip().lower()
+    target_tier = "frontier" if raw_mc in ("frontier", "llm", "tier:frontier") else "slm"
+    set_prompt_model_preference(request.user, prompt_key, target_tier=target_tier)
+    msg = f"Assigned {'LLM (Large Language Model)' if target_tier == 'frontier' else 'SLM (Small Language Model)'} to {prompt_key}."
 
     return JsonResponse({
         "status": "success",
         "message": msg,
         "prompt_key": prompt_key,
-        "assigned_model": model_choice,
+        "assigned_model": target_tier,
     })
 
 
@@ -503,46 +517,37 @@ def prompt_studio_test_run_api(request):
     from .models import LLMProviderConfig
     from .crypto import decrypt_api_key
 
-    custom_llm = None
     target_qk = PROMPT_TO_QUERY_KIND_MAP.get(prompt_key, prompt_key)
     model_display = ""
     prefer_loc = False
     only_loc = False
+    allow_loc = True
+    test_tier = None
 
-    if model_choice == "assigned" or not model_choice:
-        # Check if the prompt has an assigned model
-        assigned_prov, assigned_mod = get_prompt_model_preference(request.user, prompt_key)
-        if assigned_prov:
-            cfg = LLMProviderConfig.objects.for_user(request.user).filter(provider=assigned_prov).first()
-            api_key = decrypt_api_key(cfg.encrypted_api_key or "") if cfg else None
-            try:
-                custom_llm = get_llm(assigned_prov, api_key, assigned_mod or None, user=request.user)
-                model_display = f"{assigned_prov} / {assigned_mod or 'default'}"
-            except Exception as ex:
-                logger.warning("Failed building LLM for assigned model %s: %s", assigned_prov, ex)
-    elif "::" in model_choice:
-        sel_prov, sel_mod = model_choice.split("::", 1)
-        sel_prov = sel_prov.strip()
-        sel_mod = sel_mod.strip()
-        cfg = LLMProviderConfig.objects.for_user(request.user).filter(provider=sel_prov).first()
-        api_key = decrypt_api_key(cfg.encrypted_api_key or "") if cfg else None
-        try:
-            custom_llm = get_llm(sel_prov, api_key, sel_mod or None, user=request.user)
-            model_display = f"{sel_prov} / {sel_mod or 'default'}"
-        except Exception as ex:
-            logger.warning("Failed building LLM for model %s: %s", sel_prov, ex)
-            return JsonResponse({
-                "status": "error",
-                "message": f"Could not initialize provider '{sel_prov}': {ex}. Please configure an API key in Settings -> LLM.",
-            }, status=400)
-    elif model_choice == "local":
+    if model_choice in ("slm", "local"):
+        test_tier = "slm"
         prefer_loc = True
-        only_loc = True
-        model_display = "Local (Ollama)"
-    elif model_choice == "cloud":
+        allow_loc = True
+        model_display = "SLM Engine"
+    elif model_choice in ("frontier", "llm", "cloud"):
+        test_tier = "frontier"
         prefer_loc = False
-        only_loc = False
-        model_display = "Cloud (Gateway)"
+        allow_loc = False
+        model_display = "LLM Engine"
+    else:
+        # Assigned tier from prompt library preferences
+        from .prompt_store import get_all_prompt_model_preferences
+        all_prefs = get_all_prompt_model_preferences(request.user)
+        assigned_info = all_prefs.get(prompt_key) or all_prefs.get(target_qk) or {}
+        test_tier = assigned_info.get("target_tier") or "slm"
+        if test_tier == "frontier":
+            prefer_loc = False
+            allow_loc = False
+            model_display = "LLM Engine (Assigned)"
+        else:
+            prefer_loc = True
+            allow_loc = True
+            model_display = "SLM Engine (Assigned)"
 
     start_t = time.perf_counter()
 
@@ -551,10 +556,10 @@ def prompt_studio_test_run_api(request):
             messages_list,
             user=request.user,
             usage_query_kind=target_qk,
-            llm_override=custom_llm,
+            max_model_tier=test_tier,
             prefer_local=prefer_loc,
             only_local=only_loc,
-            allow_local=True,
+            allow_local=allow_loc,
         )
         elapsed_ms = int((time.perf_counter() - start_t) * 1000)
 

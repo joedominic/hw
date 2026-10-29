@@ -874,6 +874,7 @@
                                 <th class="w-14 shrink-0 whitespace-nowrap px-1.5 py-1.5" title="Lower number = tried sooner">Priority</th>
                                 <th class="min-w-0 px-2 py-1.5">Model</th>
                                 <th class="w-16 shrink-0 whitespace-nowrap px-1.5 py-1.5 text-center" title="Local / on-device provider+model (e.g. Ollama Local)">Local</th>
+                                <th class="w-20 shrink-0 whitespace-nowrap px-1.5 py-1.5 text-center" title="SLM (bulk vetting) or Frontier (deep synthesis)">Tier</th>
                                 <th class="w-[7rem] min-w-[7rem] whitespace-nowrap px-1.5 py-1.5" title="Max requests per minute">RPM</th>
                                 <th class="w-[9rem] min-w-[9rem] whitespace-nowrap px-1.5 py-1.5" title="Input tokens per minute (estimated)">TPM</th>
                                 <th class="w-[4.5rem] min-w-[4.5rem] shrink-0 whitespace-nowrap px-1.5 py-1.5" title="Cooldown seconds after limit">Cooldown</th>
@@ -916,6 +917,13 @@
                                     class="w-full max-w-[4.5rem] rounded border border-slate-200 bg-white px-1 py-0.5 leading-tight text-concierge-slate">
                                 <option value="0" {% if not pref.is_local %}selected{% endif %}>No</option>
                                 <option value="1" {% if pref.is_local %}selected{% endif %}>Yes</option>
+                            </select>
+                        </td>
+                        <td class="px-1.5 py-1 align-middle text-center">
+                            <select name="pref_model_tier" title="SLM for background vetting & auto-scoring; Frontier for resume writing & deep reasoning"
+                                    class="w-full max-w-[5.5rem] rounded border border-slate-200 bg-white px-1 py-0.5 leading-tight text-concierge-slate text-xs">
+                                <option value="slm" {% if pref.model_tier == 'slm' %}selected{% endif %}>SLM</option>
+                                <option value="frontier" {% if pref.model_tier == 'frontier' %}selected{% endif %}>Frontier</option>
                             </select>
                         </td>
                         <td class="px-1.5 py-1 align-middle">
@@ -989,13 +997,34 @@
                             return '<option value="' + m + '"' + sel + '>' + m + '</option>';
                         }).join('');
                     }
+                    function detectTier(provider, model) {
+                        const prov = (provider || '').toLowerCase();
+                        const m = (model || '').toLowerCase();
+                        if (prov.includes('local')) return 'slm';
+                        if (m.includes('mini') || m.includes('flash') || m.includes('haiku') || m.includes('8b') || m.includes('7b') || m.includes('3b') || m.includes('instant') || m.includes('lite')) {
+                            return 'slm';
+                        }
+                        if (m.includes('gpt-4o') || m.includes('sonnet') || m.includes('opus') || m.includes('pro') || m.includes('o1') || m.includes('o3')) {
+                            return 'frontier';
+                        }
+                        return 'slm';
+                    }
                     function wireProviderChange(row) {
                         const providerSelect = row.querySelector('select[name="pref_provider"]');
                         const modelSelect = row.querySelector('select[name="pref_model"]');
+                        const tierSelect = row.querySelector('select[name="pref_model_tier"]');
                         if (!providerSelect || !modelSelect) return;
                         providerSelect.addEventListener('change', function() {
                             const selectedProvider = providerSelect.value;
                             modelSelect.innerHTML = buildModelOptions(selectedProvider, '');
+                            if (tierSelect) {
+                                tierSelect.value = detectTier(selectedProvider, modelSelect.value);
+                            }
+                        });
+                        modelSelect.addEventListener('change', function() {
+                            if (tierSelect) {
+                                tierSelect.value = detectTier(providerSelect.value, modelSelect.value);
+                            }
                         });
                     }
                     addBtn.addEventListener('click', function() {
@@ -1021,6 +1050,10 @@
                             '<td class="px-1.5 py-1 align-middle text-center">' +
                             '<select name="pref_is_local" title="Local model runs on-device" class="w-full max-w-[4.5rem] rounded border border-slate-200 bg-white px-1 py-0.5 leading-tight text-concierge-slate">' +
                             '<option value="0" selected>No</option><option value="1">Yes</option></select>' +
+                            '</td>' +
+                            '<td class="px-1.5 py-1 align-middle text-center">' +
+                            '<select name="pref_model_tier" title="SLM for background vetting & auto-scoring; Frontier for resume writing & deep reasoning" class="w-full max-w-[5.5rem] rounded border border-slate-200 bg-white px-1 py-0.5 leading-tight text-concierge-slate text-xs">' +
+                            '<option value="slm" selected>SLM</option><option value="frontier">Frontier</option></select>' +
                             '</td>' +
                             '<td class="px-1.5 py-1 align-middle"><input type="number" min="1" step="1" name="pref_rate_limit_rpm" value="" placeholder="—" title="Requests per minute" class="w-full min-w-[6.5rem] rounded border border-slate-200 px-1.5 py-0.5 leading-tight tabular-nums"></td>' +
                             '<td class="px-1.5 py-1 align-middle"><input type="number" min="1" step="1" name="pref_rate_limit_tpm" value="" placeholder="—" title="Input tokens per minute" class="w-full min-w-[8.5rem] rounded border border-slate-200 px-1.5 py-0.5 leading-tight tabular-nums"></td>' +

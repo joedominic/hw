@@ -50,7 +50,6 @@
                         </span>
                     {% endif %}
                     {% if board_stage == "vetting" or board_stage == "applying" %}
-                        {% include "resume_app/_pipeline_authenticity_badge.html" with j=j %}
                         {% include "resume_app/_pipeline_interview_badge.html" with j=j vetting_jd_min_chars=vetting_jd_min_chars %}
                     {% endif %}
                     <form method="post" class="inline-flex items-center gap-0.5">
@@ -139,7 +138,7 @@
                     <button type="submit" name="action" value="save"
                             class="inline-flex items-center rounded-xl bg-brand px-3.5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
                         {% if board_stage == "pipeline" %}Move to Review
-                        {% elif board_stage == "vetting" %}Start Tailoring
+                        {% elif board_stage == "vetting" %}Move to Applying
                         {% else %}Mark Submitted{% endif %}
                     </button>
                 </form>
