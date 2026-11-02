@@ -223,10 +223,7 @@ def run_job_search_core(
         raise RuntimeError("A job search is already in progress for your account. Please wait for it to complete.")
 
     try:
-        try:
-            consume_quota(user, METRIC_JOB_SEARCHES, 1)
-        except QuotaExceeded as exc:
-            raise ValueError(str(exc)) from exc
+        consume_quota(user, METRIC_JOB_SEARCHES, 1)
 
         results_wanted = results_wanted or getattr(settings, "JOB_SEARCH_DEFAULT_RESULTS", 50)
         site_name = normalize_site_names(site_name)

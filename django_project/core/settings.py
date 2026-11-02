@@ -247,6 +247,7 @@ SAAS_ENFORCE_QUOTAS = env.bool(
 )
 # When True, staff/superuser skip plan quotas (default False for SaaS safety).
 SAAS_STAFF_BYPASS_QUOTAS = env.bool("SAAS_STAFF_BYPASS_QUOTAS", default=False)
+SAAS_PAST_DUE_GRACE_DAYS = env.int("SAAS_PAST_DUE_GRACE_DAYS", default=5)
 STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY", default="")
 STRIPE_PUBLISHABLE_KEY = env("STRIPE_PUBLISHABLE_KEY", default="")
 STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET", default="")
@@ -295,12 +296,15 @@ LLM_USER_DAILY_REQUEST_LIMIT = env.int("LLM_USER_DAILY_REQUEST_LIMIT", default=0
 # Daily token budgets by plan slug (0 = unlimited). Optional LLM_USER_DAILY_TOKEN_LIMIT is a hard ceiling.
 LLM_USER_DAILY_TOKEN_LIMIT = env.int("LLM_USER_DAILY_TOKEN_LIMIT", default=0)
 LLM_DAILY_TOKEN_LIMIT_BY_PLAN = {
-    "free": env.int("LLM_DAILY_TOKEN_LIMIT_FREE", default=200_000),
+    "free": env.int("LLM_DAILY_TOKEN_LIMIT_FREE", default=50_000),
+    "byok": env.int("LLM_DAILY_TOKEN_LIMIT_BYOK", default=0),
     "pro": env.int("LLM_DAILY_TOKEN_LIMIT_PRO", default=2_000_000),
-    "unlimited": env.int("LLM_DAILY_TOKEN_LIMIT_UNLIMITED", default=0),
+    "power": env.int("LLM_DAILY_TOKEN_LIMIT_POWER", default=10_000_000),
 }
+# Require Bring-Your-Own-Key (BYOK) for programmatic POST /api/resume/llm/complete on Pro plan
+LLM_COMPLETE_REQUIRE_BYOK_FOR_PRO = env.bool("LLM_COMPLETE_REQUIRE_BYOK_FOR_PRO", default=True)
 # Shared burn cap for platform/env API keys across all users (0 = unlimited).
-LLM_PLATFORM_DAILY_TOKEN_LIMIT = env.int("LLM_PLATFORM_DAILY_TOKEN_LIMIT", default=5_000_000)
+LLM_PLATFORM_DAILY_TOKEN_LIMIT = env.int("LLM_PLATFORM_DAILY_TOKEN_LIMIT", default=50_000_000)
 # Wall-clock timeout per gateway/browser-use LLM invoke (seconds; 0 = disabled).
 LLM_INVOKE_TIMEOUT_SECONDS = env.int("LLM_INVOKE_TIMEOUT_SECONDS", default=480)
 # Max concurrent in-flight LLM calls per user (0 = unlimited).

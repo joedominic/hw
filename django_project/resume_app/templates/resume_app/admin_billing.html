@@ -20,7 +20,12 @@
             <h1 class="mt-2 text-2xl font-bold tracking-tight text-concierge-slate">Billing Plans &amp; Quotas</h1>
             <p class="mt-1 text-sm text-slate-500">Configure commercial subscription tiers, daily quota ceilings, commercial pricing, and feature flags.</p>
         </div>
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
+            <a href="{% url 'billing' %}?view=candidate"
+               class="inline-flex items-center gap-1.5 rounded-concierge border border-slate-300 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+                <span class="material-symbols-outlined text-[16px] text-slate-500">visibility</span>
+                Preview Candidate View
+            </a>
             <button type="button"
                     onclick="document.getElementById('create-plan-modal').classList.remove('hidden')"
                     class="inline-flex items-center gap-1.5 rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
@@ -57,16 +62,43 @@
             <p class="mt-1 text-xs text-slate-500">Inspect &amp; impersonate</p>
         </div>
     </div>
-
-    {# Plans List & Configuration #}
+    {# Plans Dropdown Selector & Configuration Panel #}
     <div class="space-y-4">
-        <div class="flex items-center justify-between">
-            <h2 class="text-lg font-bold text-concierge-slate">Configured Commercial Plans</h2>
-            <span class="text-xs text-slate-500">Quotas set to <code class="rounded bg-slate-100 px-1 font-semibold text-slate-700">0</code> indicate <strong>Unlimited</strong>.</span>
+        <div class="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div class="space-y-1">
+                <div class="flex items-center gap-2">
+                    <span class="rounded-md bg-brand-soft px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-brand-ink">Plan Editor</span>
+                    <h2 class="text-lg font-bold text-concierge-slate">Configured Commercial Plans</h2>
+                </div>
+                <p class="text-xs text-slate-500">Select a commercial plan from the dropdown below to configure quotas, Stripe links, and entitlements without scrolling through every tier.</p>
+            </div>
+            
+            <div class="flex flex-wrap items-center gap-3">
+                <label for="admin-plan-select" class="text-xs font-semibold uppercase tracking-wider text-slate-500">Choose Plan:</label>
+                <div class="relative min-w-[240px]">
+                    <select id="admin-plan-select" onchange="switchAdminPlan(this.value)"
+                            class="w-full appearance-none rounded-concierge border border-slate-300 bg-white py-2 pl-3.5 pr-10 text-sm font-semibold text-slate-800 shadow-sm transition hover:border-brand/60 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
+                        {% for plan in plans %}
+                        <option value="{{ plan.slug }}" {% if plan.slug == selected_plan_slug %}selected{% endif %}>
+                            {{ plan.name }} ({{ plan.price_display|default:'Custom' }}){% if plan.is_default %} [Default]{% endif %}{% if not plan.is_active %} [Inactive]{% endif %}
+                        </option>
+                        {% endfor %}
+                    </select>
+                    <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-slate-500">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                    </div>
+                </div>
+                <button type="button"
+                        onclick="document.getElementById('create-plan-modal').classList.remove('hidden')"
+                        class="inline-flex items-center gap-1.5 rounded-concierge border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100">
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                    New Plan
+                </button>
+            </div>
         </div>
 
         {% for plan in plans %}
-        <div class="rounded-2xl border {% if plan.is_default %}border-brand/40 ring-1 ring-brand/20{% else %}border-slate-200{% endif %} bg-white p-6 shadow-card transition-all">
+        <div id="plan-panel-{{ plan.slug }}" class="plan-panel rounded-2xl border {% if plan.is_default %}border-brand/40 ring-1 ring-brand/20{% else %}border-slate-200{% endif %} bg-white p-6 shadow-card transition-all {% if plan.slug != selected_plan_slug %}hidden{% endif %}">
             <form method="post" action="{% url 'billing' %}" class="space-y-5">
                 {% csrf_token %}
                 <input type="hidden" name="action" value="save_plan">
@@ -91,8 +123,16 @@
                             </div>
                         </div>
                     </div>
-                    <div class="flex items-center gap-2 text-sm text-slate-500">
-                        <span class="font-medium text-slate-700">{{ plan.subscriber_count }}</span> active tenant{{ plan.subscriber_count|pluralize }}
+                    <div class="flex items-center gap-3 text-sm text-slate-500">
+                        <span><span class="font-medium text-slate-700">{{ plan.subscriber_count }}</span> active tenant{{ plan.subscriber_count|pluralize }}</span>
+                        {% if not plan.is_default and plan.subscriber_count == 0 %}
+                        <button type="submit" form="delete-plan-form-{{ plan.pk }}"
+                                onclick="return confirm('Are you sure you want to permanently delete plan \'{{ plan.name|escapejs }}\'? This action cannot be undone.');"
+                                class="inline-flex items-center gap-1 rounded-concierge border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 hover:bg-rose-100">
+                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                            Delete Plan
+                        </button>
+                        {% endif %}
                     </div>
                 </div>
 
@@ -132,7 +172,10 @@
 
                 {# Daily Quotas Ceilings #}
                 <div class="rounded-xl border border-slate-100 bg-slate-50/70 p-4">
-                    <p class="mb-3 text-xs font-bold uppercase tracking-wider text-slate-600">Daily Quota Ceilings &amp; Storage</p>
+                    <div class="mb-3 flex items-center justify-between">
+                        <p class="text-xs font-bold uppercase tracking-wider text-slate-600">Daily Quota Ceilings &amp; Storage</p>
+                        <span class="text-xs text-slate-500">Quotas set to <code class="rounded bg-slate-200 px-1 font-semibold text-slate-700">0</code> indicate <strong>Unlimited</strong>.</span>
+                    </div>
                     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
                         <div>
                             <label class="block text-xs font-medium text-slate-600">LLM Requests / Day</label>
@@ -155,12 +198,6 @@
                             <span class="mt-0.5 block text-[10px] text-slate-400">0 = Unlimited</span>
                         </div>
 
-                        <div>
-                            <label class="block text-xs font-medium text-slate-600">Apply Runs / Day</label>
-                            <input type="number" name="apply_runs_per_day" value="{{ plan.apply_runs_per_day }}" min="0"
-                                   class="mt-1 w-full rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm tabular-nums focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
-                            <span class="mt-0.5 block text-[10px] text-slate-400">0 = Unlimited</span>
-                        </div>
 
                         <div>
                             <label class="block text-xs font-medium text-slate-600">Storage Limit (MB)</label>
@@ -180,6 +217,12 @@
                             <span class="text-xs font-medium text-slate-700">Developer API Access</span>
                         </label>
 
+                        <label class="inline-flex items-center gap-2 cursor-pointer" title="Require Bring-Your-Own-Key credentials for headless completion calls">
+                            <input type="checkbox" name="byok_required_for_completion" value="1" {% if plan.byok_required_for_completion %}checked{% endif %}
+                                   class="h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand">
+                            <span class="text-xs font-medium text-slate-700">Require BYOK for API</span>
+                        </label>
+
                         <label class="inline-flex items-center gap-2 cursor-pointer">
                             <input type="checkbox" name="is_default" value="1" {% if plan.is_default %}checked{% endif %}
                                    class="h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand">
@@ -195,18 +238,180 @@
 
                     <div class="flex items-center gap-2">
                         <button type="submit"
-                                class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
-                            Save Changes
+                                class="rounded-concierge bg-brand px-5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
+                            Save Changes for {{ plan.name }}
                         </button>
                     </div>
                 </div>
             </form>
+
+            {% if not plan.is_default and plan.subscriber_count == 0 %}
+            <form id="delete-plan-form-{{ plan.pk }}" method="post" action="{% url 'billing' %}" class="hidden">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="delete_plan">
+                <input type="hidden" name="plan_id" value="{{ plan.pk }}">
+            </form>
+            {% endif %}
         </div>
         {% empty %}
         <div class="rounded-2xl border border-slate-200 bg-white p-8 text-center text-slate-500">
             No commercial plans configured.
         </div>
         {% endfor %}
+    </div>
+
+    {# Tenant Subscriptions Control Center #}
+    <div id="subscribers-section" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-card space-y-5">
+        <div class="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4">
+            <div>
+                <div class="flex items-center gap-2">
+                    <span class="rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-emerald-800">Tenant Operations</span>
+                    <span class="text-xs text-slate-500">{{ total_subscribers }} total subscribers registered</span>
+                </div>
+                <h2 class="mt-1 text-lg font-bold text-concierge-slate">Tenant Subscriptions &amp; Quota Controls</h2>
+                <p class="text-xs text-slate-500">Configure individual tenant subscriptions, override status, assign commercial tiers, extend trials, and reset daily usage.</p>
+            </div>
+            <div class="flex items-center gap-2 text-xs">
+                <a href="{% url 'staff_users' %}" class="inline-flex items-center gap-1 font-semibold text-brand hover:underline">
+                    <span>Open Staff User Directory</span>
+                    <span class="material-symbols-outlined text-[14px]">arrow_forward</span>
+                </a>
+            </div>
+        </div>
+
+        {# Filter Bar #}
+        <form method="get" action="{% url 'billing' %}" class="flex flex-wrap items-center gap-2 text-xs">
+            <input type="search" name="sub_q" value="{{ sub_q }}" placeholder="Search user, email, or Stripe ID"
+                   class="min-w-[240px] flex-1 rounded-concierge border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand">
+            
+            <select name="sub_plan" class="rounded-concierge border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700">
+                <option value="">All Plans</option>
+                {% for p in plans %}
+                <option value="{{ p.slug }}" {% if sub_plan == p.slug %}selected{% endif %}>{{ p.name }} ({{ p.slug }})</option>
+                {% endfor %}
+            </select>
+
+            <select name="sub_status" class="rounded-concierge border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700">
+                <option value="">All Statuses</option>
+                {% for val, label in status_choices %}
+                <option value="{{ val }}" {% if sub_status == val %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+
+            <button type="submit" class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover">
+                Filter
+            </button>
+            {% if sub_q or sub_plan or sub_status %}
+            <a href="{% url 'billing' %}" class="px-2 py-2 text-xs text-slate-500 hover:text-slate-800 underline">Reset</a>
+            {% endif %}
+        </form>
+
+        {# Subscriptions List #}
+        <div class="overflow-x-auto rounded-xl border border-slate-200">
+            <table class="min-w-full text-left text-xs">
+                <thead class="border-b border-slate-200 bg-slate-50 uppercase text-slate-500">
+                    <tr>
+                        <th class="px-3.5 py-2.5">User</th>
+                        <th class="px-3.5 py-2.5">Current Tier &amp; Status</th>
+                        <th class="px-3.5 py-2.5">Stripe Customer / Trial</th>
+                        <th class="px-3.5 py-2.5">Subscription Controls</th>
+                        <th class="px-3.5 py-2.5">Quota Action</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for sub in filtered_subscriptions %}
+                    <tr class="hover:bg-slate-50/50 transition-colors">
+                        <td class="px-3.5 py-3">
+                            <div class="font-bold text-slate-900">{{ sub.owner.username }}</div>
+                            <div class="text-[11px] text-slate-500">{{ sub.owner.email|default:"No email" }}</div>
+                            <div class="text-[10px] text-slate-400">Joined {{ sub.owner.date_joined|date:"M j, Y" }}</div>
+                        </td>
+                        <td class="px-3.5 py-3">
+                            <div class="font-semibold text-slate-800">{{ sub.plan.name|default:"No Plan" }}</div>
+                            <div class="mt-0.5">
+                                {% if sub.status == 'active' %}
+                                <span class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                                    <span class="h-1 w-1 rounded-full bg-emerald-500"></span> Active
+                                </span>
+                                {% elif sub.status == 'trialing' %}
+                                <span class="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-700">
+                                    <span class="h-1 w-1 rounded-full bg-sky-500"></span> Trialing
+                                </span>
+                                {% elif sub.status == 'past_due' %}
+                                <span class="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700" title="In 5-day grace period">
+                                    <span class="h-1 w-1 rounded-full bg-amber-500"></span> Past Due (Grace)
+                                </span>
+                                {% elif sub.status == 'canceled' %}
+                                <span class="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
+                                    <span class="h-1 w-1 rounded-full bg-rose-500"></span> Canceled
+                                </span>
+                                {% else %}
+                                <span class="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                                    {{ sub.status }}
+                                </span>
+                                {% endif %}
+                            </div>
+                        </td>
+                        <td class="px-3.5 py-3 text-[11px] text-slate-600">
+                            {% if sub.stripe_customer_id %}
+                            <div class="font-mono text-[10px] text-slate-500">{{ sub.stripe_customer_id }}</div>
+                            {% else %}
+                            <span class="text-slate-400 italic">No Stripe Customer</span>
+                            {% endif %}
+                            {% if sub.trial_ends_at %}
+                            <div class="mt-0.5 text-[10px] text-slate-500">Trial ends: {{ sub.trial_ends_at|date:"M j, Y" }}</div>
+                            {% endif %}
+                        </td>
+                        <td class="px-3.5 py-3">
+                            <form method="post" action="{% url 'billing' %}" class="flex flex-wrap items-center gap-1.5">
+                                {% csrf_token %}
+                                <input type="hidden" name="action" value="update_user_subscription">
+                                <input type="hidden" name="subscription_id" value="{{ sub.pk }}">
+                                
+                                <select name="plan_slug" class="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700">
+                                    {% for p in plans %}
+                                    <option value="{{ p.slug }}" {% if sub.plan_id == p.pk %}selected{% endif %}>{{ p.name }}</option>
+                                    {% endfor %}
+                                </select>
+
+                                <select name="status" class="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700">
+                                    {% for val, label in status_choices %}
+                                    <option value="{{ val }}" {% if sub.status == val %}selected{% endif %}>{{ label }}</option>
+                                    {% endfor %}
+                                </select>
+
+                                <input type="number" name="trial_days" placeholder="+Days" min="1" max="365"
+                                       class="w-16 rounded border border-slate-300 px-1.5 py-1 text-xs" title="Extend or set trial days from now">
+
+                                <button type="submit" class="rounded-concierge bg-slate-800 px-2.5 py-1 text-xs font-semibold text-white hover:bg-slate-900 shadow-sm" title="Apply Plan & Status Changes">
+                                    Save
+                                </button>
+                            </form>
+                        </td>
+                        <td class="px-3.5 py-3">
+                            <form method="post" action="{% url 'billing' %}" class="inline">
+                                {% csrf_token %}
+                                <input type="hidden" name="action" value="reset_user_quotas">
+                                <input type="hidden" name="user_id" value="{{ sub.owner_id }}">
+                                <button type="submit"
+                                        class="rounded-concierge border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-100 shadow-sm"
+                                        onclick="return confirm('Reset daily quota consumption today for {{ sub.owner.username }}?');"
+                                        title="Reset all daily usage counters for today">
+                                    Reset Today
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="5" class="px-4 py-8 text-center text-slate-400">
+                            No subscriptions match the selected criteria.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
     </div>
 
     {# Platform Telemetry & Recent Audit Activity #}
@@ -331,11 +536,6 @@
                                    class="mt-1 w-full rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm tabular-nums">
                         </div>
                         <div>
-                            <label class="block text-xs text-slate-600">Apply Runs / Day</label>
-                            <input type="number" name="apply_runs_per_day" value="20" min="0"
-                                   class="mt-1 w-full rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm tabular-nums">
-                        </div>
-                        <div>
                             <label class="block text-xs text-slate-600">Storage (MB)</label>
                             <input type="number" name="storage_mb" value="1000" min="0" step="50"
                                    class="mt-1 w-full rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm tabular-nums">
@@ -353,6 +553,11 @@
                         <input type="checkbox" name="api_access" value="1"
                                class="h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand">
                         <span class="text-xs font-medium text-slate-700">Developer API Access</span>
+                    </label>
+                    <label class="inline-flex items-center gap-2 cursor-pointer" title="Require Bring-Your-Own-Key credentials for headless completion calls">
+                        <input type="checkbox" name="byok_required_for_completion" value="1"
+                               class="h-4 w-4 rounded border-slate-300 text-brand focus:ring-brand">
+                        <span class="text-xs font-medium text-slate-700">Require BYOK for API</span>
                     </label>
                     <label class="inline-flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" name="is_active" value="1" checked
@@ -376,4 +581,31 @@
         </div>
     </div>
 </div>
+
+<script>
+function switchAdminPlan(slug) {
+    if (!slug) return;
+    document.querySelectorAll('.plan-panel').forEach(function(panel) {
+        panel.classList.add('hidden');
+    });
+    var activePanel = document.getElementById('plan-panel-' + slug);
+    if (activePanel) {
+        activePanel.classList.remove('hidden');
+    }
+    var select = document.getElementById('admin-plan-select');
+    if (select && select.value !== slug) {
+        select.value = slug;
+    }
+    var url = new URL(window.location);
+    url.searchParams.set('plan', slug);
+    window.history.replaceState({}, '', url);
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    var select = document.getElementById('admin-plan-select');
+    if (select && select.value) {
+        switchAdminPlan(select.value);
+    }
+});
+</script>
 {% endblock %}

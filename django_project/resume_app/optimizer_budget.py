@@ -123,6 +123,43 @@ def build_optimizer_context_state_raw(
     )
 
     retrieval_context = "(none)"
+    has_retrieval = False
+    retrieval_count = 0
+
+    if getattr(settings, "OPTIMIZER_RETRIEVAL_ENABLED", True):
+        try:
+            target_query = writer_job_description or job_description_full
+            if user_resume_id and target_query:
+                from .models import UserResume
+                from .resume_chunker import retrieve_relevant_chunks, format_retrieval_context
+
+                ur = UserResume.objects.filter(pk=user_resume_id).first()
+                if ur:
+                    top_k = getattr(settings, "OPTIMIZER_RETRIEVAL_TOP_K", 8)
+                    dense_w = getattr(settings, "OPTIMIZER_RETRIEVAL_DENSE_WEIGHT", 0.75)
+                    kw_w = getattr(settings, "OPTIMIZER_RETRIEVAL_KEYWORD_WEIGHT", 0.25)
+                    max_chars = getattr(settings, "OPTIMIZER_RETRIEVAL_MAX_PACK_CHARS", 12000)
+
+                    chunks = retrieve_relevant_chunks(
+                        ur,
+                        target_query,
+                        top_k=top_k,
+                        dense_weight=dense_w,
+                        keyword_weight=kw_w,
+                    )
+                    if chunks:
+                        retrieval_context = format_retrieval_context(chunks, max_chars=max_chars)
+                        if retrieval_context and retrieval_context != "(none)":
+                            has_retrieval = True
+                            retrieval_count = len(chunks)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("[optimizer_budget] Failed to retrieve resume chunks: %s", e)
+            retrieval_context = "(none)"
+
+    if has_retrieval:
+        writer_resume_cap = getattr(settings, "OPTIMIZER_WRITER_RESUME_MAX_CHARS_WITH_RAG", 8000)
+        resume_text_for_writer = _truncate(resume_text_full, writer_resume_cap)
 
     return {
         "job_description": job_description_full,
@@ -142,6 +179,8 @@ def build_optimizer_context_state_raw(
             "source_resume_text_chars": len(source_resume_text),
             "optimization_notes_chars": len(notes),
             "pipeline_skills_json_chars": len(skills),
+            "retrieval_context_chars": len(retrieval_context),
+            "retrieval_chunks_count": retrieval_count,
             "job_highlights_chars": len(highlights),
         },
     }

@@ -41,16 +41,19 @@ def saved_search_profile_tabs(user) -> list[dict[str, str]]:
     backfill_search_profile_slugs(user)
     tabs: list[dict[str, str]] = []
     seen: set[str] = set()
-    for saved in SearchProfile.objects.for_user(user).order_by("-updated_at", "name"):
+    for saved in SearchProfile.objects.for_user(user).select_related("resume").order_by("-updated_at", "name"):
         slug = (saved.slug or saved.profile_slug or "").strip().lower()
         if not slug or slug in seen:
             continue
         seen.add(slug)
+        has_resume = bool(saved.resume_id and saved.resume and saved.resume.file)
         tabs.append({
             "slug": slug,
             "label": saved.name,
             "id": saved.id,
             "is_default": bool(saved.is_default),
+            "has_resume": has_resume,
+            "is_incomplete": not has_resume,
         })
     return tabs
 

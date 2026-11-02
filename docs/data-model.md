@@ -105,8 +105,8 @@ erDiagram
 ---
 
 ### 2.6 SaaS, Billing, Identity & Removed Features
-- **`Plan`**: Commercial subscription tiers (`free`, `pro`, `unlimited`) defining daily quotas (`llm_tokens_per_day`, `llm_requests_per_day`, `job_searches_per_day`, `storage_mb`, `api_access`).
-- **`Subscription`**: Tenant plan binding, Stripe customer ID, subscription ID, and billing status (`active`, `past_due`, `canceled`).
+- **`Plan`**: Commercial subscription tiers (`free`, `byok`, `pro`, `power`) defining daily quotas (`llm_tokens_per_day`, `llm_requests_per_day`, `job_searches_per_day`, `storage_mb`, `api_access`, `byok_required_for_completion`). Legacy `apply_runs_per_day` was permanently removed in migration `0068`.
+- **`Subscription`**: Tenant plan binding, Stripe customer ID, subscription ID, billing status (`active`, `past_due`, `canceled`), and `past_due_since` grace period clock (backfilled via migration `0069`).
 - **`UsageCounter`**: Durable per-day metric ledger tracking daily quota consumption.
 - **`CustomerApiKey`**: Hashed API keys (HMAC prefix lookup) for authenticating to the Django Ninja REST API.
 - **`StripeWebhookEvent`**: Webhook idempotency log preventing duplicate transaction processing.

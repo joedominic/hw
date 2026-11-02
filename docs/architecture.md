@@ -56,6 +56,7 @@ JobApp-Main/
 - `sourcing/` — Hexagonal job ingestion subsystem with dedicated adapters for JobSpy, Greenhouse, BuiltIn, Levels.fyi, and Dice.
 - `agents.py` & `optimizer_budget.py` — Multi-agent LangGraph workflow orchestrating resume re-writing, keyword matching, and recruiter readability scoring.
 - `llm/` (`llm/gateway.py`, `llm/policy.py`, `llm/factory.py`) — Enterprise LLM subsystem managing provider selection, fallback chains, per-user daily token budgets, and concurrency controls.
+- `subscriptions/` (`entitlements.py`, `storage_quota.py`, `billing.py`, `views.py`) — SaaS entitlement control plane, daily quota enforcement (LLM tokens, requests, job searches), storage budgets, and Stripe subscription lifecycle. For the exhaustive technical audit and enforcement map, see [Entitlement Enforcement Audit](architecture/entitlement-enforcement-audit.md).
 - `tenancy.py` & `middleware.py` — Multi-tenant query scoping and global authentication enforcement.
 
 ---

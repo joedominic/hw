@@ -31,10 +31,14 @@ class TokenBudgetTests(TestCase):
         ensure_default_plans()
         self.user = create_user("tok_user")
         assign_plan(self.user, "free")
+        # Zero out DB field in TokenBudgetTests so tests for LLM_DAILY_TOKEN_LIMIT_BY_PLAN test the env fallback
+        free_p = get_user_plan(self.user)
+        free_p.llm_tokens_per_day = 0
+        free_p.save()
 
     @override_settings(
         SAAS_ENFORCE_QUOTAS=True,
-        LLM_DAILY_TOKEN_LIMIT_BY_PLAN={"free": 1000, "pro": 5000, "unlimited": 0},
+        LLM_DAILY_TOKEN_LIMIT_BY_PLAN={"free": 1000, "pro": 5000, "power": 0},
         LLM_USER_DAILY_TOKEN_LIMIT=0,
         LLM_PLATFORM_DAILY_TOKEN_LIMIT=0,
     )
@@ -44,7 +48,7 @@ class TokenBudgetTests(TestCase):
 
     @override_settings(
         SAAS_ENFORCE_QUOTAS=True,
-        LLM_DAILY_TOKEN_LIMIT_BY_PLAN={"free": 100, "pro": 5000, "unlimited": 0},
+        LLM_DAILY_TOKEN_LIMIT_BY_PLAN={"free": 100, "pro": 5000, "power": 0},
         LLM_PLATFORM_DAILY_TOKEN_LIMIT=0,
     )
     def test_check_token_budget_blocks(self):
@@ -55,7 +59,7 @@ class TokenBudgetTests(TestCase):
 
     @override_settings(
         SAAS_ENFORCE_QUOTAS=True,
-        LLM_DAILY_TOKEN_LIMIT_BY_PLAN={"free": 500, "pro": 5000, "unlimited": 0},
+        LLM_DAILY_TOKEN_LIMIT_BY_PLAN={"free": 500, "pro": 5000, "power": 0},
         LLM_PLATFORM_DAILY_TOKEN_LIMIT=0,
     )
     @patch("resume_app.llm.policy.uses_platform_keys", return_value=False)
@@ -65,7 +69,7 @@ class TokenBudgetTests(TestCase):
 
     @override_settings(
         SAAS_ENFORCE_QUOTAS=True,
-        LLM_DAILY_TOKEN_LIMIT_BY_PLAN={"free": 100, "pro": 5000, "unlimited": 0},
+        LLM_DAILY_TOKEN_LIMIT_BY_PLAN={"free": 100, "pro": 5000, "power": 0},
         LLM_PLATFORM_DAILY_TOKEN_LIMIT=0,
     )
     def test_check_token_budget_allows_local_provider_even_when_exhausted(self):
@@ -79,7 +83,16 @@ class TokenBudgetTests(TestCase):
 
     @override_settings(
         SAAS_ENFORCE_QUOTAS=True,
-        LLM_DAILY_TOKEN_LIMIT_BY_PLAN={"free": 500, "pro": 5000, "unlimited": 0},
+        LLM_USER_DAILY_TOKEN_LIMIT=25_000,
+    )
+    def test_emergency_ceiling_caps_all_plans(self):
+        pro_user = create_user("pro_ceil_user")
+        assign_plan(pro_user, "pro")
+        self.assertEqual(plan_limit(get_user_plan(pro_user), METRIC_LLM_TOKENS), 25_000)
+
+    @override_settings(
+        SAAS_ENFORCE_QUOTAS=True,
+        LLM_DAILY_TOKEN_LIMIT_BY_PLAN={"free": 500, "pro": 5000, "power": 0},
         LLM_PLATFORM_DAILY_TOKEN_LIMIT=0,
     )
     @patch("resume_app.llm.policy.uses_platform_keys", return_value=False)
@@ -92,14 +105,62 @@ class TokenBudgetTests(TestCase):
         self.assertEqual(usage_today(self.user, METRIC_LLM_TOKENS), 120)
 
 
+
+    def test_plan_database_tokens_take_precedence_over_env(self):
+        plan = get_user_plan(self.user)
+        plan.llm_tokens_per_day = 50000
+        plan.save()
+        with self.settings(LLM_DAILY_TOKEN_LIMIT_BY_PLAN={"free": 1000}):
+            self.assertEqual(plan_limit(plan, METRIC_LLM_TOKENS), 50000)
+            self.assertEqual(daily_token_limit_for_user(self.user), 50000)
+
+
+    @override_settings(SAAS_ENFORCE_QUOTAS=True)
+    @patch("resume_app.llm.policy.uses_platform_keys", return_value=True)
+    def test_byok_plan_blocks_platform_keys(self, _mock_plat):
+        byok_user = create_user("byok_user")
+        assign_plan(byok_user, "byok")
+        with self.assertRaises(LLMTokenBudgetExceeded) as ctx:
+            check_token_budget(byok_user, estimated_tokens=100, provider="OpenAI")
+        self.assertIn("The BYOK Rails plan requires configuring your own API keys", str(ctx.exception))
+
+    @override_settings(SAAS_ENFORCE_QUOTAS=True)
+    @patch("resume_app.llm.policy.uses_platform_keys", return_value=False)
+    def test_byok_plan_allows_user_keys(self, _mock_plat):
+        byok_user = create_user("byok_user_own")
+        assign_plan(byok_user, "byok")
+        check_token_budget(byok_user, estimated_tokens=10000, provider="OpenAI")
+
+
+class PlanTokenCalibrationTests(TestCase):
+    def test_default_plan_tokens_calibrated_for_openai(self):
+        ensure_default_plans()
+        from resume_app.models import Plan
+        free = Plan.objects.get(slug="free")
+        pro = Plan.objects.get(slug="pro")
+        power = Plan.objects.get(slug="power")
+        byok = Plan.objects.get(slug="byok")
+        self.assertEqual(free.llm_tokens_per_day, 8300)
+        self.assertEqual(byok.llm_tokens_per_day, 0)
+        self.assertEqual(byok.price_display, "$15 / mo")
+        self.assertTrue(byok.api_access)
+        self.assertTrue(byok.byok_required_for_completion)
+        self.assertEqual(pro.llm_tokens_per_day, 167000)
+        self.assertEqual(power.llm_tokens_per_day, 500000)
+
+
 class LlmCompleteGateTests(TestCase):
     def setUp(self):
         ensure_default_plans()
         self.client = Client()
         self.free = create_user("free_complete")
         self.pro = create_user("pro_complete")
+        self.power = create_user("power_complete")
+        self.byok = create_user("byok_complete")
         assign_plan(self.free, "free")
+        assign_plan(self.byok, "byok")
         assign_plan(self.pro, "pro")
+        assign_plan(self.power, "power")
 
     @override_settings(SAAS_ENFORCE_QUOTAS=True, LLM_COMPLETE_MAX_INPUT_CHARS=100)
     def test_free_plan_denied(self):
@@ -123,9 +184,46 @@ class LlmCompleteGateTests(TestCase):
         self.assertEqual(resp.status_code, 400)
         mock_invoke.assert_not_called()
 
+    @override_settings(SAAS_ENFORCE_QUOTAS=True, LLM_COMPLETE_MAX_INPUT_CHARS=10_000, LLM_COMPLETE_REQUIRE_BYOK_FOR_PRO=True)
+    def test_byok_plan_requires_byok(self):
+        login_client(self.client, self.byok)
+        resp = self.client.post(
+            "/api/resume/llm/complete",
+            data={"user": "hello world"},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("Bring-Your-Own-Key", resp.content.decode("utf-8"))
+
+    @override_settings(SAAS_ENFORCE_QUOTAS=True, LLM_COMPLETE_MAX_INPUT_CHARS=10_000, LLM_COMPLETE_REQUIRE_BYOK_FOR_PRO=True)
+    def test_pro_plan_requires_byok(self):
+        login_client(self.client, self.pro)
+        resp = self.client.post(
+            "/api/resume/llm/complete",
+            data={"user": "hello world"},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("Bring-Your-Own-Key", resp.content.decode("utf-8"))
+
     @override_settings(SAAS_ENFORCE_QUOTAS=True, LLM_COMPLETE_MAX_INPUT_CHARS=10_000)
     @patch("resume_app.api.call_invoke_llm_messages")
-    def test_pro_plan_allowed(self, mock_invoke):
+    def test_power_plan_allowed(self, mock_invoke):
+        mock_raw = MagicMock()
+        mock_raw.content = "ok"
+        mock_invoke.return_value = mock_raw
+        login_client(self.client, self.power)
+        resp = self.client.post(
+            "/api/resume/llm/complete",
+            data={"user": "hello world"},
+            content_type="application/json",
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        mock_invoke.assert_called_once()
+
+    @override_settings(SAAS_ENFORCE_QUOTAS=True, LLM_COMPLETE_MAX_INPUT_CHARS=10_000, LLM_COMPLETE_REQUIRE_BYOK_FOR_PRO=False)
+    @patch("resume_app.api.call_invoke_llm_messages")
+    def test_pro_plan_allowed_when_byok_disabled(self, mock_invoke):
         mock_raw = MagicMock()
         mock_raw.content = "ok"
         mock_invoke.return_value = mock_raw
@@ -163,11 +261,14 @@ class SettingsUsageTabAndResetTests(TestCase):
         self.client = Client()
         self.user = create_user("usagetab_user")
         assign_plan(self.user, "free")
+        free_p = get_user_plan(self.user)
+        free_p.llm_tokens_per_day = 0
+        free_p.save()
         login_client(self.client, self.user)
 
     @override_settings(
         SAAS_ENFORCE_QUOTAS=True,
-        LLM_DAILY_TOKEN_LIMIT_BY_PLAN={"free": 100, "pro": 5000, "unlimited": 0},
+        LLM_DAILY_TOKEN_LIMIT_BY_PLAN={"free": 100, "pro": 5000, "power": 0},
     )
     def test_informative_token_budget_error_message(self):
         consume_quota(self.user, METRIC_LLM_TOKENS, 95)
@@ -184,7 +285,13 @@ class SettingsUsageTabAndResetTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertIn("Daily usage history (past 30 days)", resp.content.decode())
         self.assertIn("1200", resp.content.decode())
-        self.assertIn("Reset today", resp.content.decode())
+        # Regular tenant user should not see admin reset button
+        self.assertNotIn("Reset today’s quota", resp.content.decode())
+        # Staff user should see admin reset button
+        self.user.is_staff = True
+        self.user.save()
+        resp_staff = self.client.get("/settings/?tab=usage")
+        self.assertIn("Reset today’s quota", resp_staff.content.decode())
 
     def test_reset_today_quotas_post_action(self):
         from resume_app.models import LLMDailyUsageBreakdown
@@ -203,6 +310,15 @@ class SettingsUsageTabAndResetTests(TestCase):
         )
         self.assertEqual(usage_today(self.user, METRIC_LLM_TOKENS), 1500)
         self.assertEqual(LLMDailyUsageBreakdown.objects.filter(owner=self.user, period_date=today).count(), 1)
+
+        # Non-staff tenant attempt is denied; counters remain
+        resp_non_staff = self.client.post("/settings/", data={"action": "reset_today_quotas"})
+        self.assertEqual(resp_non_staff.status_code, 302)
+        self.assertEqual(usage_today(self.user, METRIC_LLM_TOKENS), 1500)
+
+        # Staff user attempt succeeds; counters are reset
+        self.user.is_staff = True
+        self.user.save()
         resp = self.client.post("/settings/", data={"action": "reset_today_quotas"})
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(usage_today(self.user, METRIC_LLM_TOKENS), 0)

@@ -147,6 +147,57 @@ def full_text_for_embedding(title: str, description: str, max_role_chars: int = 
     return role_slice or ""
 
 
+def dual_texts_for_embedding(title: str, description: str) -> Tuple[str, str]:
+    """
+    Produce dual-sectored embedding texts for a job:
+    1. Scope text: title + core overview & responsibilities
+    2. Requirements text: title + technical qualifications & tech stack
+    """
+    from .jd_cleanser import JDCleanserService
+
+    t = (title or "").strip()
+    scope_slice, reqs_slice = JDCleanserService.extract_scope_and_requirements(
+        description or "", title=t, max_scope_chars=1000, max_reqs_chars=1200
+    )
+
+    scope_text = f"Job title: {t}. Role: {scope_slice}" if (t and scope_slice) else (t or scope_slice or "")
+    reqs_text = f"Job title: {t}. Requirements: {reqs_slice}" if (t and reqs_slice) else (t or reqs_slice or "")
+    return scope_text, reqs_text
+
+
+def combine_sector_embeddings(
+    vec_scope: Optional[Sequence[float]],
+    vec_reqs: Optional[Sequence[float]],
+    alpha_scope: float = 0.40,
+) -> Optional[List[float]]:
+    """
+    Fuse dual-sector embeddings (Scope + Requirements) into a single 384-dimensional unit vector.
+    Preserves 100% of both sections without truncation.
+    """
+    import numpy as np
+
+    v_s = np.asarray(vec_scope, dtype=np.float32) if vec_scope is not None else None
+    v_r = np.asarray(vec_reqs, dtype=np.float32) if vec_reqs is not None else None
+
+    if v_s is not None and v_r is not None and len(v_s) == EMBEDDING_DIM and len(v_r) == EMBEDDING_DIM:
+        combined = alpha_scope * v_s + (1.0 - alpha_scope) * v_r
+        norm = np.linalg.norm(combined)
+        if norm > 1e-9:
+            combined = combined / norm
+        return combined.tolist()
+    elif v_s is not None and len(v_s) == EMBEDDING_DIM:
+        norm = np.linalg.norm(v_s)
+        if norm > 1e-9:
+            v_s = v_s / norm
+        return v_s.tolist()
+    elif v_r is not None and len(v_r) == EMBEDDING_DIM:
+        norm = np.linalg.norm(v_r)
+        if norm > 1e-9:
+            v_r = v_r / norm
+        return v_r.tolist()
+    return None
+
+
 def get_embedding_cache_key(text: str) -> str:
     """Deterministic content-hash cache key for an arbitrary text snippet."""
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -353,12 +404,40 @@ def embed_text(text: str, max_chars: int = 2000) -> Optional[List[float]]:
 
 
 def embed_full(title: str, description: str) -> Optional[List[float]]:
-    """Embed title + role-focused description. Returns 384-dim unit vector or None."""
-    text = full_text_for_embedding(title, description)
-    if not text:
-        return None
-    res = _encode_texts_cached([text])
-    return res[0] if res else None
+    """
+    Embed title + role-focused description using dual-sectored representation.
+    Fuses Scope Vector (overview/role) and Requirements Vector (tech stack/qualifications)
+    into a normalized 384-dim unit vector, resolving the 256-token truncation.
+    """
+    s_text, r_text = dual_texts_for_embedding(title, description)
+    if not s_text and not r_text:
+        text = full_text_for_embedding(title, description)
+        if not text:
+            return None
+        res = _encode_texts_cached([text])
+        return res[0] if res else None
+
+    encoded = _encode_texts_cached([s_text, r_text])
+    v_scope = encoded[0] if len(encoded) > 0 else None
+    v_reqs = encoded[1] if len(encoded) > 1 else None
+    return combine_sector_embeddings(v_scope, v_reqs)
+
+
+def embed_full_sectors(
+    title: str, description: str
+) -> Tuple[Optional[List[float]], Optional[List[float]]]:
+    """
+    Return distinct (scope_vec, requirements_vec) pair for granular dual-sector matching.
+    """
+    s_text, r_text = dual_texts_for_embedding(title, description)
+    if not s_text and not r_text:
+        single = embed_full(title, description)
+        return single, single
+
+    encoded = _encode_texts_cached([s_text, r_text])
+    v_scope = encoded[0] if len(encoded) > 0 else None
+    v_reqs = encoded[1] if len(encoded) > 1 else None
+    return v_scope, v_reqs
 
 
 def embed_sentences_batch(sentences: List[str]) -> List[Optional[List[float]]]:
@@ -375,9 +454,33 @@ def embed_title_only_batch(items: List[Tuple[str, str]]) -> List[Optional[List[f
 
 
 def embed_full_batch(items: List[Tuple[str, str]]) -> List[Optional[List[float]]]:
-    """Batch embed (title, description) pairs using role-focused description. Returns list of vectors or None."""
-    texts = [full_text_for_embedding(t, d) for t, d in items]
-    return _encode_texts_cached(texts)
+    """
+    Batch embed (title, description) pairs using dual-sectored representation.
+    Returns list of 384-dim fused unit vectors.
+    """
+    if not items:
+        return []
+
+    all_texts: List[str] = []
+    pairs_indices: List[Tuple[int, int]] = []
+
+    for t, d in items:
+        s_text, r_text = dual_texts_for_embedding(t, d)
+        idx_s = len(all_texts)
+        all_texts.append(s_text)
+        idx_r = len(all_texts)
+        all_texts.append(r_text)
+        pairs_indices.append((idx_s, idx_r))
+
+    encoded = _encode_texts_cached(all_texts)
+
+    results: List[Optional[List[float]]] = []
+    for idx_s, idx_r in pairs_indices:
+        v_s = encoded[idx_s] if idx_s < len(encoded) else None
+        v_r = encoded[idx_r] if idx_r < len(encoded) else None
+        results.append(combine_sector_embeddings(v_s, v_r))
+
+    return results
 
 
 def embed_job_text(title: str, description: str) -> Optional[List[float]]:

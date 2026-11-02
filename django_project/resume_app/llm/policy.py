@@ -123,6 +123,13 @@ def check_token_budget(
 
     est = max(0, int(estimated_tokens))
     if user is not None and getattr(user, "is_authenticated", False) and not staff_bypasses_quotas(user):
+        plan = get_user_plan(user)
+        if plan and getattr(plan, "slug", "") == "byok" and uses_platform_keys(user, provider):
+            raise LLMTokenBudgetExceeded(
+                "The BYOK Rails plan requires configuring your own API keys in Settings → LLM "
+                "(or using local Ollama models). Platform-managed API keys are not included on this plan.",
+                limit=0,
+            )
         limit = daily_token_limit_for_user(user)
         if limit > 0:
             used = usage_today(user, METRIC_LLM_TOKENS)
@@ -133,7 +140,7 @@ def check_token_budget(
                     f"Daily LLM token budget exceeded for plan '{plan_name}' "
                     f"({used:,} / {limit:,} tokens used today, +~{est:,} est. required for this call). "
                     f"This is a cumulative daily limit across all cloud LLM operations today (resets at midnight). "
-                    f"To continue, you can upgrade your plan in Billing, use local Ollama LLMs for free, or reset today's quota in Settings → Usage.",
+                    f"To continue, you can upgrade your plan in Billing or use unmetered local models.",
                     limit=limit,
                 )
     if provider and uses_platform_keys(user, provider):

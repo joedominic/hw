@@ -502,17 +502,16 @@ def _build_pipeline_job_description(job: JobListing, user) -> str:
 
 
 def _resolve_user_resume_for_track(user, track_slug: str) -> UserResume | None:
+    """Strictly resolve the bound resume for a track's SearchProfile. No fallbacks."""
+    if not user or not user.is_authenticated:
+        return None
     track_slug = (track_slug or "").strip().lower()
-    latest_track = (
-        UserResume.objects.for_user(user).filter(is_library=True, track=track_slug).order_by("-uploaded_at").first()
-        if track_slug
-        else None
-    )
-    if latest_track and latest_track.file:
-        return latest_track
-    latest = UserResume.objects.for_user(user).filter(is_library=True).order_by("-uploaded_at").first()
-    if latest and latest.file:
-        return latest
+    if not track_slug:
+        return None
+    from .models import SearchProfile
+    sp = SearchProfile.objects.filter(owner=user, slug=track_slug).first()
+    if sp and sp.resume and sp.resume.file:
+        return sp.resume
     return None
 
 
@@ -745,6 +744,24 @@ def _run_job_search_task_impl(user_id, task_id):
         cache.delete(f"job_task_pending:{task_id}")
         cache.delete(f"job_task_manual_cooldown:{task_id}")
         return {"status": "skipped", "message": "Task is inactive"}
+
+    from .models import SearchProfile
+    profile = task.saved_search
+    if not profile and task.track:
+        profile = SearchProfile.objects.filter(owner=user, slug=task.track).first()
+    if profile and (not profile.resume or not profile.resume.file):
+        cache.delete(f"job_task_pending:{task_id}")
+        cache.delete(f"job_task_manual_cooldown:{task_id}")
+        logger.warning(
+            "[run_job_search_task] Skipping task_id=%s: search profile '%s' (slug=%s) has no bound resume (incomplete profile).",
+            task_id,
+            profile.name,
+            profile.slug,
+        )
+        return {
+            "status": "skipped",
+            "message": f"Search profile '{profile.name}' is incomplete (no resume bound). Job fetching skipped.",
+        }
 
     run = JobSearchTaskRun.objects.create(
         task=task,
@@ -1865,6 +1882,17 @@ def enqueue_due_job_search_tasks():
     enqueued_count = 0
     for task in due:
         try:
+            profile = task.saved_search
+            if not profile and task.track:
+                from .models import SearchProfile
+                profile = SearchProfile.objects.filter(owner_id=task.owner_id, slug=task.track).first()
+            if profile and (not profile.resume or not profile.resume.file):
+                logger.info(
+                    "[enqueue_due_job_search_tasks] Skipping task_id=%s: profile '%s' has no bound resume (incomplete).",
+                    task.id,
+                    getattr(profile, "name", ""),
+                )
+                continue
             next_run = get_next_run_at(task.frequency, from_time=now)
             task.next_run_at = next_run
             task.save(update_fields=["next_run_at", "updated_at"])

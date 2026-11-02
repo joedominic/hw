@@ -16,11 +16,10 @@ logger = logging.getLogger(__name__)
 METRIC_LLM_REQUESTS = "llm_requests"
 METRIC_LLM_TOKENS = "llm_tokens"
 METRIC_JOB_SEARCHES = "job_searches"
-METRIC_APPLY_RUNS = "apply_runs"
 
-ACTIVE_SUB_STATUSES = ("trialing", "active")
+ACTIVE_SUB_STATUSES = ("trialing", "active", "past_due")
 # Statuses that retain the paid plan row but must not receive paid entitlements.
-DEGRADED_SUB_STATUSES = ("past_due", "unpaid", "canceled")
+DEGRADED_SUB_STATUSES = ("unpaid", "canceled")
 
 
 class QuotaExceeded(Exception):
@@ -57,48 +56,97 @@ def ensure_default_plans() -> None:
         {
             "slug": "free",
             "name": "Free",
-            "description": "Starter limits for individual job seekers.",
+            "description": "250,000 OpenAI tokens a month to try tailoring and Skill Radar.",
             "price_display": "$0 / mo",
             "llm_requests_per_day": 50,
-            "llm_tokens_per_day": 100000,
-            "job_searches_per_day": 20,
-            "apply_runs_per_day": 5,
+            "llm_tokens_per_day": 8300,
+            "job_searches_per_day": 5,
             "storage_mb": 250,
             "api_access": False,
+            "byok_required_for_completion": False,
+            "is_active": True,
             "is_default": True,
             "sort_order": 10,
         },
         {
+            "slug": "byok",
+            "name": "BYOK Rails",
+            "description": "Orchestration rails with your own API keys. Unlocked API, 2 GB storage, and Pro pipelines.",
+            "price_display": "$15 / mo",
+            "llm_requests_per_day": 0,
+            "llm_tokens_per_day": 0,
+            "job_searches_per_day": 15,
+            "storage_mb": 2000,
+            "api_access": True,
+            "byok_required_for_completion": True,
+            "is_active": True,
+            "is_default": False,
+            "sort_order": 15,
+        },
+        {
             "slug": "pro",
             "name": "Pro",
-            "description": "Higher limits plus customer API access.",
+            "description": "High-velocity active search for serious job seekers.",
             "price_display": "$29 / mo",
-            "llm_requests_per_day": 500,
-            "llm_tokens_per_day": 1000000,
-            "job_searches_per_day": 200,
-            "apply_runs_per_day": 50,
+            "llm_requests_per_day": 250,
+            "llm_tokens_per_day": 167000,
+            "job_searches_per_day": 25,
             "storage_mb": 5000,
             "api_access": True,
+            "byok_required_for_completion": True,
+            "is_active": True,
             "is_default": False,
             "sort_order": 20,
         },
         {
-            "slug": "unlimited",
-            "name": "Unlimited",
-            "description": "No daily quotas (0 = unlimited).",
+            "slug": "power",
+            "name": "Power",
+            "description": "Maximum throughput for power candidates, coaches, and consultants.",
             "price_display": "$99 / mo",
-            "llm_requests_per_day": 0,
-            "llm_tokens_per_day": 0,
-            "job_searches_per_day": 0,
-            "apply_runs_per_day": 0,
-            "storage_mb": 0,
+            "llm_requests_per_day": 1000,
+            "llm_tokens_per_day": 500000,
+            "job_searches_per_day": 100,
+            "storage_mb": 20000,
             "api_access": True,
+            "byok_required_for_completion": False,
+            "is_active": True,
             "is_default": False,
             "sort_order": 30,
         },
     ]
     for row in defaults:
-        Plan.objects.get_or_create(slug=row["slug"], defaults=row)
+        p, created = Plan.objects.get_or_create(slug=row["slug"], defaults=row)
+        if not created:
+            # Calibrate existing default plans to the stated daily token caps
+            updates = []
+            if row["slug"] == "free" and p.llm_tokens_per_day == 50000:
+                p.llm_tokens_per_day = 8300
+                updates.append("llm_tokens_per_day")
+            elif row["slug"] == "pro" and p.llm_tokens_per_day == 2000000:
+                p.llm_tokens_per_day = 167000
+                updates.append("llm_tokens_per_day")
+            elif row["slug"] == "power" and p.llm_tokens_per_day == 10000000:
+                p.llm_tokens_per_day = 500000
+                updates.append("llm_tokens_per_day")
+            if row["slug"] == "free" and "Local models unmetered" in p.description:
+                p.description = row["description"]
+                updates.append("description")
+            if row["slug"] == "free" and p.llm_requests_per_day == 15:
+                p.llm_requests_per_day = 50
+                updates.append("llm_requests_per_day")
+            if row["slug"] == "pro" and not p.byok_required_for_completion:
+                p.byok_required_for_completion = True
+                updates.append("byok_required_for_completion")
+            if updates:
+                p.save(update_fields=updates)
+
+    # Ensure deprecated unlimited plan is purged from database and remapped
+    if Plan.objects.filter(slug="unlimited").exists():
+        power_plan = Plan.objects.filter(slug="power").first() or Plan.objects.filter(is_default=True).first()
+        from ..models import Subscription
+        if power_plan:
+            Subscription.objects.filter(plan__slug="unlimited").update(plan=power_plan)
+        Plan.objects.filter(slug="unlimited").delete()
 
 
 def get_or_create_subscription(user: AbstractBaseUser):
@@ -125,39 +173,55 @@ def get_user_plan(user: AbstractBaseUser):
     if user is None or not getattr(user, "is_authenticated", False):
         return None
     sub = get_or_create_subscription(user)
-    from ..models import Plan
+    from ..models import Plan, Subscription
 
-    # past_due / unpaid / canceled → free entitlements until payment recovers.
+    # unpaid / canceled → free entitlements until payment recovers.
     if sub.status not in ACTIVE_SUB_STATUSES or sub.plan_id is None:
         return Plan.objects.filter(slug=_default_plan_slug()).first() or sub.plan
+
+    # past_due retains paid entitlements during a 5-day grace period while Stripe retries.
+    if sub.status == Subscription.Status.PAST_DUE:
+        from datetime import timedelta
+        grace_days = int(getattr(settings, "SAAS_PAST_DUE_GRACE_DAYS", 5) or 5)
+        cutoff = timezone.now() - timedelta(days=grace_days)
+        ref_time = sub.past_due_since or sub.updated_at
+        if ref_time and ref_time < cutoff:
+            return Plan.objects.filter(slug=_default_plan_slug()).first() or sub.plan
+
     return sub.plan
 
 
 def plan_limit(plan, metric: str) -> int:
     """Return daily limit for metric; 0 means unlimited."""
     if metric == METRIC_LLM_TOKENS:
+        limit = 0
         if plan and getattr(plan, "llm_tokens_per_day", 0):
-            return int(plan.llm_tokens_per_day)
-        by_plan = getattr(settings, "LLM_DAILY_TOKEN_LIMIT_BY_PLAN", None) or {}
-        slug = getattr(plan, "slug", None) or "free"
-        limit = int(by_plan.get(slug, by_plan.get("free", 0)) or 0)
+            limit = int(plan.llm_tokens_per_day)
+        else:
+            by_plan = getattr(settings, "LLM_DAILY_TOKEN_LIMIT_BY_PLAN", None) or {}
+            slug = getattr(plan, "slug", None) or "free"
+            if slug in by_plan:
+                limit = int(by_plan.get(slug, 0) or 0)
+            elif plan is None:
+                limit = int(by_plan.get("free", 0) or 0)
+            else:
+                # Custom plan where llm_tokens_per_day was explicitly set to 0 (unlimited)
+                limit = 0
         env_cap = int(getattr(settings, "LLM_USER_DAILY_TOKEN_LIMIT", 0) or 0)
-        if env_cap > 0 and (limit == 0 or env_cap < limit):
+        if env_cap > 0:
             return env_cap if limit == 0 else min(limit, env_cap)
         return limit
     if plan is None:
         return int(getattr(settings, "LLM_USER_DAILY_REQUEST_LIMIT", 0) or 0) if metric == METRIC_LLM_REQUESTS else 0
     mapping = {
-        METRIC_LLM_REQUESTS: plan.llm_requests_per_day,
-        METRIC_JOB_SEARCHES: plan.job_searches_per_day,
-        METRIC_APPLY_RUNS: plan.apply_runs_per_day,
+        METRIC_LLM_REQUESTS: getattr(plan, "llm_requests_per_day", 0),
+        METRIC_JOB_SEARCHES: getattr(plan, "job_searches_per_day", 0),
     }
     limit = int(mapping.get(metric, 0) or 0)
     # Legacy env override for LLM when plan says unlimited (0) but env sets a global cap
     if metric == METRIC_LLM_REQUESTS:
         env_cap = int(getattr(settings, "LLM_USER_DAILY_REQUEST_LIMIT", 0) or 0)
-        if env_cap > 0 and (limit == 0 or env_cap < limit):
-            # When env is set, treat as hard ceiling for all plans
+        if env_cap > 0:
             if limit == 0:
                 return env_cap
             return min(limit, env_cap)
@@ -179,8 +243,7 @@ def _format_quota_exceeded_message(user: AbstractBaseUser, metric: str, limit: i
     return (
         f"Daily quota exceeded for {label} on plan '{plan_name}' "
         f"({current:,} / {limit:,} used today, limit resets at midnight). "
-        f"To continue, you can upgrade your plan in Billing, use local Ollama LLMs for free, "
-        f"or reset today's quota in Settings → Usage."
+        f"To continue, you can upgrade your plan in Billing or use unmetered local models."
     )
 
 
@@ -250,7 +313,7 @@ def require_api_access(user: AbstractBaseUser) -> None:
 def assign_plan(user: AbstractBaseUser, plan_slug: str, *, status: str = "active") -> None:
     from ..models import Plan, Subscription
 
-    plan = Plan.objects.get(slug=plan_slug, is_active=True)
+    plan = Plan.objects.get(slug=plan_slug)
     sub = get_or_create_subscription(user)
     sub.plan = plan
     sub.status = status
@@ -261,11 +324,11 @@ USAGE_METRIC_LABELS: dict[str, str] = {
     METRIC_LLM_REQUESTS: "LLM requests (today)",
     METRIC_LLM_TOKENS: "LLM tokens (today)",
     METRIC_JOB_SEARCHES: "Job searches (today)",
-    METRIC_APPLY_RUNS: "Apply runs (today)",
 }
 
 
 def subscription_summary(user: AbstractBaseUser) -> dict:
+    from ..models import Subscription
     sub = get_or_create_subscription(user)
     plan = get_user_plan(user)
     from .storage_quota import storage_summary
@@ -275,7 +338,6 @@ def subscription_summary(user: AbstractBaseUser) -> dict:
         METRIC_LLM_REQUESTS,
         METRIC_LLM_TOKENS,
         METRIC_JOB_SEARCHES,
-        METRIC_APPLY_RUNS,
     ):
         used = usage_today(user, metric)
         limit = plan_limit(plan, metric)
@@ -287,10 +349,20 @@ def subscription_summary(user: AbstractBaseUser) -> dict:
             "label": USAGE_METRIC_LABELS.get(metric, metric),
         }
 
+    is_in_grace = False
+    if sub.status == Subscription.Status.PAST_DUE:
+        from datetime import timedelta
+        grace_days = int(getattr(settings, "SAAS_PAST_DUE_GRACE_DAYS", 5) or 5)
+        cutoff = timezone.now() - timedelta(days=grace_days)
+        ref_time = sub.past_due_since or sub.updated_at
+        is_in_grace = bool(ref_time and ref_time >= cutoff)
+
     return {
         "plan_slug": plan.slug if plan else None,
         "plan_name": plan.name if plan else None,
         "status": sub.status,
+        "is_in_grace": is_in_grace,
+        "past_due_since": sub.past_due_since,
         "api_access": bool(plan and plan.api_access),
         "stripe_customer_id": sub.stripe_customer_id or "",
         "trial_ends_at": sub.trial_ends_at,

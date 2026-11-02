@@ -1,6 +1,6 @@
 import re
 import logging
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +199,97 @@ class JDCleanserService:
             return description[:max_chars].strip()
 
         return result[:max_chars].strip()
+
+    @classmethod
+    def extract_scope_and_requirements(
+        cls,
+        description: str,
+        title: str = "",
+        max_scope_chars: int = 1200,
+        max_reqs_chars: int = 1500,
+    ) -> Tuple[str, str]:
+        """
+        Extract dual-sectored job description slices:
+        1. Scope: Role mission, high-level duties, and scope of responsibility.
+        2. Requirements: Technical skills, mandatory qualifications, tech stack, and experience.
+
+        Guarantees that both sectors fit comfortably within the 256-token embedding context
+        without silent truncation.
+        """
+        if not description or not description.strip():
+            return "", ""
+
+        cleansed = cls.cleanse_heuristically(description, title=title, max_chars=8000)
+        if not cleansed:
+            return "", ""
+
+        SCOPE_HEADER_KEYWORDS = (
+            "about the role", "overview", "summary", "role", "responsibilities",
+            "what you'll do", "what you will", "you will", "duties",
+            "the opportunity", "position summary", "job description", "description",
+            "about the position", "day in the life", "your impact", "core responsibilities",
+        )
+
+        REQS_HEADER_KEYWORDS = (
+            "requirements", "qualifications", "key qualifications", "basic qualifications",
+            "minimum qualifications", "preferred qualifications", "technical skills",
+            "must have", "what we're looking for", "what you bring", "what you'll bring",
+            "who you are", "skills and experience", "tech stack", "technologies",
+            "required skills", "desired skills", "experience required", "technical requirements",
+        )
+
+        lines = cleansed.split("\n")
+        header_pattern = re.compile(r"^(?:\*\*|##|###)?\s*([^*#]+?)(?:\*\*|##|###)?\s*$")
+
+        scope_lines: List[str] = []
+        reqs_lines: List[str] = []
+        current_sector: str = "scope"  # default initial sector to scope
+        has_reqs_header = False
+
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            match = header_pattern.match(stripped)
+            if match:
+                norm_header = match.group(1).strip().lower()
+                norm_header = re.sub(r"[\?\:\!\.\*\_]+$", "", norm_header).strip()
+                if len(norm_header.split()) < 10:
+                    if any(kw in norm_header for kw in REQS_HEADER_KEYWORDS):
+                        current_sector = "reqs"
+                        has_reqs_header = True
+                        reqs_lines.append(stripped)
+                        continue
+                    elif any(kw in norm_header for kw in SCOPE_HEADER_KEYWORDS):
+                        current_sector = "scope"
+                        scope_lines.append(stripped)
+                        continue
+
+            if current_sector == "reqs":
+                reqs_lines.append(stripped)
+            else:
+                scope_lines.append(stripped)
+
+        scope_text = "\n".join(scope_lines).strip()
+        reqs_text = "\n".join(reqs_lines).strip()
+
+        # Fallback if no explicit requirements header was found:
+        # Split cleansed text into scope (top ~40%) and requirements (bottom ~60%)
+        if not has_reqs_header or not reqs_text:
+            all_lines = [ln.strip() for ln in lines if ln.strip()]
+            if len(all_lines) >= 4:
+                split_point = max(2, int(len(all_lines) * 0.4))
+                scope_text = "\n".join(all_lines[:split_point]).strip()
+                reqs_text = "\n".join(all_lines[split_point:]).strip()
+            else:
+                scope_text = cleansed
+                reqs_text = cleansed
+
+        return (
+            scope_text[:max_scope_chars].strip(),
+            reqs_text[:max_reqs_chars].strip(),
+        )
 
     @staticmethod
     def _is_boilerplate(text: str) -> bool:

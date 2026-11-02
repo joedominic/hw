@@ -103,7 +103,6 @@ def staff_users_view(request):
                 "Yes" if u.is_staff else "No",
                 usg.get("llm_requests", {}).get("used", 0),
                 usg.get("job_searches", {}).get("used", 0),
-                usg.get("apply_runs", {}).get("used", 0),
                 stg.get("used_mb", 0),
                 tok.get("input", 0),
                 tok.get("output", 0),
@@ -151,6 +150,22 @@ def staff_user_action_view(request, user_id: int):
             messages.success(request, f"Assigned plan {slug} to {target.username}.")
         except Exception as exc:
             messages.error(request, str(exc))
+    elif action == "set_sub_status":
+        new_status = (request.POST.get("sub_status") or "").strip()
+        from .models import Subscription
+        if new_status in Subscription.Status.values:
+            sub = get_or_create_subscription(target)
+            sub.status = new_status
+            sub.save(update_fields=["status", "updated_at"])
+            messages.success(request, f"Set subscription status for {target.username} to {sub.get_status_display()}.")
+        else:
+            messages.error(request, f"Invalid status '{new_status}'.")
+    elif action == "reset_quotas":
+        from .models import UsageCounter
+        from django.utils import timezone
+        today = timezone.localdate()
+        deleted_count, _ = UsageCounter.objects.filter(owner=target, period_date=today).delete()
+        messages.success(request, f"Reset today's usage quotas ({deleted_count} counters cleared) for {target.username}.")
     else:
         messages.error(request, "Unknown action.")
     return redirect("staff_users")

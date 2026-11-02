@@ -58,8 +58,8 @@ Enforced when `SAAS_ENFORCE_QUOTAS=True` (off automatically during `manage.py te
 | Control | Metric / store | Defaults |
 |---------|----------------|----------|
 | Daily LLM requests | `UsageCounter` / `llm_requests` | Free 50, Pro 500, Unlimited 0; optional `LLM_USER_DAILY_REQUEST_LIMIT` ceiling |
-| Daily LLM tokens | `UsageCounter` / `llm_tokens` | Free 200k, Pro 2M via `LLM_DAILY_TOKEN_LIMIT_*`; optional `LLM_USER_DAILY_TOKEN_LIMIT` |
-| Platform key burn | Redis `llm:platform:tok:v1:{date}` | `LLM_PLATFORM_DAILY_TOKEN_LIMIT` (default 5M); ops-only, not on user UI |
+| Daily LLM tokens | `UsageCounter` / `llm_tokens` | Free 50k, Pro 2M, Power 10M via plan row / `LLM_DAILY_TOKEN_LIMIT_*`; universal ceiling via `LLM_USER_DAILY_TOKEN_LIMIT` |
+| Platform key burn | Redis `llm:platform:tok:v1:{date}` | `LLM_PLATFORM_DAILY_TOKEN_LIMIT` (default 50M); ops-only, not on user UI |
 | Kill switch | `AppAutomationSettings.stop_llm_requests` | Per-user |
 
 Token budget check is **preflight** (estimate); consume is **after** success (input+output). Overshoot after success is logged, not used to drop the response.

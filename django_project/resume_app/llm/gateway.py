@@ -852,6 +852,11 @@ def _finalize_usage(
         )
     except Exception as ex:
         logger.debug("token budget consume skipped: %s", ex)
+    try:
+        from ..rate_limits import record_llm_request
+        record_llm_request(user, is_local=provider_is_local(provider))
+    except Exception as ex:
+        logger.debug("llm request count record skipped: %s", ex)
 
 
 def invoke_llm_messages(
@@ -880,7 +885,9 @@ def invoke_llm_messages(
     from .policy import assert_email_verified, assert_llm_kill_switch
     from ..rate_limits import check_user_llm_rate_limit, record_llm_request
 
-    check_user_llm_rate_limit(user)
+    # Only enforce request rate limits up front if cloud execution is strictly required
+    if not allow_local:
+        check_user_llm_rate_limit(user)
     assert_llm_kill_switch(user)
     assert_email_verified(user)
 
@@ -958,7 +965,7 @@ def invoke_llm_messages(
             provider=provider_hint,
             is_local=provider_is_local(provider_hint),
         )
-        record_llm_request(user)
+        check_user_llm_rate_limit(user, is_local=provider_is_local(provider_hint))
         with user_llm_concurrency(user):
             return _invoke_single_llm(
                 llm_override,
@@ -1004,7 +1011,6 @@ def invoke_llm_messages(
         + (" ..." if len(candidates) > 5 else ""),
     )
 
-    record_llm_request(user)
     last_exc: Exception | None = None
 
     with user_llm_concurrency(user):
@@ -1030,6 +1036,7 @@ def invoke_llm_messages(
                 last_exc = budget_err
                 continue
 
+            check_user_llm_rate_limit(user, is_local=is_cand_local)
             reconcile, release = try_acquire_llm_slot(
                 provider, model_gl, est, user=user, prefer_failover=True
             )

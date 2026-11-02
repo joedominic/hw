@@ -81,7 +81,8 @@ HireEdge reads environment variables from the `.env` file in the repository root
 - `LANGFUSE_REDACT_CONTENT`: Emergency zero-content mode (default `False`). When `True`, completely replaces input/output prompt text with `"redacted-by-litellm"`.
 - `LANGFUSE_DROP_ALL_CONTENT`: Alias for emergency zero-content mode (default `False`).
 - `LLM_USER_DAILY_REQUEST_LIMIT`: Daily request cap per user.
-- `LLM_DAILY_TOKEN_LIMIT_FREE` / `_PRO` / `_UNLIMITED`: Daily token allowances by plan.
+- `LLM_DAILY_TOKEN_LIMIT_FREE` / `_PRO` / `_POWER`: Daily cloud token allowances by plan (50k / 2M / 10M).
+- `LLM_PLATFORM_DAILY_TOKEN_LIMIT`: Shared platform API key safety ceiling (default 50M).
 - `LLM_PLATFORM_DAILY_TOKEN_LIMIT`: Daily spending ceiling for environment-backed platform keys.
 - `LLM_USER_MAX_CONCURRENT`: Maximum in-flight LLM requests per user (default `2`).
 - `OPTIMIZER_JUDGES_PREFER_LOCAL`: Route ATS and Recruiter judges to local Ollama (default `True`).

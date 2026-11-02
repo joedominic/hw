@@ -259,6 +259,19 @@ def llm_complete(request, payload: LlmCompleteRequest):
         api_key = decrypt_api_key(config.encrypted_api_key)
         model = payload.llm_model or config.default_model or None
         llm_override = get_llm(prov, api_key, model)
+    else:
+        from .subscriptions import get_user_plan, staff_bypasses_quotas
+
+        require_byok = getattr(settings, "LLM_COMPLETE_REQUIRE_BYOK_FOR_PRO", True)
+        plan = get_user_plan(user)
+        plan_slug = getattr(plan, "slug", "")
+        plan_requires_byok = require_byok and (getattr(plan, "byok_required_for_completion", False) or plan_slug == "pro")
+        if plan_requires_byok and not staff_bypasses_quotas(user):
+            raise HttpError(
+                400,
+                f"The {getattr(plan, 'name', 'Pro')} plan requires Bring-Your-Own-Key (BYOK) for programmatic API completions. "
+                "Specify 'llm_provider' with a configured API key in Settings → LLM, or upgrade to Power.",
+            )
     try:
         raw = call_invoke_llm_messages(
             messages,

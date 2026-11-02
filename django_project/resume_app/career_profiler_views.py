@@ -93,6 +93,11 @@ def career_profiler_analyze_api(request):
     # Check for direct file upload
     if request.FILES.get("resume_file"):
         uploaded_file = request.FILES["resume_file"]
+        from .subscriptions import QuotaExceeded, assert_upload_allowed
+        try:
+            assert_upload_allowed(user, uploaded_file)
+        except QuotaExceeded as exc:
+            return JsonResponse({"status": "error", "message": str(exc)}, status=400)
         resume = UserResume.objects.create(
             owner=user,
             file=uploaded_file,

@@ -159,6 +159,9 @@ def _handle_refresh_provider_models(request, user):
 
 
 def _handle_reset_today_quotas(request, user):
+    if not request.user.is_staff:
+        messages.error(request, "Permission denied. Only administrators can reset active daily quotas.")
+        return redirect(reverse("settings") + "?tab=usage")
     today = timezone.localdate()
     UsageCounter.objects.for_user(user).filter(period_date=today).delete()
     LLMDailyUsageBreakdown.objects.for_user(user).filter(period_date=today).delete()
@@ -800,7 +803,6 @@ def settings_view(request):
                 "llm_tokens": 0,
                 "llm_requests": 0,
                 "job_searches": 0,
-                "apply_runs": 0,
                 "updated_at": c.updated_at,
             }
         if c.metric == METRIC_LLM_TOKENS:
@@ -809,8 +811,6 @@ def settings_view(request):
             daily_map[d]["llm_requests"] = c.count
         elif c.metric == "job_searches":
             daily_map[d]["job_searches"] = c.count
-        elif c.metric == "apply_runs":
-            daily_map[d]["apply_runs"] = c.count
         if c.updated_at and (not daily_map[d]["updated_at"] or c.updated_at > daily_map[d]["updated_at"]):
             daily_map[d]["updated_at"] = c.updated_at
 
@@ -823,7 +823,6 @@ def settings_view(request):
             "llm_tokens": 0,
             "llm_requests": 0,
             "job_searches": 0,
-            "apply_runs": 0,
             "updated_at": None,
         }
 

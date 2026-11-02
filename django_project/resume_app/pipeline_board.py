@@ -147,34 +147,21 @@ def _attach_optimizer_user_resume_id(user, pipeline_jobs, raw_track: str) -> Non
 
 
 def _resolve_cockpit_bound_resume(user, track_slug: str = ""):
-
-    """Consistently resolve active library resume for Cockpit views and Skill Radar API."""
-
+    """Consistently resolve active library resume for Cockpit views and Skill Radar API. Strictly profile-bound; no fallbacks."""
     if not user or not user.is_authenticated:
-
         return None
-
     raw_track = (track_slug or "").strip().lower()
-
-    bound_resume = _resolve_user_resume_for_track(user, raw_track)
-
-    if not bound_resume:
-
+    active_prof = None
+    if raw_track:
         active_prof = SearchProfile.objects.filter(owner=user, slug=raw_track).first()
-
-        if not active_prof:
-
-            active_prof = SearchProfile.objects.filter(owner=user, is_default=True).first() or SearchProfile.objects.filter(owner=user).first()
-
-        if active_prof and active_prof.resume and active_prof.resume.file:
-
-            bound_resume = active_prof.resume
-
-    if not bound_resume:
-
-        bound_resume = UserResume.objects.filter(owner=user, is_library=True).exclude(file="").order_by("-uploaded_at").first()
-
-    return bound_resume
+    if not active_prof:
+        active_prof = (
+            SearchProfile.objects.filter(owner=user, is_default=True).first()
+            or SearchProfile.objects.filter(owner=user).first()
+        )
+    if active_prof and active_prof.resume and active_prof.resume.file:
+        return active_prof.resume
+    return None
 
 
 
@@ -799,18 +786,18 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
                 original_name = original_name.split("\\")[-1].split("/")[-1].strip()
 
                 if original_name.lower().endswith(".pdf"):
-
-                    uploaded_resume = UserResume.objects.create(
-
-                        owner=user,
-
-                        file=resume_file,
-
-                        original_filename=original_name[:255],
-
-                        is_library=True,
-
-                    )
+                    from .subscriptions import QuotaExceeded, assert_upload_allowed
+                    try:
+                        assert_upload_allowed(user, resume_file)
+                        uploaded_resume = UserResume.objects.create(
+                            owner=user,
+                            file=resume_file,
+                            original_filename=original_name[:255],
+                            is_library=True,
+                        )
+                    except QuotaExceeded as exc:
+                        messages.error(request, str(exc))
+                        return redirect(next_url)
 
 
 

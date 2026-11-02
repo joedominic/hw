@@ -132,8 +132,11 @@ def apply_stripe_event(event: dict[str, Any]) -> bool:
             "past_due": Subscription.Status.PAST_DUE,
             "canceled": Subscription.Status.CANCELED,
             "unpaid": Subscription.Status.UNPAID,
+            "incomplete_expired": Subscription.Status.CANCELED,
+            "incomplete": Subscription.Status.UNPAID,
+            "paused": Subscription.Status.UNPAID,
         }
-        status = status_map.get(data.get("status") or "", Subscription.Status.ACTIVE)
+        status = status_map.get(data.get("status") or "", Subscription.Status.UNPAID)
         items = ((data.get("items") or {}).get("data") or [])
         price_id = ""
         if items:
@@ -156,17 +159,18 @@ def apply_stripe_event(event: dict[str, Any]) -> bool:
         customer_id = data.get("customer") or ""
         user = _user_from_customer(customer_id)
         if user:
-            assign_plan(user, getattr(settings, "SAAS_DEFAULT_PLAN_SLUG", "free"), status=Subscription.Status.CANCELED)
             sub = get_or_create_subscription(user)
-            sub.stripe_subscription_id = ""
-            sub.save(update_fields=["stripe_subscription_id", "updated_at"])
+            sub.status = Subscription.Status.CANCELED
+            # Retain sub.plan and sub.stripe_subscription_id for Customer Portal history/recovery
+            sub.save(update_fields=["status", "updated_at"])
+            logger.info("customer.subscription.deleted user=%s → canceled", user.pk)
 
     elif etype == "invoice.payment_failed":
         customer_id = data.get("customer") or ""
         user = _user_from_customer(customer_id)
         if user:
             sub = get_or_create_subscription(user)
-            # Keep plan FK for portal recovery messaging; entitlements fall back to free.
+            # Retain paid plan FK during 5-day grace period while Stripe retries payment.
             sub.status = Subscription.Status.PAST_DUE
             sub.save(update_fields=["status", "updated_at"])
             logger.info("invoice.payment_failed user=%s → past_due", user.pk)

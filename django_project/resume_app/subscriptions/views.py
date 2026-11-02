@@ -31,7 +31,11 @@ def billing_view(request):
     - Regular Users / Impersonating: Candidate subscription summary & Stripe checkout/portal.
     """
     ensure_default_plans()
-    is_admin_mode = bool(request.user.is_staff and not getattr(request.user, "is_hijacked", False))
+    is_admin_mode = bool(
+        request.user.is_staff
+        and not getattr(request.user, "is_hijacked", False)
+        and request.GET.get("view") != "candidate"
+    )
 
     if is_admin_mode:
         from django.db.models import Count
@@ -57,7 +61,6 @@ def billing_view(request):
                     plan.llm_requests_per_day = max(0, int(request.POST.get("llm_requests_per_day", 0) or 0))
                     plan.llm_tokens_per_day = max(0, int(request.POST.get("llm_tokens_per_day", 0) or 0))
                     plan.job_searches_per_day = max(0, int(request.POST.get("job_searches_per_day", 0) or 0))
-                    plan.apply_runs_per_day = max(0, int(request.POST.get("apply_runs_per_day", 0) or 0))
                     plan.storage_mb = max(0, int(request.POST.get("storage_mb", 0) or 0))
                     plan.sort_order = max(0, int(request.POST.get("sort_order", 100) or 100))
                 except ValueError:
@@ -65,6 +68,7 @@ def billing_view(request):
                     return redirect("billing")
 
                 plan.api_access = bool(request.POST.get("api_access"))
+                plan.byok_required_for_completion = bool(request.POST.get("byok_required_for_completion"))
                 new_is_active = bool(request.POST.get("is_active"))
                 new_is_default = bool(request.POST.get("is_default"))
 
@@ -85,7 +89,7 @@ def billing_view(request):
 
                 plan.save()
                 messages.success(request, f"Plan '{plan.name}' updated successfully.")
-                return redirect("billing")
+                return redirect(f"{reverse('billing')}?plan={plan.slug}")
 
             if action == "create_plan":
                 name = (request.POST.get("name") or "").strip()
@@ -103,7 +107,6 @@ def billing_view(request):
                     llm_req = max(0, int(request.POST.get("llm_requests_per_day", 100) or 0))
                     llm_tok = max(0, int(request.POST.get("llm_tokens_per_day", 500000) or 0))
                     searches = max(0, int(request.POST.get("job_searches_per_day", 50) or 0))
-                    applies = max(0, int(request.POST.get("apply_runs_per_day", 20) or 0))
                     storage = max(0, int(request.POST.get("storage_mb", 1000) or 0))
                     sort_order = max(0, int(request.POST.get("sort_order", 50) or 50))
                 except ValueError:
@@ -123,15 +126,15 @@ def billing_view(request):
                     llm_requests_per_day=llm_req,
                     llm_tokens_per_day=llm_tok,
                     job_searches_per_day=searches,
-                    apply_runs_per_day=applies,
                     storage_mb=storage,
                     sort_order=sort_order,
                     api_access=bool(request.POST.get("api_access")),
+                    byok_required_for_completion=bool(request.POST.get("byok_required_for_completion")),
                     is_active=bool(request.POST.get("is_active")),
                     is_default=is_default,
                 )
                 messages.success(request, f"New plan '{name}' created successfully.")
-                return redirect("billing")
+                return redirect(f"{reverse('billing')}?plan={slug}")
 
             if action == "delete_plan":
                 plan_id = request.POST.get("plan_id")
@@ -154,14 +157,71 @@ def billing_view(request):
                 messages.success(request, f"Plan '{plan_name}' deleted.")
                 return redirect("billing")
 
-        from django.db.models import Sum
+            if action == "update_user_subscription":
+                sub_id = request.POST.get("subscription_id")
+                plan_slug = (request.POST.get("plan_slug") or "").strip()
+                new_status = (request.POST.get("status") or "").strip()
+                trial_days_raw = (request.POST.get("trial_days") or "").strip()
 
-        plans = Plan.objects.annotate(subscriber_count=Count("subscriptions")).order_by("sort_order", "name")
+                try:
+                    target_sub = Subscription.objects.select_related("owner").get(pk=sub_id)
+                except Subscription.DoesNotExist:
+                    messages.error(request, "Subscription record not found.")
+                    return redirect("billing")
+
+                if plan_slug:
+                    try:
+                        target_sub.plan = Plan.objects.get(slug=plan_slug)
+                    except Plan.DoesNotExist:
+                        messages.error(request, f"Plan '{plan_slug}' does not exist.")
+                        return redirect("billing")
+
+                if new_status and new_status in Subscription.Status.values:
+                    target_sub.status = new_status
+
+                if trial_days_raw:
+                    try:
+                        days = int(trial_days_raw)
+                        from datetime import timedelta
+                        from django.utils import timezone
+                        target_sub.trial_ends_at = timezone.now() + timedelta(days=days)
+                    except ValueError:
+                        pass
+                elif request.POST.get("clear_trial"):
+                    target_sub.trial_ends_at = None
+
+                target_sub.save()
+                messages.success(
+                    request,
+                    f"Updated subscription for {target_sub.owner.username}: "
+                    f"Plan={target_sub.plan.name if target_sub.plan else 'None'}, "
+                    f"Status={target_sub.get_status_display()}.",
+                )
+                return redirect("billing")
+
+            if action == "reset_user_quotas":
+                owner_id = request.POST.get("user_id")
+                from ..models import UsageCounter
+                from django.utils import timezone
+                today = timezone.localdate()
+                deleted_count, _ = UsageCounter.objects.filter(owner_id=owner_id, period_date=today).delete()
+                messages.success(request, f"Daily quotas reset ({deleted_count} counters cleared) for user #{owner_id}.")
+                return redirect("billing")
+
+        from django.db.models import Q, Sum
+
+        plans = list(Plan.objects.annotate(subscriber_count=Count("subscriptions")).order_by("sort_order", "name"))
+        plan_slugs = [p.slug for p in plans]
+        selected_plan_slug = (request.GET.get("plan") or "").strip()
+        if selected_plan_slug not in plan_slugs:
+            default_p = next((p for p in plans if p.is_default), None)
+            selected_plan_slug = default_p.slug if default_p else (plan_slugs[0] if plan_slugs else "")
+
         total_subscribers = Subscription.objects.count()
         active_subscribers_count = Subscription.objects.filter(status__in=["active", "trialing"]).count()
-        active_plans_count = plans.filter(is_active=True).count()
+        active_plans_count = sum(1 for p in plans if p.is_active)
         recent_subscriptions = list(
-            Subscription.objects.select_related("owner", "plan").order_by("-updated_at")[:8]
+            Subscription.objects.select_related("owner", "plan").order_by("-updated_at")[:12]
         )
         recent_impersonations = list(
             ImpersonationAuditLog.objects.select_related("hijacker", "target").order_by("-started_at")[:8]
@@ -172,15 +232,39 @@ def billing_view(request):
             total_req=Sum("total_requests"),
         )
 
+        sub_q = (request.GET.get("sub_q") or "").strip()
+        sub_plan = (request.GET.get("sub_plan") or "").strip()
+        sub_status = (request.GET.get("sub_status") or "").strip()
+
+        subs_qs = Subscription.objects.select_related("owner", "plan").order_by("-updated_at")
+        if sub_q:
+            subs_qs = subs_qs.filter(
+                Q(owner__username__icontains=sub_q)
+                | Q(owner__email__icontains=sub_q)
+                | Q(stripe_customer_id__icontains=sub_q)
+            )
+        if sub_plan:
+            subs_qs = subs_qs.filter(plan__slug=sub_plan)
+        if sub_status:
+            subs_qs = subs_qs.filter(status=sub_status)
+
+        filtered_subscriptions = list(subs_qs[:50])
+
         return render(
             request,
             "resume_app/admin_billing.html",
             {
                 "plans": plans,
+                "selected_plan_slug": selected_plan_slug,
                 "total_subscribers": total_subscribers,
                 "active_subscribers_count": active_subscribers_count,
                 "active_plans_count": active_plans_count,
                 "recent_subscriptions": recent_subscriptions,
+                "filtered_subscriptions": filtered_subscriptions,
+                "sub_q": sub_q,
+                "sub_plan": sub_plan,
+                "sub_status": sub_status,
+                "status_choices": Subscription.Status.choices,
                 "recent_impersonations": recent_impersonations,
                 "platform_tokens": {
                     "input": int(token_aggregates.get("total_in") or 0),

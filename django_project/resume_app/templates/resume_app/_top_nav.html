@@ -78,6 +78,10 @@
                         <span class="material-symbols-outlined text-[16px] text-slate-400">shield_person</span>
                         <span>Staff Console</span>
                     </a>
+                    <a href="{% url 'billing' %}" class="flex items-center gap-2.5 px-3 py-1.5 text-slate-600 hover:bg-slate-50 font-medium transition-colors {% if url_name == 'billing' %}bg-slate-50 text-[#0F382A] font-bold{% endif %}">
+                        <span class="material-symbols-outlined text-[16px] text-slate-400">tune</span>
+                        <span>Subscription &amp; Plans</span>
+                    </a>
                     {% endif %}
                 </div>
             </div>
@@ -175,6 +179,10 @@
             <a href="{% url 'staff_users' %}" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-slate-700 hover:bg-slate-50">
                 <span class="material-symbols-outlined text-[15px] text-slate-500">shield_person</span>
                 <span>Staff Console</span>
+            </a>
+            <a href="{% url 'billing' %}" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-slate-700 hover:bg-slate-50">
+                <span class="material-symbols-outlined text-[15px] text-slate-500">tune</span>
+                <span>Subscriptions</span>
             </a>
         </div>
     </div>

@@ -12,12 +12,13 @@ class LLMUserRateLimitExceeded(Exception):
     """Per-user LLM usage cap exceeded."""
 
 
-def check_user_llm_rate_limit(user: Optional[AbstractBaseUser]) -> None:
+def check_user_llm_rate_limit(user: Optional[AbstractBaseUser], is_local: bool = False) -> None:
     """
     Enforce plan daily LLM quota (and optional LLM_USER_DAILY_REQUEST_LIMIT ceiling).
+    Local models are unmetered and bypass request rate limits.
     Raises LLMUserRateLimitExceeded when over quota.
     """
-    if user is None or not getattr(user, "is_authenticated", False):
+    if is_local or user is None or not getattr(user, "is_authenticated", False):
         return
     try:
         check_quota(user, METRIC_LLM_REQUESTS)
@@ -25,9 +26,9 @@ def check_user_llm_rate_limit(user: Optional[AbstractBaseUser]) -> None:
         raise LLMUserRateLimitExceeded(str(exc)) from exc
 
 
-def record_llm_request(user: Optional[AbstractBaseUser]) -> None:
-    """Increment durable LLM usage when an invoke is about to run."""
-    if user is None or not getattr(user, "is_authenticated", False):
+def record_llm_request(user: Optional[AbstractBaseUser], is_local: bool = False) -> None:
+    """Increment durable LLM usage when an invoke is about to run. Local models are unmetered."""
+    if is_local or user is None or not getattr(user, "is_authenticated", False):
         return
     try:
         consume_quota(user, METRIC_LLM_REQUESTS, 1)

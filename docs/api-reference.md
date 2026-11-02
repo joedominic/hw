@@ -125,7 +125,7 @@ Mounted in `resume_app/api.py`.
 - `POST /api/resume/status/{resume_id}/cancel` — Cancel active optimization task.
 - `POST /api/resume/run-step` — Execute an isolated step (`writer`, `ats_judge`, `recruiter_judge`, or `jd_cleanse`).
 - `POST /api/resume/fit-check` — Score resume fit against a job description.
-- `POST /api/resume/llm/complete` — Generic LLM completion (requires `api_access` plan permission).
+- `POST /api/resume/llm/complete` — Generic LLM completion (requires `api_access`; Pro tier requires BYOK, Power allows platform keys up to 10M daily tokens).
 - `POST /api/resume/llm/connect` — Validate and store encrypted provider API keys.
 - `GET /api/resume/llm/models` — Retrieve available models for a provider.
 - `POST /api/resume/llm/set-default-model` — Set default provider/model preference.

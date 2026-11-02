@@ -2018,15 +2018,15 @@ class Plan(models.Model):
         default=20,
         help_text="Daily job-search runs. 0 = unlimited.",
     )
-    apply_runs_per_day = models.PositiveIntegerField(
-        default=5,
-        help_text="Daily apply-agent attempt starts. 0 = unlimited.",
-    )
     storage_mb = models.PositiveIntegerField(
         default=250,
         help_text="Soft storage budget in MB. 0 = unlimited (enforcement optional).",
     )
     api_access = models.BooleanField(default=False)
+    byok_required_for_completion = models.BooleanField(
+        default=False,
+        help_text="Require caller to provide BYOK credentials for headless LLM completion.",
+    )
     stripe_price_id = models.CharField(max_length=128, blank=True, default="")
     is_active = models.BooleanField(default=True)
     is_default = models.BooleanField(default=False)
@@ -2073,6 +2073,11 @@ class Subscription(models.Model):
     stripe_subscription_id = models.CharField(max_length=128, blank=True, default="")
     trial_ends_at = models.DateTimeField(null=True, blank=True)
     current_period_end = models.DateTimeField(null=True, blank=True)
+    past_due_since = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when subscription entered past_due status.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -2083,6 +2088,19 @@ class Subscription(models.Model):
     def __str__(self):
         plan = self.plan.slug if self.plan_id else "?"
         return f"{self.owner_id}:{plan}:{self.status}"
+
+    def save(self, *args, **kwargs):
+        if self.status == self.Status.PAST_DUE:
+            if not self.past_due_since:
+                self.past_due_since = timezone.now()
+        else:
+            self.past_due_since = None
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            update_fields = set(update_fields)
+            update_fields.add("past_due_since")
+            kwargs["update_fields"] = update_fields
+        super().save(*args, **kwargs)
 
 
 class UsageCounter(models.Model):

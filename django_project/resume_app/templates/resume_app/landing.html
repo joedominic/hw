@@ -7,11 +7,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="HireEdge uses AI to tailor your resume for every role, surface the best job matches, and keep your pipeline organized—so you can focus on the interview.">
     {% include "resume_app/_tailwind_theme.html" %}
+    <style>
+        .tabular-nums {
+            font-variant-numeric: tabular-nums;
+        }
+    </style>
 </head>
 <body class="brand-public min-h-full bg-white font-sans text-concierge-slate antialiased">
+    <!-- Header / Sticky Navigation -->
     <header class="sticky top-0 z-40 border-b border-slate-100/80 bg-white/90 backdrop-blur-md">
         <div class="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
-            <a href="{% url 'landing' %}" class="text-xl font-bold tracking-tight text-brand">HireEdge</a>
+            <a href="{% url 'landing' %}" class="flex items-center gap-2 text-xl font-bold tracking-tight text-brand">
+                <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-brand text-white shadow-xs">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    </svg>
+                </span>
+                <span>HireEdge</span>
+            </a>
             <nav class="hidden items-center gap-8 text-sm font-medium text-slate-600 md:flex" aria-label="Marketing">
                 <a href="#product" class="transition hover:text-concierge-slate">Product</a>
                 <a href="#features" class="transition hover:text-concierge-slate">Features</a>
@@ -31,7 +44,7 @@
     </header>
 
     <main>
-        {# Hero — full-bleed product visual #}
+        <!-- Hero Section -->
         <section class="relative min-h-[88vh] overflow-hidden">
             <img
                 src="{% static 'resume_app/landing-hero-product.png' %}?v=3"
@@ -44,7 +57,10 @@
             <div class="absolute inset-0 bg-gradient-to-b from-white/95 via-white/55 to-white/25" aria-hidden="true"></div>
             <div class="absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-white via-white/80 to-transparent" aria-hidden="true"></div>
             <div class="relative mx-auto flex min-h-[88vh] max-w-3xl flex-col items-center justify-start px-4 pb-28 pt-24 text-center sm:px-6 sm:pt-28">
-                <p class="brand-animate text-sm font-bold tracking-tight text-brand sm:text-base">HireEdge</p>
+                <div class="brand-animate inline-flex items-center gap-2 rounded-full border border-brand/20 bg-brand-mist px-3 py-1 text-xs font-semibold text-brand sm:text-sm">
+                    <span class="h-1.5 w-1.5 rounded-full bg-brand"></span>
+                    Intelligent Job Search &amp; Career Telemetry
+                </div>
                 <h1 class="brand-animate brand-animate-delay-1 mt-5 text-4xl font-extrabold tracking-tight text-concierge-slate sm:text-5xl lg:text-[3.25rem] lg:leading-[1.15]">
                     Your job search, smarter from day one.
                 </h1>
@@ -65,11 +81,50 @@
             </div>
         </section>
 
-        {# Features #}
+        <!-- Product: How It Works (Section #product ordered directly after Hero) -->
+        <section id="product" class="scroll-mt-20 px-4 py-16 sm:px-6 sm:py-20">
+            <div class="mx-auto max-w-6xl overflow-hidden rounded-3xl bg-concierge-dark px-6 py-12 sm:px-12 sm:py-16">
+                <div class="mx-auto max-w-2xl text-center">
+                    <div class="inline-flex items-center gap-2 rounded-full border border-teal-500/30 bg-teal-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-teal-300">
+                        System Workflow
+                    </div>
+                    <h2 class="mt-3 text-2xl font-bold tracking-tight text-white sm:text-3xl">How it works</h2>
+                    <p class="mt-3 text-sm text-slate-300 sm:text-base">Three steps from profile to interview-ready applications.</p>
+                </div>
+                <ol class="mt-12 grid gap-10 sm:grid-cols-3 sm:gap-8">
+                    <li class="relative rounded-2xl border border-slate-800 bg-slate-900/40 p-6 text-center sm:text-left">
+                        <span class="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-teal-500 text-sm font-bold text-white shadow-sm">1</span>
+                        <h3 class="mt-5 text-lg font-bold text-white">Upload</h3>
+                        <p class="mt-2 text-sm leading-relaxed text-slate-300">
+                            Securely upload your resume and set your job targets. We parse your experience, skills, and preferences in seconds.
+                        </p>
+                    </li>
+                    <li class="relative rounded-2xl border border-slate-800 bg-slate-900/40 p-6 text-center sm:text-left">
+                        <span class="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-teal-500 text-sm font-bold text-white shadow-sm">2</span>
+                        <h3 class="mt-5 text-lg font-bold text-white">Match</h3>
+                        <p class="mt-2 text-sm leading-relaxed text-slate-300">
+                            Automated scraping and deterministic scoring match opportunities against your profile with zero keyword fluff.
+                        </p>
+                    </li>
+                    <li class="relative rounded-2xl border border-slate-800 bg-slate-900/40 p-6 text-center sm:text-left">
+                        <span class="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-teal-500 text-sm font-bold text-white shadow-sm">3</span>
+                        <h3 class="mt-5 text-lg font-bold text-white">Prepare</h3>
+                        <p class="mt-2 text-sm leading-relaxed text-slate-300">
+                            Optimize bullet points with live diffs, generate tailored cover letters, and access AI STAR interview briefing packs.
+                        </p>
+                    </li>
+                </ol>
+            </div>
+        </section>
+
+        <!-- Features: Core Capabilities -->
         <section id="features" class="scroll-mt-20 border-t border-slate-100 bg-white py-16 sm:py-20">
             <div class="mx-auto max-w-6xl px-4 sm:px-6">
                 <div class="mx-auto max-w-2xl text-center">
-                    <h2 class="text-3xl font-bold tracking-tight text-concierge-slate sm:text-4xl">Built to save you time</h2>
+                    <div class="inline-flex items-center gap-2 rounded-full border border-brand/20 bg-brand-mist px-3 py-1 text-xs font-semibold uppercase tracking-wider text-brand">
+                        Core Capabilities
+                    </div>
+                    <h2 class="mt-3 text-3xl font-bold tracking-tight text-concierge-slate sm:text-4xl">Built to save you time</h2>
                     <p class="mt-3 text-base text-slate-600 sm:text-lg">
                         Everything you need to land your next role, without the usual stress and manual effort.
                     </p>
@@ -81,11 +136,18 @@
                         </div>
                         <h3 class="mt-5 text-lg font-bold text-concierge-slate">Tailor-Made Resumes</h3>
                         <p class="mt-2 text-sm leading-relaxed text-slate-600">
-                            Automatically customize your professional experience for every job application with AI-powered optimization.
+                            Automatically customize your professional experience for every job application with AI-powered keyword optimization and rich diff inspection.
                         </p>
-                        <a href="{% if signup_enabled %}{% url 'signup' %}{% else %}{% url 'login' %}{% endif %}" class="mt-4 inline-flex items-center gap-1 text-sm font-semibold text-brand transition group-hover:gap-1.5">
-                            Learn more <span aria-hidden="true">›</span>
-                        </a>
+                        <ul class="mt-4 space-y-2 text-xs text-slate-500">
+                            <li class="flex items-center gap-1.5">
+                                <svg class="h-4 w-4 text-brand shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                <span>Targeted metric bullet enhancement</span>
+                            </li>
+                            <li class="flex items-center gap-1.5">
+                                <svg class="h-4 w-4 text-brand shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                <span>Side-by-side change verification</span>
+                            </li>
+                        </ul>
                     </article>
                     <article class="group rounded-2xl border border-slate-200 bg-white p-6 shadow-card transition duration-300 hover:-translate-y-0.5 hover:border-brand/20 hover:shadow-md">
                         <div class="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-soft text-brand">
@@ -93,11 +155,18 @@
                         </div>
                         <h3 class="mt-5 text-lg font-bold text-concierge-slate">Track Your Success</h3>
                         <p class="mt-2 text-sm leading-relaxed text-slate-600">
-                            Organize applications in a visual pipeline and never lose track of where you stand with each opportunity.
+                            Organize applications in a deterministic 4-stage visual pipeline with automated scraper sync so you never miss an interview opportunity.
                         </p>
-                        <a href="{% if signup_enabled %}{% url 'signup' %}{% else %}{% url 'login' %}{% endif %}" class="mt-4 inline-flex items-center gap-1 text-sm font-semibold text-brand transition group-hover:gap-1.5">
-                            Learn more <span aria-hidden="true">›</span>
-                        </a>
+                        <ul class="mt-4 space-y-2 text-xs text-slate-500">
+                            <li class="flex items-center gap-1.5">
+                                <svg class="h-4 w-4 text-brand shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                <span>Structured Kanban stages</span>
+                            </li>
+                            <li class="flex items-center gap-1.5">
+                                <svg class="h-4 w-4 text-brand shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                <span>Zero context loss per opportunity</span>
+                            </li>
+                        </ul>
                     </article>
                     <article class="group rounded-2xl border border-slate-200 bg-white p-6 shadow-card transition duration-300 hover:-translate-y-0.5 hover:border-brand/20 hover:shadow-md">
                         <div class="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-soft text-brand">
@@ -105,75 +174,294 @@
                         </div>
                         <h3 class="mt-5 text-lg font-bold text-concierge-slate">Interview-Ready, Faster</h3>
                         <p class="mt-2 text-sm leading-relaxed text-slate-600">
-                            Generate tailored cover letters and AI-powered interview coaching for every role—customized to the exact job description.
+                            Generate tailored cover letters and AI-powered STAR interview briefings for every role—customized directly to company requirements.
                         </p>
-                        <a href="{% if signup_enabled %}{% url 'signup' %}{% else %}{% url 'login' %}{% endif %}" class="mt-4 inline-flex items-center gap-1 text-sm font-semibold text-brand transition group-hover:gap-1.5">
-                            Learn more <span aria-hidden="true">›</span>
-                        </a>
+                        <ul class="mt-4 space-y-2 text-xs text-slate-500">
+                            <li class="flex items-center gap-1.5">
+                                <svg class="h-4 w-4 text-brand shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                <span>STAR situational interview prompts</span>
+                            </li>
+                            <li class="flex items-center gap-1.5">
+                                <svg class="h-4 w-4 text-brand shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                <span>Role and recruiter briefing dossiers</span>
+                            </li>
+                        </ul>
                     </article>
                 </div>
             </div>
         </section>
 
-        {# Process #}
-        <section id="product" class="scroll-mt-20 px-4 py-16 sm:px-6 sm:py-20">
-            <div class="mx-auto max-w-6xl overflow-hidden rounded-3xl bg-concierge-dark px-6 py-12 sm:px-12 sm:py-16">
+        <!-- Pricing: Recalibrated Monthly Tiers & Comparison Table -->
+        <section id="pricing" class="scroll-mt-20 border-t border-slate-100 bg-slate-50/70 py-16 sm:py-24">
+            <div class="mx-auto max-w-6xl px-4 sm:px-6">
+                <!-- Section Header -->
                 <div class="mx-auto max-w-2xl text-center">
-                    <h2 class="text-2xl font-bold tracking-tight text-white sm:text-3xl">How it works</h2>
-                    <p class="mt-3 text-sm text-slate-300 sm:text-base">Three steps from profile to interview-ready applications.</p>
+                    <div class="inline-flex items-center gap-2 rounded-full border border-brand/20 bg-brand-mist px-3 py-1 text-xs font-semibold uppercase tracking-wider text-brand">
+                        Monthly Pricing Tiers
+                    </div>
+                    <h2 class="mt-3 text-3xl font-bold tracking-tight text-concierge-slate sm:text-4xl">Simple, transparent pricing</h2>
+                    <p class="mt-3 text-base text-slate-600 sm:text-lg">
+                        Choose managed OpenAI intelligence or bring your own API keys. Full career OS orchestration across all plans.
+                    </p>
                 </div>
-                <ol class="mt-12 grid gap-10 sm:grid-cols-3 sm:gap-8">
-                    <li class="relative text-center sm:text-left">
-                        <span class="inline-flex h-8 w-8 items-center justify-center rounded-full bg-teal-500 text-sm font-bold text-white">1</span>
-                        <h3 class="mt-4 text-lg font-bold text-white">Upload</h3>
-                        <p class="mt-2 text-sm leading-relaxed text-slate-300">
-                            Securely upload your resume and set your job targets. We parse your experience and preferences in seconds.
-                        </p>
-                    </li>
-                    <li class="relative text-center sm:text-left">
-                        <span class="inline-flex h-8 w-8 items-center justify-center rounded-full bg-teal-500 text-sm font-bold text-white">2</span>
-                        <h3 class="mt-4 text-lg font-bold text-white">Match</h3>
-                        <p class="mt-2 text-sm leading-relaxed text-slate-300">
-                            AI scores every job against your profile and preferences, surfacing the best-fit opportunities automatically.
-                        </p>
-                    </li>
-                    <li class="relative text-center sm:text-left">
-                        <span class="inline-flex h-8 w-8 items-center justify-center rounded-full bg-teal-500 text-sm font-bold text-white">3</span>
-                        <h3 class="mt-4 text-lg font-bold text-white">Prepare</h3>
-                        <p class="mt-2 text-sm leading-relaxed text-slate-300">
-                            Optimize your resume, generate a tailored cover letter, and get AI interview coaching—all customized to each role.
-                        </p>
-                    </li>
-                </ol>
-            </div>
-        </section>
 
-        {# Pricing / final CTA #}
-        <section id="pricing" class="scroll-mt-20 px-4 pb-20 sm:px-6 sm:pb-24">
-            <div class="mx-auto max-w-4xl rounded-3xl bg-concierge-soft px-6 py-14 text-center sm:px-12">
-                <h2 class="text-3xl font-bold tracking-tight text-concierge-slate sm:text-4xl">Ready to land your next role?</h2>
-                <p class="mx-auto mt-4 max-w-xl text-base text-slate-600">
-                    Join professionals using HireEdge to secure better roles in half the time.
-                </p>
-                {% if signup_enabled %}
-                <a href="{% url 'signup' %}" class="mt-8 inline-flex items-center gap-2 rounded-concierge bg-brand px-6 py-3.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-hover">
-                    Get started for free
-                </a>
-                {% else %}
-                <a href="{% url 'login' %}" class="mt-8 inline-flex items-center gap-2 rounded-concierge bg-brand px-6 py-3.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-hover">
-                    Sign in
-                </a>
-                {% endif %}
-                <p class="mt-4 text-xs text-slate-500">No credit card required. Cancel anytime.</p>
+                <!-- 4-Tier Grid -->
+                <div class="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-4 lg:items-stretch">
+                    <!-- 1. Free Tier -->
+                    <div class="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-7 shadow-sm transition hover:shadow-md">
+                        <div>
+                            <div class="flex items-center justify-between">
+                                <h3 class="text-xl font-bold text-concierge-slate">Free</h3>
+                                <span class="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-semibold text-slate-600">Community</span>
+                            </div>
+                            <p class="mt-2 text-sm text-slate-600 leading-relaxed">
+                                250,000 OpenAI tokens a month to try tailoring and Skill Radar.
+                            </p>
+                            <div class="mt-6 flex items-baseline gap-1">
+                                <span class="text-4xl font-extrabold tracking-tight text-concierge-slate tabular-nums">$0</span>
+                                <span class="text-sm font-medium text-slate-500">/ month</span>
+                            </div>
+
+                            <!-- Quota Box -->
+                            <div class="mt-6 space-y-2.5 rounded-xl border border-slate-100 bg-slate-50 p-4 text-xs font-mono text-slate-700">
+                                <div class="flex justify-between">
+                                    <span class="text-slate-500 font-sans font-medium">Daily AI tokens:</span>
+                                    <span class="font-bold text-slate-900">8,300 / day <span class="font-normal text-slate-500 text-[11px]">(~250k/mo)</span></span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-slate-500 font-sans font-medium">Job searches:</span>
+                                    <span class="font-bold text-slate-900">5 / day</span>
+                                </div>
+                            </div>
+
+                            <!-- Features List -->
+                            <ul class="mt-6 space-y-3 text-sm text-slate-600">
+                                <li class="flex items-start gap-2.5">
+                                    <svg class="h-4 w-4 text-brand shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                    <span>AI Resume Tailor &amp; Skill Radar</span>
+                                </li>
+                                <li class="flex items-start gap-2.5">
+                                    <svg class="h-4 w-4 text-brand shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                    <span>Interactive Job Search Kanban</span>
+                                </li>
+                                <li class="flex items-start gap-2.5">
+                                    <svg class="h-4 w-4 text-brand shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                    <span>Target profile &amp; custom search criteria</span>
+                                </li>
+                            </ul>
+                        </div>
+
+                        <div class="mt-8 pt-4">
+                            <a href="{% if signup_enabled %}{% url 'signup' %}{% else %}{% url 'login' %}{% endif %}" class="block w-full rounded-concierge border border-slate-300 bg-white py-2.5 text-center text-sm font-semibold text-slate-700 shadow-xs transition hover:bg-slate-50">
+                                Get started for free
+                            </a>
+                        </div>
+                    </div>
+
+                    <!-- 2. BYOK Rails Tier -->
+                    <div class="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-7 shadow-sm transition hover:shadow-md">
+                        <div>
+                            <div class="flex items-center justify-between">
+                                <h3 class="text-xl font-bold text-concierge-slate">BYOK Rails</h3>
+                                <span class="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-semibold text-slate-600">Self-Funded</span>
+                            </div>
+                            <p class="mt-2 text-sm text-slate-600 leading-relaxed">
+                                Orchestration rails with your own API keys. Unlocked API and Pro pipelines.
+                            </p>
+                            <div class="mt-6 flex items-baseline gap-1">
+                                <span class="text-4xl font-extrabold tracking-tight text-concierge-slate tabular-nums">$15</span>
+                                <span class="text-sm font-medium text-slate-500">/ month</span>
+                            </div>
+
+                            <!-- Quota Box -->
+                            <div class="mt-6 space-y-2.5 rounded-xl border border-slate-100 bg-slate-50 p-4 text-xs font-mono text-slate-700">
+                                <div class="flex justify-between">
+                                    <span class="text-slate-500 font-sans font-medium">Model spend:</span>
+                                    <span class="font-bold text-slate-900">Your Own Keys</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-slate-500 font-sans font-medium">Job searches:</span>
+                                    <span class="font-bold text-slate-900">15 / day</span>
+                                </div>
+                            </div>
+
+                            <!-- Features List -->
+                            <ul class="mt-6 space-y-3 text-sm text-slate-600">
+                                <li class="flex items-start gap-2.5">
+                                    <svg class="h-4 w-4 text-brand shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                    <span>Direct model billing (OpenAI / Anthropic)</span>
+                                </li>
+                                <li class="flex items-start gap-2.5">
+                                    <svg class="h-4 w-4 text-brand shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                    <span>Developer REST API access included</span>
+                                </li>
+                                <li class="flex items-start gap-2.5">
+                                    <svg class="h-4 w-4 text-brand shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                    <span>2 GB resume &amp; extraction storage</span>
+                                </li>
+                                <li class="flex items-start gap-2.5">
+                                    <svg class="h-4 w-4 text-brand shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                    <span>Career Cockpit &amp; multi-channel scrapers</span>
+                                </li>
+                            </ul>
+                        </div>
+
+                        <div class="mt-8 pt-4">
+                            <a href="{% if signup_enabled %}{% url 'signup' %}{% else %}{% url 'login' %}{% endif %}" class="block w-full rounded-concierge border border-slate-300 bg-white py-2.5 text-center text-sm font-semibold text-slate-700 shadow-xs transition hover:bg-slate-50">
+                                Start with BYOK
+                            </a>
+                        </div>
+                    </div>
+
+                    <!-- 3. Pro Tier (Featured) -->
+                    <div class="relative flex flex-col justify-between rounded-2xl border-2 border-brand bg-white p-7 shadow-lg">
+                        <div class="absolute -top-3.5 left-1/2 -translate-x-1/2 rounded-full bg-brand px-3.5 py-0.5 text-[11px] font-bold tracking-wider text-white uppercase shadow-sm">
+                            Most Popular
+                        </div>
+
+                        <div>
+                            <div class="flex items-center justify-between">
+                                <h3 class="text-xl font-bold text-concierge-slate">Pro</h3>
+                                <span class="rounded-md border border-brand/30 bg-brand-soft px-2 py-0.5 text-xs font-semibold text-brand">High-Velocity</span>
+                            </div>
+                            <p class="mt-2 text-sm text-slate-600 leading-relaxed">
+                                High-velocity active search for serious job seekers.
+                            </p>
+                            <div class="mt-6 flex items-baseline gap-1">
+                                <span class="text-4xl font-extrabold tracking-tight text-concierge-slate tabular-nums">$29</span>
+                                <span class="text-sm font-medium text-slate-500">/ month</span>
+                            </div>
+
+                            <!-- Quota Box -->
+                            <div class="mt-6 space-y-2.5 rounded-xl border border-brand/20 bg-brand-mist/50 p-4 text-xs font-mono text-slate-700">
+                                <div class="flex justify-between">
+                                    <span class="text-slate-600 font-sans font-medium">Daily AI tokens:</span>
+                                    <span class="font-bold text-brand">167,000 / day <span class="font-normal text-slate-500 text-[11px]">(~5M/mo)</span></span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-slate-600 font-sans font-medium">Job searches:</span>
+                                    <span class="font-bold text-slate-900">25 / day</span>
+                                </div>
+                            </div>
+
+                            <!-- Features List -->
+                            <ul class="mt-6 space-y-3 text-sm text-slate-700">
+                                <li class="flex items-start gap-2.5">
+                                    <svg class="h-4 w-4 text-brand shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                    <span>Multi-agent resume tailoring with side-by-side diffs</span>
+                                </li>
+                                <li class="flex items-start gap-2.5">
+                                    <svg class="h-4 w-4 text-brand shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                    <span>Multi-channel job scraper synchronization</span>
+                                </li>
+                                <li class="flex items-start gap-2.5">
+                                    <svg class="h-4 w-4 text-brand shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                    <span>Multi-track targeted search profiles</span>
+                                </li>
+                                <li class="flex items-start gap-2.5">
+                                    <svg class="h-4 w-4 text-brand shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                    <span>Full STAR interview dossier generation</span>
+                                </li>
+                            </ul>
+                        </div>
+
+                        <div class="mt-8 pt-4">
+                            <a href="{% if signup_enabled %}{% url 'signup' %}{% else %}{% url 'login' %}{% endif %}" class="block w-full rounded-concierge bg-brand py-2.5 text-center text-sm font-semibold text-white shadow-sm transition hover:bg-brand-hover">
+                                Start Pro search
+                            </a>
+                        </div>
+                    </div>
+
+                    <!-- 4. Power Tier -->
+                    <div class="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-7 shadow-sm transition hover:shadow-md">
+                        <div>
+                            <div class="flex items-center justify-between">
+                                <h3 class="text-xl font-bold text-concierge-slate">Power</h3>
+                                <span class="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-semibold text-slate-600">Enterprise</span>
+                            </div>
+                            <p class="mt-2 text-sm text-slate-600 leading-relaxed">
+                                Maximum throughput for power candidates, coaches, and consultants.
+                            </p>
+                            <div class="mt-6 flex items-baseline gap-1">
+                                <span class="text-4xl font-extrabold tracking-tight text-concierge-slate tabular-nums">$99</span>
+                                <span class="text-sm font-medium text-slate-500">/ month</span>
+                            </div>
+
+                            <!-- Quota Box -->
+                            <div class="mt-6 space-y-2.5 rounded-xl border border-slate-100 bg-slate-50 p-4 text-xs font-mono text-slate-700">
+                                <div class="flex justify-between">
+                                    <span class="text-slate-500 font-sans font-medium">Daily AI tokens:</span>
+                                    <span class="font-bold text-slate-900">500,000 / day <span class="font-normal text-slate-500 text-[11px]">(~15M/mo)</span></span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span class="text-slate-500 font-sans font-medium">Job searches:</span>
+                                    <span class="font-bold text-slate-900">100 / day</span>
+                                </div>
+                            </div>
+
+                            <!-- Features List -->
+                            <ul class="mt-6 space-y-3 text-sm text-slate-600">
+                                <li class="flex items-start gap-2.5">
+                                    <svg class="h-4 w-4 text-brand shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                    <span>Advanced multi-track profile management</span>
+                                </li>
+                                <li class="flex items-start gap-2.5">
+                                    <svg class="h-4 w-4 text-brand shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                    <span>Automated scheduled scraping &amp; pipeline tracking</span>
+                                </li>
+                                <li class="flex items-start gap-2.5">
+                                    <svg class="h-4 w-4 text-brand shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                    <span>Executive panel interview simulation briefs</span>
+                                </li>
+                                <li class="flex items-start gap-2.5">
+                                    <svg class="h-4 w-4 text-brand shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                    <span>Dedicated priority support &amp; SLA</span>
+                                </li>
+                            </ul>
+                        </div>
+
+                        <div class="mt-8 pt-4">
+                            <a href="{% if signup_enabled %}{% url 'signup' %}{% else %}{% url 'login' %}{% endif %}" class="block w-full rounded-concierge border border-slate-300 bg-white py-2.5 text-center text-sm font-semibold text-slate-700 shadow-xs transition hover:bg-slate-50">
+                                Get Power tier
+                            </a>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Final Conversion CTA Card -->
+                <div class="mt-16 overflow-hidden rounded-3xl bg-concierge-soft border border-slate-200/80 px-6 py-14 text-center sm:px-12">
+                    <h2 class="text-3xl font-bold tracking-tight text-concierge-slate sm:text-4xl">Ready to land your next role?</h2>
+                    <p class="mx-auto mt-4 max-w-xl text-base text-slate-600">
+                        Join professionals using HireEdge to secure better roles in half the time.
+                    </p>
+                    {% if signup_enabled %}
+                    <a href="{% url 'signup' %}" class="mt-8 inline-flex items-center gap-2 rounded-concierge bg-brand px-6 py-3.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-hover">
+                        Get started for free
+                    </a>
+                    {% else %}
+                    <a href="{% url 'login' %}" class="mt-8 inline-flex items-center gap-2 rounded-concierge bg-brand px-6 py-3.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-hover">
+                        Sign in
+                    </a>
+                    {% endif %}
+                    <p class="mt-4 text-xs text-slate-500">No credit card required. Cancel anytime.</p>
+                </div>
             </div>
         </section>
     </main>
 
+    <!-- Footer -->
     <footer class="border-t border-slate-200 bg-slate-50">
         <div class="mx-auto max-w-6xl px-4 py-12 sm:px-6">
             <div class="grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
                 <div class="sm:col-span-2 lg:col-span-1">
-                    <a href="{% url 'landing' %}" class="text-lg font-bold text-brand">HireEdge</a>
+                    <a href="{% url 'landing' %}" class="flex items-center gap-2 text-lg font-bold text-brand">
+                        <span class="flex h-7 w-7 items-center justify-center rounded bg-brand text-white shadow-xs">
+                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                            </svg>
+                        </span>
+                        <span>HireEdge</span>
+                    </a>
                     <p class="mt-3 max-w-xs text-sm leading-relaxed text-slate-600">
                         The simple, effective navigator for your career growth.
                     </p>
@@ -181,8 +469,8 @@
                 <div>
                     <p class="text-sm font-semibold text-concierge-slate">Product</p>
                     <ul class="mt-3 space-y-2 text-sm text-slate-600">
-                        <li><a href="#features" class="hover:text-brand">Features</a></li>
                         <li><a href="#product" class="hover:text-brand">How it works</a></li>
+                        <li><a href="#features" class="hover:text-brand">Features</a></li>
                         <li><a href="#pricing" class="hover:text-brand">Pricing</a></li>
                     </ul>
                 </div>

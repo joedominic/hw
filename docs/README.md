@@ -38,9 +38,13 @@ For the complete, canonical user journey specification across the 3 tabs, see **
 - [Interview Prep Coach](features/interview-prep-coach.md) — Multi-round STAR coaching, Cloud LLM routing, and round-specific question synthesis for Applied jobs.
 - [Job Sourcing & Scraping](job-sources-scraping.md) — Multi-channel scraping architecture, adapters, deduplication, and ranking.
 - [Job Source Resilience & Circuit Breakers](features/job-source-resilience.md) — Circuit breaker mechanics, failure thresholds, graceful partial aggregation, and CLI controls.
+- [Dual-Sectored Embeddings & Resume RAG](features/dual-sector-embeddings-and-rag.md) — Decomposed Scope/Requirements job embeddings and hierarchical context-prepended resume chunking.
+- [Search Profile Resume Binding & Guards](features/search-profile-resume-binding-and-guards.md) — Strict 1:1 profile resume bindings, zero-fallback resolution, UI incomplete badges, and search gating.
+- [Subscription Plans & Capability Matrix](features/subscription-plans-and-capabilities.md) — Commercial tiers, daily quota ceilings, storage allocations, developer API access, and degradation policies (backed by the [Entitlement Enforcement Audit](architecture/entitlement-enforcement-audit.md)).
 
 ### Architecture & Operations
 - [Architecture](architecture.md) — Runtime stack, component boundaries, background processing, and Redis locks.
+- [Entitlement Enforcement Audit](architecture/entitlement-enforcement-audit.md) — Authoritative code-level entitlement control audit, quota call sites, token accounting, and gap backlog.
 - [Operations](operations.md) — Environment configuration, Redis setup, background workers, tests, and operational practices.
 - [Production Hardening & Guardrails](guides/production-hardening.md) — Fail-closed deployment invariants, zero-data dashboard contracts, and monotonic workflow safety.
 - [Disaster Recovery & Database Backups](guides/disaster-recovery-and-backups.md) — RPO/RTO specifications, automated backup automation, checksum verification, and restore drill procedures.

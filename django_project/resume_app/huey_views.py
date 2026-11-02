@@ -489,6 +489,18 @@ def job_task_run_now_view(request, task_id):
         cockpit_url += f"?track={track_slug}"
     redirect_url = request.POST.get("next") or request.GET.get("next") or cockpit_url
 
+    # 0. Check if the associated search profile is complete (has a bound resume)
+    from .models import SearchProfile
+    profile = task.saved_search
+    if not profile and task.track:
+        profile = SearchProfile.objects.filter(owner=request.user, slug=task.track).first()
+    if profile and (not profile.resume or not profile.resume.file):
+        msg = f"Cannot run search: Search profile '{profile.name}' is incomplete because no resume is attached. Please attach a resume first."
+        if is_ajax:
+            return JsonResponse({"status": "error", "message": msg}, status=400)
+        messages.error(request, msg)
+        return redirect(redirect_url)
+
     # 1. Check if a search task is already actively running for this user
     lock_key = get_job_search_task_lock_key(request.user.id)
     is_running = bool(cache.get(lock_key)) or task.runs.filter(status=JobSearchTaskRun.STATUS_RUNNING).exists()

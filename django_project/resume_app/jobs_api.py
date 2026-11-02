@@ -50,7 +50,13 @@ from .search_profile_scope import (
 )
 from .services import parse_pdf
 from .crypto import decrypt_api_key
-from .llm import LLMEmailVerificationRequired, LLMRequestsDisabled
+from .llm import (
+    LLMEmailVerificationRequired,
+    LLMRequestsDisabled,
+    LLMTokenBudgetExceeded,
+)
+from .rate_limits import LLMUserRateLimitExceeded
+from .subscriptions import QuotaExceeded
 from .preference import (
     get_preference_vectors,
     get_disliked_embeddings,
@@ -515,6 +521,8 @@ def jobs_search(request, payload: JobSearchRequest):
                 site_name=normalize_site_names(payload.site_name),
                 sort=(payload.sort or "match"),
             )
+        except QuotaExceeded as e:
+            raise HttpError(429, str(e)) from e
         except ValueError as e:
             raise HttpError(400, str(e)) from e
         except RuntimeError as e:
@@ -760,6 +768,8 @@ def jobs_insights(request, payload: InsightsRequest):
         raise HttpError(503, str(e)) from e
     except LLMEmailVerificationRequired as e:
         raise HttpError(403, str(e)) from e
+    except (LLMTokenBudgetExceeded, LLMUserRateLimitExceeded, QuotaExceeded) as e:
+        raise HttpError(429, str(e)) from e
     except Exception as e:
         logger.warning("Insights LLM invoke failed: %s", e)
         raise HttpError(502, str(e)) from e
@@ -826,6 +836,8 @@ def pipeline_interview_prep_generate(request, pipeline_entry_id: int, payload: I
         raise HttpError(503, str(e)) from e
     except LLMEmailVerificationRequired as e:
         raise HttpError(403, str(e)) from e
+    except (LLMTokenBudgetExceeded, LLMUserRateLimitExceeded, QuotaExceeded) as e:
+        raise HttpError(429, str(e)) from e
     except Exception as e:
         logger.warning("Interview prep generation failed for entry %s: %s", pipeline_entry_id, e)
         raise HttpError(502, str(e)) from e
@@ -1628,6 +1640,8 @@ def jobs_match(request, job_listing_id: int, payload: MatchRequest):
         raise HttpError(503, str(e)) from e
     except LLMEmailVerificationRequired as e:
         raise HttpError(403, str(e)) from e
+    except (LLMTokenBudgetExceeded, LLMUserRateLimitExceeded, QuotaExceeded) as e:
+        raise HttpError(429, str(e)) from e
     score = result.get("score", 0)
     reasoning = result.get("reasoning", "")
 

@@ -2,6 +2,12 @@
 {% block title %}Billing — HireEdge{% endblock %}
 {% block content %}
 <div class="mx-auto max-w-3xl space-y-6">
+    {% if request.user.is_staff %}
+    <div class="rounded-xl border border-brand/30 bg-brand-soft/40 px-4 py-2.5 text-xs text-brand-ink flex items-center justify-between">
+        <span class="font-medium">Staff Mode &bull; Viewing Candidate Billing Experience</span>
+        <a href="{% url 'billing' %}" class="font-bold underline hover:text-brand">Return to Admin Control Center &rarr;</a>
+    </div>
+    {% endif %}
     <div>
         <h1 class="text-2xl font-bold text-concierge-slate">Billing &amp; plan</h1>
         <p class="mt-1 text-sm text-slate-600">Your plan controls daily AI, search, and storage limits.</p>
@@ -14,12 +20,27 @@
             <strong>{{ subscription.plan_name|default:"—" }}</strong>
             <span class="text-slate-500">({{ subscription.status }})</span>
         </p>
-        {% if subscription.status == "past_due" or subscription.status == "unpaid" %}
-        <div class="mt-3 rounded-concierge border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-            Payment failed or overdue. Paid entitlements are paused — you currently have Free plan limits until
-            billing is updated.
+        {% if subscription.status == "past_due" %}
+            {% if subscription.is_in_grace %}
+            <div class="mt-3 rounded-concierge border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                Payment failed or overdue. Your subscription is currently in an active 5-day grace period while automatic payment retries occur. Please update your payment method to ensure uninterrupted service.
+                {% if stripe_enabled and subscription.stripe_customer_id %}
+                Use <strong>Manage billing in Stripe</strong> below to update your card.
+                {% endif %}
+            </div>
+            {% else %}
+            <div class="mt-3 rounded-concierge border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-900">
+                Payment grace period expired. Paid entitlements are paused — your account currently has Free plan limits until billing is restored.
+                {% if stripe_enabled and subscription.stripe_customer_id %}
+                Use <strong>Manage billing in Stripe</strong> below to restart your subscription.
+                {% endif %}
+            </div>
+            {% endif %}
+        {% elif subscription.status == "unpaid" or subscription.status == "canceled" %}
+        <div class="mt-3 rounded-concierge border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-900">
+            Subscription unpaid or canceled. Paid entitlements are paused — your account currently has Free plan limits until billing is restored.
             {% if stripe_enabled and subscription.stripe_customer_id %}
-            Use <strong>Manage billing</strong> below to update your payment method.
+            Use <strong>Manage billing in Stripe</strong> below to restart your subscription.
             {% endif %}
         </div>
         {% endif %}
@@ -71,10 +92,9 @@
                 </div>
                 <p class="mt-1 text-sm text-slate-600">{{ plan.description }}</p>
                 <ul class="mt-2 text-xs text-slate-500 space-y-0.5">
-                    <li>LLM requests / day: {% if plan.llm_requests_per_day %}{{ plan.llm_requests_per_day }}{% else %}Unlimited{% endif %}</li>
-                    <li>LLM tokens / day: {% if plan.token_limit_display %}{{ plan.token_limit_display }}{% else %}Unlimited{% endif %}</li>
+                    <li>Daily cloud tokens: {% if plan.token_limit_display %}{{ plan.token_limit_display }}{% else %}Unlimited{% endif %}</li>
+                    <li>Daily LLM requests: {% if plan.llm_requests_per_day %}{{ plan.llm_requests_per_day }}{% else %}Unlimited{% endif %}</li>
                     <li>Searches / day: {% if plan.job_searches_per_day %}{{ plan.job_searches_per_day }}{% else %}Unlimited{% endif %}</li>
-                    <li>Apply runs / day: {% if plan.apply_runs_per_day %}{{ plan.apply_runs_per_day }}{% else %}Unlimited{% endif %}</li>
                     <li>Storage: {% if plan.storage_mb %}{{ plan.storage_mb }} MB{% else %}Unlimited{% endif %}</li>
                     <li>API access: {% if plan.api_access %}Yes{% else %}No{% endif %}</li>
                 </ul>

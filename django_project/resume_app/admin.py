@@ -40,22 +40,115 @@ class PlanAdmin(admin.ModelAdmin):
         "llm_requests_per_day",
         "llm_tokens_per_day",
         "job_searches_per_day",
-        "apply_runs_per_day",
+        "storage_mb",
         "api_access",
+        "byok_required_for_completion",
         "is_default",
         "is_active",
         "stripe_price_id",
     )
-    list_filter = ("is_active", "api_access", "is_default")
+    list_filter = ("is_active", "api_access", "byok_required_for_completion", "is_default")
+    search_fields = ("slug", "name", "description", "stripe_price_id")
     prepopulated_fields = {"slug": ("name",)}
+    actions = ["activate_plans", "deactivate_plans"]
+
+    @admin.action(description="Mark selected plans as active")
+    def activate_plans(self, request, queryset):
+        count = queryset.update(is_active=True)
+        self.message_user(request, f"{count} plan(s) activated.")
+
+    @admin.action(description="Mark selected plans as inactive")
+    def deactivate_plans(self, request, queryset):
+        count = queryset.update(is_active=False)
+        self.message_user(request, f"{count} plan(s) deactivated.")
 
 
 @admin.register(Subscription)
 class SubscriptionAdmin(admin.ModelAdmin):
-    list_display = ("owner", "plan", "status", "stripe_customer_id", "updated_at")
-    list_filter = ("status", "plan")
+    list_display = (
+        "owner",
+        "owner_email",
+        "plan",
+        "status",
+        "stripe_customer_id",
+        "trial_ends_at",
+        "current_period_end",
+        "updated_at",
+    )
+    list_filter = ("status", "plan", "created_at")
     raw_id_fields = ("owner", "plan")
-    search_fields = ("owner__username", "owner__email", "stripe_customer_id")
+    search_fields = (
+        "owner__username",
+        "owner__email",
+        "stripe_customer_id",
+        "stripe_subscription_id",
+    )
+    actions = [
+        "assign_free_plan",
+        "assign_byok_plan",
+        "assign_pro_plan",
+        "assign_power_plan",
+        "mark_active",
+        "mark_canceled",
+        "reset_quotas_today",
+    ]
+
+    @admin.display(description="Email")
+    def owner_email(self, obj):
+        return obj.owner.email or "—"
+
+    @admin.action(description="Assign selected subscriptions to Free plan")
+    def assign_free_plan(self, request, queryset):
+        from .subscriptions import assign_plan
+        for sub in queryset:
+            assign_plan(sub.owner, "free")
+        self.message_user(request, f"Assigned {queryset.count()} subscriptions to Free plan.")
+
+    @admin.action(description="Assign selected subscriptions to BYOK Rails plan")
+    def assign_byok_plan(self, request, queryset):
+        from .subscriptions import assign_plan
+        for sub in queryset:
+            assign_plan(sub.owner, "byok")
+        self.message_user(request, f"Assigned {queryset.count()} subscriptions to BYOK Rails plan.")
+
+    @admin.action(description="Assign selected subscriptions to Pro plan")
+    def assign_pro_plan(self, request, queryset):
+        from .subscriptions import assign_plan
+        for sub in queryset:
+            assign_plan(sub.owner, "pro")
+        self.message_user(request, f"Assigned {queryset.count()} subscriptions to Pro plan.")
+
+    @admin.action(description="Assign selected subscriptions to Power plan")
+    def assign_power_plan(self, request, queryset):
+        from .subscriptions import assign_plan
+        for sub in queryset:
+            assign_plan(sub.owner, "power")
+        self.message_user(request, f"Assigned {queryset.count()} subscriptions to Power plan.")
+
+    @admin.action(description="Mark selected subscriptions as Active")
+    def mark_active(self, request, queryset):
+        count = 0
+        for sub in queryset:
+            sub.status = Subscription.Status.ACTIVE
+            sub.save(update_fields=["status", "past_due_since", "updated_at"])
+            count += 1
+        self.message_user(request, f"{count} subscriptions marked Active.")
+
+    @admin.action(description="Mark selected subscriptions as Canceled")
+    def mark_canceled(self, request, queryset):
+        count = 0
+        for sub in queryset:
+            sub.status = Subscription.Status.CANCELED
+            sub.save(update_fields=["status", "past_due_since", "updated_at"])
+            count += 1
+        self.message_user(request, f"{count} subscriptions marked Canceled.")
+
+    @admin.action(description="Reset today's usage quotas for selected users")
+    def reset_quotas_today(self, request, queryset):
+        from django.utils import timezone
+        user_ids = list(queryset.values_list("owner_id", flat=True))
+        deleted, _ = UsageCounter.objects.filter(owner_id__in=user_ids, period_date=timezone.localdate()).delete()
+        self.message_user(request, f"Reset {deleted} usage counters for {len(user_ids)} selected users.")
 
 
 @admin.register(UsageCounter)
