@@ -2635,9 +2635,16 @@ def serve_media_view(request, path: str):
     """Serve uploaded files only to the owning authenticated user (local or S3)."""
     import mimetypes
 
-    from django.http import FileResponse, Http404
+    from django.core.files.storage import default_storage
+    from django.http import FileResponse, Http404, HttpResponseRedirect
 
-    from .media_access import media_exists, media_open, resolve_safe_media_path, user_may_access_media
+    from .media_access import (
+        media_exists,
+        media_open,
+        resolve_safe_media_path,
+        user_may_access_media,
+        using_remote_storage,
+    )
     from .tenancy import get_active_user
 
     user = get_active_user(request)
@@ -2646,6 +2653,10 @@ def serve_media_view(request, path: str):
     safe = resolve_safe_media_path(path)
     if not safe or not media_exists(safe):
         raise Http404("File not found")
+
+    if using_remote_storage():
+        return HttpResponseRedirect(default_storage.url(safe))
+
     content_type, _ = mimetypes.guess_type(safe)
     return FileResponse(
         media_open(safe),
@@ -3127,6 +3138,45 @@ from .career_profiler_views import (
     career_profiler_preview_matches_api,
 )
 
+def health_live_view(request):
+    """Liveness probe: verifies process is alive and web worker is responding."""
+    return JsonResponse({"status": "ok", "live": True}, status=200)
 
 
+def health_ready_view(request):
+    """Readiness probe: verifies database and cache connectivity."""
+    from django.db import connections
+    from django.core.cache import cache
+
+    checks = {"live": True}
+    status_code = 200
+
+    # 1. Database check
+    try:
+        with connections["default"].cursor() as cursor:
+            cursor.execute("SELECT 1;")
+            cursor.fetchone()
+        checks["database"] = "ok"
+    except Exception as exc:
+        logger.warning("Readiness probe database check failed: %s", exc)
+        checks["database"] = "error"
+        status_code = 503
+
+    # 2. Cache / Redis check
+    try:
+        cache_key = "_readiness_check"
+        cache.set(cache_key, "1", timeout=10)
+        val = cache.get(cache_key)
+        if val == "1":
+            checks["cache"] = "ok"
+        else:
+            checks["cache"] = "unexpected_value"
+            status_code = 503
+    except Exception as exc:
+        logger.warning("Readiness probe cache check failed: %s", exc)
+        checks["cache"] = "error"
+        status_code = 503
+
+    checks["status"] = "ok" if status_code == 200 else "degraded"
+    return JsonResponse(checks, status=status_code)
 

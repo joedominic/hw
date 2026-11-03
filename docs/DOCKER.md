@@ -38,7 +38,9 @@ docker compose up --build
 - UI: http://localhost:8000/
 - Huey monitor: http://localhost:8000/jobs/huey/
 
-The entrypoint runs `migrate` on each container start before the main command.
+The entrypoint checks `RUN_MIGRATIONS`:
+- By default in Compose, `web` has `RUN_MIGRATIONS=1` (executes migrations) while `huey` has `RUN_MIGRATIONS=0` (skips migrations to avoid race conditions).
+- In multi-pod or Kubernetes deployments, set `RUN_MIGRATIONS=0` across all pods and run migrations via a dedicated pre-deploy Job or init container.
 
 ## Production
 
@@ -50,7 +52,7 @@ Prod overrides:
 
 - **web:** `gunicorn` with 2 workers, 120s timeout
 - **Both:** `restart: unless-stopped`, `DEBUG=False` on web/huey
-- **Healthchecks:** HTTP probe on web; Redis ping on huey
+- **Healthchecks:** HTTP readiness probe (`/health/ready`) on web; Redis ping on huey
 
 Set in `.env` before prod:
 
@@ -59,7 +61,17 @@ Set in `.env` before prod:
 - `ALLOWED_HOSTS` = your public hostname(s)
 - `MYSQL_DATABASE` / `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_HOST` / `MYSQL_PORT` (recommended; omit only for single-node SQLite demos)
 
-Serve `/media/` **through Django** (`serve_media_view` is owner-gated). Do **not** alias `MEDIA_ROOT` as static files in nginx/Caddy — that bypasses ACL. Optional S3 via `AWS_STORAGE_BUCKET_NAME`.
+Serve `/media/` **through Django** (`serve_media_view` is owner-gated). Do **not** alias `MEDIA_ROOT` as static files in nginx/Caddy — that bypasses ACL.
+
+### Static Assets (WhiteNoise)
+Static files (Django admin, CSS/JS) are collected at Docker build time (`RUN python manage.py collectstatic --noinput`) and served directly by Gunicorn using **WhiteNoise** (`whitenoise.storage.CompressedManifestStaticFilesStorage`). No separate Nginx sidecar is required for static assets in production.
+
+### Media & S3 Storage Posture
+- **Single-Node Compose:** Local `./django_project/media` bind-mount is shared between `web` and `huey`.
+- **Multi-Node / Cloud Deployments:** Configure `AWS_STORAGE_BUCKET_NAME` (plus credentials and region).
+- **Owner-Gated S3 Access:** When remote S3 storage is enabled, `serve_media_view` validates user tenant ownership with `user_may_access_media` and issues a `302 Found` redirect to a short-lived presigned S3 URL (`AWS_QUERYSTRING_EXPIRE=120`). Large binary file downloads are offloaded directly to S3/CloudFront without consuming Gunicorn worker bandwidth.
+- **Remote PDF Parsing:** PDF text extraction throughout the application uses `local_file_or_temp`, which streams remote storage objects to temporary files on demand and cleans them up automatically.
+- **Pipeline Skill Extracts:** `pipeline_llm_skill_extract.py` transparently routes progress, stop signals, and extraction records through `default_storage` (local disk in dev/compose; S3 in multi-node prod), eliminating filesystem locality blockers between web and worker tiers.
 
 ## Volumes
 
@@ -103,7 +115,10 @@ HUEY_REDIS_HOST=host.docker.internal
 - **web** enqueues tasks (optimize, job search, vetting, etc.) to Redis.
 - **huey** runs `run_huey` with 2 thread workers and the periodic scheduler.
 - Do **not** set `HUEY_IMMEDIATE=1` in Docker — tasks would run in the web process and periodic crons would not schedule.
-- With **SQLite**, run **one** `huey` replica. With **MySQL** (`MYSQL_*` in `.env`), multiple web/huey workers are viable across tenants.
+- With **SQLite**, run **one** `huey` replica.
+- With **MySQL** and **Redis cache** enabled:
+  - **Horizontal Huey:** Multiple Huey workers are supported. Periodic tasks deduplicate automatically via Redis leader locks (`acquire_periodic_leader_lock`). Note that workers must either share media (via S3 or RWX volume) and use a shared Ollama endpoint or cloud LLMs.
+  - **Horizontal Web:** Multiple web replicas behind a load balancer require `AWS_STORAGE_BUCKET_NAME` (or shared RWX storage) so uploaded resumes are globally accessible across pods. WhiteNoise handles static files independently on each pod.
 
 Periodic tasks (require huey + Redis):
 

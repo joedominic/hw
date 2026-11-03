@@ -10,13 +10,14 @@ services:
     restart: unless-stopped
     environment:
       DEBUG: "False"
+      RUN_MIGRATIONS: "1"
     healthcheck:
       test:
         [
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/', timeout=5)",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=5)",
         ]
       interval: 30s
       timeout: 10s
@@ -27,6 +28,7 @@ services:
     restart: unless-stopped
     environment:
       DEBUG: "False"
+      RUN_MIGRATIONS: "0"
     healthcheck:
       test:
         [

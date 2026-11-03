@@ -613,7 +613,7 @@ def jobs_ai_match(request, payload: AiMatchRequest):
     resume = get_owned_or_404(UserResume, user, id=payload.resume_id, is_library=True)
     if not resume.file:
         raise HttpError(400, "Resume not found or file missing.")
-    resume_text = parse_pdf(resume.file.path) or ""
+    resume_text = parse_pdf(resume.file) or ""
     if not resume_text:
         raise HttpError(400, "Could not extract text from resume.")
     llm = None
@@ -1203,7 +1203,7 @@ def jobs_run_keyword_search(request, payload: RunKeywordSearchRequest):
                 logger.warning("Preference reorder in keyword search failed: %s", e)
 
         try:
-            resume_text = parse_pdf(resume.file.path)
+            resume_text = parse_pdf(resume.file)
         except Exception as e:
             errors.append(f"Resume PDF read failed: {e}")
             resume_text = None
@@ -1618,7 +1618,7 @@ def jobs_match(request, job_listing_id: int, payload: MatchRequest):
 
     llm = _get_llm_from_request(user, payload.llm_provider, payload.llm_model) if payload.llm_provider else None
     try:
-        resume_text = parse_pdf(resume.file.path)
+        resume_text = parse_pdf(resume.file)
     except Exception as e:
         raise HttpError(400, f"Could not read resume PDF: {e}") from e
 

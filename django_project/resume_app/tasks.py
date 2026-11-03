@@ -283,7 +283,7 @@ def optimize_resume_task(
         job_desc = optimized_resume.job_description.content
 
         # Parse PDF
-        resume_text = parse_pdf(optimized_resume.original_resume.file.path)
+        resume_text = parse_pdf(optimized_resume.original_resume.file)
 
         ctx_state = build_optimizer_context_state(
             optimized=optimized_resume,
@@ -1113,7 +1113,7 @@ def evaluate_vetting_matching_task(
             if not latest or not latest.file:
                 continue
             try:
-                resume_text = parse_pdf(latest.file.path)
+                resume_text = parse_pdf(latest.file)
                 resume_snippet_map[track or ""] = (latest, resume_text)
             except Exception as e:
                 logger.exception(
@@ -1307,7 +1307,7 @@ def try_vetting_match_debug(
     if not latest or not latest.file:
         return {"ok": False, "skip_reason": "no_resume"}
     try:
-        resume_text = parse_pdf(latest.file.path)
+        resume_text = parse_pdf(latest.file)
     except Exception as e:
         logger.exception("try_vetting_match_debug resume parse entry_id=%s", entry.id)
         return {"ok": False, "skip_reason": "resume_parse_error", "error": str(e)}

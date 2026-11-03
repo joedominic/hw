@@ -9,6 +9,8 @@ services:
     command: python manage.py runserver 0.0.0.0:8000
     ports:
       - "8000:8000"
+    environment:
+      RUN_MIGRATIONS: "1"
     env_file:
       - path: .env
         required: false
@@ -24,6 +26,8 @@ services:
     image: jobapp-jules-app:latest
     build: .
     command: python manage.py run_huey
+    environment:
+      RUN_MIGRATIONS: "0"
     env_file:
       - path: .env
         required: false

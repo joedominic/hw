@@ -374,7 +374,7 @@ def run_step(
                     pass
         if payload.use_resume_id:
             ur = get_owned_or_404(UserResume, user, id=payload.use_resume_id, is_library=True)
-            return parse_pdf(ur.file.path)
+            return parse_pdf(ur.file)
         return None
 
     jkey = (payload.job_cache_key or "").strip() or None
@@ -990,7 +990,7 @@ def get_status_data(resume_id: int, user, request=None):
             )
             if optimized.original_resume.file:
                 from .tasks import parse_pdf
-                original_text = parse_pdf(optimized.original_resume.file.path) or ""
+                original_text = parse_pdf(optimized.original_resume.file) or ""
     except Exception as e:
         logger.debug(f"Could not extract original resume text for resume {resume_id}: {e}")
 

@@ -57,7 +57,7 @@ class Command(BaseCommand):
 
         self.stdout.write(f"Using resume: {resume.original_filename} (ID: {resume.id})")
         try:
-            resume_text = parse_pdf(resume.file.path)
+            resume_text = parse_pdf(resume.file)
             self.stdout.write(f"Parsed resume text length: {len(resume_text)} chars")
         except Exception as e:
             self.stderr.write(f"Failed to parse resume: {e}")

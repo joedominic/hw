@@ -51,8 +51,15 @@ INSTALLED_APPS = [
     "resume_app",
 ]
 
+try:
+    import whitenoise  # noqa: F401
+    _HAS_WHITENOISE = True
+except ImportError:
+    _HAS_WHITENOISE = False
+
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    *(["whitenoise.middleware.WhiteNoiseMiddleware"] if _HAS_WHITENOISE else []),
     "resume_app.middleware.SessionInterruptedMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -198,6 +205,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
 import os
 MEDIA_URL = "/media/"
@@ -221,6 +229,7 @@ LOGIN_EXEMPT_URL_PREFIXES = (
     "/accounts/",
     "/admin/",
     "/static/",
+    "/health/",
     "/billing/stripe/webhook/",
     "/legal/",
 )
@@ -277,15 +286,25 @@ AWS_ACCESS_KEY_ID = env("AWS_ACCESS_KEY_ID", default="")
 AWS_SECRET_ACCESS_KEY = env("AWS_SECRET_ACCESS_KEY", default="")
 AWS_DEFAULT_ACL = env("AWS_DEFAULT_ACL", default="private")
 AWS_QUERYSTRING_AUTH = env.bool("AWS_QUERYSTRING_AUTH", default=True)
-if AWS_STORAGE_BUCKET_NAME:
-    STORAGES = {
-        "default": {
-            "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
-        },
-        "staticfiles": {
-            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
-        },
-    }
+AWS_QUERYSTRING_EXPIRE = env.int("AWS_QUERYSTRING_EXPIRE", default=120)
+
+_staticfiles_backend = (
+    "whitenoise.storage.CompressedManifestStaticFilesStorage"
+    if (_HAS_WHITENOISE and not DEBUG and not _IN_TEST)
+    else "django.contrib.staticfiles.storage.StaticFilesStorage"
+)
+STORAGES = {
+    "default": {
+        "BACKEND": (
+            "storages.backends.s3boto3.S3Boto3Storage"
+            if AWS_STORAGE_BUCKET_NAME
+            else "django.core.files.storage.FileSystemStorage"
+        ),
+    },
+    "staticfiles": {
+        "BACKEND": _staticfiles_backend,
+    },
+}
 
 # django-hijack: support staff impersonation
 HIJACK_PERMISSION_CHECK = "resume_app.hijack_permissions.can_hijack"
@@ -641,6 +660,11 @@ LOGGING = {
 # Production Startup Invariant Verification (Fail-Closed Safety Guardrails)
 # ==============================================================================
 if not DEBUG and not _IN_TEST:
+    if not _HAS_WHITENOISE:
+        raise ImproperlyConfigured(
+            "Production configuration error: 'whitenoise' is required when DEBUG is False. "
+            "Install with: pip install whitenoise>=6.6.0"
+        )
     _insecure_defaults = (
         "django-insecure-+a#*@w#!qb+w*1_6vd4my0q2q^!ddes#&#%jueou)q7(5(=v*n",
         "django-insecure-",

@@ -40,8 +40,7 @@ def extract_text_from_user_resume(resume: UserResume) -> str:
         except Exception:
             pass
     try:
-        file_path = resume.file.path
-        return parse_pdf(file_path)
+        return parse_pdf(resume.file)
     except (PDFParseError, Exception) as e:
         logger.warning("[career_profiler] parse_pdf failed on resume %s: %s; trying raw read", resume.id, e)
         try:

@@ -119,7 +119,7 @@ def _library_resume_text(track_slug: str, *, user) -> str:
     if ur is None or not ur.file:
         return ""
     try:
-        return parse_pdf(ur.file.path) or ""
+        return parse_pdf(ur.file) or ""
     except Exception as exc:
         logger.warning("Failed to parse library resume for track=%s: %s", track_slug, exc)
         return ""

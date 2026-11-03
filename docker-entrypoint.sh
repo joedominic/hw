@@ -16,5 +16,10 @@ if [ -z "$MYSQL_DATABASE" ] && [ -e db.sqlite3 ]; then
   done
 fi
 
-python manage.py migrate --noinput
+if [ "${RUN_MIGRATIONS}" = "1" ]; then
+  echo "RUN_MIGRATIONS=1: executing database migrations..."
+  python manage.py migrate --noinput
+else
+  echo "Skipping migrations (RUN_MIGRATIONS != 1)..."
+fi
 exec "$@"

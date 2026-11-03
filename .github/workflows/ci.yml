@@ -1,0 +1,191 @@
+name: HireEdge Production Release Gate
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security-and-lint:
+    name: Deployment Security & Migration Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+          pip install --no-deps -r requirements-jobspy.txt
+
+      - name: Migration Invariant Verification
+        run: |
+          cd django_project
+          python manage.py makemigrations --check --dry-run
+
+      - name: Django Framework System Check
+        run: |
+          cd django_project
+          python manage.py check
+
+      - name: Production Deployment Security Audit
+        env:
+          DEBUG: "False"
+          SECRET_KEY: "ci-in-flight-production-gating-secret-key-at-least-50-characters-long"
+          ALLOWED_HOSTS: "app.hireedge.com,127.0.0.1,localhost"
+          ALLOW_SQLITE_IN_PRODUCTION: "True"
+          ALLOW_CONSOLE_EMAIL_IN_PRODUCTION: "True"
+          ALLOW_EMPTY_STRIPE_WEBHOOK_SECRET: "True"
+          SECURE_SSL_REDIRECT: "True"
+          SESSION_COOKIE_SECURE: "True"
+          CSRF_COOKIE_SECURE: "True"
+        run: |
+          cd django_project
+          python manage.py check --deploy
+
+  test-suite:
+    name: Test Suite (${{ matrix.database }})
+    needs: [security-and-lint]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [sqlite, mysql]
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      mariadb:
+        image: mariadb:10.11
+        ports:
+          - 3306:3306
+        env:
+          MARIADB_ROOT_PASSWORD: root
+          MARIADB_DATABASE: test_resxjob
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+          pip install --no-deps -r requirements-jobspy.txt
+
+      - name: Run Test Suite
+        env:
+          HUEY_REDIS_HOST: "127.0.0.1"
+          HUEY_REDIS_PORT: 6379
+          HUEY_NAME: "ci-worker"
+          OTEL_ENABLED: "False"
+          MYSQL_DATABASE: ${{ matrix.database == 'mysql' && 'test_resxjob' || '' }}
+          MYSQL_USER: ${{ matrix.database == 'mysql' && 'root' || '' }}
+          MYSQL_PASSWORD: ${{ matrix.database == 'mysql' && 'root' || '' }}
+          MYSQL_HOST: ${{ matrix.database == 'mysql' && '127.0.0.1' || '' }}
+          MYSQL_PORT: ${{ matrix.database == 'mysql' && '3306' || '' }}
+          MYSQL_USE_FOR_TESTS: ${{ matrix.database == 'mysql' && '1' || '0' }}
+          MYSQL_SSL_DISABLED: "1"
+        run: |
+          cd django_project
+          # 1. Zero-data truth in advertising, legal compliance, and OpenTelemetry toggle
+          python manage.py test resume_app.test_zero_data_dashboard
+          
+          # 2. Multi-tenancy isolation, media protection, and Stripe webhook handling
+          python manage.py test resume_app.test_multi_tenant resume_app.test_saas_phase01 resume_app.test_saas_phase2
+          
+          # 3. 3-Tab Model & Candidate Journey E2E Smoke Tests
+          python manage.py test resume_app.test_tenant_journey_e2e
+          
+          # 4. Prompt studio, employer responses, and saved searches
+          python manage.py test resume_app.test_prompt_studio resume_app.test_employer_responses resume_app.test_saved_searches
+
+          # 5. Background worker reliability (leader election, DLQ) and scraper resilience (circuit breaker)
+          python manage.py test resume_app.test_worker_and_scraper_resilience
+
+  backup-recovery-drill:
+    name: Disaster Recovery & Restore Drill
+    needs: [security-and-lint]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Execute Backup & Restore Drill
+        run: |
+          cd django_project
+          # Initialize database schema
+          python manage.py migrate --no-input
+
+          # Create hot backup snapshot
+          python manage.py dbbackup --output /tmp/ci_snapshot.sql.gz
+
+          # Confirm backup file and checksum exists
+          test -f /tmp/ci_snapshot.sql.gz
+          test -f /tmp/ci_snapshot.sql.gz.sha256
+
+          # Validate SHA256 integrity
+          sha256sum -c /tmp/ci_snapshot.sql.gz.sha256
+
+          # Verify restoration command
+          python manage.py dbrestore /tmp/ci_snapshot.sql.gz --verify --no-input
+
+  docker-smoke-test:
+    name: Docker Image Build & Health Check
+    needs: [security-and-lint]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Build Production Container
+        run: |
+          docker build -t hireedge:release-gate .
+
+      - name: Run Container Smoke Check
+        run: |
+          docker run --rm hireedge:release-gate python manage.py check

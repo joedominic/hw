@@ -169,6 +169,9 @@ urlpatterns = [
         resume_views.focus_alignment_view,
         name="focus_alignment",
     ),
+    path("health/live", resume_views.health_live_view, name="health_live"),
+    path("health/ready", resume_views.health_ready_view, name="health_ready"),
+    path("health/", resume_views.health_live_view, name="health_root"),
     path("media/<path:path>", resume_views.serve_media_view, name="serve_media"),
 ]
 

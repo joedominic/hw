@@ -15,7 +15,11 @@ import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+
+from django.core.files.base import ContentFile
+from django.core.files.storage import default_storage
+from .media_access import using_remote_storage
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +102,27 @@ def run_directory(track_slug: str, run_id: str) -> Path:
     return pipeline_extract_root() / track_slug / run_id
 
 
+def _normalize_storage_prefix(run_dir_or_str: Union[str, Path]) -> str:
+    """Extract relative storage key prefix e.g. pipeline_llm_extract/{track}/{run_id}."""
+    s = str(run_dir_or_str).replace("\\", "/").rstrip("/")
+    marker = "pipeline_llm_extract/"
+    if marker in s:
+        idx = s.find(marker)
+        return s[idx:]
+    return s.lstrip("/")
+
+
+def _storage_key(run_dir_or_str: Union[str, Path], filename: str) -> str:
+    prefix = _normalize_storage_prefix(run_dir_or_str)
+    return f"{prefix}/{filename}"
+
+
+def _local_file_path(run_dir_or_str: Union[str, Path], filename: str) -> Path:
+    from django.conf import settings
+    prefix = _normalize_storage_prefix(run_dir_or_str)
+    return Path(settings.MEDIA_ROOT) / prefix / filename
+
+
 def _hash_entry_ids(entry_ids: Sequence[int]) -> str:
     raw = ",".join(str(i) for i in entry_ids)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -119,19 +144,27 @@ def estimate_message_tokens(model: str, system_text: str, user_text: str, overhe
     return len(enc.encode(system_text)) + len(enc.encode(user_text)) + overhead
 
 
-def load_run_meta(run_dir: Path) -> Dict[str, Any]:
-    p = run_dir / RUN_META_NAME
-    with open(p, encoding="utf-8") as f:
+def load_run_meta(run_dir: Union[Path, str]) -> Dict[str, Any]:
+    key = _storage_key(run_dir, RUN_META_NAME)
+    if using_remote_storage():
+        with default_storage.open(key, "rb") as f:
+            return json.loads(f.read().decode("utf-8"))
+    local_p = _local_file_path(run_dir, RUN_META_NAME)
+    with open(local_p, encoding="utf-8") as f:
         return json.load(f)
 
 
-def load_progress(run_dir: Path) -> Dict[str, Any]:
-    p = run_dir / PROGRESS_NAME
-    with open(p, encoding="utf-8") as f:
+def load_progress(run_dir: Union[Path, str]) -> Dict[str, Any]:
+    key = _storage_key(run_dir, PROGRESS_NAME)
+    if using_remote_storage():
+        with default_storage.open(key, "rb") as f:
+            return json.loads(f.read().decode("utf-8"))
+    local_p = _local_file_path(run_dir, PROGRESS_NAME)
+    with open(local_p, encoding="utf-8") as f:
         return json.load(f)
 
 
-def write_run_error(run_dir: Path, message: str) -> None:
+def write_run_error(run_dir: Union[Path, str], message: str) -> None:
     try:
         prog = load_progress(run_dir)
     except Exception:
@@ -147,44 +180,98 @@ def write_run_error(run_dir: Path, message: str) -> None:
     write_progress(run_dir, prog)
 
 
-def write_progress(run_dir: Path, data: Dict[str, Any]) -> None:
-    p = run_dir / PROGRESS_NAME
+def write_progress(run_dir: Union[Path, str], data: Dict[str, Any]) -> None:
     data = {**data, "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
-    tmp = p.with_suffix(".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-    tmp.replace(p)
-
-
-def append_skills_batch(run_dir: Path, batch_record: Dict[str, Any]) -> None:
-    path = run_dir / SKILLS_NAME
-    line = json.dumps(batch_record, ensure_ascii=False) + "\n"
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(line)
-
-
-def stop_requested(run_dir: Path) -> bool:
-    return (run_dir / STOP_FILENAME).exists()
-
-
-def touch_stop_signal(run_dir: Path) -> None:
-    (run_dir / STOP_FILENAME).touch()
-
-
-def read_ndjson_skills(run_dir: Path) -> List[Dict[str, Any]]:
-    path = run_dir / SKILLS_NAME
-    if not path.exists():
-        return []
-    rows = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
+    key = _storage_key(run_dir, PROGRESS_NAME)
+    if using_remote_storage():
+        content = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
+        if default_storage.exists(key):
             try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError:
-                logger.warning("Skipping bad NDJSON line in %s", path)
+                default_storage.delete(key)
+            except Exception:
+                pass
+        default_storage.save(key, ContentFile(content))
+    else:
+        local_p = _local_file_path(run_dir, PROGRESS_NAME)
+        local_p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = local_p.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        tmp.replace(local_p)
+
+
+def append_skills_batch(run_dir: Union[Path, str], batch_record: Dict[str, Any]) -> None:
+    key = _storage_key(run_dir, SKILLS_NAME)
+    line = json.dumps(batch_record, ensure_ascii=False) + "\n"
+    if using_remote_storage():
+        existing = ""
+        if default_storage.exists(key):
+            try:
+                with default_storage.open(key, "rb") as f:
+                    existing = f.read().decode("utf-8")
+            except Exception:
+                existing = ""
+        new_content = (existing + line).encode("utf-8")
+        if default_storage.exists(key):
+            try:
+                default_storage.delete(key)
+            except Exception:
+                pass
+        default_storage.save(key, ContentFile(new_content))
+    else:
+        local_p = _local_file_path(run_dir, SKILLS_NAME)
+        local_p.parent.mkdir(parents=True, exist_ok=True)
+        with open(local_p, "a", encoding="utf-8") as f:
+            f.write(line)
+
+
+def stop_requested(run_dir: Union[Path, str]) -> bool:
+    key = _storage_key(run_dir, STOP_FILENAME)
+    if using_remote_storage():
+        return default_storage.exists(key)
+    return _local_file_path(run_dir, STOP_FILENAME).exists()
+
+
+def touch_stop_signal(run_dir: Union[Path, str]) -> None:
+    key = _storage_key(run_dir, STOP_FILENAME)
+    if using_remote_storage():
+        if not default_storage.exists(key):
+            default_storage.save(key, ContentFile(b"stop"))
+    else:
+        local_p = _local_file_path(run_dir, STOP_FILENAME)
+        local_p.parent.mkdir(parents=True, exist_ok=True)
+        local_p.touch()
+
+
+def read_ndjson_skills(run_dir: Union[Path, str]) -> List[Dict[str, Any]]:
+    key = _storage_key(run_dir, SKILLS_NAME)
+    lines: List[str] = []
+    if using_remote_storage():
+        if not default_storage.exists(key):
+            return []
+        try:
+            with default_storage.open(key, "rb") as f:
+                content = f.read().decode("utf-8")
+                lines = content.splitlines()
+        except Exception as e:
+            logger.warning("Error reading remote ndjson %s: %s", key, e)
+            return []
+    else:
+        local_p = _local_file_path(run_dir, SKILLS_NAME)
+        if not local_p.exists():
+            return []
+        with open(local_p, encoding="utf-8") as f:
+            lines = f.readlines()
+
+    rows = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            logger.warning("Skipping bad NDJSON line in %s", key)
     return rows
 
 
@@ -327,13 +414,24 @@ def _build_consolidation_user_content(aggregated: Dict[str, List[str]]) -> str:
     return "INPUT:\n" + json.dumps(body, ensure_ascii=False, indent=2)
 
 
-def _write_consolidated_skills(run_dir: Path, data: Dict[str, List[str]]) -> None:
-    p = run_dir / CONSOLIDATED_SKILLS_NAME
-    tmp = p.with_suffix(".tmp")
+def _write_consolidated_skills(run_dir: Union[Path, str], data: Dict[str, List[str]]) -> None:
     payload = {k: list(data.get(k) or []) for k in SKILL_ARRAY_KEYS}
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-    tmp.replace(p)
+    key = _storage_key(run_dir, CONSOLIDATED_SKILLS_NAME)
+    if using_remote_storage():
+        content = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+        if default_storage.exists(key):
+            try:
+                default_storage.delete(key)
+            except Exception:
+                pass
+        default_storage.save(key, ContentFile(content))
+    else:
+        local_p = _local_file_path(run_dir, CONSOLIDATED_SKILLS_NAME)
+        local_p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = local_p.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        tmp.replace(local_p)
 
 
 def maybe_run_pipeline_consolidation(
@@ -383,7 +481,7 @@ def maybe_run_pipeline_consolidation(
         )
         merged = _skills_from_llm_text(content)
         _write_consolidated_skills(run_dir, merged)
-        logger.info("Pipeline resume summary: wrote %s", run_dir / CONSOLIDATED_SKILLS_NAME)
+        logger.info("Pipeline resume summary: wrote %s", _storage_key(run_dir, CONSOLIDATED_SKILLS_NAME))
     except Exception as e:
         logger.warning("Pipeline skill consolidation failed (API shows raw merge): %s", e)
 
@@ -392,11 +490,25 @@ def read_run_status(track_slug: str, run_id: str) -> Optional[Dict[str, Any]]:
     """Load meta + progress + aggregated NDJSON skills for API polling."""
     from django.conf import settings
 
+    run_prefix = f"pipeline_llm_extract/{track_slug}/{run_id}"
+    meta_key = f"{run_prefix}/{RUN_META_NAME}"
+
+    if using_remote_storage():
+        if not default_storage.exists(meta_key):
+            return None
+    else:
+        local_dir = Path(settings.MEDIA_ROOT) / run_prefix
+        if not local_dir.is_dir():
+            return None
+
     run_dir = run_directory(track_slug, run_id)
-    if not run_dir.is_dir():
+    try:
+        meta = load_run_meta(run_dir)
+        prog = load_progress(run_dir)
+    except Exception as e:
+        logger.warning("read_run_status: could not load run %s/%s: %s", track_slug, run_id, e)
         return None
-    meta = load_run_meta(run_dir)
-    prog = load_progress(run_dir)
+
     rows = read_ndjson_skills(run_dir)
     min_kw = max(1, int(getattr(settings, "PIPELINE_LLM_KEYWORD_MIN_COUNT", 1)))
     if rows:
@@ -411,18 +523,29 @@ def read_run_status(track_slug: str, run_id: str) -> Optional[Dict[str, Any]]:
     )
     phase = str(prog.get("phase", "unknown"))
     if aggregated and phase == "completed":
-        cpath = run_dir / CONSOLIDATED_SKILLS_NAME
-        if cpath.is_file():
-            try:
-                with open(cpath, encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    consolidated = {k: _normalize_token_list(data.get(k)) for k in SKILL_ARRAY_KEYS}
-                    aggregated = rank_consolidated_by_counters(
-                        consolidated, occ, min_count=min_kw, batch_freq=bf
-                    )
-            except Exception as e:
-                logger.warning("Could not load consolidated skills %s: %s", cpath, e)
+        c_key = _storage_key(run_dir, CONSOLIDATED_SKILLS_NAME)
+        data = None
+        if using_remote_storage():
+            if default_storage.exists(c_key):
+                try:
+                    with default_storage.open(c_key, "rb") as f:
+                        data = json.loads(f.read().decode("utf-8"))
+                except Exception as e:
+                    logger.warning("Could not load consolidated skills %s: %s", c_key, e)
+        else:
+            cpath = _local_file_path(run_dir, CONSOLIDATED_SKILLS_NAME)
+            if cpath.is_file():
+                try:
+                    with open(cpath, encoding="utf-8") as f:
+                        data = json.load(f)
+                except Exception as e:
+                    logger.warning("Could not load consolidated skills %s: %s", cpath, e)
+
+        if isinstance(data, dict):
+            consolidated = {k: _normalize_token_list(data.get(k)) for k in SKILL_ARRAY_KEYS}
+            aggregated = rank_consolidated_by_counters(
+                consolidated, occ, min_count=min_kw, batch_freq=bf
+            )
     return {
         "track": str(meta.get("track", track_slug)),
         "run_id": run_id,
@@ -752,14 +875,16 @@ def run_pipeline_llm_extraction(
     except Exception:
         AppAutomationSettings = None  # type: ignore
 
-    meta_path = run_dir / RUN_META_NAME
-    if not meta_path.exists():
+    meta_key = _storage_key(run_dir, RUN_META_NAME)
+    progress_key = _storage_key(run_dir, PROGRESS_NAME)
+    has_meta = default_storage.exists(meta_key) if using_remote_storage() else _local_file_path(run_dir, RUN_META_NAME).exists()
+    has_prog = default_storage.exists(progress_key) if using_remote_storage() else _local_file_path(run_dir, PROGRESS_NAME).exists()
+    if not has_meta:
         raise FileNotFoundError(f"Missing {RUN_META_NAME}")
 
     bucket = _MinuteBucket()
     last_request_end = 0.0
-    progress_path = run_dir / PROGRESS_NAME
-    if not progress_path.exists():
+    if not has_prog:
         raise FileNotFoundError(f"Missing {PROGRESS_NAME}")
 
     prog = load_progress(run_dir)
@@ -1020,19 +1145,33 @@ def run_pipeline_llm_extraction(
     _finalize_meta(run_dir)
 
 
-def _finalize_meta(run_dir: Path, completed: bool = True) -> None:
-    meta = load_run_meta(run_dir)
-    meta["completed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+def _finalize_meta(run_dir: Union[Path, str], completed: bool = True) -> None:
+    try:
+        meta = load_run_meta(run_dir)
+    except Exception:
+        return
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    meta["completed_at"] = now
     meta["success"] = completed
-    p = run_dir / RUN_META_NAME
-    tmp = p.with_suffix(".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(meta, f, indent=2)
-    tmp.replace(p)
+    key = _storage_key(run_dir, RUN_META_NAME)
+    if using_remote_storage():
+        content = json.dumps(meta, indent=2, ensure_ascii=False).encode("utf-8")
+        if default_storage.exists(key):
+            try:
+                default_storage.delete(key)
+            except Exception:
+                pass
+        default_storage.save(key, ContentFile(content))
+    else:
+        local_p = _local_file_path(run_dir, RUN_META_NAME)
+        tmp = local_p.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+        tmp.replace(local_p)
 
 
 def write_initial_run_files(
-    run_dir: Path,
+    run_dir: Union[Path, str],
     *,
     owner_id: int,
     track: str,
@@ -1042,7 +1181,6 @@ def write_initial_run_files(
     entry_ids: Sequence[int],
     jobs: Sequence[Tuple[str, str]],
 ) -> None:
-    run_dir.mkdir(parents=True, exist_ok=True)
     meta = {
         "owner_id": int(owner_id),
         "track": track,
@@ -1056,8 +1194,20 @@ def write_initial_run_files(
         "completed_at": None,
         "success": None,
     }
-    with open(run_dir / RUN_META_NAME, "w", encoding="utf-8") as f:
-        json.dump(meta, f, indent=2)
+    meta_key = _storage_key(run_dir, RUN_META_NAME)
+    if using_remote_storage():
+        content = json.dumps(meta, indent=2, ensure_ascii=False).encode("utf-8")
+        if default_storage.exists(meta_key):
+            try:
+                default_storage.delete(meta_key)
+            except Exception:
+                pass
+        default_storage.save(meta_key, ContentFile(content))
+    else:
+        local_dir = _local_file_path(run_dir, RUN_META_NAME).parent
+        local_dir.mkdir(parents=True, exist_ok=True)
+        with open(local_dir / RUN_META_NAME, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
 
     prog = {
         "last_processed_index": -1,
@@ -1070,9 +1220,17 @@ def write_initial_run_files(
     }
     write_progress(run_dir, prog)
 
-    skills_path = run_dir / SKILLS_NAME
-    if skills_path.exists():
-        skills_path.unlink()
+    skills_key = _storage_key(run_dir, SKILLS_NAME)
+    if using_remote_storage():
+        if default_storage.exists(skills_key):
+            try:
+                default_storage.delete(skills_key)
+            except Exception:
+                pass
+    else:
+        skills_path = _local_file_path(run_dir, SKILLS_NAME)
+        if skills_path.exists():
+            skills_path.unlink()
 
 
 def fetch_jobs_ordered(entry_ids: Sequence[int]) -> List[Tuple[str, str]]:

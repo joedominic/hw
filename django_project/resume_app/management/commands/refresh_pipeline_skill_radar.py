@@ -168,7 +168,7 @@ class Command(BaseCommand):
             r_id = bound_resume.id
             if r_id not in resume_cache:
                 try:
-                    resume_cache[r_id] = parse_pdf(bound_resume.file.path)
+                    resume_cache[r_id] = parse_pdf(bound_resume.file)
                 except Exception as e:
                     self.stderr.write(f"Failed to parse resume PDF {bound_resume.original_filename}: {e}")
                     resume_cache[r_id] = ""

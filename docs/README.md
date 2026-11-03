@@ -52,6 +52,7 @@ For the complete, canonical user journey specification across the 3 tabs, see **
 - [Agent Guide](agent-guide.md) — Engineering conventions, entry points, and maintenance map for AI agents.
 - [User Journey Trace](user-journey.md) — End-to-end lifecycle trace of a single job listing from ingestion to offer.
 - [Docker Deployment](DOCKER.md) — Containerized multi-service deployment.
+- [Container Scaling & Deployment](guides/container-scaling-and-deployment.md) — Horizontal scaling posture, WhiteNoise static assets, S3 presigned redirects, and startup migration coordination.
 - [Search Profile Consolidation](search-profile-consolidation.md) — Status: Phase 1 done, Phase 2 partial, Phases 3–5 open.
 
 ### Dated Audits & Point-in-Time Reviews (Informational)

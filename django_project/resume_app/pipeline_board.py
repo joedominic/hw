@@ -2397,7 +2397,7 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
 
                     from .services import parse_pdf
 
-                    resume_text = (parse_pdf(bound_resume.file.path) or "").lower()
+                    resume_text = (parse_pdf(bound_resume.file) or "").lower()
 
                     cache.set(cache_key, resume_text, 3600)
 
@@ -3331,7 +3331,7 @@ def cockpit_skill_radar_api(request):
 
         try:
 
-            resume_text = parse_pdf(bound_resume.file.path)
+            resume_text = parse_pdf(bound_resume.file)
 
         except Exception as e:
 
