@@ -24,6 +24,11 @@
             </div>
             <h1 class="mt-2 text-2xl font-bold tracking-tight text-concierge-slate">Worker &amp; Task Queue Monitor</h1>
             <p class="mt-1 text-sm text-slate-500">Real-time queue health, background cron schedulers, database maintenance, and tenant task execution history.</p>
+            {% if huey_readonly %}
+            <p class="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-900">
+                Read-only while impersonating — release the session to pause, flush, or run tasks.
+            </p>
+            {% endif %}
         </div>
         <div class="flex items-center gap-3">
             <div class="inline-flex items-center gap-2 rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm">
@@ -144,6 +149,7 @@
                             {% endif %}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-right space-x-2">
+                            {% if not huey_readonly %}
                             <form method="post" action="{% url 'huey_task_run_now' task_name=t.task_fn_name %}" class="inline">
                                 {% csrf_token %}
                                 <button type="submit"
@@ -172,6 +178,9 @@
                                 </button>
                             </form>
                             {% endif %}
+                            {% else %}
+                            <span class="text-xs text-slate-400">Read-only</span>
+                            {% endif %}
                         </td>
                     </tr>
                     {% endfor %}
@@ -187,12 +196,14 @@
             <div>
                 <div class="flex items-center justify-between border-b border-slate-100 pb-3">
                     <h2 class="text-base font-bold text-concierge-slate">System Cleanup &amp; Data Hygiene</h2>
+                    {% if not huey_readonly %}
                     <form method="post" action="{% url 'huey_run_cleanup_now' %}">
                         {% csrf_token %}
                         <button type="submit" class="rounded-concierge border border-brand/20 bg-brand-soft px-3 py-1.5 text-xs font-semibold text-brand-ink hover:bg-brand/20">
                             Run Cleanup Now
                         </button>
                     </form>
+                    {% endif %}
                 </div>
                 <p class="mt-2 text-xs text-slate-500">Runs pipeline deduplication, applies per-stage retention purges, and verifies expired job posting URLs.</p>
 
@@ -255,7 +266,7 @@
             <div class="mt-5 flex items-center justify-between border-t border-slate-100 pt-4">
                 <span class="text-xs text-slate-400">Irreversible action</span>
                 <button type="button"
-                        {% if immediate %}disabled{% else %}onclick="document.getElementById('flushQueueModal').showModal()"{% endif %}
+                        {% if immediate or huey_readonly %}disabled{% else %}onclick="document.getElementById('flushQueueModal').showModal()"{% endif %}
                         class="rounded-concierge bg-rose-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-rose-700 disabled:opacity-50">
                     Flush Pending Tasks
                 </button>
@@ -272,6 +283,20 @@
             </div>
             <span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">{{ unified_activity|length }} Recent Events</span>
         </div>
+        <form method="get" action="{% url 'huey_dashboard' %}" class="flex flex-wrap items-center gap-2 border-b border-slate-100 px-6 py-3 text-xs">
+            <label class="sr-only" for="huey-owner-filter">Owner</label>
+            <input id="huey-owner-filter" type="search" name="owner" value="{{ activity_owner }}"
+                   placeholder="Filter by username or email"
+                   class="min-w-[200px] flex-1 rounded-concierge border border-slate-300 px-3 py-1.5 text-sm">
+            <label class="inline-flex items-center gap-1.5 text-slate-600">
+                <input type="checkbox" name="failed" value="1" {% if activity_failed_only %}checked{% endif %} class="rounded border-slate-300">
+                Failed only
+            </label>
+            <button type="submit" class="rounded-concierge bg-brand px-3 py-1.5 text-sm font-semibold text-white hover:bg-brand-hover">Filter</button>
+            {% if activity_owner or activity_failed_only %}
+            <a href="{% url 'huey_dashboard' %}" class="text-slate-500 underline hover:text-slate-800">Clear</a>
+            {% endif %}
+        </form>
 
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-200 text-sm">

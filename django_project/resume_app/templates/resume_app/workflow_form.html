@@ -9,11 +9,15 @@
         <p class="mt-1 text-sm text-slate-600">
             Build a chain of steps using prompts from the Prompt Library. The workflow runs once in order.
         </p>
+        <p class="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-950">
+            Affects all tenants — system workflows are shared across every account.
+        </p>
     </div>
 
     {% include "resume_app/_concierge_messages.html" %}
 
-    <form method="post" id="workflow-form" class="space-y-6">
+    <form method="post" id="workflow-form" class="space-y-6"
+          onsubmit="return confirm('This system workflow affects all tenants. Save changes?');">
         {% csrf_token %}
         <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
             <h2 class="text-lg font-semibold text-concierge-slate">Details</h2>

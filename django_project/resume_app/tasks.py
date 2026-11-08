@@ -461,15 +461,24 @@ def optimize_resume_task(
 
     except Exception as e:
         from .agents import clear_node_llm_debug
+        from .llm import LLMTokenBudgetExceeded
 
         clear_node_llm_debug(str(resume_id))
         if is_auth_error(e):
             LLMProviderConfig.objects.for_user(user).filter(provider=provider).update(encrypted_api_key="", last_validated_at=None)
         optimized_resume.refresh_from_db()
         optimized_resume.status = OptimizedResume.STATUS_FAILED
-        optimized_resume.error_message = str(e)
+        err_msg = str(e)
+        if isinstance(e, LLMTokenBudgetExceeded) or "token budget" in err_msg.lower():
+            has_draft = bool((optimized_resume.optimized_content or "").strip())
+            err_msg = (
+                "Draft saved; judges skipped — daily token budget reached."
+                if has_draft
+                else "Daily token budget reached before the draft finished. Try again after midnight or upgrade under Plan & usage."
+            )
+        optimized_resume.error_message = err_msg
         optimized_resume.save()
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": err_msg}
 
 
 PIPELINE_OPT_MIN_JD_CHARS = 50
@@ -516,6 +525,9 @@ def _resolve_user_resume_for_track(user, track_slug: str) -> UserResume | None:
 
 
 def _resolve_llm_for_pipeline_optimization(user) -> tuple[str | None, LLMProviderConfig | None]:
+    """Resolve BYOK provider/config, else platform cloud default for optimizer writer."""
+    from .llm.session import resolve_optimizer_provider
+
     provider = get_active_llm_provider(user, None)
     config = None
     if provider:
@@ -530,7 +542,13 @@ def _resolve_llm_for_pipeline_optimization(user) -> tuple[str | None, LLMProvide
             cand = cands[0]
             config = cand["config"]
             provider = cand["provider"]
-    return provider, config
+    if provider and config:
+        return provider, config
+
+    resolved = resolve_optimizer_provider(user, None)
+    if resolved.get("ready") and resolved.get("provider"):
+        return resolved["provider"], None
+    return None, None
 
 
 def _enqueue_single_pipeline_resume_optimization(
@@ -594,20 +612,27 @@ def _enqueue_single_pipeline_resume_optimization(
         }
 
     provider, config = _resolve_llm_for_pipeline_optimization(user)
-    if not provider or not config:
+    if not provider:
         return {
             "status": "error",
-            "message": "No LLM configured with API key",
+            "message": "No cloud LLM available (connect a key in Settings or enable platform defaults)",
             "entry_id": pipeline_entry_id,
         }
-    api_key = decrypt_api_key(config.encrypted_api_key or "")
+    api_key = ""
+    model = None
+    if config:
+        api_key = decrypt_api_key(config.encrypted_api_key or "") or ""
+        model = (config.default_model or "").strip() or None
     if not (api_key or "").strip():
+        from .pipeline_llm_skill_extract import resolve_provider_api_key
+
+        api_key = resolve_provider_api_key(provider, user=user) or ""
+    if not (api_key or "").strip() and not cloud_llm_available(user):
         return {
             "status": "error",
             "message": "No API key for active LLM provider",
             "entry_id": pipeline_entry_id,
         }
-    model = (config.default_model or "").strip() or None
 
     solo = AppAutomationSettings.get_for_user(user)
     workflow: OptimizerWorkflow | None = solo.applying_optimizer_workflow

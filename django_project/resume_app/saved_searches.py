@@ -120,6 +120,24 @@ def create_or_update_saved_search(
         if not resume:
             raise ValueError("Invalid resume selection.")
 
+    # Simple/Normal tenants must bind a resume so Run Search / Skill Radar can score.
+    from .experience import is_power_user
+
+    if not is_power_user(user):
+        if resume is None and preset_id:
+            existing = SearchProfile.objects.for_user(user).filter(pk=preset_id).first()
+            if existing and existing.resume_id:
+                resume = existing.resume
+        if resume is None:
+            resume = (
+                UserResume.objects.for_user(user)
+                .filter(is_library=True)
+                .order_by("-uploaded_at")
+                .first()
+            )
+        if resume is None:
+            raise ValueError("Attach a resume to this Search Profile before saving.")
+
     sites = normalize_site_names(site_names)
     if preset_id:
         saved = SearchProfile.objects.for_user(user).filter(pk=preset_id).first()
@@ -178,8 +196,10 @@ def create_or_update_saved_search(
     saved.site_names = sites
     saved.llm_model = (llm_model or "").strip()[:128]
     saved.save()
+    from .experience import complete_onboarding, mark_onboarding_step
     from .models import JobSearchTask
     from .saved_search_schedule import sync_job_search_task_from_saved
+    from .search_profile_scope import migrate_orphan_default_track_entries
 
     task = JobSearchTask.objects.for_user(user).filter(saved_search=saved).first()
     if task:
@@ -195,6 +215,11 @@ def create_or_update_saved_search(
                 "updated_at",
             ]
         )
+    if saved.resume_id:
+        migrate_orphan_default_track_entries(user, saved)
+        mark_onboarding_step(user, "resume")
+        mark_onboarding_step(user, "search")
+        complete_onboarding(user)
     return saved
 
 

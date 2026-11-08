@@ -81,12 +81,28 @@ def has_search_activity(user) -> bool:
     return PipelineEntry.objects.for_user(user).exists()
 
 
+def has_bound_search_profile(user) -> bool:
+    """True when the user has at least one Search Profile with a bound resume file."""
+    from .models import SearchProfile
+
+    return (
+        SearchProfile.objects.for_user(user)
+        .filter(resume__isnull=False)
+        .exclude(resume__file="")
+        .exists()
+    )
+
+
 def onboarding_steps_complete(user, exp: UserExperienceSettings | None = None) -> bool:
-    """Required onboarding: resume + first search. LLM is platform default or optional BYOK."""
+    """
+    Required onboarding: library resume + Search Profile with bound resume.
+
+    LLM uses platform default or optional BYOK and is not a blocking step.
+    """
     exp = exp or UserExperienceSettings.get_for_user(user)
     resume_ok = exp.step_resume_uploaded or has_library_resume(user)
-    search_ok = exp.step_first_search or has_search_activity(user)
-    return resume_ok and search_ok
+    profile_ok = exp.step_first_search or has_bound_search_profile(user)
+    return resume_ok and profile_ok
 
 
 def sync_onboarding_progress(user) -> UserExperienceSettings:
@@ -104,7 +120,7 @@ def sync_onboarding_progress(user) -> UserExperienceSettings:
     if has_library_resume(user) and not exp.step_resume_uploaded:
         exp.step_resume_uploaded = True
         update_fields.append("step_resume_uploaded")
-    if has_search_activity(user) and not exp.step_first_search:
+    if has_bound_search_profile(user) and not exp.step_first_search:
         exp.step_first_search = True
         update_fields.append("step_first_search")
 
@@ -145,7 +161,7 @@ def onboarding_progress(user) -> dict:
     exp = sync_onboarding_progress(user)
     llm_done = llm_ready_for_user(user) or exp.step_llm_connected
     resume_done = exp.step_resume_uploaded or has_library_resume(user)
-    search_done = exp.step_first_search or has_search_activity(user)
+    search_done = exp.step_first_search or has_bound_search_profile(user)
     platform_llm = server_has_active_llm_keys()
     steps_complete = resume_done and search_done
     return {
@@ -157,6 +173,7 @@ def onboarding_progress(user) -> dict:
         "llm_done": llm_done,
         "resume_done": resume_done,
         "search_done": search_done,
+        "profile_done": search_done,
         "steps_complete": steps_complete,
         "dismissed": bool(exp.onboarding_dismissed_at),
         "completed": bool(exp.onboarding_completed_at),
@@ -193,8 +210,8 @@ def get_post_login_url(user, next_url: str | None = None) -> str:
     if next_url:
         return next_url
     if needs_onboarding(user):
-        return reverse("getting_started")
-    return reverse("pipeline")
+        return reverse("career_profiler")
+    return reverse("career_cockpit")
 
 
 def mark_onboarding_step(user, step: str) -> None:

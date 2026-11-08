@@ -48,6 +48,37 @@ def staff_bypasses_quotas(user: AbstractBaseUser | None) -> bool:
     return bool(getattr(user, "is_staff", False) or getattr(user, "is_superuser", False))
 
 
+def parse_numeric_quota(val: str | int | float | None, default: int = 0) -> int:
+    """
+    Parse quota numeric inputs from admin or API forms.
+    Gracefully handles commas (e.g. 200,000), whitespace, metric suffixes (e.g. 200k, 1.5M),
+    and sentinel strings (0, unlimited, none).
+    """
+    if val is None:
+        return default
+    if isinstance(val, (int, float)):
+        return max(0, int(val))
+    raw = str(val).strip().replace(",", "").replace(" ", "").lower()
+    if not raw:
+        return default
+    if raw in ("unlimited", "none", "inf", "infinity"):
+        return 0
+    multiplier = 1
+    if raw.endswith("k"):
+        multiplier = 1_000
+        raw = raw[:-1].strip()
+    elif raw.endswith("m"):
+        multiplier = 1_000_000
+        raw = raw[:-1].strip()
+    elif raw.endswith("b"):
+        multiplier = 1_000_000_000
+        raw = raw[:-1].strip()
+    try:
+        return max(0, int(float(raw) * multiplier))
+    except (ValueError, TypeError):
+        raise ValueError(f"Invalid numeric quota value: {val!r}")
+
+
 def ensure_default_plans() -> None:
     """Idempotently create built-in plans if missing (safe to call from AppConfig / migrate)."""
     from ..models import Plan
@@ -56,10 +87,10 @@ def ensure_default_plans() -> None:
         {
             "slug": "free",
             "name": "Free",
-            "description": "250,000 OpenAI tokens a month to try tailoring and Skill Radar.",
+            "description": "1.5M OpenAI tokens a month (~50k/day) to try tailoring and Skill Radar.",
             "price_display": "$0 / mo",
             "llm_requests_per_day": 50,
-            "llm_tokens_per_day": 8300,
+            "llm_tokens_per_day": 50000,
             "job_searches_per_day": 5,
             "storage_mb": 250,
             "api_access": False,
@@ -114,31 +145,22 @@ def ensure_default_plans() -> None:
             "sort_order": 30,
         },
     ]
+    # Create missing built-ins only. Staff edits in the Billing admin console must stick
+    # (see test_saas_phase2). Remediations below fix known pre-seed drift only — they
+    # never overwrite intentional admin customizations outside those stale values.
+    # stripe_price_id is never touched (env-specific Stripe Price IDs).
     for row in defaults:
         p, created = Plan.objects.get_or_create(slug=row["slug"], defaults=row)
-        if not created:
-            # Calibrate existing default plans to the stated daily token caps
-            updates = []
-            if row["slug"] == "free" and p.llm_tokens_per_day == 50000:
-                p.llm_tokens_per_day = 8300
-                updates.append("llm_tokens_per_day")
-            elif row["slug"] == "pro" and p.llm_tokens_per_day == 2000000:
-                p.llm_tokens_per_day = 167000
-                updates.append("llm_tokens_per_day")
-            elif row["slug"] == "power" and p.llm_tokens_per_day == 10000000:
-                p.llm_tokens_per_day = 500000
-                updates.append("llm_tokens_per_day")
-            if row["slug"] == "free" and "Local models unmetered" in p.description:
-                p.description = row["description"]
-                updates.append("description")
-            if row["slug"] == "free" and p.llm_requests_per_day == 15:
-                p.llm_requests_per_day = 50
-                updates.append("llm_requests_per_day")
-            if row["slug"] == "pro" and not p.byok_required_for_completion:
-                p.byok_required_for_completion = True
-                updates.append("byok_required_for_completion")
-            if updates:
-                p.save(update_fields=updates)
+        if created:
+            continue
+        updates = []
+        # Fill blank commercial copy from seed (does not clobber custom strings).
+        for field in ("description", "price_display"):
+            if not (getattr(p, field) or "").strip() and row.get(field):
+                setattr(p, field, row[field])
+                updates.append(field)
+        if updates:
+            p.save(update_fields=updates)
 
     # Ensure deprecated unlimited plan is purged from database and remapped
     if Plan.objects.filter(slug="unlimited").exists():
@@ -243,7 +265,7 @@ def _format_quota_exceeded_message(user: AbstractBaseUser, metric: str, limit: i
     return (
         f"Daily quota exceeded for {label} on plan '{plan_name}' "
         f"({current:,} / {limit:,} used today, limit resets at midnight). "
-        f"To continue, you can upgrade your plan in Billing or use unmetered local models."
+        f"To continue, upgrade your plan under Plan & usage, or ask an administrator."
     )
 
 
@@ -360,6 +382,7 @@ def subscription_summary(user: AbstractBaseUser) -> dict:
     return {
         "plan_slug": plan.slug if plan else None,
         "plan_name": plan.name if plan else None,
+        "plan_price": (plan.price_display if plan else "") or "",
         "status": sub.status,
         "is_in_grace": is_in_grace,
         "past_due_since": sub.past_due_since,

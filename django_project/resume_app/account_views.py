@@ -80,8 +80,33 @@ def verify_email_view(request, uidb64: str, token: str):
     mark_email_verified(user, email=target or None)
     messages.success(request, "Your email address has been verified.")
     if request.user.is_authenticated and request.user.pk == user.pk:
-        return redirect(reverse("settings") + "?tab=account")
+        from .experience import get_post_login_url
+
+        return redirect(get_post_login_url(request.user))
     return redirect("login")
+
+
+@require_http_methods(["GET"])
+def verify_email_pending_view(request):
+    """
+    Interstitial shown when REQUIRE_EMAIL_VERIFICATION blocks the rest of the app.
+    """
+    if not request.user.is_authenticated:
+        return redirect("login")
+    if is_email_verified(request.user) and not UserExperienceSettings.get_for_user(request.user).pending_email:
+        from .experience import get_post_login_url
+
+        return redirect(get_post_login_url(request.user))
+    exp = UserExperienceSettings.get_for_user(request.user)
+    email = normalize_email(exp.pending_email or request.user.email or "")
+    return render(
+        request,
+        "resume_app/auth/verify_email_pending.html",
+        {
+            "email": email,
+            "settings_account_url": reverse("settings") + "?tab=account",
+        },
+    )
 
 
 @require_http_methods(["POST"])
@@ -95,7 +120,7 @@ def resend_verification_view(request):
         messages.success(request, "Verification email sent. Check your inbox.")
     else:
         messages.error(request, "Could not send verification email. Check your email address and try again.")
-    next_url = (request.POST.get("next") or "").strip() or (reverse("settings") + "?tab=account")
+    next_url = (request.POST.get("next") or "").strip() or reverse("verify_email_pending")
     return redirect(next_url)
 
 

@@ -119,6 +119,7 @@ def _get_optimizer_context(request) -> dict[str, str]:
 
 
 def _handle_experience_mode(request, user):
+    """Persist Simple/Advanced on the real staff user (not the hijacked tenant)."""
     real_user = get_real_user(request)
     if not getattr(real_user, "is_staff", False):
         messages.error(request, "Experience mode is managed by admins.")
@@ -130,7 +131,7 @@ def _handle_experience_mode(request, user):
     ):
         messages.error(request, "Invalid experience mode.")
     else:
-        set_experience_mode(user, mode)
+        set_experience_mode(real_user, mode)
         label = "Advanced" if mode == UserExperienceSettings.ExperienceMode.POWER else "Simple"
         messages.success(request, f"Experience mode set to {label}.")
     return redirect(reverse("settings") + "?tab=account")
@@ -635,6 +636,12 @@ def settings_view(request):
         if action == "save_stop_llm_requests":
             return _handle_save_stop_llm_requests(request, user)
         if action == "save_app_automation":
+            if getattr(request.user, "is_hijacked", False):
+                messages.info(
+                    request,
+                    "While impersonating, edit the tenant’s automation in Cockpit → Automation — not Settings.",
+                )
+                return redirect(reverse("career_cockpit") + "?drawer=automation")
             return _handle_save_app_automation(request, user)
         if action == "save_export_replacements":
             return _handle_save_export_replacements(request, user)
@@ -655,8 +662,19 @@ def settings_view(request):
 
     tab = (request.GET.get("tab") or "account").strip().lower()
     allowed_tabs = ["account", "llm", "usage", "replacements"]
-    if request.user.is_staff:
+    real_for_tabs = get_real_user(request)
+    if (
+        real_for_tabs
+        and getattr(real_for_tabs, "is_staff", False)
+        and not getattr(request.user, "is_hijacked", False)
+    ):
         allowed_tabs.append("app")
+    if tab == "app" and getattr(request.user, "is_hijacked", False):
+        messages.info(
+            request,
+            "While impersonating, use Cockpit → Automation for the tenant’s policies.",
+        )
+        return redirect(reverse("career_cockpit") + "?drawer=automation")
     if tab not in allowed_tabs:
         tab = "account"
     provider_preference_list = list(get_provider_preferences(user))
@@ -1062,6 +1080,14 @@ def settings_view(request):
         },
     ]
 
+    real_user = get_real_user(request)
+    real_user_is_staff = bool(real_user and getattr(real_user, "is_staff", False))
+    staff_exp = (
+        UserExperienceSettings.get_for_user(real_user)
+        if real_user_is_staff and real_user
+        else None
+    )
+
     context = {
         "provider_infos": provider_infos,
         "provider_preference_list": provider_preference_list,
@@ -1072,6 +1098,8 @@ def settings_view(request):
         "settings_tab": tab,
         "app_automation": AppAutomationSettings.get_for_user(user),
         "experience_settings": UserExperienceSettings.get_for_user(user),
+        "staff_experience_mode": getattr(staff_exp, "experience_mode", None),
+        "real_user_is_staff": real_user_is_staff,
         "is_power_user": is_power_user(user),
         "optimizer_workflows": list_optimizer_workflows(user),
         "optimizer_supporting_context": optimizer_supporting_context,

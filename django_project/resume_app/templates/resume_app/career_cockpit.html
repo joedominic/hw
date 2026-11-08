@@ -64,6 +64,16 @@
         ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: #94A3B8; }
         .tabular-nums { font-variant-numeric: tabular-nums; }
+        /* Wide screens: feed and inspector share leftover width. Beats utility shrink-0 / fixed widths. */
+        @media (min-width: 1280px) {
+            #cockpit-workstation > main,
+            #cockpit-inspector {
+                flex: 1 1 0%;
+                width: auto;
+                max-width: none;
+                min-width: 400px;
+            }
+        }
     </style>
 </head>
 <body class="bg-cockpit-canvas font-sans text-cockpit-textMain antialiased h-screen flex flex-col overflow-hidden">
@@ -71,8 +81,24 @@
     <!-- Top Global Header -->
     {% include "resume_app/_top_nav.html" %}
 
+    <div class="shrink-0 px-4 pt-2 md:px-6 space-y-2">
+        {% include "resume_app/_concierge_messages.html" %}
+        {% if quota_banner %}
+        <div class="rounded-lg border px-4 py-2.5 text-sm flex flex-wrap items-center justify-between gap-2 {% if quota_banner.exhausted %}border-rose-200 bg-rose-50 text-rose-900{% else %}border-amber-200 bg-amber-50 text-amber-950{% endif %}" role="status">
+            <span class="font-medium">
+                {% if quota_banner.exhausted %}
+                {{ quota_banner.label }} limit reached ({{ quota_banner.used }}/{{ quota_banner.limit }}) on {{ quota_banner.plan_name }}.
+                {% else %}
+                {{ quota_banner.label }} is {{ quota_banner.used }}/{{ quota_banner.limit }} today on {{ quota_banner.plan_name }}.
+                {% endif %}
+            </span>
+            <a href="{% url 'billing' %}" class="font-bold underline shrink-0">Plan &amp; usage</a>
+        </div>
+        {% endif %}
+    </div>
+
     <!-- Tri-Pane Primary Workstation Body -->
-    <div class="flex-1 flex overflow-hidden">
+    <div id="cockpit-workstation" class="flex-1 flex overflow-hidden min-h-0 w-full">
 
         <!-- ========================================== -->
         <!-- PANE 1: LEFT CONTROL RAIL (~260px)        -->
@@ -97,7 +123,7 @@
                     <!-- Primary Switcher: Target Search Profiles Card -->
                     <div class="bg-white p-2.5 rounded-xl border border-slate-200/90 shadow-2xs space-y-2">
                         <div class="flex items-center justify-between px-0.5">
-                            <span class="text-xs text-slate-700 font-bold">Target Profiles</span>
+                            <span class="text-xs text-slate-700 font-bold">Search Profiles</span>
                             <div class="flex items-center gap-1">
                                 <button type="button" onclick="openNewProfileDrawer()" class="inline-flex items-center gap-0.5 text-[10px] font-bold text-brand bg-brand-mist hover:bg-brand-soft/40 px-1.5 py-0.5 rounded border border-brand/20 transition-all duration-100 active:scale-[0.98] cursor-pointer" title="Create new search profile">
                                     <span class="material-symbols-outlined text-[13px]">add</span>
@@ -115,11 +141,11 @@
                         </p>
 
                         <!-- Interactive Scope Selector List -->
-                        <div class="space-y-1.5 pt-0.5" role="radiogroup" aria-label="Target Search Profiles">
+                        <div class="space-y-1.5 pt-0.5" role="radiogroup" aria-label="Search Profiles">
                             {% for t in pipeline_tracks %}
                             <div class="group relative rounded-lg border transition-all duration-150 {% if t.slug == pipeline_track %}bg-brand/5 border-brand ring-1 ring-brand/30 shadow-xs{% else %}bg-slate-50/70 hover:bg-white border-slate-200/90 hover:border-slate-300 hover:shadow-2xs text-slate-700{% endif %}">
                                 <div class="flex items-center justify-between p-2">
-                                    <a href="?track={{ t.slug }}&stage={{ board_stage }}" 
+                                    <a href="?profile={{ t.slug }}&stage={{ board_stage }}" 
                                        class="flex items-center gap-2 min-w-0 flex-1 cursor-pointer select-none"
                                        title="Switch to {{ t.label }} profile">
                                         <!-- Radio-style tactile indicator -->
@@ -467,7 +493,8 @@
                         </div>
                     </div>
 
-                    <!-- Pipeline Thresholds & Cleanup Policy (Compact Summary Card with Drawer Trigger) -->
+                    <!-- Pipeline Thresholds & Cleanup Policy (staff / Advanced only; staff chrome uses real user during hijack) -->
+                    {% if power_user or real_user_is_staff %}
                     <div class="bg-amber-50/70 p-2.5 rounded-lg border border-amber-200/90 shadow-2xs space-y-2">
                         <div class="flex items-center justify-between">
                             <div class="flex items-center gap-1.5">
@@ -514,6 +541,7 @@
                             </form>
                         </div>
                     </div>
+                    {% endif %}
                 </div>
             </div>
         </aside>
@@ -521,7 +549,7 @@
         <!-- ========================================== -->
         <!-- PANE 2: CENTER WORKSTATION (Feed)         -->
         <!-- ========================================== -->
-        <main class="flex-1 min-w-[340px] xl:min-w-[480px] xl:max-w-[580px] 2xl:max-w-[660px] flex flex-col bg-slate-50/50 border-r border-cockpit-border h-full overflow-hidden">
+        <main class="flex-1 basis-0 min-w-[340px] xl:min-w-[400px] flex flex-col bg-slate-50/50 border-r border-cockpit-border h-full overflow-hidden">
             
             <!-- Sticky Filter & Hotkey Toolbar -->
             <div class="p-3.5 border-b border-cockpit-border bg-white shrink-0 space-y-2.5">
@@ -540,7 +568,7 @@
                         <span class="text-slate-500 font-medium hidden sm:inline">Weekly Goal:</span>
                         <span class="font-bold text-slate-800 font-mono">{{ done_this_week }}/{{ weekly_target }}</span>
                         {% if oldest_applying_id %}
-                        <a href="?track={{ pipeline_track }}&stage=applying#job-{{ oldest_applying_id }}" class="inline-flex items-center gap-1 font-semibold text-brand hover:underline bg-brand-mist px-2 py-0.5 rounded text-[10px]" title="Jump to oldest role in Applying to reach your weekly goal">
+                        <a href="?profile={{ pipeline_track }}&stage=applying#job-{{ oldest_applying_id }}" class="inline-flex items-center gap-1 font-semibold text-brand hover:underline bg-brand-mist px-2 py-0.5 rounded text-[10px]" title="Jump to oldest role in Applying to reach your weekly goal">
                             <span>{{ weekly_gap }} needed · Apply next</span>
                             <span class="material-symbols-outlined text-[12px]">arrow_forward</span>
                         </a>
@@ -590,7 +618,7 @@
                     <div class="relative bg-slate-100/90 p-1.5 rounded-xl border border-slate-200">
                         <div class="flex items-center gap-1 sm:gap-2">
                             <!-- Stage: New -->
-                            <a href="?track={{ pipeline_track }}&stage=pipeline{% if pipeline_sort_by %}&sort_by={{ pipeline_sort_by }}{% endif %}"
+                            <a href="?profile={{ pipeline_track }}&stage=pipeline{% if pipeline_sort_by %}&sort_by={{ pipeline_sort_by }}{% endif %}"
                                class="flex-1 relative flex flex-col justify-between p-2.5 rounded-lg transition-all {% if board_stage == 'pipeline' %}bg-brand text-white shadow-md ring-2 ring-brand/30{% else %}bg-white text-slate-800 hover:bg-slate-50 border border-slate-200/80 hover:border-slate-300 shadow-xs{% endif %}">
                                 <div class="flex items-center justify-between">
                                     <span class="text-xs font-bold {% if board_stage == 'pipeline' %}text-emerald-200{% else %}text-slate-500{% endif %}">New</span>
@@ -621,7 +649,7 @@
                             </div>
 
                             <!-- Stage: Review -->
-                            <a href="?track={{ pipeline_track }}&stage=vetting{% if pipeline_sort_by %}&sort_by={{ pipeline_sort_by }}{% endif %}"
+                            <a href="?profile={{ pipeline_track }}&stage=vetting{% if pipeline_sort_by %}&sort_by={{ pipeline_sort_by }}{% endif %}"
                                class="flex-1 relative flex flex-col justify-between p-2.5 rounded-lg transition-all {% if board_stage == 'vetting' %}bg-brand text-white shadow-md ring-2 ring-brand/30{% else %}bg-white text-slate-800 hover:bg-slate-50 border border-slate-200/80 hover:border-slate-300 shadow-xs{% endif %}">
                                 <div class="flex items-center justify-between">
                                     <span class="text-xs font-bold {% if board_stage == 'vetting' %}text-emerald-200{% else %}text-slate-500{% endif %}">Review</span>
@@ -652,7 +680,7 @@
                             </div>
 
                             <!-- Stage: Applying -->
-                            <a href="?track={{ pipeline_track }}&stage=applying{% if pipeline_sort_by %}&sort_by={{ pipeline_sort_by }}{% endif %}"
+                            <a href="?profile={{ pipeline_track }}&stage=applying{% if pipeline_sort_by %}&sort_by={{ pipeline_sort_by }}{% endif %}"
                                class="flex-1 relative flex flex-col justify-between p-2.5 rounded-lg transition-all {% if board_stage == 'applying' %}bg-brand text-white shadow-md ring-2 ring-brand/30{% else %}bg-white text-slate-800 hover:bg-slate-50 border border-slate-200/80 hover:border-slate-300 shadow-xs{% endif %}">
                                 <div class="flex items-center justify-between">
                                     <span class="text-xs font-bold {% if board_stage == 'applying' %}text-emerald-200{% else %}text-slate-500{% endif %}">Applying</span>
@@ -683,7 +711,7 @@
                             </div>
 
                             <!-- Stage: Applied -->
-                            <a href="?track={{ pipeline_track }}&stage=done{% if pipeline_sort_by %}&sort_by={{ pipeline_sort_by }}{% endif %}"
+                            <a href="?profile={{ pipeline_track }}&stage=done{% if pipeline_sort_by %}&sort_by={{ pipeline_sort_by }}{% endif %}"
                                class="flex-1 relative flex flex-col justify-between p-2.5 rounded-lg transition-all {% if board_stage == 'done' %}bg-brand text-white shadow-md ring-2 ring-brand/30{% else %}bg-white text-slate-800 hover:bg-slate-50 border border-slate-200/80 hover:border-slate-300 shadow-xs{% endif %}">
                                 <div class="flex items-center justify-between">
                                     <span class="text-xs font-bold {% if board_stage == 'done' %}text-emerald-200{% else %}text-slate-500{% endif %}">Applied</span>
@@ -790,11 +818,11 @@
             </div>
 
             <!-- Hidden Form for Bulk Action Submission -->
-            <form id="cockpit-bulk-form" method="post" action="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage={{ board_stage }}" class="hidden">
+            <form id="cockpit-bulk-form" method="post" action="{% url 'career_cockpit' %}?profile={{ pipeline_track }}&stage={{ board_stage }}" class="hidden">
                 {% csrf_token %}
                 <input type="hidden" name="action" id="cockpit-bulk-action" value="">
                 <input type="hidden" name="track" value="{{ pipeline_track }}">
-                <input type="hidden" name="next" value="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage={{ board_stage }}">
+                <input type="hidden" name="next" value="{% url 'career_cockpit' %}?profile={{ pipeline_track }}&stage={{ board_stage }}">
             </form>
 
             <!-- Scrollable Opportunity Cards Feed -->
@@ -978,36 +1006,36 @@
                     <div class="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between pl-1">
                         <div class="flex items-center gap-1.5">
                             {% if board_stage == 'pipeline' %}
-                            <form method="post" action="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage=pipeline" class="inline">
+                            <form method="post" action="{% url 'career_cockpit' %}?profile={{ pipeline_track }}&stage=pipeline" class="inline">
                                 {% csrf_token %}
                                 <input type="hidden" name="action" value="save"/>
                                 <input type="hidden" name="job_id" value="{{ job.id }}"/>
                                 <input type="hidden" name="track" value="{{ pipeline_track }}"/>
-                                <input type="hidden" name="next" value="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage=pipeline"/>
+                                <input type="hidden" name="next" value="{% url 'career_cockpit' %}?profile={{ pipeline_track }}&stage=pipeline"/>
                                 <button type="submit" class="shortlist-btn h-7 px-2.5 rounded bg-brand text-white text-xs font-semibold flex items-center gap-1 hover:bg-brand/90 transition">
                                     <span class="material-symbols-outlined text-[14px]">bookmark_add</span>
                                     <span>Move to Review</span>
                                 </button>
                             </form>
                             {% elif board_stage == 'vetting' %}
-                            <form method="post" action="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage=vetting" class="inline">
+                            <form method="post" action="{% url 'career_cockpit' %}?profile={{ pipeline_track }}&stage=vetting" class="inline">
                                 {% csrf_token %}
                                 <input type="hidden" name="action" value="save"/>
                                 <input type="hidden" name="job_id" value="{{ job.id }}"/>
                                 <input type="hidden" name="track" value="{{ pipeline_track }}"/>
-                                <input type="hidden" name="next" value="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage=vetting"/>
+                                <input type="hidden" name="next" value="{% url 'career_cockpit' %}?profile={{ pipeline_track }}&stage=vetting"/>
                                 <button type="submit" class="shortlist-btn h-7 px-2.5 rounded bg-brand text-white text-xs font-semibold flex items-center gap-1 hover:bg-brand/90 transition">
                                     <span class="material-symbols-outlined text-[14px]">send</span>
                                     <span>Move to Applying</span>
                                 </button>
                             </form>
                             {% elif board_stage == 'applying' %}
-                            <form method="post" action="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage=applying" class="inline">
+                            <form method="post" action="{% url 'career_cockpit' %}?profile={{ pipeline_track }}&stage=applying" class="inline">
                                 {% csrf_token %}
                                 <input type="hidden" name="action" value="save"/>
                                 <input type="hidden" name="job_id" value="{{ job.id }}"/>
                                 <input type="hidden" name="track" value="{{ pipeline_track }}"/>
-                                <input type="hidden" name="next" value="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage=applying"/>
+                                <input type="hidden" name="next" value="{% url 'career_cockpit' %}?profile={{ pipeline_track }}&stage=applying"/>
                                 <button type="submit" class="shortlist-btn h-7 px-2.5 rounded bg-brand text-white text-xs font-semibold flex items-center gap-1 hover:bg-brand/90 transition">
                                     <span class="material-symbols-outlined text-[14px]">check_circle</span>
                                     <span>Mark Submitted</span>
@@ -1023,38 +1051,37 @@
                             </button>
                             {% endif %}
 
-                            <!-- Dedicated Like Button -->
-                            <form method="post" action="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage={{ board_stage }}" class="inline">
+                            <form method="post" action="{% url 'career_cockpit' %}?profile={{ pipeline_track }}&stage={{ board_stage }}" class="inline">
                                 {% csrf_token %}
                                 <input type="hidden" name="action" value="{% if job.is_liked %}unlike{% else %}like{% endif %}"/>
                                 <input type="hidden" name="job_id" value="{{ job.id }}"/>
                                 <input type="hidden" name="track" value="{{ pipeline_track }}"/>
-                                <input type="hidden" name="next" value="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage={{ board_stage }}"/>
-                                <button type="submit" class="like-btn w-7 h-7 rounded border {% if job.is_liked %}border-brand bg-brand-mist text-brand font-bold{% else %}border-slate-200 bg-white text-slate-500 hover:text-brand hover:border-brand/40{% endif %} flex items-center justify-center transition" title="{% if job.is_liked %}Liked — click to remove like{% else %}Like (L) — train positive AI preference{% endif %}">
+                                <input type="hidden" name="next" value="{% url 'career_cockpit' %}?profile={{ pipeline_track }}&stage={{ board_stage }}"/>
+                                <button type="submit" class="like-btn w-7 h-7 rounded border {% if job.is_liked %}border-brand bg-brand-mist text-brand font-bold{% else %}border-slate-200 bg-white text-slate-500 hover:text-brand hover:border-brand/40{% endif %} flex items-center justify-center transition" title="{% if job.is_liked %}Liked — click to remove like{% else %}Like (L) — improves ranking only; use stage buttons to move jobs{% endif %}">
                                     <span class="material-symbols-outlined text-[14px]" {% if job.is_liked %}style="font-variation-settings: 'FILL' 1;"{% endif %}>thumb_up</span>
                                 </button>
                             </form>
 
-                            <!-- Dislike / Pass Button -->
-                            <form method="post" action="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage={{ board_stage }}" class="inline">
+                            <form method="post" action="{% url 'career_cockpit' %}?profile={{ pipeline_track }}&stage={{ board_stage }}" class="inline">
                                 {% csrf_token %}
                                 <input type="hidden" name="action" value="dislike"/>
                                 <input type="hidden" name="job_id" value="{{ job.id }}"/>
                                 <input type="hidden" name="track" value="{{ pipeline_track }}"/>
-                                <input type="hidden" name="next" value="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage={{ board_stage }}"/>
-                                <button type="submit" class="pass-btn w-7 h-7 rounded border border-slate-200 bg-white text-slate-500 hover:text-amber-600 hover:border-amber-300 flex items-center justify-center transition" title="Dislike — avoid similar jobs">
+                                <input type="hidden" name="next" value="{% url 'career_cockpit' %}?profile={{ pipeline_track }}&stage={{ board_stage }}"/>
+                                <button type="submit" class="pass-btn w-7 h-7 rounded border border-slate-200 bg-white text-slate-500 hover:text-amber-600 hover:border-amber-300 flex items-center justify-center transition" title="Not Interested (Thumbs Down) — Removes job and trains AI to avoid recommending similar roles">
                                     <span class="material-symbols-outlined text-[14px]">thumb_down</span>
                                 </button>
                             </form>
 
-                            <!-- Remove / Delete Button -->
-                            <form method="post" action="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage={{ board_stage }}" class="inline">
+                            <form method="post" action="{% url 'career_cockpit' %}?profile={{ pipeline_track }}&stage={{ board_stage }}" class="inline">
                                 {% csrf_token %}
                                 <input type="hidden" name="action" value="delete"/>
                                 <input type="hidden" name="job_id" value="{{ job.id }}"/>
                                 <input type="hidden" name="track" value="{{ pipeline_track }}"/>
-                                <input type="hidden" name="next" value="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage={{ board_stage }}"/>
-                                <button type="submit" class="delete-btn w-7 h-7 rounded border border-slate-200 bg-white text-slate-400 hover:text-rose-600 hover:border-rose-300 hover:bg-rose-50 flex items-center justify-center transition" title="Remove (X) — delete from board">
+                                <input type="hidden" name="next" value="{% url 'career_cockpit' %}?profile={{ pipeline_track }}&stage={{ board_stage }}"/>
+                                <button type="submit" class="delete-btn w-7 h-7 rounded border border-slate-200 bg-white text-slate-400 hover:text-rose-600 hover:border-rose-300 hover:bg-rose-50 flex items-center justify-center transition cursor-pointer"
+                                        title="Remove (X) — Removes job from pipeline only, without affecting your AI recommendations or match scoring"
+                                        aria-label="Remove (X) — removes without affecting recommendations">
                                     <span class="material-symbols-outlined text-[14px]">close</span>
                                 </button>
                             </form>
@@ -1068,7 +1095,7 @@
                             <span>Prep Kit{% if job.has_interview_prep %} ✓{% endif %}</span>
                         </button>
                         {% else %}
-                        <a href="{% url 'resume_optimizer' %}?job_id={{ job.id }}&track={{ pipeline_track }}{% if active_profile.resume %}&resume_id={{ active_profile.resume.id }}{% endif %}" class="tailor-btn h-7 px-2.5 rounded bg-emerald-100 text-emerald-900 font-bold text-xs flex items-center gap-1 hover:bg-emerald-200 transition">
+                        <a href="{% url 'resume_optimizer' %}?job_id={{ job.id }}&profile={{ pipeline_track }}{% if active_profile.resume %}&resume_id={{ active_profile.resume.id }}{% endif %}" class="tailor-btn h-7 px-2.5 rounded bg-emerald-100 text-emerald-900 font-bold text-xs flex items-center gap-1 hover:bg-emerald-200 transition">
                             <span class="material-symbols-outlined text-[14px] text-emerald-700">auto_fix_high</span>
                             <span>Tailor</span>
                         </a>
@@ -1077,76 +1104,40 @@
                 </div>
                 {% empty %}
                 {% if total_pipeline_jobs == 0 %}
-                <div class="p-6 sm:p-8 bg-white rounded-2xl border border-slate-200/90 shadow-sm">
-                    <div class="max-w-md mx-auto text-center">
-                        <div class="w-12 h-12 mx-auto rounded-2xl bg-brand-soft flex items-center justify-center text-brand mb-3">
-                            <span class="material-symbols-outlined text-2xl text-brand">rocket_launch</span>
+                <div class="p-6 sm:p-8 bg-white rounded-2xl border border-brand/20 shadow-sm ring-1 ring-brand/10">
+                    <div class="max-w-xl mx-auto text-center">
+                        <div class="w-12 h-12 mx-auto rounded-2xl bg-brand text-white flex items-center justify-center mb-4">
+                            <span class="material-symbols-outlined text-2xl">rocket_launch</span>
                         </div>
-                        <h3 class="text-base font-bold text-slate-900">Get Started in 3 Simple Steps</h3>
-                        <p class="text-xs text-slate-500 mt-1">Your review queue is currently empty. Follow these steps to kick off your job search momentum:</p>
-                    </div>
-
-                    <div class="mt-6 max-w-lg mx-auto space-y-3">
-                        <!-- Step 1 -->
-                        <div class="flex items-start gap-3 p-3.5 rounded-xl border border-slate-100 bg-slate-50/70 hover:bg-white hover:border-brand/30 transition">
-                            <div class="w-6 h-6 rounded-full bg-brand text-white text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">1</div>
-                            <div class="flex-1 min-w-0">
-                                <div class="flex items-center justify-between gap-2">
-                                    <h4 class="text-xs font-bold text-slate-900">Define Target &amp; Profile</h4>
-                                    <a href="{% url 'career_profiler' %}" class="text-[11px] font-bold text-brand hover:underline inline-flex items-center gap-0.5">
-                                        Profiler <span class="material-symbols-outlined text-[13px]">arrow_forward</span>
-                                    </a>
-                                </div>
-                                <p class="text-[11px] text-slate-500 mt-0.5">Analyze your resume, calibrate target titles, and set salary baselines.</p>
-                            </div>
+                        <h3 class="text-lg font-bold text-slate-900 tracking-tight">Welcome — your Search Profile is ready</h3>
+                        <p class="text-sm text-slate-600 mt-2 leading-relaxed">
+                            <span class="font-semibold text-brand">{% firstof active_profile_label pipeline_track "your profile" %}</span>
+                            is set up. Let&rsquo;s find your first target roles and pull them into this Cockpit.
+                        </p>
+                        <div class="mt-6 flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-3">
+                            <a href="{% url 'jobs_search' %}" class="inline-flex items-center justify-center gap-1.5 bg-brand hover:bg-brand-hover text-white text-sm font-bold px-5 py-3 rounded-xl transition">
+                                <span class="material-symbols-outlined text-[18px]">search</span>
+                                <span>Find jobs in Target &amp; Discover</span>
+                            </a>
+                            <button type="button" onclick="openEditProfileDrawer('{{ pipeline_track }}')" class="inline-flex items-center justify-center gap-1.5 bg-white hover:bg-slate-50 text-slate-800 text-sm font-bold px-5 py-3 rounded-xl border border-slate-200 transition cursor-pointer">
+                                <span class="material-symbols-outlined text-[18px] text-slate-600">tune</span>
+                                <span>Edit Search Profile</span>
+                            </button>
                         </div>
-
-                        <!-- Step 2 -->
-                        <div class="flex items-start gap-3 p-3.5 rounded-xl border border-slate-100 bg-slate-50/70 hover:bg-white hover:border-brand/30 transition">
-                            <div class="w-6 h-6 rounded-full bg-brand text-white text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">2</div>
-                            <div class="flex-1 min-w-0">
-                                <div class="flex items-center justify-between gap-2">
-                                    <h4 class="text-xs font-bold text-slate-900">Discover &amp; Ingest Roles</h4>
-                                    <a href="{% url 'jobs_search' %}" class="text-[11px] font-bold text-brand hover:underline inline-flex items-center gap-0.5">
-                                        Sandbox <span class="material-symbols-outlined text-[13px]">arrow_forward</span>
-                                    </a>
-                                </div>
-                                <p class="text-[11px] text-slate-500 mt-0.5">Run queries across boards and 1-click &ldquo;+ Add to Review&rdquo;, or schedule automated query feeds.</p>
-                            </div>
-                        </div>
-
-                        <!-- Step 3 -->
-                        <div class="flex items-start gap-3 p-3.5 rounded-xl border border-slate-100 bg-slate-50/70 hover:bg-white hover:border-brand/30 transition">
-                            <div class="w-6 h-6 rounded-full bg-slate-200 text-slate-700 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">3</div>
-                            <div class="flex-1 min-w-0">
-                                <h4 class="text-xs font-bold text-slate-900">Triage, Tailor &amp; Track</h4>
-                                <p class="text-[11px] text-slate-500 mt-0.5">Review high-signal matches, tailor resumes with AI persona judges, and track outcomes.</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="mt-6 flex flex-wrap items-center justify-center gap-3">
-                        <a href="{% url 'career_profiler' %}" class="inline-flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-3.5 py-2.5 rounded-xl transition">
-                            <span class="material-symbols-outlined text-[16px] text-slate-600">psychology</span>
-                            <span>Open AI Profiler</span>
-                        </a>
-                        <a href="{% url 'jobs_search' %}" class="inline-flex items-center gap-1.5 bg-brand hover:bg-brand-hover text-white text-xs font-bold px-4 py-2.5 rounded-xl shadow-xs transition">
-                            <span class="material-symbols-outlined text-[16px]">travel_explore</span>
-                            <span>Find Jobs in Sandbox</span>
-                        </a>
+                        <p class="mt-4 text-[11px] text-slate-400">Save roles with <strong>Save to Cockpit</strong>. Then use J/K to move, E to advance, and T to tailor.</p>
                     </div>
                 </div>
                 {% else %}
                 <div class="p-8 text-center bg-white rounded-xl border border-dashed border-slate-300">
                     <span class="material-symbols-outlined text-4xl text-slate-300">inbox</span>
                     <p class="mt-2 text-sm text-slate-600 font-semibold">No opportunities in {{ board_stage_display|default:board_stage|title }} stage</p>
-                    <p class="text-xs text-slate-400 mt-1">Advance roles from earlier stages or discover new opportunities in the sandbox.</p>
+                    <p class="text-xs text-slate-400 mt-1">Advance roles from earlier stages or find jobs under Target &amp; Discover.</p>
                     <div class="mt-4 flex items-center justify-center gap-2">
-                        <a href="{% url 'career_cockpit' %}?track={{ pipeline_track }}&stage=pipeline" class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg text-xs font-semibold">
+                        <a href="{% url 'career_cockpit' %}?profile={{ pipeline_track }}&stage=pipeline" class="bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg text-xs font-semibold">
                             Go to New Stage
                         </a>
                         <a href="{% url 'jobs_search' %}" class="bg-brand text-white hover:bg-brand-hover px-3 py-1.5 rounded-lg text-xs font-semibold">
-                            Find Jobs
+                            Find jobs
                         </a>
                     </div>
                 </div>
@@ -1170,7 +1161,7 @@
         <!-- PANE 3: RIGHT DIAGNOSTIC & ACTION INSPECTOR -->
         <!-- ========================================== -->
         <section id="cockpit-inspector" 
-                 class="w-full sm:w-[480px] xl:w-[460px] 2xl:w-[500px] bg-white flex flex-col h-full border-l border-cockpit-border shrink-0 fixed inset-y-0 right-0 z-50 xl:relative xl:z-auto xl:shadow-none shadow-2xl transition-transform duration-200 ease-in-out translate-x-full xl:translate-x-0 overflow-hidden">
+                 class="w-full sm:w-[480px] xl:w-auto xl:flex-1 xl:basis-0 xl:min-w-[400px] bg-white flex flex-col h-full border-l border-cockpit-border shrink-0 fixed inset-y-0 right-0 z-50 xl:relative xl:z-auto xl:shadow-none shadow-2xl transition-transform duration-200 ease-in-out translate-x-full xl:translate-x-0 overflow-hidden">
             
             <!-- Inspector Target Header -->
             <div class="p-4 sm:p-5 border-b border-cockpit-border bg-slate-50/50 shrink-0">
@@ -1260,17 +1251,17 @@
 
                     <!-- Triage & Moderation Controls -->
                     <div class="flex items-center gap-1.5 shrink-0">
-                        <button type="button" id="inspector-like-btn" class="h-9 px-2.5 rounded border border-slate-200 bg-white text-slate-600 hover:text-brand hover:border-brand/40 font-bold text-xs flex items-center gap-1 transition-all duration-100 active:scale-[0.98] cursor-pointer" title="Like (L) — train positive AI preference">
+                        <button type="button" id="inspector-like-btn" class="h-9 px-2.5 rounded border border-slate-200 bg-white text-slate-600 hover:text-brand hover:border-brand/40 font-bold text-xs flex items-center gap-1 transition-all duration-100 active:scale-[0.98] cursor-pointer" title="Like (L) — improves ranking only; use stage buttons to move jobs">
                             <span id="inspector-like-icon" class="material-symbols-outlined text-[16px]">thumb_up</span>
                             <span id="inspector-like-label">Like</span>
                         </button>
-                        <button type="button" id="inspector-pass-btn" class="h-9 px-2.5 rounded border border-slate-200 bg-white text-slate-600 hover:text-amber-600 hover:border-amber-300 font-bold text-xs flex items-center gap-1 transition-all duration-100 active:scale-[0.98] cursor-pointer" title="Dislike — avoid similar jobs">
+                        <button type="button" id="inspector-pass-btn" class="h-9 px-2.5 rounded border border-slate-200 bg-white text-slate-600 hover:text-amber-600 hover:border-amber-300 font-bold text-xs flex items-center gap-1 transition-all duration-100 active:scale-[0.98] cursor-pointer" title="Not Interested (Thumbs Down) — Removes job and trains AI to avoid recommending similar roles">
                             <span class="material-symbols-outlined text-[16px]">thumb_down</span>
-                            <span>Dislike</span>
+                            <span>Pass</span>
                         </button>
-                        <button type="button" id="inspector-delete-btn" class="h-9 px-2.5 rounded border border-slate-200 bg-white text-slate-500 hover:text-rose-600 hover:border-rose-300 hover:bg-rose-50 font-bold text-xs flex items-center gap-1 transition-all duration-100 active:scale-[0.98] cursor-pointer" title="Remove (X) — delete from board">
+                        <button type="button" id="inspector-delete-btn" class="h-9 px-2.5 rounded border border-slate-200 bg-white text-slate-500 hover:text-rose-600 hover:border-rose-300 hover:bg-rose-50 font-bold text-xs flex items-center gap-1 transition-all duration-100 active:scale-[0.98] cursor-pointer" title="Remove (X) — Removes job from pipeline only, without affecting your AI recommendations or match scoring">
                             <span class="material-symbols-outlined text-[16px]">close</span>
-                            <span>Remove</span>
+                            <span>Remove only</span>
                         </button>
                     </div>
                 </div>
@@ -1308,7 +1299,7 @@ Select an opportunity to read the full job description.
                         </div>
                         <button type="button"
                                 id="inspect-update-response-btn"
-                                onclick="const peId = rows[activeIndex]?.dataset?.pipelineEntryId; if (peId) openLogInterviewDrawer(peId);"
+                                onclick="openLogInterviewDrawerForActiveJob()"
                                 class="h-7 px-2.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-semibold flex items-center gap-1 hover:bg-emerald-100 transition cursor-pointer">
                             <span class="material-symbols-outlined text-[13px]">edit_calendar</span>
                             <span id="inspect-response-btn-label">Log Response</span>
@@ -1372,7 +1363,7 @@ Select an opportunity to read the full job description.
                             </p>
                         </div>
                         <button type="button"
-                                onclick="const peId = rows[activeIndex]?.dataset?.pipelineEntryId; if (peId) openLogInterviewDrawer(peId);"
+                                onclick="openLogInterviewDrawerForActiveJob()"
                                 class="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 text-xs font-semibold transition cursor-pointer shadow-2xs">
                             <span class="material-symbols-outlined text-[14px]">event</span>
                             <span>Log Recruiter Callback / Interview</span>
@@ -1498,7 +1489,7 @@ Select an opportunity to read the full job description.
                         <div class="text-xs font-semibold text-slate-600">No tailored resume snapshot found</div>
                         <div class="text-[11px] text-slate-400">This role was marked applied without a saved tailored resume. You can tailor one now for interview reference:</div>
                         <div class="pt-1">
-                            <button type="button" onclick="const jobId = rows[activeIndex]?.dataset?.jobId; window.location.href = '{% url 'resume_optimizer' %}?job_id=' + (jobId || '') + '&track={{ pipeline_track }}';" class="inline-flex items-center gap-1 text-xs font-bold text-brand hover:underline cursor-pointer">
+                            <button type="button" onclick="openOptimizerForActiveJob()" class="inline-flex items-center gap-1 text-xs font-bold text-brand hover:underline cursor-pointer">
                                 <span class="material-symbols-outlined text-[14px]">auto_fix_high</span>
                                 <span>Tailor Resume for Interview</span>
                             </button>
@@ -2678,7 +2669,6 @@ Select an opportunity to read the full job description.
             // Responsive Drawer Controls for Narrow Screens
             const inspector = document.getElementById('cockpit-inspector');
             const backdrop = document.getElementById('inspector-backdrop');
-            const toggleInspectorBtn = document.getElementById('toggle-inspector-btn');
             const closeInspectorBtn = document.getElementById('close-inspector-btn');
 
             function openInspector() {
@@ -2702,14 +2692,6 @@ Select an opportunity to read the full job description.
                 }
             }
             window.closeInspector = closeInspector;
-
-            if (toggleInspectorBtn) {
-                toggleInspectorBtn.addEventListener('click', () => {
-                    const isClosed = inspector && inspector.classList.contains('translate-x-full');
-                    if (isClosed) openInspector();
-                    else closeInspector();
-                });
-            }
 
             if (closeInspectorBtn) {
                 closeInspectorBtn.addEventListener('click', closeInspector);
@@ -2737,20 +2719,32 @@ Select an opportunity to read the full job description.
                 });
             }
 
-            // Initialize first job or job matching target job_id from URL
-            if (rows.length > 0) {
+            // Initialize first job or job matching target job_id from URL; honor drawer deep-links
+            {
                 const urlParams = new URLSearchParams(window.location.search);
                 const targetJobId = urlParams.get('job_id');
-                let targetIdx = 0;
-                if (targetJobId) {
-                    const matchIdx = rows.findIndex(r => r.dataset.jobId === targetJobId);
-                    if (matchIdx >= 0) targetIdx = matchIdx;
+                const drawer = (urlParams.get('drawer') || '').toLowerCase();
+                if (rows.length > 0) {
+                    let targetIdx = 0;
+                    if (targetJobId) {
+                        const matchIdx = rows.findIndex(r => r.dataset.jobId === targetJobId);
+                        if (matchIdx >= 0) targetIdx = matchIdx;
+                    }
+                    selectJob(targetIdx);
+                    if (targetIdx > 0 && rows[targetIdx]) {
+                        setTimeout(() => {
+                            rows[targetIdx].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                        }, 50);
+                    }
                 }
-                selectJob(targetIdx);
-                if (targetIdx > 0 && rows[targetIdx]) {
+                if (drawer === 'inspector' || drawer === 'fit') {
+                    setTimeout(() => { if (typeof openInspector === 'function') openInspector(); }, 80);
+                } else if (drawer === 'automation') {
+                    setTimeout(() => { if (typeof openAutomationDrawer === 'function') openAutomationDrawer(); }, 80);
+                } else if (drawer === 'interview') {
                     setTimeout(() => {
-                        rows[targetIdx].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-                    }, 50);
+                        if (typeof openLogInterviewDrawer === 'function') openLogInterviewDrawer();
+                    }, 80);
                 }
             }
 
@@ -2863,7 +2857,7 @@ Select an opportunity to read the full job description.
                         const deleteForm = rows[activeIndex].querySelector('form input[name="action"][value="delete"]')?.closest('form')
                             || rows[activeIndex].querySelector('form input[name="action"][value="dislike"]')?.closest('form');
                         if (deleteForm) {
-                            showToast(`Removing: ${rows[activeIndex].dataset.jobTitle}`);
+                            showToast(`Removed: ${rows[activeIndex].dataset.jobTitle}`);
                             deleteForm.submit();
                         }
                     }
@@ -2873,7 +2867,7 @@ Select an opportunity to read the full job description.
                         const jobId = rows[activeIndex].dataset.jobId;
                         const track = '{{ pipeline_track }}';
                         const resumeId = '{% if active_profile.resume %}{{ active_profile.resume.id }}{% endif %}';
-                        let url = `{% url 'resume_optimizer' %}?job_id=${jobId}&track=${track}`;
+                        let url = `{% url 'resume_optimizer' %}?job_id=${jobId}&profile=${track}`;
                         if (resumeId) url += `&resume_id=${resumeId}`;
                         window.location.href = url;
                     }
@@ -2960,7 +2954,7 @@ Select an opportunity to read the full job description.
 
                 try {
                     showToast(isCloud ? 'Running deep analysis with Cloud LLM (~15-20s)...' : 'Running deep analysis with local SLM (~45s)...');
-                    const resp = await fetch(`/jobs/cockpit/api/skill-radar/?job_id=${jobId}&track=${track}&force=1&tier=${tier}`);
+                    const resp = await fetch(`/jobs/cockpit/api/skill-radar/?job_id=${jobId}&profile=${track}&force=1&tier=${tier}`);
                     const data = await resp.json();
                     
                     clearInterval(analysisTimerInterval);
@@ -3031,7 +3025,7 @@ Select an opportunity to read the full job description.
                         const jobId = rows[activeIndex].dataset.jobId;
                         const track = '{{ pipeline_track }}';
                         const resumeId = '{% if active_profile.resume %}{{ active_profile.resume.id }}{% endif %}';
-                        let url = `{% url 'resume_optimizer' %}?job_id=${jobId}&track=${track}`;
+                        let url = `{% url 'resume_optimizer' %}?job_id=${jobId}&profile=${track}`;
                         if (resumeId) url += `&resume_id=${resumeId}`;
                         window.location.href = url;
                     }
@@ -3078,7 +3072,7 @@ Select an opportunity to read the full job description.
                     if (rows[activeIndex]) {
                         const passForm = rows[activeIndex].querySelector('form input[name="action"][value="dislike"]')?.closest('form');
                         if (passForm) {
-                            showToast(`Disliking: ${rows[activeIndex].dataset.jobTitle}`);
+                            showToast(`Passed: ${rows[activeIndex].dataset.jobTitle}`);
                             passForm.submit();
                         }
                     }
@@ -3585,6 +3579,34 @@ Select an opportunity to read the full job description.
             const form = document.getElementById('add-phrase-form');
             if (form) form.classList.toggle('hidden');
         }
+
+        function openLogInterviewDrawerForActiveJob() {
+            try {
+                const peId = (typeof rows !== 'undefined' && rows[activeIndex] && rows[activeIndex].dataset)
+                    ? rows[activeIndex].dataset.pipelineEntryId
+                    : null;
+                if (peId && typeof openLogInterviewDrawer === 'function') {
+                    openLogInterviewDrawer(peId);
+                } else if (typeof openLogInterviewDrawer === 'function') {
+                    openLogInterviewDrawer();
+                }
+            } catch (err) {
+                if (typeof openLogInterviewDrawer === 'function') openLogInterviewDrawer();
+            }
+        }
+        window.openLogInterviewDrawerForActiveJob = openLogInterviewDrawerForActiveJob;
+
+        function openOptimizerForActiveJob() {
+            try {
+                const jobId = (typeof rows !== 'undefined' && rows[activeIndex] && rows[activeIndex].dataset)
+                    ? (rows[activeIndex].dataset.jobId || '')
+                    : '';
+                window.location.href = '{% url "resume_optimizer" %}?job_id=' + jobId + '&profile={{ pipeline_track }}';
+            } catch (err) {
+                window.location.href = '{% url "resume_optimizer" %}?profile={{ pipeline_track }}';
+            }
+        }
+        window.openOptimizerForActiveJob = openOptimizerForActiveJob;
 
         function openAutomationDrawer() {
             const backdrop = document.getElementById('automation-drawer-backdrop');

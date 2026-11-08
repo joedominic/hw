@@ -31,8 +31,8 @@
                                 class="job-like-btn rounded-lg p-2 transition-colors {% if j.is_liked %}bg-brand-mist text-brand{% else %}text-slate-400 hover:bg-brand-mist hover:text-brand{% endif %}"
                                 data-job-id="{{ j.id }}"
                                 data-liked="{% if j.is_liked %}1{% else %}0{% endif %}"
-                                title="{% if j.is_liked %}Remove like{% else %}Like — improve ranking for similar jobs{% endif %}"
-                                aria-label="{% if j.is_liked %}Unlike{% else %}Like{% endif %}"
+                                title="{% if j.is_liked %}Remove like{% else %}Like — improves ranking only; does not add to Cockpit{% endif %}"
+                                aria-label="{% if j.is_liked %}Unlike{% else %}Like (ranking only){% endif %}"
                                 aria-pressed="{% if j.is_liked %}true{% else %}false{% endif %}">
                             <svg class="job-like-icon h-5 w-5" viewBox="0 0 24 24" aria-hidden="true"
                                  {% if j.is_liked %}fill="currentColor"{% else %}fill="none" stroke="currentColor"{% endif %}>
@@ -113,7 +113,7 @@
                         class="job-save-btn inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-sm font-semibold transition {% if j.is_saved %}bg-emerald-600 text-white hover:bg-emerald-700{% else %}bg-brand text-white hover:bg-brand-hover{% endif %}"
                         data-job-id="{{ j.id }}"
                         data-saved="{% if j.is_saved %}1{% else %}0{% endif %}"
-                        title="{% if j.is_saved %}Remove from Review queue in Cockpit{% else %}Add directly to Review queue in Cockpit{% endif %}"
+                        title="{% if j.is_saved %}Remove from Cockpit{% else %}Save to Cockpit (Review stage){% endif %}"
                         aria-pressed="{% if j.is_saved %}true{% else %}false{% endif %}">
                     <svg class="job-save-icon h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
                         {% if j.is_saved %}
@@ -122,7 +122,7 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/>
                         {% endif %}
                     </svg>
-                    <span class="job-save-label">{% if j.is_saved %}In Review{% else %}+ Add to Review{% endif %}</span>
+                    <span class="job-save-label">{% if j.is_saved %}In Cockpit{% else %}Save to Cockpit{% endif %}</span>
                 </button>
             </div>
         </div>

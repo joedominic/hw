@@ -91,16 +91,16 @@
                 <div class="flex items-center gap-2 text-xs text-slate-500 font-medium">
                     <a href="{% url 'career_cockpit' %}" class="hover:text-slate-900 transition-colors">Cockpit</a>
                     <span class="text-slate-300">›</span>
-                    <span class="text-slate-900 font-semibold">Tracker: Search Momentum</span>
+                    <span class="text-slate-900 font-semibold">Tracker</span>
                     <span class="text-slate-300">›</span>
-                    <span class="text-slate-500 hidden sm:inline">Career Momentum &amp; Outcomes</span>
+                    <span class="text-slate-500 hidden sm:inline">Search Momentum &amp; Outcomes</span>
                     <span class="text-slate-300 hidden sm:inline">›</span>
                     <span id="telemetry-status-badge" class="inline-flex items-center gap-1.5 text-xs font-semibold {% if is_cached %}text-emerald-700 bg-emerald-50 border border-emerald-200{% else %}text-amber-700 bg-amber-50 border border-amber-200{% endif %} px-2.5 py-0.5 rounded-full transition-all duration-300">
                         <span class="w-1.5 h-1.5 rounded-full {% if is_cached %}bg-emerald-500{% else %}bg-amber-500 animate-ping{% endif %}"></span>
                         <span id="telemetry-status-text">{% if is_cached %}Calibrated Rhythm{% else %}Calibrating Momentum...{% endif %}</span>
                     </span>
                 </div>
-                <h1 class="text-2xl sm:text-3xl font-display font-extrabold text-slate-900 tracking-tight mt-1.5">Your Search Momentum</h1>
+                <h1 class="text-2xl sm:text-3xl font-display font-extrabold text-slate-900 tracking-tight mt-1.5">Tracker</h1>
                 <p class="text-xs sm:text-sm text-slate-500 font-normal mt-0.5">
                     Track steady progress, celebrate recruiter responses, and focus on one high-impact step today.
                 </p>
@@ -240,12 +240,12 @@
                     </div>
                 </div>
                 <div class="pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                    <button type="button" onclick="openLogInterviewDrawer()" class="inline-flex items-center gap-1 font-semibold text-[#0F382A] hover:underline cursor-pointer">
+                    <a href="{% url 'career_cockpit' %}?stage=done&drawer=interview" class="inline-flex items-center gap-1 font-semibold text-[#0F382A] hover:underline">
                         <span class="material-symbols-outlined text-[15px]">add_call</span>
-                        <span>+ Log Conversation</span>
-                    </button>
+                        <span>Log in Cockpit</span>
+                    </a>
                     <a href="{% url 'career_cockpit' %}?stage=done" class="inline-flex items-center gap-0.5 text-slate-500 hover:text-slate-900 transition-colors">
-                        <span>View Pipeline</span>
+                        <span>Open Applied</span>
                         <span class="material-symbols-outlined text-[14px]">arrow_forward</span>
                     </a>
                 </div>
@@ -302,8 +302,8 @@
                     <span class="text-[11px] text-slate-500">
                         Diagnostic: <strong id="kpi-keywords-aligned" class="text-slate-800">{% if stats %}{{ stats.keywords_aligned|default:"0" }}{% else %}—{% endif %}</strong> keywords aligned
                     </span>
-                    <a href="{% url 'fit_inspector' %}" class="inline-flex items-center gap-0.5 font-semibold text-[#0F382A] hover:underline">
-                        <span>Fit Audit</span>
+                    <a href="{% url 'career_cockpit' %}?drawer=inspector" class="inline-flex items-center gap-0.5 font-semibold text-[#0F382A] hover:underline">
+                        <span>Open in Cockpit</span>
                         <span class="material-symbols-outlined text-[14px]">arrow_forward</span>
                     </a>
                 </div>
@@ -398,10 +398,10 @@
                     <h3 class="text-sm font-display font-bold text-slate-900">Upcoming Conversations &amp; Milestones</h3>
                     <p class="text-xs text-slate-500 font-medium">Scheduled recruiter screens, hiring manager deep dives, and briefing dossiers.</p>
                 </div>
-                <button type="button" onclick="openLogInterviewDrawer()" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0F382A] hover:bg-[#134E39] text-white text-xs font-semibold shadow-xs transition cursor-pointer">
+                <a href="{% url 'career_cockpit' %}?stage=done&drawer=interview" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0F382A] hover:bg-[#134E39] text-white text-xs font-semibold shadow-xs transition">
                     <span class="material-symbols-outlined text-[16px]">add</span>
-                    <span>Add Milestone</span>
-                </button>
+                    <span>Add in Cockpit</span>
+                </a>
             </div>
 
             <!-- List of Confirmed Interview Cards -->
@@ -433,12 +433,11 @@
 
                         <!-- Ergonomic 42px touch-target Prep Brief CTA -->
                         <div class="flex items-center gap-2.5 self-end md:self-auto shrink-0">
-                            <button type="button"
-                                    onclick="openLogInterviewDrawerForJob('{{ screen.pipeline_entry_id }}', '{{ screen.company|escapejs }}', '{{ screen.role|escapejs }}')"
-                                    class="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-medium transition cursor-pointer">
+                            <a href="{{ screen.log_url|default:screen.action_url }}"
+                               class="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-medium transition">
                                 <span class="material-symbols-outlined text-[16px] text-slate-400">edit_calendar</span>
-                                <span>Update Stage</span>
-                            </button>
+                                <span>Update in Cockpit</span>
+                            </a>
                             <a href="{{ screen.action_url }}"
                                class="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#0F382A] hover:bg-[#134E39] text-white text-xs font-semibold shadow-xs transition active:scale-[0.98]">
                                 <span>Prep Brief</span>
@@ -457,10 +456,10 @@
                                 Log recruiter callbacks, hiring manager screens, or panel rounds to activate your interview preparation briefs.
                             </p>
                         </div>
-                        <button type="button" onclick="openLogInterviewDrawer()" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 text-xs font-semibold shadow-2xs transition cursor-pointer">
+                        <a href="{% url 'career_cockpit' %}?stage=done&drawer=interview" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 text-xs font-semibold shadow-2xs transition">
                             <span class="material-symbols-outlined text-[15px]">add</span>
-                            <span>Log First Conversation</span>
-                        </button>
+                            <span>Log First Conversation in Cockpit</span>
+                        </a>
                     </div>
                     {% endfor %}
                 {% else %}
@@ -684,15 +683,15 @@
                                         Log recruiter callbacks, hiring manager screens, or panel rounds to activate your interview preparation briefs.\
                                     </p>\
                                 </div>\
-                                <button type="button" onclick="openLogInterviewDrawer()" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 text-xs font-semibold shadow-2xs transition cursor-pointer">\
+                                <a href="/jobs/cockpit/?stage=done&drawer=interview" class="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 text-xs font-semibold shadow-2xs transition">\
                                     <span class="material-symbols-outlined text-[15px]">add</span>\
-                                    <span>Log First Conversation</span>\
-                                </button>\
+                                    <span>Log First Conversation in Cockpit</span>\
+                                </a>\
                             </div>';
                     } else {
                         screensList.innerHTML = s.confirmed_screens.map(function(screen) {
-                            const escComp = (screen.company || '').replace(/'/g, "\\'");
-                            const escRole = (screen.role || '').replace(/'/g, "\\'");
+                            const logUrl = screen.log_url || (screen.action_url || '/jobs/cockpit/?stage=done');
+                            const prepUrl = screen.action_url || '/jobs/cockpit/?stage=done';
                             return '\
                             <div class="p-4 sm:p-5 rounded-xl border border-slate-200 bg-white hover:border-slate-300 hover:shadow-xs transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 group">\
                                 <div class="flex items-start gap-3.5 min-w-0">\
@@ -717,13 +716,12 @@
                                     </div>\
                                 </div>\
                                 <div class="flex items-center gap-2.5 self-end md:self-auto shrink-0">\
-                                    <button type="button"\
-                                            onclick="openLogInterviewDrawerForJob(\'' + screen.pipeline_entry_id + '\', \'' + escComp + '\', \'' + escRole + '\')"\
-                                            class="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-medium transition cursor-pointer">\
+                                    <a href="' + logUrl + '"\
+                                       class="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-medium transition">\
                                         <span class="material-symbols-outlined text-[16px] text-slate-400">edit_calendar</span>\
-                                        <span>Update Stage</span>\
-                                    </button>\
-                                    <a href="' + screen.action_url + '"\
+                                        <span>Update in Cockpit</span>\
+                                    </a>\
+                                    <a href="' + prepUrl + '"\
                                        class="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#0F382A] hover:bg-[#134E39] text-white text-xs font-semibold shadow-xs transition active:scale-[0.98]">\
                                         <span>Prep Brief</span>\
                                         <span class="material-symbols-outlined text-[15px]">arrow_forward</span>\
@@ -797,27 +795,7 @@
                 if (jApplied) jApplied.innerText = s.total_applied || 0;
             }
 
-            window.onLogInterviewSuccess = function(data) {
-                // Instantly re-fetch dynamic sections with cache busting
-                ['hero', 'interviews', 'pulse', 'journey'].forEach(function(sec) {
-                    fetch('/performance/api/metrics/?section=' + sec + '&refresh=1')
-                        .then(function(res) { return res.json(); })
-                        .then(function(data) {
-                            if (data.status === 'ok' && data.stats) {
-                                if (sec === 'hero') hydrateHero(data.stats);
-                                else if (sec === 'interviews') hydrateInterviews(data.stats);
-                                else if (sec === 'pulse') hydratePulse(data.stats);
-                                else if (sec === 'journey') hydrateJourney(data.stats);
-                            }
-                        })
-                        .catch(function() {
-                            window.location.reload();
-                        });
-                });
-            };
         });
     </script>
-
-    {% include "resume_app/_log_interview_drawer.html" %}
 </body>
 </html>

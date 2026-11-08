@@ -52,6 +52,7 @@ def staff_users_view(request):
                 "plan_slug": summary.get("plan_slug"),
                 "plan_name": summary.get("plan_name"),
                 "sub_status": sub.status,
+                "trial_ends_at": sub.trial_ends_at,
                 "email_verified": is_email_verified(u),
                 "usage": summary.get("usage") or {},
                 "storage": summary.get("storage") or {},
@@ -160,6 +161,41 @@ def staff_user_action_view(request, user_id: int):
             messages.success(request, f"Set subscription status for {target.username} to {sub.get_status_display()}.")
         else:
             messages.error(request, f"Invalid status '{new_status}'.")
+    elif action == "extend_trial":
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from .models import Subscription
+
+        trial_days_raw = (request.POST.get("trial_days") or "").strip()
+        sub = get_or_create_subscription(target)
+        try:
+            days = int(trial_days_raw)
+        except ValueError:
+            messages.error(request, "Trial days must be a whole number.")
+            return redirect("staff_users")
+        if days < 1 or days > 365:
+            messages.error(request, "Trial days must be between 1 and 365.")
+            return redirect("staff_users")
+        sub.trial_ends_at = timezone.now() + timedelta(days=days)
+        if sub.status != Subscription.Status.TRIALING:
+            sub.status = Subscription.Status.TRIALING
+        sub.save(update_fields=["trial_ends_at", "status", "updated_at"])
+        messages.success(
+            request,
+            f"Extended trial for {target.username} by {days} day(s) "
+            f"(ends {sub.trial_ends_at.date()}).",
+        )
+    elif action == "clear_trial":
+        from .models import Subscription
+
+        sub = get_or_create_subscription(target)
+        sub.trial_ends_at = None
+        if sub.status == Subscription.Status.TRIALING:
+            sub.status = Subscription.Status.ACTIVE
+        sub.save(update_fields=["trial_ends_at", "status", "updated_at"])
+        messages.success(request, f"Cleared trial for {target.username}.")
     elif action == "reset_quotas":
         from .models import UsageCounter
         from django.utils import timezone

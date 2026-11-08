@@ -34,7 +34,7 @@ from .huey_dashboard import (
     get_run_now_display_name,
     run_now_task_names,
 )
-from .tenancy import get_owned_or_404
+from .tenancy import get_owned_or_404, get_real_user
 from .utils import cron_to_short_description
 
 
@@ -81,27 +81,69 @@ def _parse_task_form(request, default_track: str, valid_track_slugs: set):
     }
 
 
-def staff_required(view_fn):
-    """Decorator: returns 403 for non-staff users on operational/monitor endpoints."""
-    @wraps(view_fn)
-    def _wrapped(request, *args, **kwargs):
-        if not (request.user and request.user.is_authenticated and request.user.is_staff):
-            return HttpResponseForbidden("Staff access required.")
-        return view_fn(request, *args, **kwargs)
+def staff_required(view_fn=None, *, allow_hijack_read: bool = False):
+    """
+    Decorator: staff-only Huey endpoints, gated on the real signed-in user
+    so support can open the monitor while hijacking.
 
-    return _wrapped
+    ``allow_hijack_read`` is retained for call-site clarity; mutations still
+    call ``_require_huey_mutation`` to block write actions during hijack.
+    """
+
+    def decorator(fn):
+        @wraps(fn)
+        def _wrapped(request, *args, **kwargs):
+            user = getattr(request, "user", None)
+            if not (user and user.is_authenticated):
+                return HttpResponseForbidden("Staff access required.")
+            real = get_real_user(request)
+            if real and getattr(real, "is_staff", False):
+                return fn(request, *args, **kwargs)
+            # allow_hijack_read kept for API compatibility with call sites
+            _ = allow_hijack_read
+            return HttpResponseForbidden("Staff access required.")
+
+        return _wrapped
+
+    if view_fn is not None:
+        return decorator(view_fn)
+    return decorator
+
+
+def _huey_mutations_allowed(request) -> bool:
+    """Queue mutations require staff-as-self (not while impersonating)."""
+    user = getattr(request, "user", None)
+    return bool(
+        user
+        and user.is_authenticated
+        and getattr(user, "is_staff", False)
+        and not getattr(user, "is_hijacked", False)
+    )
+
+
+def _require_huey_mutation(request):
+    """Return a redirect response when mutations are blocked; else None."""
+    if _huey_mutations_allowed(request):
+        return None
+    messages.error(
+        request,
+        "Queue controls require releasing the impersonation session first.",
+    )
+    return redirect("huey_dashboard")
 
 
 def job_tasks_view(request):
-    """Decommissioned in favor of Career Cockpit Search Schedule. Redirects to career_cockpit."""
-    track = (request.GET.get("track") or "").strip()
+    """Decommissioned in favor of Career Cockpit Automation Drawer. Preserve query state."""
+    params = request.GET.copy()
+    # Prefer profile= for new links; keep track= if that is what callers sent.
+    if not params.get("drawer"):
+        params["drawer"] = "automation"
+    qs = params.urlencode()
     cockpit_url = reverse("career_cockpit")
-    if track:
-        cockpit_url += f"?track={track}"
-    return redirect(cockpit_url)
+    return redirect(f"{cockpit_url}?{qs}" if qs else f"{cockpit_url}?drawer=automation")
 
 
-@staff_required
+@staff_required(allow_hijack_read=True)
 def huey_dashboard_view(request):
     """UI for monitoring Huey queue depth and controlling periodic tasks (pause/restore)."""
     from huey.contrib.djhuey import HUEY
@@ -171,11 +213,22 @@ def huey_dashboard_view(request):
             }
         )
 
-    # Build recent activity items from search scrapes
-    recent_searches = list(
-        JobSearchTaskRun.objects.select_related("task", "task__owner")
-        .order_by("-started_at")[:20]
+    from django.db.models import Q
+
+    owner_q = (request.GET.get("owner") or "").strip()
+    failed_only = (request.GET.get("failed") or "").strip() in ("1", "true", "yes")
+    runs_qs = JobSearchTaskRun.objects.select_related("task", "task__owner").order_by(
+        "-started_at"
     )
+    if owner_q:
+        runs_qs = runs_qs.filter(
+            Q(task__owner__username__icontains=owner_q)
+            | Q(task__owner__email__icontains=owner_q)
+        )
+    if failed_only:
+        runs_qs = runs_qs.filter(status=JobSearchTaskRun.STATUS_FAILED)
+
+    recent_searches = list(runs_qs[:40])
 
     unified_activity = []
     for s in recent_searches:
@@ -211,6 +264,9 @@ def huey_dashboard_view(request):
         "failed_24h": failed_24h,
         "active_running": active_running,
         "cleanup_status": cleanup_status,
+        "huey_readonly": not _huey_mutations_allowed(request),
+        "activity_owner": owner_q,
+        "activity_failed_only": failed_only,
     }
     return render(request, "resume_app/huey_dashboard.html", context)
 
@@ -220,6 +276,9 @@ def huey_periodic_revoke_view(request, task_name: str):
     """Pause a specific Huey periodic task via revoke()."""
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
+    blocked = _require_huey_mutation(request)
+    if blocked:
+        return blocked
 
     from huey.contrib.djhuey import HUEY
 
@@ -253,6 +312,9 @@ def huey_periodic_restore_view(request, task_name: str):
     """Restore a specific Huey periodic task via restore()."""
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
+    blocked = _require_huey_mutation(request)
+    if blocked:
+        return blocked
 
     from huey.contrib.djhuey import HUEY
 
@@ -286,6 +348,9 @@ def huey_flush_queue_view(request):
     """Flush pending Huey queue (destructive)."""
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
+    blocked = _require_huey_mutation(request)
+    if blocked:
+        return blocked
 
     from huey.contrib.djhuey import HUEY
 
@@ -315,13 +380,16 @@ def huey_run_cleanup_now_view(request):
     """Enqueue Cleanup Manager (dedupe + retention + inactive check) immediately."""
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
+    blocked = _require_huey_mutation(request)
+    if blocked:
+        return blocked
 
     try:
         from .tasks import cleanup_manager
 
         cleanup_manager()
     except Exception as e:
-        messages.error(request, f"Failed to queue cleanup task: {e}")
+        messages.error(request, f"Failed to enqueue cleanup task: {e}")
         return redirect("huey_dashboard")
 
     messages.success(request, "Cleanup Manager queued (dedupe, retention purge, inactive Applying check).")
@@ -333,6 +401,9 @@ def huey_task_run_now_view(request, task_name: str):
     """Enqueue a periodic Huey task or an ad-hoc @db_task that needs no arguments."""
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
+    blocked = _require_huey_mutation(request)
+    if blocked:
+        return blocked
 
     if task_name not in run_now_task_names():
         messages.error(request, f"Unknown or unsupported on-demand task: {task_name}")

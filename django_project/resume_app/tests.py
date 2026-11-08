@@ -2032,6 +2032,13 @@ class FindJobsSavePipelineTestCase(TenantTestCase):
 
     username = "findjobs_save"
 
+    def setUp(self):
+        super().setUp()
+        from resume_app.models import SearchProfile
+
+        Track.ensure_baseline(self.user)
+        SearchProfile.ensure_baseline(self.user)
+
     def _create_job(self, external_id: str = "save-1") -> JobListing:
         return JobListing.objects.create(
             source="test",
@@ -2102,17 +2109,28 @@ class FindJobsSavePipelineTestCase(TenantTestCase):
 
     @patch("resume_app.jobs_api._enqueue_vetting_match_for_entry")
     def test_saved_job_appears_on_review_board(self, _mock_enqueue):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from resume_app.models import SearchProfile, UserResume
         from resume_app.saved_searches import create_or_update_saved_search
 
-        create_or_update_saved_search(self.user, name="FinCrimes", search_term="AML")
+        pdf = SimpleUploadedFile("resume.pdf", b"%PDF-1.4 test", content_type="application/pdf")
+        resume = UserResume.objects.create(
+            owner=self.user,
+            file=pdf,
+            original_filename="resume.pdf",
+            is_library=True,
+        )
+        create_or_update_saved_search(
+            self.user,
+            name="FinCrimes",
+            search_term="AML",
+            resume_id=resume.id,
+        )
         job = self._create_job("save-board")
-        # Saved searches create a profile slug from the name
-        from resume_app.models import SearchProfile
-
         sp = SearchProfile.objects.for_user(self.user).filter(name="FinCrimes").first()
         track = sp.slug if sp else Track.get_default_slug(self.user)
         self.client.post(f"/api/resume/jobs/{job.id}/save?track={track}")
-        response = self.client.get(f"/jobs/vetting/?track={track}")
+        response = self.client.get(f"/jobs/cockpit/?stage=vetting&track={track}")
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Engineer")
         self.assertContains(response, "ACME")

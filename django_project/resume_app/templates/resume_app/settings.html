@@ -30,10 +30,10 @@
            class="rounded-t-concierge px-4 py-2 text-sm font-semibold {% if settings_tab == 'replacements' %}bg-white text-brand ring-1 ring-slate-200 ring-b-0{% else %}text-slate-600 hover:text-concierge-slate{% endif %}">
             Replacements
         </a>
-        {% if request.user.is_staff %}
+        {% if real_user_is_staff and not is_hijacked %}
         <a href="?tab=app"
            class="rounded-t-concierge px-4 py-2 text-sm font-semibold {% if settings_tab == 'app' %}bg-white text-brand ring-1 ring-slate-200 ring-b-0{% else %}text-slate-600 hover:text-concierge-slate{% endif %}">
-            App Automation
+            Account defaults
         </a>
         {% endif %}
     </div>
@@ -96,6 +96,34 @@
                 </button>
             </form>
         </div>
+
+        {% if real_user_is_staff %}
+        <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 class="text-lg font-semibold text-concierge-slate">Experience mode</h2>
+            <p class="mt-1 text-sm text-slate-600">
+                Simple keeps the tenant-oriented workspace. Advanced unlocks staff diagnostics and denser controls.
+                This setting applies to your staff account, not an impersonated tenant.
+            </p>
+            <form method="post" class="mt-4 flex flex-wrap items-center gap-3">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="save_experience_mode">
+                <label class="inline-flex items-center gap-2 rounded-concierge border px-3 py-2 text-sm cursor-pointer
+                    {% if staff_experience_mode != 'power' %}border-brand bg-brand/5 text-brand font-semibold{% else %}border-slate-200 text-slate-700 hover:bg-slate-50{% endif %}">
+                    <input type="radio" name="experience_mode" value="normal" class="sr-only"
+                           {% if staff_experience_mode != 'power' %}checked{% endif %}
+                           onchange="this.form.submit()">
+                    Simple
+                </label>
+                <label class="inline-flex items-center gap-2 rounded-concierge border px-3 py-2 text-sm cursor-pointer
+                    {% if staff_experience_mode == 'power' %}border-brand bg-brand/5 text-brand font-semibold{% else %}border-slate-200 text-slate-700 hover:bg-slate-50{% endif %}">
+                    <input type="radio" name="experience_mode" value="power" class="sr-only"
+                           {% if staff_experience_mode == 'power' %}checked{% endif %}
+                           onchange="this.form.submit()">
+                    Advanced
+                </label>
+            </form>
+        </div>
+        {% endif %}
 
         <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
             <h2 class="text-lg font-semibold text-concierge-slate">API keys</h2>
@@ -536,17 +564,22 @@
             </p>
         </div>
     </div>
-    {% elif settings_tab == 'app' and request.user.is_staff %}
+    {% elif settings_tab == 'app' and real_user_is_staff and not is_hijacked %}
     <div class="space-y-6">
+        <div class="rounded-concierge border border-amber-200 bg-amber-50/60 p-4 text-sm text-amber-950">
+            These are <strong>your staff account</strong> automation defaults — not a global tenant policy.
+            To tune a customer while supporting them, impersonate and use
+            <a href="{% url 'career_cockpit' %}?drawer=automation" class="font-semibold underline">Cockpit → Automation</a>.
+        </div>
         <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
             <div class="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
                 <div>
-                    <h2 class="text-lg font-semibold text-concierge-slate">Pipeline Automation & Retention</h2>
+                    <h2 class="text-lg font-semibold text-concierge-slate">Account automation defaults</h2>
                     <p class="mt-1 text-sm text-slate-600">
-                        Baseline automated pipeline promotion thresholds, nightly retention cleanup windows, and default applying workflow.
+                        Baseline pipeline promotion thresholds, nightly retention windows, and default applying workflow for this staff account (dogfooding).
                     </p>
                 </div>
-                <span class="inline-flex items-center gap-1 rounded bg-slate-100 px-2.5 py-1 text-xs font-mono font-bold text-slate-700">Staff Admin</span>
+                <span class="inline-flex items-center gap-1 rounded bg-slate-100 px-2.5 py-1 text-xs font-mono font-bold text-slate-700">This account</span>
             </div>
             <form method="post" class="mt-6 space-y-6">
                 {% csrf_token %}

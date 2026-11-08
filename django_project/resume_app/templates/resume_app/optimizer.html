@@ -86,15 +86,6 @@
             {% endif %}
 
             {% if target_job or optimized_resume_id %}
-            <button type="button" 
-                    id="save-draft-top-btn" 
-                    onclick="window.submitSaveDraft();"
-                    class="h-9 px-3.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center gap-1.5 transition shadow-xs"
-                    title="Save tailored resume draft (stays in Applying stage) (Ctrl+S)">
-                <span class="material-symbols-outlined text-[16px] text-slate-500">save</span>
-                <span>Save Draft</span>
-                <kbd class="hidden sm:inline-block ml-1 bg-slate-100 border border-slate-200 text-slate-500 px-1 py-0.5 rounded text-[10px] font-mono">Ctrl+S</kbd>
-            </button>
 
             <form method="post" action="{% url 'resume_optimizer' %}{% if target_job %}?job_id={{ target_job.id }}&track={{ pipeline_track }}{% elif optimized_resume_id %}?opt_id={{ optimized_resume_id }}{% endif %}" id="approve-apply-form" class="inline" onsubmit="if (window.syncApproveMarkdown) window.syncApproveMarkdown();">
                 {% csrf_token %}
@@ -162,8 +153,8 @@
         <input type="hidden" name="max_iterations" value="3">
         <input type="hidden" name="score_threshold" value="85">
 
-        {# ——— Step 1 ——— #}
-        <div id="wizard-panel-1" class="wizard-panel space-y-8" data-step="1">
+        {# ——— Step 1 (power/staff setup). Hidden for tenants to avoid FOUC before showStep(). ——— #}
+        <div id="wizard-panel-1" class="wizard-panel space-y-8{% if not is_power_user %} hidden{% endif %}" data-step="1">
             <div class="grid gap-6 lg:grid-cols-2">
                 <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-card">
                     <div class="flex flex-wrap items-center justify-between gap-2">
@@ -180,7 +171,9 @@
                             <span class="text-brand"> · Connected</span>
                         {% endif %}
                     </p>
-                    {% if llm_key_stored %}
+                    {% if llm_key_stored and using_platform_key %}
+                        <p class="mt-2 text-xs text-slate-500">Using HireEdge platform AI for this run. You can connect your own key in Settings anytime.</p>
+                    {% elif llm_key_stored %}
                         <p class="mt-2 text-xs text-slate-500">Using stored credentials for this provider.</p>
                     {% elif llm_key_error %}
                         <p class="mt-2 text-xs text-red-600">{{ llm_key_error }}</p>
@@ -331,7 +324,7 @@
         </div>
 
         {# ——— Step 2 ——— #}
-        <div id="wizard-panel-2" class="wizard-panel hidden space-y-5 brand-animate brand-animate-delay-1" data-step="2">
+        <div id="wizard-panel-2" class="wizard-panel space-y-5 brand-animate brand-animate-delay-1{% if is_power_user %} hidden{% endif %}" data-step="2">
             <div class="grid gap-5 lg:grid-cols-2">
                 {# Upload resume #}
                 <div class="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-card">
@@ -433,8 +426,19 @@
                 </div>
             </details>
 
-            {# Configuration #}
-            <div class="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-card">
+            {# Configuration — Executive Mode collapses engine knobs for tenants #}
+            <details class="group rounded-2xl border border-slate-200/80 bg-white shadow-card" id="advanced-engine-settings" {% if is_power_user or request.user.is_staff %}open{% endif %}>
+                <summary class="flex cursor-pointer list-none items-center gap-3 px-5 py-4 [&::-webkit-details-marker]:hidden">
+                    <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-600" aria-hidden="true">
+                        <span class="material-symbols-outlined text-[20px]">tune</span>
+                    </span>
+                    <span class="min-w-0 flex-1">
+                        <span class="block text-sm font-bold text-concierge-slate">Advanced Engine Settings</span>
+                        <span class="block text-xs text-slate-500">Workflow, ATS profile, run mode, and delay. Defaults are used when left closed.</span>
+                    </span>
+                    <svg class="h-5 w-5 shrink-0 text-slate-400 transition group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                </summary>
+            <div class="border-t border-slate-100 px-5 pb-6 pt-4">
                 <div class="grid gap-6 lg:grid-cols-2">
                     <div>
                         <div class="mb-1.5 flex items-center justify-between gap-2">
@@ -512,15 +516,24 @@
                         <button type="button" data-goto-step="3" class="text-sm font-medium text-slate-400 hover:text-concierge-slate hover:underline">Skip to results</button>
                     </div>
                     <button type="submit" class="inline-flex items-center gap-2 rounded-xl bg-brand px-6 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-brand-hover disabled:opacity-50"
-                            {% if not llm_key_stored %}disabled{% endif %}>
+                            {% if not llm_key_stored or token_preflight.blocked %}disabled{% endif %}>
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"/></svg>
                         <span id="run-optimizer-btn-label">Run optimizer</span>
                     </button>
-                    {% if not llm_key_stored %}
-                        <p class="w-full text-xs text-red-600">Configure an active provider in Settings before running.</p>
+                    {% if token_preflight and not token_preflight.unlimited %}
+                        <p class="w-full text-xs {% if token_preflight.blocked %}text-red-600{% else %}text-slate-500{% endif %}">
+                            About {{ token_preflight.estimate|default:0 }} tokens for a full run
+                            · {{ token_preflight.used|default:0 }} / {{ token_preflight.limit|default:0 }} used today
+                            {% if token_preflight.blocked %}
+                                · Not enough budget left — try again after midnight or upgrade under Plan &amp; usage.
+                            {% endif %}
+                        </p>
+                    {% elif not llm_key_stored %}
+                        <p class="w-full text-xs text-red-600">No cloud AI is available yet. Connect a key in Settings, or ask an admin to enable the platform default.</p>
                     {% endif %}
                 </div>
             </div>
+            </details>
         </div>
 
         {# ——— Step 3 ——— #}
@@ -532,7 +545,7 @@
 
             <div class="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-card" id="run-single-step-card" style="display: none;">
                 <h3 class="text-base font-bold text-concierge-slate">Step by step</h3>
-                <p class="mt-1 text-xs text-slate-500">Run one agent at a time; the draft field updates after Writer. A second Writer pass uses that draft when you keep it filled.</p>
+                <p class="mt-1 text-xs text-slate-500">Run one step at a time; the draft field updates after Writer. A second Writer pass uses that draft when you keep it filled.</p>
                 <div class="mt-4 text-xs text-slate-600" id="step-progress-visual" aria-live="polite"></div>
                 <div class="mt-4">
                     <label class="mb-1.5 block text-sm font-semibold text-concierge-slate" for="step-select">Step</label>
@@ -1196,11 +1209,7 @@
             html += '<button type="button" class="diff-mode-btn active px-3 py-1.5 rounded-md bg-white text-slate-800 shadow-sm transition" data-mode="split">Side-by-Side Diff</button>';
             html += '<button type="button" class="diff-mode-btn px-3 py-1.5 rounded-md text-slate-600 hover:text-slate-900 transition" data-mode="tailored-only">Tailored Draft Only</button>';
             html += '<button type="button" class="diff-mode-btn px-3 py-1.5 rounded-md text-slate-600 hover:text-slate-900 transition" data-mode="original-only">Original Source Only</button></div>';
-            html += '<div class="h-5 w-[1px] bg-slate-200 hidden sm:block"></div>';
-            html += '<div class="flex items-center gap-2">';
-            html += '<button type="button" id="save-draft-btn" data-resume-id="' + esc(resumeId) + '" class="inline-flex items-center gap-1.5 rounded-lg bg-brand hover:bg-brand-hover text-white px-3.5 py-1.5 text-xs font-bold shadow-sm transition">';
-            html += '<span class="material-symbols-outlined text-[15px]">save</span><span>Save draft</span></button>';
-            html += '<span id="save-draft-status" class="text-xs text-slate-500" aria-live="polite"></span></div></div></div>';
+            html += '</div></div></div>';
 
             if (data.discrepancies && data.discrepancies.has_discrepancies) {
                 html += '<div class="mt-4 rounded-2xl border border-amber-300 bg-amber-50/70 p-4 shadow-sm" id="factual-discrepancy-callout">';
@@ -1254,7 +1263,8 @@
             html += '<div class="flex flex-wrap items-center gap-2">';
             html += '<a id="export-pdf-btn" class="inline-flex items-center gap-1.5 rounded-lg bg-brand hover:bg-brand-hover text-white px-3.5 py-2 text-xs font-bold transition shadow-sm export-button" href="/api/resume/export/' + esc(resumeId) + '/pdf" data-base-href="/api/resume/export/' + esc(resumeId) + '/pdf" data-resume-id="' + esc(resumeId) + '"><span class="material-symbols-outlined text-[16px]">picture_as_pdf</span><span>Export PDF</span></a>';
             html += '<a id="export-docx-btn" class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 px-3.5 py-2 text-xs font-bold transition shadow-sm export-button" href="/api/resume/export/' + esc(resumeId) + '/docx" data-base-href="/api/resume/export/' + esc(resumeId) + '/docx" data-resume-id="' + esc(resumeId) + '"><span class="material-symbols-outlined text-[16px]">description</span><span>Export Word (.docx)</span></a>';
-            html += '<button type="button" onclick="window.submitSaveDraft();" class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 px-3.5 py-2 text-xs font-bold transition shadow-sm"><span class="material-symbols-outlined text-[16px]">save</span><span>Save Draft</span></button>';
+            html += '<button type="button" id="save-draft-btn" data-resume-id="' + esc(resumeId) + '" onclick="window.submitSaveDraft();" class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 px-3.5 py-2 text-xs font-bold transition shadow-sm" title="Save tailored resume draft (stays in Applying stage) (Ctrl+S)"><span class="material-symbols-outlined text-[16px]">save</span><span>Save Draft</span><kbd class="hidden sm:inline-block ml-1 bg-slate-100 border border-slate-200 text-slate-500 px-1 py-0.5 rounded text-[10px] font-mono">Ctrl+S</kbd></button>';
+            html += '<span id="save-draft-status" class="text-xs text-slate-500 font-medium" aria-live="polite"></span>';
             html += '<button type="button" onclick="window.submitApproveAndApply();" class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white px-4 py-2 text-xs font-bold transition shadow-sm"><span class="material-symbols-outlined text-[16px]">task_alt</span><span>I Submitted This</span><kbd class="hidden sm:inline-block ml-1 bg-emerald-900/40 text-emerald-100 px-1 py-0.5 rounded text-[9px] font-mono">Ctrl+Enter</kbd></button></div></div>';
         } else {
             html += '<h4 class="text-lg font-semibold text-concierge-slate">Draft so far</h4>';
@@ -2037,25 +2047,8 @@
 
         var saveBtn = e.target.closest("#save-draft-btn");
         if (saveBtn && !saveBtn.disabled) {
-            var rid = saveBtn.getAttribute("data-resume-id");
-            var ta = document.getElementById("optimizer-draft-editor");
-            var statusEl = document.getElementById("save-draft-status");
-            if (!rid || !ta) return;
-            saveBtn.disabled = true;
-            if (statusEl) { statusEl.textContent = "Saving…"; statusEl.className = "text-xs text-slate-500"; }
-            saveDraftContent(rid, ta.value).then(function (res) {
-                saveBtn.disabled = false;
-                if (res.ok && res.data && res.data.ok) {
-                    window.__optimizerDraftDirty = false;
-                    if (statusEl) { statusEl.textContent = "Saved"; statusEl.className = "text-xs text-brand"; }
-                } else {
-                    var err = (res.data && res.data.error) ? res.data.error : "Save failed";
-                    if (statusEl) { statusEl.textContent = err; statusEl.className = "text-xs text-red-700"; }
-                }
-            }).catch(function () {
-                saveBtn.disabled = false;
-                if (statusEl) { statusEl.textContent = "Save failed"; statusEl.className = "text-xs text-red-700"; }
-            });
+            e.preventDefault();
+            window.submitSaveDraft();
             return;
         }
         var btn = e.target.closest("#stop-optimization-btn");
@@ -2200,65 +2193,98 @@
         if (window.syncApproveMarkdown) {
             window.syncApproveMarkdown();
         }
-        var topBtn = document.getElementById("save-draft-top-btn");
-        if (topBtn) {
-            topBtn.disabled = true;
-            topBtn.innerHTML = '<span class="material-symbols-outlined text-[16px] animate-spin">refresh</span><span>Saving…</span>';
+        var saveBtns = document.querySelectorAll("#save-draft-btn");
+        var statusEl = document.getElementById("save-draft-status");
+        var originalBtnHtml = (saveBtns.length && saveBtns[0]) ? saveBtns[0].innerHTML : "";
+
+        saveBtns.forEach(function (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<span class="material-symbols-outlined text-[16px] animate-spin">refresh</span><span>Saving…</span>';
+        });
+
+        if (statusEl) {
+            statusEl.textContent = "Saving…";
+            statusEl.className = "text-xs text-slate-500 font-medium";
         }
+
         var editor = document.getElementById("optimizer-draft-editor");
         var markdownContent = editor ? editor.value : "";
+        if (!markdownContent.trim()) {
+            saveBtns.forEach(function (btn) {
+                btn.disabled = false;
+                btn.innerHTML = originalBtnHtml || '<span class="material-symbols-outlined text-[16px]">save</span><span>Save Draft</span>';
+            });
+            if (statusEl) {
+                statusEl.textContent = "Draft cannot be empty";
+                statusEl.className = "text-xs text-rose-700 font-medium";
+            }
+            return;
+        }
+
         var csrf = document.querySelector("[name=csrfmiddlewaretoken]");
         var csrfToken = csrf ? csrf.value : "";
 
-        var form = document.createElement("form");
-        form.method = "POST";
-        form.action = window.location.pathname + window.location.search;
-
-        var csrfInput = document.createElement("input");
-        csrfInput.type = "hidden";
-        csrfInput.name = "csrfmiddlewaretoken";
-        csrfInput.value = csrfToken;
-        form.appendChild(csrfInput);
-
-        var actionInput = document.createElement("input");
-        actionInput.type = "hidden";
-        actionInput.name = "action";
-        actionInput.value = "save_draft";
-        form.appendChild(actionInput);
-
-        var mdInput = document.createElement("input");
-        mdInput.type = "hidden";
-        mdInput.name = "markdown";
-        mdInput.value = markdownContent;
-        form.appendChild(mdInput);
-
         var urlParams = new URLSearchParams(window.location.search);
-        var optId = urlParams.get("opt_id");
-        if (optId) {
-            var optInput = document.createElement("input");
-            optInput.type = "hidden";
-            optInput.name = "opt_id";
-            optInput.value = optId;
-            form.appendChild(optInput);
-        }
-        var jobId = urlParams.get("job_id");
-        if (jobId) {
-            var jInput = document.createElement("input");
-            jInput.type = "hidden";
-            jInput.name = "job_id";
-            jInput.value = jobId;
-            form.appendChild(jInput);
-        }
-        var tr = urlParams.get("track");
-        if (tr) {
-            var trInput = document.createElement("input");
-            trInput.type = "hidden";
-            trInput.name = "track";
-            trInput.value = tr;
-            form.appendChild(trInput);
-        }
-        document.body.appendChild(form);
-        form.submit();
+        var statusContainer = document.getElementById("optimizer-status-container");
+        var optId = urlParams.get("opt_id")
+            || (statusContainer ? statusContainer.getAttribute("data-resume-id") : "")
+            || (editor ? editor.getAttribute("data-resume-id") : "")
+            || ((saveBtns.length && saveBtns[0]) ? saveBtns[0].getAttribute("data-resume-id") : "");
+        var jobId = urlParams.get("job_id")
+            || (document.getElementById("approve-apply-job-id") ? document.getElementById("approve-apply-job-id").value : "");
+        var tr = urlParams.get("track")
+            || (document.getElementById("approve-apply-track") ? document.getElementById("approve-apply-track").value : "");
+
+        var formData = new FormData();
+        formData.append("action", "save_draft");
+        formData.append("markdown", markdownContent);
+        if (csrfToken) formData.append("csrfmiddlewaretoken", csrfToken);
+        if (optId) formData.append("opt_id", optId);
+        if (jobId) formData.append("job_id", jobId);
+        if (tr) formData.append("track", tr);
+
+        var targetUrl = window.location.pathname + window.location.search;
+
+        var p1 = fetch(targetUrl, {
+            method: "POST",
+            headers: {
+                "X-Requested-With": "XMLHttpRequest",
+                "Accept": "application/json",
+            },
+            body: formData
+        }).then(function (r) {
+            return r.json().catch(function () { return { ok: r.ok }; });
+        });
+
+        var p2 = (optId && typeof saveDraftContent === "function")
+            ? saveDraftContent(optId, markdownContent).catch(function () { return { ok: false }; })
+            : Promise.resolve({ ok: true });
+
+        Promise.all([p1, p2]).then(function (results) {
+            saveBtns.forEach(function (btn) {
+                btn.disabled = false;
+                btn.innerHTML = originalBtnHtml || '<span class="material-symbols-outlined text-[16px]">save</span><span>Save Draft</span>';
+            });
+            window.__optimizerDraftDirty = false;
+            if (statusEl) {
+                statusEl.textContent = "Saved";
+                statusEl.className = "text-xs text-emerald-700 font-semibold";
+                setTimeout(function () {
+                    if (statusEl && statusEl.textContent === "Saved") {
+                        statusEl.textContent = "";
+                    }
+                }, 3500);
+            }
+        }).catch(function (err) {
+            saveBtns.forEach(function (btn) {
+                btn.disabled = false;
+                btn.innerHTML = originalBtnHtml || '<span class="material-symbols-outlined text-[16px]">save</span><span>Save Draft</span>';
+            });
+            if (statusEl) {
+                statusEl.textContent = "Save failed";
+                statusEl.className = "text-xs text-rose-700 font-medium";
+            }
+        });
     };
 
     window.submitApproveAndApply = function () {

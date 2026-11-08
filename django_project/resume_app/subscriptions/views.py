@@ -17,7 +17,7 @@ from .billing import (
     create_checkout_session,
     stripe_enabled,
 )
-from .entitlements import ensure_default_plans, subscription_summary
+from .entitlements import ensure_default_plans, parse_numeric_quota, subscription_summary
 from ..models import ImpersonationAuditLog, LLMAppUsageTotals, Plan, Subscription
 
 logger = logging.getLogger(__name__)
@@ -58,14 +58,14 @@ def billing_view(request):
                 plan.stripe_price_id = (request.POST.get("stripe_price_id") or "").strip()
 
                 try:
-                    plan.llm_requests_per_day = max(0, int(request.POST.get("llm_requests_per_day", 0) or 0))
-                    plan.llm_tokens_per_day = max(0, int(request.POST.get("llm_tokens_per_day", 0) or 0))
-                    plan.job_searches_per_day = max(0, int(request.POST.get("job_searches_per_day", 0) or 0))
-                    plan.storage_mb = max(0, int(request.POST.get("storage_mb", 0) or 0))
-                    plan.sort_order = max(0, int(request.POST.get("sort_order", 100) or 100))
+                    plan.llm_requests_per_day = parse_numeric_quota(request.POST.get("llm_requests_per_day"), 0)
+                    plan.llm_tokens_per_day = parse_numeric_quota(request.POST.get("llm_tokens_per_day"), 0)
+                    plan.job_searches_per_day = parse_numeric_quota(request.POST.get("job_searches_per_day"), 0)
+                    plan.storage_mb = parse_numeric_quota(request.POST.get("storage_mb"), 0)
+                    plan.sort_order = parse_numeric_quota(request.POST.get("sort_order"), 100)
                 except ValueError:
                     messages.error(request, "Invalid numeric quota value.")
-                    return redirect("billing")
+                    return redirect(f"{reverse('billing')}?plan={plan.slug}")
 
                 plan.api_access = bool(request.POST.get("api_access"))
                 plan.byok_required_for_completion = bool(request.POST.get("byok_required_for_completion"))
@@ -104,11 +104,11 @@ def billing_view(request):
                     return redirect("billing")
 
                 try:
-                    llm_req = max(0, int(request.POST.get("llm_requests_per_day", 100) or 0))
-                    llm_tok = max(0, int(request.POST.get("llm_tokens_per_day", 500000) or 0))
-                    searches = max(0, int(request.POST.get("job_searches_per_day", 50) or 0))
-                    storage = max(0, int(request.POST.get("storage_mb", 1000) or 0))
-                    sort_order = max(0, int(request.POST.get("sort_order", 50) or 50))
+                    llm_req = parse_numeric_quota(request.POST.get("llm_requests_per_day"), 100)
+                    llm_tok = parse_numeric_quota(request.POST.get("llm_tokens_per_day"), 500000)
+                    searches = parse_numeric_quota(request.POST.get("job_searches_per_day"), 50)
+                    storage = parse_numeric_quota(request.POST.get("storage_mb"), 1000)
+                    sort_order = parse_numeric_quota(request.POST.get("sort_order"), 50)
                 except ValueError:
                     messages.error(request, "Invalid numeric quota value.")
                     return redirect("billing")
@@ -157,58 +157,15 @@ def billing_view(request):
                 messages.success(request, f"Plan '{plan_name}' deleted.")
                 return redirect("billing")
 
-            if action == "update_user_subscription":
-                sub_id = request.POST.get("subscription_id")
-                plan_slug = (request.POST.get("plan_slug") or "").strip()
-                new_status = (request.POST.get("status") or "").strip()
-                trial_days_raw = (request.POST.get("trial_days") or "").strip()
-
-                try:
-                    target_sub = Subscription.objects.select_related("owner").get(pk=sub_id)
-                except Subscription.DoesNotExist:
-                    messages.error(request, "Subscription record not found.")
-                    return redirect("billing")
-
-                if plan_slug:
-                    try:
-                        target_sub.plan = Plan.objects.get(slug=plan_slug)
-                    except Plan.DoesNotExist:
-                        messages.error(request, f"Plan '{plan_slug}' does not exist.")
-                        return redirect("billing")
-
-                if new_status and new_status in Subscription.Status.values:
-                    target_sub.status = new_status
-
-                if trial_days_raw:
-                    try:
-                        days = int(trial_days_raw)
-                        from datetime import timedelta
-                        from django.utils import timezone
-                        target_sub.trial_ends_at = timezone.now() + timedelta(days=days)
-                    except ValueError:
-                        pass
-                elif request.POST.get("clear_trial"):
-                    target_sub.trial_ends_at = None
-
-                target_sub.save()
-                messages.success(
+            # Per-tenant subscription edits live on Staff Console (/staff/users/).
+            if action in ("update_user_subscription", "reset_user_quotas"):
+                messages.info(
                     request,
-                    f"Updated subscription for {target_sub.owner.username}: "
-                    f"Plan={target_sub.plan.name if target_sub.plan else 'None'}, "
-                    f"Status={target_sub.get_status_display()}.",
+                    "Per-user plan, trial, and quota actions live in Staff Console.",
                 )
-                return redirect("billing")
+                return redirect("staff_users")
 
-            if action == "reset_user_quotas":
-                owner_id = request.POST.get("user_id")
-                from ..models import UsageCounter
-                from django.utils import timezone
-                today = timezone.localdate()
-                deleted_count, _ = UsageCounter.objects.filter(owner_id=owner_id, period_date=today).delete()
-                messages.success(request, f"Daily quotas reset ({deleted_count} counters cleared) for user #{owner_id}.")
-                return redirect("billing")
-
-        from django.db.models import Q, Sum
+        from django.db.models import Sum
 
         plans = list(Plan.objects.annotate(subscriber_count=Count("subscriptions")).order_by("sort_order", "name"))
         plan_slugs = [p.slug for p in plans]
@@ -220,9 +177,6 @@ def billing_view(request):
         total_subscribers = Subscription.objects.count()
         active_subscribers_count = Subscription.objects.filter(status__in=["active", "trialing"]).count()
         active_plans_count = sum(1 for p in plans if p.is_active)
-        recent_subscriptions = list(
-            Subscription.objects.select_related("owner", "plan").order_by("-updated_at")[:12]
-        )
         recent_impersonations = list(
             ImpersonationAuditLog.objects.select_related("hijacker", "target").order_by("-started_at")[:8]
         )
@@ -231,24 +185,6 @@ def billing_view(request):
             total_out=Sum("total_output_tokens"),
             total_req=Sum("total_requests"),
         )
-
-        sub_q = (request.GET.get("sub_q") or "").strip()
-        sub_plan = (request.GET.get("sub_plan") or "").strip()
-        sub_status = (request.GET.get("sub_status") or "").strip()
-
-        subs_qs = Subscription.objects.select_related("owner", "plan").order_by("-updated_at")
-        if sub_q:
-            subs_qs = subs_qs.filter(
-                Q(owner__username__icontains=sub_q)
-                | Q(owner__email__icontains=sub_q)
-                | Q(stripe_customer_id__icontains=sub_q)
-            )
-        if sub_plan:
-            subs_qs = subs_qs.filter(plan__slug=sub_plan)
-        if sub_status:
-            subs_qs = subs_qs.filter(status=sub_status)
-
-        filtered_subscriptions = list(subs_qs[:50])
 
         return render(
             request,
@@ -259,12 +195,6 @@ def billing_view(request):
                 "total_subscribers": total_subscribers,
                 "active_subscribers_count": active_subscribers_count,
                 "active_plans_count": active_plans_count,
-                "recent_subscriptions": recent_subscriptions,
-                "filtered_subscriptions": filtered_subscriptions,
-                "sub_q": sub_q,
-                "sub_plan": sub_plan,
-                "sub_status": sub_status,
-                "status_choices": Subscription.Status.choices,
                 "recent_impersonations": recent_impersonations,
                 "platform_tokens": {
                     "input": int(token_aggregates.get("total_in") or 0),

@@ -1,11 +1,12 @@
 """Tests for SavedJobSearch presets."""
 
 from django.contrib.auth.models import User
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 from django.urls import reverse
 
 from resume_app.experience import set_experience_mode
-from resume_app.models import SavedJobSearch, Track
+from resume_app.models import SavedJobSearch, Track, UserResume
 from resume_app.saved_searches import (
     apply_saved_search_to_get,
     backfill_saved_search_profile_tracks,
@@ -16,10 +17,21 @@ from resume_app.saved_searches import (
 )
 
 
+def _seed_library_resume(user) -> UserResume:
+    pdf = SimpleUploadedFile("resume.pdf", b"%PDF-1.4 test", content_type="application/pdf")
+    return UserResume.objects.create(
+        owner=user,
+        file=pdf,
+        original_filename="resume.pdf",
+        is_library=True,
+    )
+
+
 class SavedJobSearchHelpersTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username="preset_user", password="pass12345!")
         Track.ensure_baseline(self.user)
+        _seed_library_resume(self.user)
 
     def test_create_and_load_preset(self):
         saved = create_or_update_saved_search(
@@ -95,6 +107,7 @@ class SavedJobSearchScheduleTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(username="sched_user", password="pass12345!")
         Track.ensure_baseline(self.user)
+        _seed_library_resume(self.user)
         self.saved = create_or_update_saved_search(
             self.user,
             name="Nightly SWE",
@@ -209,6 +222,7 @@ class SavedJobSearchViewTests(TestCase):
         self.client = Client()
         self.user = User.objects.create_user(username="view_user", password="pass12345!")
         Track.ensure_baseline(self.user)
+        _seed_library_resume(self.user)
         self.client.login(username="view_user", password="pass12345!")
         self.saved = create_or_update_saved_search(
             self.user,

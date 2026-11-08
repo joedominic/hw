@@ -77,7 +77,7 @@ ROOT_URLCONF = "core.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        "DIRS": [BASE_DIR / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -306,9 +306,11 @@ STORAGES = {
     },
 }
 
-# django-hijack: support staff impersonation
+# django-hijack: support staff impersonation.
+# None disables the stock bottom "stop impersonating" widget on every HTML
+# response. Release stays on the sticky top banner (_hijack_banner.html).
 HIJACK_PERMISSION_CHECK = "resume_app.hijack_permissions.can_hijack"
-HIJACK_INSERT_BEFORE = "<main"
+HIJACK_INSERT_BEFORE = None
 
 # Per-user LLM usage limits (0 = unlimited)
 LLM_USER_DAILY_REQUEST_LIMIT = env.int("LLM_USER_DAILY_REQUEST_LIMIT", default=0)
@@ -528,15 +530,12 @@ else:
         }
     }
 
-# --- Autonomous Apply Agent ---
+# --- Legacy browser-apply tooling (env knobs retained; product Apply Agent UI removed) ---
 # When true, resolve_and_detect uses a deterministic URL map (CI/unit tests).
-# Default false so real Indeed/LinkedIn aggregator URLs use live Playwright resolution.
 APPLY_USE_MOCK_RESOLVER = env.bool("APPLY_USE_MOCK_RESOLVER", default=False)
-# Max concurrent browser automation steps (keep low; Chromium is memory-heavy).
 APPLY_BROWSER_CONCURRENCY = env.int("APPLY_BROWSER_CONCURRENCY", default=2)
-# Hard wall-clock cap per browser-touching orchestrator step (seconds).
 APPLY_BROWSER_STEP_TIMEOUT_SECONDS = env.int("APPLY_BROWSER_STEP_TIMEOUT_SECONDS", default=360)
-# When False, Playwright and browser-use open a visible Chromium window (dev only; Huey must run locally).
+# When False, Playwright opens a visible Chromium window (dev only; Huey must run locally).
 APPLY_BROWSER_HEADLESS = env.bool("APPLY_BROWSER_HEADLESS", default=False)
 
 # --- LLM rate limits (Redis, shared across workers). Only providers listed in

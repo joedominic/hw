@@ -799,14 +799,22 @@ def optimize_resume(request, payload: OptimizeRequest = Form(...), file: Uploade
         ats_judge_profile=ats_profile,
     )
 
-    # Resolve API key: request > stored config > env
+    # Resolve API key: request > stored config > platform/env fallback
+    from .pipeline_llm_skill_extract import resolve_provider_api_key
+
     api_key = payload.api_key
     if not api_key:
         config = _user_llm_config(user, payload.llm_provider)
         if config and config.encrypted_api_key:
             api_key = decrypt_api_key(config.encrypted_api_key)
         if not api_key:
-            raise HttpError(400, f"API key required for {payload.llm_provider}. Enter key in LLM Config and connect, or pass api_key.")
+            api_key = resolve_provider_api_key(payload.llm_provider, user=user)
+        if not api_key:
+            raise HttpError(
+                400,
+                f"API key required for {payload.llm_provider}. "
+                "Connect a key in Settings → LLM, or ask an admin to enable the platform default.",
+            )
 
     model = payload.llm_model
     if not model:

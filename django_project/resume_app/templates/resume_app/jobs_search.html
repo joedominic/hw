@@ -12,7 +12,6 @@
 
 {% block content %}
 <div class="mx-auto max-w-7xl">
-    {% include "resume_app/_onboarding_banner.html" %}
     {% include "resume_app/_concierge_messages.html" %}
 
     {% if disqualifier_prompt %}
@@ -578,7 +577,7 @@
     function setSaveButtonState(btn, saved) {
         btn.dataset.saved = saved ? '1' : '0';
         btn.setAttribute('aria-pressed', saved ? 'true' : 'false');
-        btn.setAttribute('aria-label', saved ? 'Remove from Review' : 'Add to Review');
+        btn.setAttribute('aria-label', saved ? 'Remove from Cockpit' : 'Save to Cockpit');
         btn.title = saved ? 'Remove from Review queue in Cockpit' : 'Add directly to Review queue in Cockpit';
         btn.classList.toggle('bg-emerald-600', saved);
         btn.classList.toggle('hover:bg-emerald-700', saved);
@@ -593,13 +592,13 @@
             }
         }
         var label = btn.querySelector('.job-save-label');
-        if (label) label.textContent = saved ? 'In Review' : '+ Add to Review';
+        if (label) label.textContent = saved ? 'In Cockpit' : 'Save to Cockpit';
     }
     function setLikeButtonState(btn, liked) {
         btn.dataset.liked = liked ? '1' : '0';
         btn.setAttribute('aria-pressed', liked ? 'true' : 'false');
         btn.setAttribute('aria-label', liked ? 'Unlike' : 'Like');
-        btn.title = liked ? 'Remove like' : 'Like — improve ranking for similar jobs';
+        btn.title = liked ? 'Remove like' : 'Like — improves ranking only; does not add to Cockpit';
         btn.classList.toggle('bg-brand-mist', liked);
         btn.classList.toggle('text-brand', liked);
         btn.classList.toggle('text-slate-400', !liked);

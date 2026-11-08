@@ -499,6 +499,58 @@ def _save_success_message(board_stage: str, *, power_user: bool) -> str:
 
 
 
+def _cockpit_quota_banner(user) -> dict | None:
+    """Soft quota warning for Cockpit when any daily meter is near/at limit."""
+    try:
+        from .subscriptions.entitlements import subscription_summary
+
+        summary = subscription_summary(user)
+    except Exception:
+        return None
+
+    hottest = None
+    for metric, row in (summary.get("usage") or {}).items():
+        limit = int(row.get("limit") or 0)
+        if limit <= 0:
+            continue
+        used = int(row.get("used") or 0)
+        ratio = used / limit
+        if ratio < 0.8:
+            continue
+        candidate = {
+            "metric": metric,
+            "label": row.get("label") or metric,
+            "used": used,
+            "limit": limit,
+            "remaining": row.get("remaining"),
+            "exhausted": used >= limit,
+            "plan_name": summary.get("plan_name") or "your plan",
+        }
+        if hottest is None or candidate["exhausted"] or (
+            not hottest["exhausted"] and ratio > (hottest["used"] / max(hottest["limit"], 1))
+        ):
+            hottest = candidate
+
+    storage = summary.get("storage") or {}
+    storage_limit = int(storage.get("limit_mb") or 0)
+    storage_used = float(storage.get("used_mb") or 0)
+    if storage_limit > 0:
+        ratio = storage_used / storage_limit
+        if ratio >= 0.8:
+            storage_row = {
+                "metric": "storage",
+                "label": "Storage",
+                "used": round(storage_used, 1),
+                "limit": storage_limit,
+                "remaining": max(0, round(storage_limit - storage_used, 1)),
+                "exhausted": storage_used >= storage_limit,
+                "plan_name": summary.get("plan_name") or "your plan",
+            }
+            if hottest is None or storage_row["exhausted"]:
+                hottest = storage_row
+    return hottest
+
+
 def pipeline_board_view(request, board_stage: str, template_name: str = "resume_app/pipeline_board.html"):
 
     if board_stage not in BOARD_STAGES:
@@ -510,46 +562,16 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
     user = request.user
 
     power_user = is_power_user(user)
+    from .tenancy import get_real_user
+
+    real_user = get_real_user(request)
+    real_user_is_staff = bool(real_user and getattr(real_user, "is_staff", False))
 
     backfill_saved_search_profile_tracks(user)
 
 
 
-    if not has_my_jobs_search_profile(user):
-
-        jobs_search_url = reverse("jobs_search")
-
-        if request.method == "POST":
-
-            messages.info(
-
-                request,
-
-                "Set up a search profile on Find jobs first—run a search and save it with a name.",
-
-            )
-
-            return redirect(reverse("pipeline"))
-
-        return render(
-
-            request,
-
-            "resume_app/pipeline_board.html",
-
-            {
-
-                "my_jobs_profile_gate": True,
-
-                "board_page_title": "My jobs",
-
-                "jobs_search_url": jobs_search_url,
-
-            },
-
-        )
-
-
+    # First-run Search Profile creation lives on Career Profiler (no Cockpit gate).
 
     if not power_user and board_stage in ("vetting", "applying", "done"):
 
@@ -729,11 +751,11 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
 
         if is_cockpit:
 
-            default_next = reverse("career_cockpit") + f"?track={raw_track}&stage={board_stage}{sort_query}"
+            default_next = reverse("career_cockpit") + f"?profile={raw_track}&stage={board_stage}{sort_query}"
 
         else:
 
-            default_next = reverse(board_stage) + f"?track={raw_track}{sort_query}"
+            default_next = reverse("career_cockpit") + f"?profile={raw_track}&stage={board_stage}{sort_query}"
 
         next_url = request.POST.get("next") or default_next
 
@@ -881,7 +903,7 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
 
                 messages.success(request, f'Search profile "{profile.name}" saved.')
 
-                return redirect(reverse("career_cockpit") + f"?track={profile.slug}&stage={board_stage}")
+                return redirect(reverse("career_cockpit") + f"?profile={profile.slug}&stage={board_stage}")
 
             except Exception as e:
 
@@ -1055,7 +1077,7 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
 
             request.session.modified = True
 
-            return redirect(reverse("career_cockpit") + f"?track={next_track}&stage={board_stage}")
+            return redirect(reverse("career_cockpit") + f"?profile={next_track}&stage={board_stage}")
 
 
 
@@ -1067,7 +1089,7 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
 
                 UserDisqualifier.objects.get_or_create(owner=user, phrase=phrase)
 
-            return redirect(reverse("career_cockpit") + f"?track={raw_track}&stage={board_stage}")
+            return redirect(reverse("career_cockpit") + f"?profile={raw_track}&stage={board_stage}")
 
 
 
@@ -1079,11 +1101,15 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
 
                 UserDisqualifier.objects.filter(owner=user, phrase=phrase).delete()
 
-            return redirect(reverse("career_cockpit") + f"?track={raw_track}&stage={board_stage}")
+            return redirect(reverse("career_cockpit") + f"?profile={raw_track}&stage={board_stage}")
 
 
 
         elif action in ("update_pipeline_retention", "update_pipeline_policies"):
+
+            if not (power_user or real_user_is_staff):
+                messages.error(request, "Pipeline automation policies are available on Advanced / staff accounts only.")
+                return redirect(reverse("career_cockpit") + f"?profile={raw_track}&stage={board_stage}")
 
             cfg = AppAutomationSettings.get_for_user(user)
 
@@ -3057,6 +3083,22 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
 
         "pipeline_track": raw_track,
 
+        "active_profile_label": next(
+
+            (
+
+                (t.get("label") or t.get("name") or t.get("slug") or raw_track)
+
+                for t in pipeline_track_tabs
+
+                if t.get("slug") == raw_track
+
+            ),
+
+            raw_track,
+
+        ),
+
         "pipeline_search_query": search_q if search_q else None,
 
         "pipeline_total_count": pipeline_stage_total,
@@ -3133,13 +3175,13 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
 
         "vetting_jd_min_chars": VETTING_MATCHING_JD_MIN_CHARS,
 
+        "power_user": power_user,
+
+        "real_user_is_staff": real_user_is_staff,
+
+        "quota_banner": _cockpit_quota_banner(user),
+
     }
-
-    if is_cockpit:
-
-        from django.contrib.messages import get_messages
-
-        list(get_messages(request))
 
     return render(request, template_name, context)
 
@@ -3147,13 +3189,24 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
 
 
 
+
+def redirect_legacy_board_to_cockpit(request, stage: str):
+    """
+    Redirect legacy My-jobs stage URLs to Career Cockpit, preserving query state.
+
+    POST requests are handled via pipeline_board_view so legacy form submissions
+    (and actions) are executed before redirecting to Cockpit.
+    """
+    if request.method == "POST":
+        return pipeline_board_view(request, stage)
+    params = request.GET.copy()
+    params["stage"] = stage
+    qs = params.urlencode()
+    url = reverse("career_cockpit")
+    return redirect(f"{url}?{qs}" if qs else f"{url}?stage={stage}")
+
+
 def career_cockpit_view(request):
-
-    from django.contrib.messages import get_messages
-
-    # Drain any queued messages in session so they do not build up or spill into other pages
-
-    list(get_messages(request))
 
     req_stage = request.GET.get("stage")
 
@@ -3205,7 +3258,7 @@ def career_cockpit_view(request):
 
 def pipeline_view(request):
 
-    return pipeline_board_view(request, "pipeline")
+    return redirect_legacy_board_to_cockpit(request, "pipeline")
 
 
 
@@ -3213,7 +3266,7 @@ def pipeline_view(request):
 
 def vetting_view(request):
 
-    return pipeline_board_view(request, "vetting")
+    return redirect_legacy_board_to_cockpit(request, "vetting")
 
 
 
@@ -3221,7 +3274,7 @@ def vetting_view(request):
 
 def applying_view(request):
 
-    return pipeline_board_view(request, "applying")
+    return redirect_legacy_board_to_cockpit(request, "applying")
 
 
 
@@ -3229,7 +3282,7 @@ def applying_view(request):
 
 def done_view(request):
 
-    return pipeline_board_view(request, "done")
+    return redirect_legacy_board_to_cockpit(request, "done")
 
 
 

@@ -25,7 +25,7 @@
             <span>/</span>
             <span class="text-slate-900 font-semibold">Target &amp; Discover</span>
             <span>/</span>
-            <span class="text-emerald-800 font-semibold">Search Sandbox</span>
+            <span class="text-emerald-800 font-semibold">Find jobs</span>
         </div>
 
         <div class="flex items-center bg-zinc-100 p-1 rounded-xl text-xs font-semibold self-start sm:self-auto">
@@ -35,7 +35,7 @@
             </a>
             <span class="px-3 py-1.5 rounded-lg bg-white text-zinc-900 shadow-sm border border-zinc-200/80 flex items-center gap-1.5">
                 <span class="material-symbols-outlined text-[16px] {% if job_search_track %}text-indigo-600{% else %}text-emerald-700{% endif %}">travel_explore</span>
-                Search Sandbox
+                Find jobs
                 {% if job_search_track %}
                 <span class="px-1.5 py-0.2 bg-indigo-100 text-indigo-800 text-[9px] font-mono uppercase tracking-wider rounded font-bold">{{ job_search_track_label }}</span>
                 {% else %}
@@ -79,8 +79,8 @@
         <div id="profile-calc-warning" class="mt-3 {% if not job_search_track %}hidden{% endif %} flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50/90 px-3.5 py-2.5 text-xs text-amber-900">
             <span class="material-symbols-outlined text-amber-600 text-[18px] shrink-0 mt-0.5">timer</span>
             <div class="min-w-0">
-                <span class="font-semibold">Profile calculations enabled:</span>
-                Searching with a profile computes AI vector embeddings to rank matches and apply preference filters. This search will take longer to load than an unbiased search.
+                <span class="font-semibold">Ranking by your profile:</span>
+                This search ranks roles against your profile and may take a bit longer than an unbiased search.
             </div>
         </div>
 
@@ -110,7 +110,7 @@
                     </select>
                 </div>
                 <div class="sm:col-span-1 lg:col-span-3">
-                    <label class="mb-1 block text-[10px] font-semibold text-slate-500" for="track-select">Scoring Profile</label>
+                    <label class="mb-1 block text-[10px] font-semibold text-slate-500" for="track-select">Rank by my profile</label>
                     <select id="track-select" name="track" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm">
                         <option value="" {% if not job_search_track %}selected{% endif %}>None (Unbiased / No Profile)</option>
                         {% for t in job_tracks %}

@@ -172,16 +172,7 @@
                 </button>
             </div>
 
-            <div class="h-5 w-[1px] bg-slate-200 hidden sm:block"></div>
 
-            <div class="flex items-center gap-2">
-                <button type="button" id="save-draft-btn" data-resume-id="{{ rid }}"
-                        class="inline-flex items-center gap-1.5 rounded-lg bg-brand hover:bg-brand-hover text-white px-3.5 py-1.5 text-xs font-bold shadow-sm transition">
-                    <span class="material-symbols-outlined text-[15px]">save</span>
-                    <span>Save draft</span>
-                </button>
-                <span id="save-draft-status" class="text-xs text-slate-500" aria-live="polite"></span>
-            </div>
         </div>
     </div>
 
@@ -284,6 +275,14 @@
                 <span class="material-symbols-outlined text-[16px]">description</span>
                 <span>Export Word (.docx)</span>
             </a>
+            <button type="button" id="save-draft-btn" data-resume-id="{{ rid }}" onclick="window.submitSaveDraft();"
+                    class="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 px-3.5 py-2 text-xs font-bold transition shadow-sm"
+                    title="Save tailored resume draft (stays in Applying stage) (Ctrl+S)">
+                <span class="material-symbols-outlined text-[16px]">save</span>
+                <span>Save Draft</span>
+                <kbd class="hidden sm:inline-block ml-1 bg-slate-100 border border-slate-200 text-slate-500 px-1 py-0.5 rounded text-[10px] font-mono">Ctrl+S</kbd>
+            </button>
+            <span id="save-draft-status" class="text-xs text-slate-500 font-medium" aria-live="polite"></span>
             {% if target_job %}
             <button type="button" onclick="var b = document.getElementById('approve-apply-btn'); if (b) b.click();"
                     class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 text-xs font-bold transition shadow-sm">

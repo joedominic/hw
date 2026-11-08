@@ -1718,8 +1718,20 @@ def jobs_save(request, job_listing_id: int, track: Optional[str] = None, profile
     """
     user = api_user(request)
     job = get_object_or_404(JobListing, id=job_listing_id)
+    from .models import SearchProfile
+
+    if not SearchProfile.objects.for_user(user).exists():
+        raise HttpError(
+            400,
+            "Create a Search Profile first (Target & Discover → AI Resume Profiler), then Save to Cockpit.",
+        )
     raw_track = _resolve_track_from_request(user, request, track=track, profile=profile)
     dw = dual_write_track_fields(user=user, slug=raw_track)
+    if dw.get("search_profile") is None:
+        raise HttpError(
+            400,
+            "Save to Cockpit requires an active Search Profile. Open Target & Discover → AI Resume Profiler to create one.",
+        )
     with transaction.atomic():
         # Clear any conflicting negative actions (disliked/hidden) on this track when manually saving/rescuing
         JobListingAction.objects.for_user(user).filter(

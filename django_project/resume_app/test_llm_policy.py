@@ -140,7 +140,7 @@ class PlanTokenCalibrationTests(TestCase):
         pro = Plan.objects.get(slug="pro")
         power = Plan.objects.get(slug="power")
         byok = Plan.objects.get(slug="byok")
-        self.assertEqual(free.llm_tokens_per_day, 8300)
+        self.assertEqual(free.llm_tokens_per_day, 50000)
         self.assertEqual(byok.llm_tokens_per_day, 0)
         self.assertEqual(byok.price_display, "$15 / mo")
         self.assertTrue(byok.api_access)

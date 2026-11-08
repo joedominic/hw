@@ -1,0 +1,52 @@
+{% if request.user.is_hijacked %}
+<style>
+    .hijack-top-banner {
+        position: sticky;
+        top: 0;
+        z-index: 60;
+        flex-shrink: 0;
+        border-bottom: 1px solid #fcd34d;
+        background: #fffbeb;
+        color: #451a03;
+        padding: 0.5rem 1rem;
+        font-size: 0.875rem;
+        line-height: 1.25rem;
+    }
+    .hijack-top-banner__row {
+        margin-inline: auto;
+        display: flex;
+        max-width: 72rem;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: center;
+        column-gap: 0.75rem;
+        row-gap: 0.25rem;
+    }
+    .hijack-top-banner a,
+    .hijack-top-banner button {
+        font-weight: 600;
+        color: inherit;
+        background: none;
+        border: 0;
+        padding: 0;
+        font: inherit;
+        text-decoration: underline;
+        cursor: pointer;
+    }
+    .hijack-top-banner form { display: inline; margin: 0; }
+</style>
+<div class="hijack-top-banner sticky top-0 z-[60] shrink-0 border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-950" role="status">
+    <div class="hijack-top-banner__row mx-auto flex max-w-6xl flex-wrap items-center justify-center gap-x-3 gap-y-1">
+        <span>
+            Viewing as <strong>{{ request.user.get_username }}</strong>
+            {% if request.user.email %}({{ request.user.email }}){% endif %}
+        </span>
+        <span class="hidden text-amber-400 sm:inline" aria-hidden="true">·</span>
+        <a href="{% url 'career_cockpit' %}" class="font-semibold underline hover:text-amber-900">Cockpit</a>
+        <span class="text-amber-400" aria-hidden="true">·</span>
+        <a href="{% url 'career_cockpit' %}?drawer=automation" class="font-semibold underline hover:text-amber-900">Automation</a>
+        <span class="text-amber-400" aria-hidden="true">·</span>
+        <form method="post" action="{% url 'hijack:release' %}" class="inline">{% csrf_token %}<button type="submit" class="font-semibold underline hover:text-amber-900">Release</button></form>
+    </div>
+</div>
+{% endif %}

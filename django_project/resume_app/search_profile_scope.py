@@ -216,3 +216,51 @@ def remove_pipeline_entry_on_unsave(
         entry.mark_deleted(save=True)
         removed_count += 1
     return removed_count
+
+
+def migrate_orphan_default_track_entries(user, target_profile: SearchProfile) -> int:
+    """
+    Reassign pipeline rows saved under the default Track slug with no SearchProfile
+    onto ``target_profile`` (first-run reclaim after Profiler provision).
+
+    Skips jobs that already have an active row on the target slug.
+    Returns the number of rows migrated.
+    """
+    if user is None or target_profile is None:
+        return 0
+    default_slug = Track.get_default_slug(user)
+    target_slug = (target_profile.slug or "").strip().lower()
+    if not target_slug or target_slug == default_slug:
+        return 0
+
+    orphans = list(
+        PipelineEntry.objects.for_user(user).filter(
+            track=default_slug,
+            search_profile__isnull=True,
+            removed_at__isnull=True,
+        )
+    )
+    if not orphans:
+        return 0
+
+    existing_job_ids = set(
+        PipelineEntry.objects.for_user(user)
+        .filter(track=target_slug, removed_at__isnull=True)
+        .values_list("job_listing_id", flat=True)
+    )
+    migrated = 0
+    for entry in orphans:
+        if entry.job_listing_id in existing_job_ids:
+            continue
+        # Avoid unique_owner_job_track collisions with soft-deleted target rows.
+        PipelineEntry.objects.for_user(user).filter(
+            job_listing_id=entry.job_listing_id,
+            track=target_slug,
+            removed_at__isnull=False,
+        ).delete()
+        entry.track = target_slug
+        entry.search_profile = target_profile
+        entry.save(update_fields=["track", "search_profile"])
+        existing_job_ids.add(entry.job_listing_id)
+        migrated += 1
+    return migrated

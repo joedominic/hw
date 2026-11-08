@@ -364,6 +364,30 @@ class BillingPageTests(TestCase):
         free_plan.refresh_from_db()
         self.assertEqual(free_plan.name, "Free Starter Plus")
         self.assertEqual(free_plan.llm_requests_per_day, 75)
+        self.assertEqual(free_plan.llm_tokens_per_day, 150000)
+
+        # Updating Pro tokens with shorthand or raw numbers must stick and not revert to 167k
+        pro_plan = Plan.objects.get(slug="pro")
+        resp = client.post(
+            reverse("billing"),
+            {
+                "action": "save_plan",
+                "plan_id": pro_plan.pk,
+                "name": pro_plan.name,
+                "llm_requests_per_day": "200",
+                "llm_tokens_per_day": "200k",
+                "job_searches_per_day": "25",
+                "storage_mb": "1000",
+                "sort_order": "20",
+                "is_active": "1",
+            },
+        )
+        self.assertEqual(resp.status_code, 302)
+        pro_plan.refresh_from_db()
+        self.assertEqual(pro_plan.llm_tokens_per_day, 200000)
+        ensure_default_plans()
+        pro_plan.refresh_from_db()
+        self.assertEqual(pro_plan.llm_tokens_per_day, 200000)
 
     def test_admin_can_create_new_plan(self):
         ensure_default_plans()
@@ -408,32 +432,26 @@ class BillingPageTests(TestCase):
         login_client(client, admin)
         resp = client.get(reverse("billing") + "?view=candidate")
         self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "Viewing Candidate Billing Experience")
+        self.assertContains(resp, "Viewing Candidate Plan Experience")
         self.assertContains(resp, "Return to Admin Control Center")
+        self.assertContains(resp, "Plan &amp; usage")
 
-    def test_admin_can_update_user_subscription_and_reset_quotas(self):
+    def test_billing_per_user_actions_redirect_to_staff_console(self):
         ensure_default_plans()
         admin = create_user("bill_admin_sub_mgr")
         admin.is_staff = True
+        from django.contrib.auth.models import Permission
+        perm = Permission.objects.get(codename="can_impersonate_users")
+        admin.user_permissions.add(perm)
         admin.save()
 
         candidate = create_user("sub_candidate_test")
         sub = get_or_create_subscription(candidate)
         self.assertEqual(sub.plan.slug, "free")
-        self.assertEqual(sub.status, "active")
-
-        # Create usage counter today
-        UsageCounter.objects.create(
-            owner=candidate,
-            metric=METRIC_LLM_REQUESTS,
-            period_date=timezone.localdate(),
-            count=45,
-        )
 
         client = Client()
         login_client(client, admin)
 
-        # 1. Update subscription to Pro and trialing with 14 trial days
         resp = client.post(
             reverse("billing"),
             {
@@ -445,27 +463,15 @@ class BillingPageTests(TestCase):
             },
         )
         self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp["Location"], reverse("staff_users"))
         sub.refresh_from_db()
-        self.assertEqual(sub.plan.slug, "pro")
-        self.assertEqual(sub.status, "trialing")
-        self.assertIsNotNone(sub.trial_ends_at)
+        self.assertEqual(sub.plan.slug, "free")  # unchanged — Staff Console owns edits
 
-        # 2. Reset quotas for candidate
-        resp2 = client.post(
-            reverse("billing"),
-            {
-                "action": "reset_user_quotas",
-                "user_id": candidate.pk,
-            },
-        )
-        self.assertEqual(resp2.status_code, 302)
-        self.assertFalse(
-            UsageCounter.objects.filter(
-                owner=candidate,
-                metric=METRIC_LLM_REQUESTS,
-                period_date=timezone.localdate(),
-            ).exists()
-        )
+        # Billing page deep-links to Staff Console instead of inline editors
+        page = client.get(reverse("billing"))
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, "Open Staff Console")
+        self.assertNotContains(page, "update_user_subscription")
 
     def test_staff_user_action_set_sub_status_and_reset_quotas(self):
         ensure_default_plans()
@@ -511,6 +517,16 @@ class BillingPageTests(TestCase):
                 period_date=timezone.localdate(),
             ).exists()
         )
+
+        # Extend trial from Staff Console
+        resp3 = client.post(
+            reverse("staff_user_action", kwargs={"user_id": candidate.pk}),
+            {"action": "extend_trial", "trial_days": "7"},
+        )
+        self.assertEqual(resp3.status_code, 302)
+        sub.refresh_from_db()
+        self.assertEqual(sub.status, "trialing")
+        self.assertIsNotNone(sub.trial_ends_at)
 
     def test_subscription_and_plan_admin_actions(self):
         ensure_default_plans()

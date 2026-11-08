@@ -41,7 +41,7 @@
                         Find jobs to add
                     </a>
                 {% elif board_stage == "vetting" %}
-                    <a href="{% url 'pipeline' %}" class="inline-flex items-center gap-2 rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
+                    <a href="{% url 'career_cockpit' %}" class="inline-flex items-center gap-2 rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
                         Go to Pipeline backlog
                     </a>
                 {% elif board_stage == "applying" %}
@@ -49,7 +49,7 @@
                         Review jobs in Vetting
                     </a>
                 {% else %}
-                    <a href="{% url 'pipeline' %}" class="inline-flex items-center gap-2 rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
+                    <a href="{% url 'career_cockpit' %}" class="inline-flex items-center gap-2 rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
                         View active jobs
                     </a>
                 {% endif %}
@@ -225,8 +225,8 @@
                             {% endif %}
                         {% endif %}
                         <button type="submit" name="action" value="like" class="rounded-concierge border border-sky-200 bg-white px-2 py-1 text-xs font-medium text-sky-900 hover:bg-sky-50">Like</button>
-                        <button type="submit" name="action" value="dislike" class="rounded-concierge border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-800 hover:bg-red-50">Dislike</button>
-                        <button type="submit" name="action" value="delete" class="rounded-concierge border border-amber-200 bg-white px-2 py-1 text-xs font-medium text-amber-900 hover:bg-amber-50" title="Remove from pipeline (won't be re-added)">Delete</button>
+                        <button type="submit" name="action" value="dislike" class="rounded-concierge border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-800 hover:bg-red-50" title="Not Interested (Thumbs Down) — Removes from pipeline and trains AI to avoid recommending similar roles">Dislike</button>
+                        <button type="submit" name="action" value="delete" class="rounded-concierge border border-amber-200 bg-white px-2 py-1 text-xs font-medium text-amber-900 hover:bg-amber-50" title="Remove (X) — Removes from pipeline only, without affecting your AI recommendations or match scoring">Remove</button>
                     </form>
                 </div>
             </div>

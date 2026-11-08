@@ -36,7 +36,7 @@
                         Saved to Pipeline (<span id="inspectCountSaved">0</span>)
                     </button>
                     <button type="button" class="inspect-filter-tab rounded-md px-2.5 py-1 text-slate-600 hover:text-slate-900 transition" data-filter="eliminated">
-                        Eliminated (<span id="inspectCountEliminated">0</span>)
+                        Skipped (<span id="inspectCountEliminated">0</span>)
                     </button>
                     <button type="button" class="inspect-filter-tab rounded-md px-2.5 py-1 text-slate-600 hover:text-slate-900 transition" data-filter="skipped">
                         In Pipeline / Prev (<span id="inspectCountSkipped">0</span>)
@@ -71,7 +71,7 @@
                         <th class="py-2.5 px-3">Job Title &amp; Company</th>
                         <th class="py-2.5 px-3">Location / Source</th>
                         <th class="py-2.5 px-3">Status</th>
-                        <th class="py-2.5 px-3">Elimination Reason / Details</th>
+                        <th class="py-2.5 px-3">Why skipped</th>
                         <th class="py-2.5 px-3 text-right">Action</th>
                     </tr>
                 </thead>
@@ -197,7 +197,7 @@
             } else if (disp === "eliminated_disliked_similarity") {
                 badgeHtml = '<span class="inline-flex items-center gap-1 rounded bg-rose-50 px-2 py-0.5 font-medium text-rose-700 border border-rose-200/50"><span class="h-1.5 w-1.5 rounded-full bg-rose-500"></span>Disliked Trait</span>';
             } else {
-                badgeHtml = '<span class="inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 font-medium text-slate-600 border border-slate-200/50"><span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>Eliminated</span>';
+                badgeHtml = '<span class="inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 font-medium text-slate-600 border border-slate-200/50"><span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>Skipped</span>';
             }
 
             var linkHtml = item.url
@@ -224,13 +224,13 @@
             // Action button column
             var actionHtml = "";
             if (isSaved) {
-                actionHtml = '<span class="inline-flex items-center gap-1 rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 border border-emerald-200/60"><svg class="w-3 h-3 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>In Review</span>';
+                actionHtml = '<span class="inline-flex items-center gap-1 rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 border border-emerald-200/60"><svg class="w-3 h-3 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>In Cockpit</span>';
             } else if (disp === "already_in_pipeline") {
                 actionHtml = '<span class="inline-flex items-center gap-1 rounded bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700 border border-blue-200/60"><span class="h-1.5 w-1.5 rounded-full bg-blue-500"></span>In Pipeline</span>';
             } else if (item.job_id) {
                 actionHtml = '<button type="button" class="inspect-add-review-btn inline-flex items-center gap-1 rounded-md bg-white border border-slate-300 hover:border-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 px-2.5 py-1 text-[11px] font-semibold text-slate-700 shadow-xs transition cursor-pointer" data-job-id="' + item.job_id + '" title="Add this job to Review stage in Career Cockpit">' +
                     '<svg class="w-3 h-3 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/></svg>' +
-                    '<span>Add to Review</span>' +
+                    '<span>Save to Cockpit</span>' +
                     '</button>';
             } else {
                 actionHtml = '<span class="text-slate-400 text-[11px]">—</span>';

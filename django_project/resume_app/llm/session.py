@@ -5,6 +5,10 @@ provider configs, preferences, and the active-provider marker are never
 shared across tenants.
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 from ..models import LLMProviderConfig, LLMProviderPreference
 
 
@@ -129,6 +133,72 @@ def get_active_llm_provider(user, request=None):
         request.session["active_llm_provider"] = fallback.provider
         request.session.modified = True
     return fallback.provider
+
+
+def resolve_optimizer_provider(
+    user,
+    request=None,
+) -> dict[str, Any]:
+    """
+    Resolve which LLM provider the Optimizer UI / enqueue path should use.
+
+    Prefers the user's BYOK active provider. When none is connected, falls back
+    to the first cloud platform default for the optimizer writer chain that has
+    an environment key available (same gateway path as Skill Radar / Huey).
+
+    Returns:
+        {
+            "provider": str | None,
+            "model": str | None,
+            "using_platform_key": bool,
+            "ready": bool,
+        }
+    """
+    from .gateway import (
+        USAGE_QUERY_OPTIMIZER_WRITER,
+        _system_default_candidates,
+        cloud_llm_available,
+        provider_is_local,
+    )
+    from .services import DEFAULT_MODELS
+
+    byok = get_active_llm_provider(user, request)
+    if byok and not provider_is_local(byok):
+        cfg = _connected_configs_qs(user).filter(provider=byok).first()
+        model = (cfg.default_model if cfg else None) or DEFAULT_MODELS.get(byok)
+        return {
+            "provider": byok,
+            "model": model,
+            "using_platform_key": False,
+            "ready": True,
+        }
+
+    for cand in _system_default_candidates(
+        USAGE_QUERY_OPTIMIZER_WRITER,
+        user=user,
+        only_local=False,
+        allow_local=False,
+    ):
+        prov = (cand.get("provider") or "").strip()
+        if not prov or provider_is_local(prov):
+            continue
+        model = (cand.get("model_get_llm") or cand.get("model") or "").strip() or DEFAULT_MODELS.get(prov)
+        if request is not None:
+            request.session["active_llm_provider"] = prov
+            request.session.modified = True
+        return {
+            "provider": prov,
+            "model": model,
+            "using_platform_key": True,
+            "ready": True,
+        }
+
+    return {
+        "provider": None,
+        "model": None,
+        "using_platform_key": False,
+        "ready": bool(cloud_llm_available(user)),
+    }
 
 
 set_active_llm_provider = set_active_provider

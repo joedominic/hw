@@ -1,3 +1,4 @@
+{% include "resume_app/_hijack_banner.html" %}
 {% with url_name=request.resolver_match.url_name %}
 <header class="bg-white border-b border-slate-200 px-4 sm:px-6 py-2.5 flex items-center justify-between shrink-0 sticky top-0 z-40 shadow-sm">
     <div class="flex items-center gap-3 sm:gap-5">
@@ -17,7 +18,9 @@
             </span>
             <div class="flex items-center gap-1.5">
                 <span class="font-display font-extrabold text-base tracking-tight text-slate-900">HireEdge</span>
-                <span class="text-[10px] font-mono uppercase bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-bold border border-slate-200">Executive</span>
+                {% if real_user_is_advanced and not is_hijacked %}
+                <span class="text-[10px] font-mono uppercase bg-amber-50 text-amber-800 px-1.5 py-0.5 rounded font-bold border border-amber-200" title="Experience mode: Advanced">Advanced</span>
+                {% endif %}
             </div>
         </a>
 
@@ -46,42 +49,49 @@
                 </button>
                 <div id="nav-tools-menu"
                      class="hidden absolute left-0 mt-1.5 w-56 rounded-xl bg-white shadow-xl border border-slate-200 py-1.5 text-xs z-50 animate-in fade-in zoom-in-95 duration-100">
-                    <a href="{% url 'fit_inspector' %}" class="flex items-center gap-2.5 px-3 py-2 text-slate-700 hover:bg-slate-50 font-medium transition-colors {% if url_name == 'fit_inspector' %}bg-slate-50 text-[#0F382A] font-bold{% endif %}">
-                        <span class="material-symbols-outlined text-[17px] text-emerald-700">search_check</span>
-                        <span>Fit Inspector</span>
-                    </a>
-                    <a href="{% url 'resume_optimizer' %}" class="flex items-center gap-2.5 px-3 py-2 text-slate-700 hover:bg-slate-50 font-medium transition-colors {% if url_name == 'resume_optimizer' or url_name == 'resume_status' or url_name == 'resume_save_draft' or url_name == 'optimizer_context_debug' %}bg-slate-50 text-[#0F382A] font-bold{% endif %}">
+                    <a href="{% url 'career_cockpit' %}?stage=applying" class="flex items-center gap-2.5 px-3 py-2 text-slate-700 hover:bg-slate-50 font-medium transition-colors {% if url_name == 'resume_optimizer' or url_name == 'resume_status' or url_name == 'resume_save_draft' or url_name == 'optimizer_context_debug' %}bg-slate-50 text-[#0F382A] font-bold{% endif %}">
                         <span class="material-symbols-outlined text-[17px] text-emerald-700">edit_note</span>
                         <span>Tailor Resume</span>
                     </a>
+                    {# Plan & usage for tenants and during hijack; staff-as-self uses Admin Console → Billing #}
+                    {% if not show_admin_console or is_hijacked %}
                     <a href="{% url 'billing' %}" class="flex items-center gap-2.5 px-3 py-2 text-slate-700 hover:bg-slate-50 font-medium transition-colors {% if url_name == 'billing' %}bg-slate-50 text-[#0F382A] font-bold{% endif %}">
                         <span class="material-symbols-outlined text-[17px] text-emerald-700">credit_card</span>
-                        <span>Billing</span>
+                        <span>Plan &amp; usage</span>
                     </a>
+                    {% endif %}
 
-                    {% if request.user.is_staff %}
+                    {% if show_admin_console %}
                     <div class="border-t border-slate-100 my-1"></div>
                     <div class="px-3 py-1 text-[10px] font-mono uppercase font-bold text-slate-400">Admin Console</div>
+                    <a href="{% url 'fit_inspector' %}" class="flex items-center gap-2.5 px-3 py-1.5 text-slate-600 hover:bg-slate-50 font-medium transition-colors {% if url_name == 'fit_inspector' %}bg-slate-50 text-[#0F382A] font-bold{% endif %}">
+                        <span class="material-symbols-outlined text-[16px] text-slate-400">search_check</span>
+                        <span>Fit Inspector</span>
+                    </a>
+                    <a href="{% url 'huey_dashboard' %}" class="flex items-center gap-2.5 px-3 py-1.5 text-slate-600 hover:bg-slate-50 font-medium transition-colors {% if url_name == 'huey_dashboard' %}bg-slate-50 text-[#0F382A] font-bold{% endif %}">
+                        <span class="material-symbols-outlined text-[16px] text-slate-400">monitoring</span>
+                        <span>Huey Monitor{% if is_hijacked %} <span class="text-[9px] font-normal text-slate-400">(read-only)</span>{% endif %}</span>
+                    </a>
+                    {% if not is_hijacked %}
                     <a href="{% url 'workflow_list' %}" class="flex items-center gap-2.5 px-3 py-1.5 text-slate-600 hover:bg-slate-50 font-medium transition-colors {% if url_name == 'workflow_list' or url_name == 'workflow_create' or url_name == 'workflow_edit' %}bg-slate-50 text-[#0F382A] font-bold{% endif %}">
                         <span class="material-symbols-outlined text-[16px] text-slate-400">schema</span>
                         <span>Workflows</span>
-                    </a>
-                    <a href="{% url 'huey_dashboard' %}" class="flex items-center gap-2.5 px-3 py-1.5 text-slate-600 hover:bg-slate-50 font-medium transition-colors">
-                        <span class="material-symbols-outlined text-[16px] text-slate-400">monitoring</span>
-                        <span>Huey Monitor</span>
                     </a>
                     <a href="{% url 'prompt_library' %}" class="flex items-center gap-2.5 px-3 py-1.5 text-slate-600 hover:bg-slate-50 font-medium transition-colors">
                         <span class="material-symbols-outlined text-[16px] text-slate-400">code_blocks</span>
                         <span>Prompt Library</span>
                     </a>
+                    {% if can_impersonate_users %}
                     <a href="{% url 'staff_users' %}" class="flex items-center gap-2.5 px-3 py-1.5 text-slate-600 hover:bg-slate-50 font-medium transition-colors">
                         <span class="material-symbols-outlined text-[16px] text-slate-400">shield_person</span>
                         <span>Staff Console</span>
                     </a>
+                    {% endif %}
                     <a href="{% url 'billing' %}" class="flex items-center gap-2.5 px-3 py-1.5 text-slate-600 hover:bg-slate-50 font-medium transition-colors {% if url_name == 'billing' %}bg-slate-50 text-[#0F382A] font-bold{% endif %}">
                         <span class="material-symbols-outlined text-[16px] text-slate-400">tune</span>
-                        <span>Subscription &amp; Plans</span>
+                        <span>Billing</span>
                     </a>
+                    {% endif %}
                     {% endif %}
                 </div>
             </div>
@@ -95,11 +105,6 @@
             <span class="material-symbols-outlined text-[14px]">keyboard</span>
             <span class="font-mono text-[11px] font-bold">J/K/E/X/T</span>
         </div>
-        <!-- Cockpit Quick Drawer Trigger (Mobile/Tablet) -->
-        <button type="button" id="toggle-inspector-btn" class="xl:hidden flex items-center gap-1.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 px-2 py-1 rounded text-slate-600 hover:text-slate-900 text-xs font-semibold transition" title="Toggle Inspector Drawer">
-            <span class="material-symbols-outlined text-[16px] text-[#0F382A]">dock_to_left</span>
-            <span class="hidden sm:inline">Inspector</span>
-        </button>
         {% endif %}
 
 
@@ -145,45 +150,51 @@
     <div class="border-t border-slate-100 pt-2 space-y-1 text-xs">
         <div class="text-[10px] font-mono uppercase font-bold text-slate-400 px-1">Tools</div>
         <div class="grid grid-cols-2 gap-1.5">
-            <a href="{% url 'fit_inspector' %}" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-slate-700 hover:bg-slate-50">
-                <span class="material-symbols-outlined text-[16px] text-emerald-700">search_check</span>
-                <span>Fit Inspector</span>
-            </a>
-            <a href="{% url 'resume_optimizer' %}" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-slate-700 hover:bg-slate-50">
+            <a href="{% url 'career_cockpit' %}?stage=applying" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-slate-700 hover:bg-slate-50">
                 <span class="material-symbols-outlined text-[16px] text-emerald-700">edit_note</span>
                 <span>Tailor Resume</span>
             </a>
+            {% if not show_admin_console or is_hijacked %}
             <a href="{% url 'billing' %}" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-slate-700 hover:bg-slate-50">
                 <span class="material-symbols-outlined text-[16px] text-emerald-700">credit_card</span>
-                <span>Billing</span>
+                <span>Plan &amp; usage</span>
             </a>
+            {% endif %}
         </div>
     </div>
 
-    {% if request.user.is_staff %}
+    {% if show_admin_console %}
     <div class="border-t border-slate-100 pt-2 space-y-1 text-xs">
         <div class="text-[10px] font-mono uppercase font-bold text-slate-400 px-1">Admin Tools</div>
         <div class="grid grid-cols-2 gap-1.5">
-            <a href="{% url 'workflow_list' %}" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-slate-700 hover:bg-slate-50">
-                <span class="material-symbols-outlined text-[15px] text-slate-500">schema</span>
-                <span>Workflows</span>
+            <a href="{% url 'fit_inspector' %}" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-slate-700 hover:bg-slate-50">
+                <span class="material-symbols-outlined text-[15px] text-slate-500">search_check</span>
+                <span>Fit Inspector</span>
             </a>
             <a href="{% url 'huey_dashboard' %}" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-slate-700 hover:bg-slate-50">
                 <span class="material-symbols-outlined text-[15px] text-slate-500">monitoring</span>
-                <span>Huey Monitor</span>
+                <span>Huey{% if is_hijacked %} (RO){% endif %}</span>
+            </a>
+            {% if not is_hijacked %}
+            <a href="{% url 'workflow_list' %}" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-slate-700 hover:bg-slate-50">
+                <span class="material-symbols-outlined text-[15px] text-slate-500">schema</span>
+                <span>Workflows</span>
             </a>
             <a href="{% url 'prompt_library' %}" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-slate-700 hover:bg-slate-50">
                 <span class="material-symbols-outlined text-[15px] text-slate-500">code_blocks</span>
                 <span>Prompts</span>
             </a>
+            {% if can_impersonate_users %}
             <a href="{% url 'staff_users' %}" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-slate-700 hover:bg-slate-50">
                 <span class="material-symbols-outlined text-[15px] text-slate-500">shield_person</span>
                 <span>Staff Console</span>
             </a>
+            {% endif %}
             <a href="{% url 'billing' %}" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-slate-700 hover:bg-slate-50">
                 <span class="material-symbols-outlined text-[15px] text-slate-500">tune</span>
-                <span>Subscriptions</span>
+                <span>Billing</span>
             </a>
+            {% endif %}
         </div>
     </div>
     {% endif %}

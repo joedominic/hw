@@ -241,7 +241,7 @@ class ImpersonationTests(TestCase):
         content = resp.content.decode("utf-8")
         self.assertIn("Admin Console", content)
 
-        # Hijack target candidate: Candidate view active, Admin Console hidden
+        # Hijack: support chrome keeps Fit Inspector; global ops stay staff-as-self only
         client.post("/hijack/acquire/", {"user_pk": self.target.pk, "next": "/"})
         resp = client.get("/settings/")
         self.assertEqual(resp.status_code, 200)
@@ -249,7 +249,15 @@ class ImpersonationTests(TestCase):
         self.assertIn("Viewing as", content)
         self.assertIn("Cockpit", content)
         self.assertIn("Discover", content)
-        self.assertNotIn("Admin Console", content)
+        self.assertIn("Admin Console", content)
+        self.assertIn("Fit Inspector", content)
+        self.assertIn("Plan &amp; usage", content)
+        self.assertIn("Huey Monitor", content)
+        self.assertIn("read-only", content)
+        self.assertNotIn("Prompt Library", content)
+        self.assertIn("Cockpit", content)
+        self.assertIn("Automation", content)
+        self.assertIn("Release", content)
 
 
 class MonitorAccessControlTests(TestCase):

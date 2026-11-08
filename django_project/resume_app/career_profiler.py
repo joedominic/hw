@@ -345,6 +345,11 @@ def provision_career_tracks(
         # Default to latest library resume if available
         bound_resume = UserResume.objects.for_user(user).filter(is_library=True).order_by("-uploaded_at").first()
 
+    if not bound_resume or not getattr(bound_resume, "file", None):
+        raise ValueError(
+            "Attach a resume before creating your Search Profile so HireEdge can score and tailor roles."
+        )
+
     created_profiles: List[Dict[str, Any]] = []
 
     for item in tracks_config:
@@ -428,6 +433,17 @@ def provision_career_tracks(
             "schedule_interval": schedule_interval,
             "task_id": task_id,
         })
+
+    if created_profiles:
+        from .experience import complete_onboarding, mark_onboarding_step
+        from .search_profile_scope import migrate_orphan_default_track_entries
+
+        first = SearchProfile.objects.for_user(user).filter(pk=created_profiles[0]["id"]).first()
+        if first:
+            migrate_orphan_default_track_entries(user, first)
+        mark_onboarding_step(user, "resume")
+        mark_onboarding_step(user, "search")
+        complete_onboarding(user)
 
     return created_profiles
 

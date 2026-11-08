@@ -90,6 +90,7 @@ from .llm.session import (
     get_active_llm_provider as _get_active_llm_provider,
     get_provider_preferences as _get_provider_preferences,
     get_provider_preference_rows as _get_provider_preference_rows,
+    resolve_optimizer_provider as _resolve_optimizer_provider,
     set_active_provider as _set_active_llm_provider,
 )
 from django.utils import timezone
@@ -261,7 +262,9 @@ def optimizer_view(request):
     - Upload resume + job description (or use job_id/resume_id from Match link)
     - Trigger optimization and see status
     """
-    selected_provider = _get_active_llm_provider(request.user, request)
+    optimizer_llm = _resolve_optimizer_provider(request.user, request)
+    selected_provider = optimizer_llm.get("provider")
+    using_platform_key = bool(optimizer_llm.get("using_platform_key"))
 
     # UserResume id (from Match / job search) — do not use for OptimizedResume PK; use opt_id for that.
     resume_id = request.GET.get("resume_id")
@@ -399,22 +402,33 @@ def optimizer_view(request):
             request.session["optimizer_resume_id"] = ur.id
             request.session.modified = True
 
-    # LLM models + key status
+    # LLM models + key status (BYOK or platform/env fallback)
     llm_models = []
-    llm_default_model = None
-    llm_key_stored = False
+    llm_default_model = optimizer_llm.get("model")
+    llm_key_stored = bool(optimizer_llm.get("ready") and selected_provider)
     llm_key_error = None
 
     if selected_provider:
         try:
             models_data = api_llm_models(request, provider=selected_provider)
             llm_models = models_data.get("models", [])
-            llm_default_model = models_data.get("default_model")
+            llm_default_model = models_data.get("default_model") or llm_default_model
             llm_key_stored = True
         except HttpError as e:
-            llm_key_error = str(e)
+            # Platform-key users may still run via the gateway even if model listing fails.
+            if using_platform_key and optimizer_llm.get("ready"):
+                llm_key_stored = True
+                llm_key_error = None
+                if not llm_models and llm_default_model:
+                    llm_models = [llm_default_model]
+            else:
+                llm_key_error = str(e)
+                llm_key_stored = False
     else:
-        llm_key_error = "No LLM provider configured. Choose one in Settings."
+        llm_key_error = (
+            "No cloud LLM available. Connect an API key in Settings, "
+            "or ask an admin to enable the platform default."
+        )
 
     # Prompts: system-wide (Prompt Library / prompts.py); read-only on optimizer.
     try:
@@ -641,8 +655,6 @@ def optimizer_view(request):
             highlights = (request.POST.get("job_highlights") or "").strip()
             _save_optimizer_supporting_context(request.user, notes, skills, highlights)
             if request.headers.get("X-Requested-With") == "XMLHttpRequest":
-                from django.http import JsonResponse
-
                 return JsonResponse({"ok": True})
             messages.success(request, "Supporting context saved.")
             return redirect(reverse("resume_optimizer") + "?wizard_step=2")
@@ -691,8 +703,25 @@ def optimizer_view(request):
             raw_wf = (request.POST.get("optimizer_workflow_id") or "").strip()
             optimizer_workflow_id = int(raw_wf) if raw_wf.isdigit() else None
 
-            if not llm_key_stored:
-                messages.error(request, "No API key stored for this provider. Connect an API key before running.")
+            from .llm import optimizer_token_preflight
+
+            token_preflight = optimizer_token_preflight(request.user)
+            if not llm_key_stored or not selected_provider:
+                messages.error(
+                    request,
+                    "No cloud LLM available. Connect an API key in Settings, "
+                    "or ask an admin to enable the platform default.",
+                )
+            elif token_preflight.get("blocked"):
+                messages.error(
+                    request,
+                    (
+                        f"This run needs about {token_preflight['estimate']:,} tokens, but only "
+                        f"{token_preflight.get('remaining') or 0:,} remain of your "
+                        f"{token_preflight['limit']:,} daily budget. Try again after midnight, "
+                        "or upgrade under Plan & usage."
+                    ),
+                )
             elif not resume_file:
                 messages.error(request, "Please upload a PDF resume or use the resume selected from Match.")
             elif not job_description:
@@ -888,15 +917,21 @@ def optimizer_view(request):
             if not track_slug and entry_for_stage.track:
                 resolved_track = entry_for_stage.track
 
+    from .llm import optimizer_token_preflight
+
+    token_preflight = optimizer_token_preflight(request.user)
+
     context = {
         "is_power_user": is_power_user(request.user),
         "show_agent_thoughts": show_agent_thoughts,
         "selected_provider": selected_provider,
+        "using_platform_key": using_platform_key,
         "llm_models": llm_models,
         "llm_default_model": llm_default_model,
         "selected_llm_model": selected_llm_model,
         "llm_key_stored": llm_key_stored,
         "llm_key_error": llm_key_error,
+        "token_preflight": token_preflight,
         "prompts": prompts,
         "resume_id": resume_id,
         "opt_id": opt_id,
@@ -2028,11 +2063,16 @@ def track_list_view(request):
     Track Management page: search tracks (CRUD for Track) and resume PDFs (upload, assign
     default track, delete). POST `action` distinguishes create_track, edit_track,
     upload_resume, assign_resume_tracks, delete_resume.
+
+    Normal tenants are redirected to Cockpit (Search Profile drawer is the home).
+    Staff and Power keep the full tracks page.
     """
     from .experience import is_power_user
     from .models import SearchProfile
 
     power_user = is_power_user(request.user)
+    if not power_user and not request.user.is_staff:
+        return redirect(reverse("career_cockpit"))
     if power_user:
         tracks_qs = Track.ensure_baseline(request.user)
         tracks = list(tracks_qs)
@@ -2667,16 +2707,32 @@ def serve_media_view(request, path: str):
 @login_required
 def fit_inspector_view(request):
     """
-    Job Fit Inspector & Simulator:
-    - Test any job description against track preference models.
-    - Reveal positive & negative driver jobs with similarity breakdown.
-    - One-click pruning of training jobs (likes/dislikes).
+    Job Fit Inspector & Simulator (staff-only UI).
+
+    Gate on the real signed-in user so support can open Fit Inspector while
+    hijacking; data is always scoped to the active (tenant) user.
+    Tenants are redirected to Career Cockpit with the inspector drawer opened
+    when a job_id is present; otherwise they land on Cockpit New stage.
     """
-    from .tenancy import get_active_user
+    from .tenancy import get_active_user, get_real_user
     from .models import JobListing, JobListingAction, JobListingEmbedding, Track, SearchProfile
     from .jobs_api import _resolve_track_from_request
 
     user = get_active_user(request)
+    real_user = get_real_user(request)
+    # Standalone Fit Inspector is staff-only; tenants land in Cockpit inspector.
+    if not getattr(real_user, "is_staff", False):
+        params = request.GET.copy()
+        job_id = (params.get("job_id") or "").strip()
+        if job_id:
+            params["drawer"] = "inspector"
+            params["stage"] = params.get("stage") or "vetting"
+        else:
+            params["stage"] = params.get("stage") or "pipeline"
+            params.pop("drawer", None)
+        qs = params.urlencode()
+        cockpit = reverse("career_cockpit")
+        return redirect(f"{cockpit}?{qs}" if qs else cockpit)
 
     # 1. Fetch user's actual search profiles
     profiles_qs = SearchProfile.objects.for_user(user).order_by("name")

@@ -90,7 +90,7 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="finish">
                 <button type="submit" class="rounded-concierge bg-brand px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-hover">
-                    Go to My jobs
+                    Go to Career Cockpit
                 </button>
             </form>
         {% else %}
@@ -98,7 +98,7 @@
                 {% csrf_token %}
                 <input type="hidden" name="action" value="dismiss">
                 <button type="submit" class="rounded-concierge border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-concierge-slate hover:bg-slate-50">
-                    Skip for now → My jobs
+                    Skip for now → Career Cockpit
                 </button>
             </form>
         {% endif %}

@@ -1,0 +1,46 @@
+{% extends "resume_app/auth/base_public.html" %}
+{% block title %}Verify your email — HireEdge{% endblock %}
+{% block header_nav %}
+<form action="{% url 'logout' %}" method="post" class="inline">
+    {% csrf_token %}
+    <button type="submit" class="rounded-concierge px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50 hover:text-concierge-slate">
+        Log out
+    </button>
+</form>
+{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-md">
+    <h1 class="text-2xl font-bold tracking-tight text-concierge-slate">Check your inbox</h1>
+    <p class="mt-2 text-sm text-slate-600">
+        We sent a verification link
+        {% if email %}to <span class="font-semibold text-concierge-slate">{{ email }}</span>{% endif %}.
+        Open that email and click the link to unlock HireEdge.
+    </p>
+
+    {% if messages %}
+    <ul class="mt-4 space-y-2">
+        {% for message in messages %}
+        <li class="rounded-concierge border px-3 py-2 text-sm {% if message.tags == 'error' %}border-red-200 bg-red-50 text-red-800{% else %}border-brand/20 bg-brand-mist text-brand-ink{% endif %}">
+            {{ message }}
+        </li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+
+    <div class="mt-6 space-y-3 rounded-2xl border border-slate-200 bg-white p-6 shadow-card">
+        <form method="post" action="{% url 'resend_verification' %}">
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{% url 'verify_email_pending' %}">
+            <button type="submit" class="w-full rounded-concierge bg-brand px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-hover">
+                Resend verification email
+            </button>
+        </form>
+        <a href="{{ settings_account_url }}" class="block w-full rounded-concierge border border-slate-300 bg-white px-4 py-2.5 text-center text-sm font-semibold text-concierge-slate hover:bg-slate-50">
+            Wrong email? Update it in Settings
+        </a>
+    </div>
+    <p class="mt-4 text-center text-xs text-slate-500">
+        Already verified? Refresh this page or sign in again.
+    </p>
+</div>
+{% endblock %}

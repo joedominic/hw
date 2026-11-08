@@ -90,6 +90,7 @@ class LoginRequiredMiddleware:
             "/admin/",
             "/static/",
             "/media/",
+            "/legal/",
         )
 
     def __call__(self, request):
@@ -106,7 +107,7 @@ class LoginRequiredMiddleware:
                         {"detail": "Email verification required"},
                         status=403,
                     )
-                return redirect(reverse("settings") + "?tab=account")
+                return redirect("verify_email_pending")
             return self.get_response(request)
 
         path = request.path

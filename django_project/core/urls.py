@@ -42,6 +42,11 @@ urlpatterns = [
         name="verify_email",
     ),
     path(
+        "accounts/verify-email/",
+        account_views.verify_email_pending_view,
+        name="verify_email_pending",
+    ),
+    path(
         "accounts/resend-verification/",
         account_views.resend_verification_view,
         name="resend_verification",

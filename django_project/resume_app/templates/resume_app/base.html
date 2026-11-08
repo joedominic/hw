@@ -22,16 +22,7 @@
     {% block extra_head %}{% endblock %}
 </head>
 <body class="concierge-app min-h-full bg-[#F8FAFC] text-slate-900 antialiased flex flex-col">
-{% load hijack %}
-{% if request.user.is_hijacked %}
-<div class="sticky top-0 z-[60] border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-sm text-amber-950">
-    Viewing as <strong>{{ request.user.get_username }}</strong>
-    {% if request.user.email %}({{ request.user.email }}){% endif %}
-    — <form method="post" action="{% url 'hijack:release' %}" class="inline">{% csrf_token %}<button type="submit" class="font-semibold underline">Release</button></form>
-</div>
-{% endif %}
-
-{# Global Standard Top Navigation Header #}
+{# Global Standard Top Navigation Header (includes hijack banner) #}
 {% block top_header %}
 {% include "resume_app/_top_nav.html" %}
 {% endblock top_header %}

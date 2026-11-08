@@ -185,10 +185,15 @@
                         </div>
 
                         <div>
-                            <label class="block text-xs font-medium text-slate-600">LLM Tokens / Day</label>
-                            <input type="number" name="llm_tokens_per_day" value="{{ plan.llm_tokens_per_day }}" min="0" step="1000"
-                                   class="mt-1 w-full rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm tabular-nums focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20">
-                            <span class="mt-0.5 block text-[10px] text-slate-400">0 = Unlimited</span>
+                            <div class="flex items-center justify-between">
+                                <label class="block text-xs font-medium text-slate-600">LLM Tokens / Day</label>
+                                <span class="text-[10px] font-semibold text-brand token-monthly-preview"></span>
+                            </div>
+                            <input type="text" inputmode="numeric" name="llm_tokens_per_day" value="{{ plan.llm_tokens_per_day }}"
+                                   data-quota-tokens
+                                   class="mt-1 w-full rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm tabular-nums focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20"
+                                   placeholder="e.g. 200000 or 200k">
+                            <span class="mt-0.5 block text-[10px] text-slate-400">0 = Unlimited &bull; Supports <code>200k</code> or <code>200,000</code></span>
                         </div>
 
                         <div>
@@ -260,157 +265,25 @@
         {% endfor %}
     </div>
 
-    {# Tenant Subscriptions Control Center #}
-    <div id="subscribers-section" class="rounded-2xl border border-slate-200 bg-white p-6 shadow-card space-y-5">
-        <div class="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4">
+    {# Per-tenant ops live on Staff Console — Billing stays plan-catalog focused #}
+    <div id="subscribers-section" class="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-6 shadow-card">
+        <div class="flex flex-wrap items-center justify-between gap-4">
             <div>
                 <div class="flex items-center gap-2">
-                    <span class="rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-emerald-800">Tenant Operations</span>
-                    <span class="text-xs text-slate-500">{{ total_subscribers }} total subscribers registered</span>
+                    <span class="rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-semibold uppercase tracking-wider text-emerald-900">Tenant Operations</span>
+                    <span class="text-xs text-slate-600">{{ total_subscribers }} subscribers · {{ active_subscribers_count }} active/trialing</span>
                 </div>
-                <h2 class="mt-1 text-lg font-bold text-concierge-slate">Tenant Subscriptions &amp; Quota Controls</h2>
-                <p class="text-xs text-slate-500">Configure individual tenant subscriptions, override status, assign commercial tiers, extend trials, and reset daily usage.</p>
+                <h2 class="mt-1 text-lg font-bold text-concierge-slate">Per-user plan, status &amp; quotas</h2>
+                <p class="mt-1 max-w-2xl text-sm text-slate-600">
+                    Assign plans, extend trials, reset daily usage, suspend accounts, and impersonate from
+                    <strong>Staff Console</strong>. This page manages the commercial plan catalog and Stripe Price IDs only.
+                </p>
             </div>
-            <div class="flex items-center gap-2 text-xs">
-                <a href="{% url 'staff_users' %}" class="inline-flex items-center gap-1 font-semibold text-brand hover:underline">
-                    <span>Open Staff User Directory</span>
-                    <span class="material-symbols-outlined text-[14px]">arrow_forward</span>
-                </a>
-            </div>
-        </div>
-
-        {# Filter Bar #}
-        <form method="get" action="{% url 'billing' %}" class="flex flex-wrap items-center gap-2 text-xs">
-            <input type="search" name="sub_q" value="{{ sub_q }}" placeholder="Search user, email, or Stripe ID"
-                   class="min-w-[240px] flex-1 rounded-concierge border border-slate-300 px-3 py-2 text-sm focus:border-brand focus:outline-none focus:ring-1 focus:ring-brand">
-            
-            <select name="sub_plan" class="rounded-concierge border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700">
-                <option value="">All Plans</option>
-                {% for p in plans %}
-                <option value="{{ p.slug }}" {% if sub_plan == p.slug %}selected{% endif %}>{{ p.name }} ({{ p.slug }})</option>
-                {% endfor %}
-            </select>
-
-            <select name="sub_status" class="rounded-concierge border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700">
-                <option value="">All Statuses</option>
-                {% for val, label in status_choices %}
-                <option value="{{ val }}" {% if sub_status == val %}selected{% endif %}>{{ label }}</option>
-                {% endfor %}
-            </select>
-
-            <button type="submit" class="rounded-concierge bg-brand px-4 py-2 text-sm font-semibold text-white hover:bg-brand-hover">
-                Filter
-            </button>
-            {% if sub_q or sub_plan or sub_status %}
-            <a href="{% url 'billing' %}" class="px-2 py-2 text-xs text-slate-500 hover:text-slate-800 underline">Reset</a>
-            {% endif %}
-        </form>
-
-        {# Subscriptions List #}
-        <div class="overflow-x-auto rounded-xl border border-slate-200">
-            <table class="min-w-full text-left text-xs">
-                <thead class="border-b border-slate-200 bg-slate-50 uppercase text-slate-500">
-                    <tr>
-                        <th class="px-3.5 py-2.5">User</th>
-                        <th class="px-3.5 py-2.5">Current Tier &amp; Status</th>
-                        <th class="px-3.5 py-2.5">Stripe Customer / Trial</th>
-                        <th class="px-3.5 py-2.5">Subscription Controls</th>
-                        <th class="px-3.5 py-2.5">Quota Action</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-100">
-                    {% for sub in filtered_subscriptions %}
-                    <tr class="hover:bg-slate-50/50 transition-colors">
-                        <td class="px-3.5 py-3">
-                            <div class="font-bold text-slate-900">{{ sub.owner.username }}</div>
-                            <div class="text-[11px] text-slate-500">{{ sub.owner.email|default:"No email" }}</div>
-                            <div class="text-[10px] text-slate-400">Joined {{ sub.owner.date_joined|date:"M j, Y" }}</div>
-                        </td>
-                        <td class="px-3.5 py-3">
-                            <div class="font-semibold text-slate-800">{{ sub.plan.name|default:"No Plan" }}</div>
-                            <div class="mt-0.5">
-                                {% if sub.status == 'active' %}
-                                <span class="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
-                                    <span class="h-1 w-1 rounded-full bg-emerald-500"></span> Active
-                                </span>
-                                {% elif sub.status == 'trialing' %}
-                                <span class="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-700">
-                                    <span class="h-1 w-1 rounded-full bg-sky-500"></span> Trialing
-                                </span>
-                                {% elif sub.status == 'past_due' %}
-                                <span class="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700" title="In 5-day grace period">
-                                    <span class="h-1 w-1 rounded-full bg-amber-500"></span> Past Due (Grace)
-                                </span>
-                                {% elif sub.status == 'canceled' %}
-                                <span class="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
-                                    <span class="h-1 w-1 rounded-full bg-rose-500"></span> Canceled
-                                </span>
-                                {% else %}
-                                <span class="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
-                                    {{ sub.status }}
-                                </span>
-                                {% endif %}
-                            </div>
-                        </td>
-                        <td class="px-3.5 py-3 text-[11px] text-slate-600">
-                            {% if sub.stripe_customer_id %}
-                            <div class="font-mono text-[10px] text-slate-500">{{ sub.stripe_customer_id }}</div>
-                            {% else %}
-                            <span class="text-slate-400 italic">No Stripe Customer</span>
-                            {% endif %}
-                            {% if sub.trial_ends_at %}
-                            <div class="mt-0.5 text-[10px] text-slate-500">Trial ends: {{ sub.trial_ends_at|date:"M j, Y" }}</div>
-                            {% endif %}
-                        </td>
-                        <td class="px-3.5 py-3">
-                            <form method="post" action="{% url 'billing' %}" class="flex flex-wrap items-center gap-1.5">
-                                {% csrf_token %}
-                                <input type="hidden" name="action" value="update_user_subscription">
-                                <input type="hidden" name="subscription_id" value="{{ sub.pk }}">
-                                
-                                <select name="plan_slug" class="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700">
-                                    {% for p in plans %}
-                                    <option value="{{ p.slug }}" {% if sub.plan_id == p.pk %}selected{% endif %}>{{ p.name }}</option>
-                                    {% endfor %}
-                                </select>
-
-                                <select name="status" class="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700">
-                                    {% for val, label in status_choices %}
-                                    <option value="{{ val }}" {% if sub.status == val %}selected{% endif %}>{{ label }}</option>
-                                    {% endfor %}
-                                </select>
-
-                                <input type="number" name="trial_days" placeholder="+Days" min="1" max="365"
-                                       class="w-16 rounded border border-slate-300 px-1.5 py-1 text-xs" title="Extend or set trial days from now">
-
-                                <button type="submit" class="rounded-concierge bg-slate-800 px-2.5 py-1 text-xs font-semibold text-white hover:bg-slate-900 shadow-sm" title="Apply Plan & Status Changes">
-                                    Save
-                                </button>
-                            </form>
-                        </td>
-                        <td class="px-3.5 py-3">
-                            <form method="post" action="{% url 'billing' %}" class="inline">
-                                {% csrf_token %}
-                                <input type="hidden" name="action" value="reset_user_quotas">
-                                <input type="hidden" name="user_id" value="{{ sub.owner_id }}">
-                                <button type="submit"
-                                        class="rounded-concierge border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-100 shadow-sm"
-                                        onclick="return confirm('Reset daily quota consumption today for {{ sub.owner.username }}?');"
-                                        title="Reset all daily usage counters for today">
-                                    Reset Today
-                                </button>
-                            </form>
-                        </td>
-                    </tr>
-                    {% empty %}
-                    <tr>
-                        <td colspan="5" class="px-4 py-8 text-center text-slate-400">
-                            No subscriptions match the selected criteria.
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+            <a href="{% url 'staff_users' %}"
+               class="inline-flex items-center gap-1.5 rounded-concierge bg-brand px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-hover">
+                <span class="material-symbols-outlined text-[18px]">shield_person</span>
+                <span>Open Staff Console</span>
+            </a>
         </div>
     </div>
 
@@ -526,9 +399,15 @@
                                    class="mt-1 w-full rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm tabular-nums">
                         </div>
                         <div>
-                            <label class="block text-xs text-slate-600">LLM Tokens / Day</label>
-                            <input type="number" name="llm_tokens_per_day" value="500000" min="0" step="1000"
-                                   class="mt-1 w-full rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm tabular-nums">
+                            <div class="flex items-center justify-between">
+                                <label class="block text-xs text-slate-600">LLM Tokens / Day</label>
+                                <span class="text-[10px] font-semibold text-brand token-monthly-preview"></span>
+                            </div>
+                            <input type="text" inputmode="numeric" name="llm_tokens_per_day" value="500000"
+                                   data-quota-tokens
+                                   class="mt-1 w-full rounded-concierge border border-slate-200 bg-white px-3 py-1.5 text-sm tabular-nums"
+                                   placeholder="e.g. 500000 or 500k">
+                            <span class="mt-0.5 block text-[10px] text-slate-400">0 = Unlimited &bull; Supports <code>500k</code> or <code>500,000</code></span>
                         </div>
                         <div>
                             <label class="block text-xs text-slate-600">Job Searches / Day</label>
@@ -601,11 +480,42 @@ function switchAdminPlan(slug) {
     window.history.replaceState({}, '', url);
 }
 
+function updateTokenMonthlyPreview(input) {
+    if (!input) return;
+    var container = input.closest('div');
+    if (!container) return;
+    var preview = container.querySelector('.token-monthly-preview');
+    if (!preview) return;
+    var raw = (input.value || '').trim().replace(/,/g, '').toLowerCase();
+    if (!raw) { preview.textContent = ''; return; }
+    if (raw === '0' || raw === 'unlimited') {
+        preview.textContent = '(Unlimited / mo)';
+        return;
+    }
+    var mult = 1;
+    if (raw.endsWith('k')) { mult = 1000; raw = raw.slice(0, -1); }
+    else if (raw.endsWith('m')) { mult = 1000000; raw = raw.slice(0, -1); }
+    else if (raw.endsWith('b')) { mult = 1000000000; raw = raw.slice(0, -1); }
+    var val = parseFloat(raw);
+    if (!isNaN(val) && val > 0) {
+        var daily = val * mult;
+        var monthly = daily * 30;
+        var formatted = monthly >= 1000000 ? (monthly / 1000000).toFixed(1) + 'M' : Math.round(monthly / 1000) + 'K';
+        preview.textContent = '(~' + formatted + '/mo)';
+    } else {
+        preview.textContent = '';
+    }
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     var select = document.getElementById('admin-plan-select');
     if (select && select.value) {
         switchAdminPlan(select.value);
     }
+    document.querySelectorAll('input[data-quota-tokens]').forEach(function(inp) {
+        updateTokenMonthlyPreview(inp);
+        inp.addEventListener('input', function() { updateTokenMonthlyPreview(inp); });
+    });
 });
 </script>
 {% endblock %}

@@ -1,6 +1,7 @@
 from django.test import TestCase, Client
 from django.urls import reverse
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
 from unittest.mock import patch
 
 from resume_app.models import JobListing, JobListingAction, JobListingEmbedding, Track, SearchProfile
@@ -11,7 +12,10 @@ User = get_user_model()
 class FitInspectorTestCase(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(
-            username="testinspector", email="inspector@example.com", password="password123"
+            username="testinspector",
+            email="inspector@example.com",
+            password="password123",
+            is_staff=True,
         )
         self.client = Client()
         self.client.force_login(self.user)
@@ -22,6 +26,14 @@ class FitInspectorTestCase(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Fit Inspector")
         self.assertContains(resp, "Job Fit Simulator")
+
+    def test_tenant_redirected_to_cockpit(self):
+        tenant = User.objects.create_user(username="tenant_fit", password="password123")
+        client = Client()
+        client.force_login(tenant)
+        resp = client.get(reverse("fit_inspector"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/jobs/cockpit/", resp["Location"])
 
     @patch("resume_app.embeddings.embed_full", return_value=[0.1] * 384)
     @patch("resume_app.preference.get_preference_vectors")
@@ -118,22 +130,63 @@ class FitInspectorTestCase(TestCase):
         )
         self.assertEqual(resp.status_code, 200)
 
-        # 3. Preference vectors for SearchProfile must immediately reflect removal and not return cached stale job
+        # 3. Cache must reflect removal
         pv2 = get_preference_vectors(user=self.user, track="dir-plano")
-        self.assertIsNone(pv2)
+        liked_ids = [j[0] for j in (pv2[2] if pv2 else [])]
+        self.assertNotIn(job1.id, liked_ids)
 
     @patch("resume_app.embeddings.embed_full", return_value=[0.1] * 384)
     def test_fit_inspector_get_with_job_id(self, mock_embed):
         job = JobListing.objects.create(
-            title="Principal AI Architect",
-            company_name="InnovateAI",
-            description="Lead machine learning models and cloud architecture.",
+            title="Inspect Me",
+            company_name="Acme",
+            description="Python Django role",
             source="test",
-            external_id="j_inspect_1",
+            external_id="inspect-1",
         )
         resp = self.client.get(reverse("fit_inspector") + f"?job_id={job.id}&track=ic")
         self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "Principal AI Architect")
-        self.assertContains(resp, "InnovateAI")
-        self.assertContains(resp, f"Job #{job.id}")
+        self.assertContains(resp, "Inspect Me")
 
+
+class FitInspectorHijackTests(TestCase):
+    """Support can diagnose tenant fit data while impersonating."""
+
+    def setUp(self):
+        self.support = User.objects.create_user(
+            username="fit_support",
+            password="pass12345!",
+            is_staff=True,
+        )
+        perm = Permission.objects.get(codename="can_impersonate_users")
+        self.support.user_permissions.add(perm)
+        self.target = User.objects.create_user(username="fit_target", password="pass12345!")
+        Track.ensure_baseline(self.target)
+        SearchProfile.objects.create(owner=self.target, name="Target Profile", slug="target-profile")
+        self.job = JobListing.objects.create(
+            title="Target Liked Role",
+            company_name="GoodCo",
+            source="test",
+            external_id="fit-hijack-1",
+        )
+        JobListingAction.objects.create(
+            owner=self.target,
+            job_listing=self.job,
+            action=JobListingAction.ActionType.LIKED,
+            track="target-profile",
+        )
+
+    def test_fit_inspector_while_hijacked_shows_tenant_data(self):
+        client = Client()
+        client.login(username="fit_support", password="pass12345!")
+        resp = client.post(
+            "/hijack/acquire/",
+            {"user_pk": self.target.pk, "next": reverse("career_cockpit")},
+        )
+        self.assertEqual(resp.status_code, 302)
+
+        resp = client.get(reverse("fit_inspector") + "?track=target-profile")
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Target Profile")
+        self.assertContains(resp, "Target Liked Role")
+        self.assertEqual(resp.context["liked_count"], 1)

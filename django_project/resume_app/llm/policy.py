@@ -67,6 +67,50 @@ def daily_token_limit_for_user(user: AbstractBaseUser | None) -> int:
     return plan_limit(get_user_plan(user), METRIC_LLM_TOKENS)
 
 
+def estimate_optimizer_full_run_tokens() -> int:
+    """
+    Rough token estimate for one Writer → ATS Judge → Recruiter Judge pass.
+
+    Uses optimizer context char caps with chars/4 estimation plus per-step
+    prompt/output overhead. Intended for preflight UI, not hard metering.
+    """
+    writer_resume = int(getattr(settings, "OPTIMIZER_WRITER_RESUME_MAX_CHARS", 14000) or 14000)
+    writer_jd = int(getattr(settings, "OPTIMIZER_WRITER_JD_ROLE_MAX_CHARS", 8000) or 8000)
+    judge_resume = int(getattr(settings, "OPTIMIZER_JUDGE_RESUME_MAX_CHARS", 12000) or 12000)
+    judge_jd = int(getattr(settings, "OPTIMIZER_JUDGE_JD_MAX_CHARS", 8000) or 8000)
+    step_overhead = 2000
+    writer = (writer_resume + writer_jd) // 4 + step_overhead + 3000
+    ats = (judge_resume + judge_jd) // 4 + step_overhead + 1500
+    recruiter = (judge_resume + judge_jd) // 4 + step_overhead + 1500
+    return max(1, writer + ats + recruiter)
+
+
+def optimizer_token_preflight(user: AbstractBaseUser | None) -> dict[str, Any]:
+    """
+    Preflight budget snapshot for the Optimizer Run button.
+
+    Returns used/limit/estimate/remaining and whether the run should be blocked.
+    Unlimited limits (0) never block.
+    """
+    from ..subscriptions import usage_today
+
+    estimate = estimate_optimizer_full_run_tokens()
+    limit = daily_token_limit_for_user(user)
+    used = 0
+    if user is not None and getattr(user, "is_authenticated", False):
+        used = int(usage_today(user, METRIC_LLM_TOKENS) or 0)
+    remaining = None if limit <= 0 else max(0, limit - used)
+    blocked = bool(limit > 0 and used + estimate > limit)
+    return {
+        "estimate": estimate,
+        "used": used,
+        "limit": limit,
+        "remaining": remaining,
+        "blocked": blocked,
+        "unlimited": limit <= 0,
+    }
+
+
 def platform_daily_token_limit() -> int:
     """Global daily token budget for platform/env API keys (0 = unlimited)."""
     return int(getattr(settings, "LLM_PLATFORM_DAILY_TOKEN_LIMIT", 0) or 0)

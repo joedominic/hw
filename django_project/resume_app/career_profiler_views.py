@@ -63,9 +63,13 @@ def career_profiler_view(request):
         if record and record.analysis_data:
             saved_analysis = record.analysis_data
 
+    from .experience import needs_onboarding, onboarding_progress
+
     context = {
         "resumes": resumes,
         "selected_resume": selected_resume,
+        "needs_onboarding": needs_onboarding(user),
+        "onboarding": onboarding_progress(user),
         "existing_tracks": existing_tracks,
         "existing_profiles": existing_profiles,
         "saved_analysis": saved_analysis,

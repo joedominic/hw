@@ -65,18 +65,18 @@ class TenantJourneyE2ETest(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Target &amp; Discover")
         self.assertContains(resp, "AI Resume Profiler")
-        self.assertContains(resp, "Search Sandbox")
+        self.assertContains(resp, "Find jobs")
         # Ensure Tools menu does not expose Workflow to non-staff tenant
         self.assertNotContains(resp, "href=\"/resume/workflow/\"")
 
-        # 2. Target & Discover: Search Sandbox (Default view)
+        # 2. Target & Discover: Find jobs (Default view)
         resp = self.client.get(reverse("jobs_search"))
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Target &amp; Discover")
-        self.assertContains(resp, "Search Sandbox")
+        self.assertContains(resp, "Find jobs")
         self.assertContains(resp, "Save Query to Cockpit")
 
-        # 3. Target & Discover: Search Sandbox (With preset selected)
+        # 3. Target & Discover: Find jobs (With preset selected)
         resp_preset = self.client.get(f"{reverse('jobs_search')}?preset={self.preset.id}")
         self.assertEqual(resp_preset.status_code, 200)
         self.assertContains(resp_preset, "Automate into Cockpit")
@@ -112,24 +112,23 @@ class TenantJourneyE2ETest(TestCase):
         self.assertContains(resp_cockpit, "automation-drawer-backdrop")
         self.assertContains(resp_cockpit, "openAutomationDrawer()")
 
-    def test_day_1_empty_state_onboarding_checklist(self):
+    def test_day_1_empty_state_kickoff_banner(self):
         self.client.login(username="tenant_tester", password=self.password)
 
-        # For an empty track with 0 jobs, Cockpit must show Day-1 3-step onboarding checklist
+        # Empty Cockpit shows a single high-affordance kickoff banner (not a barren Kanban)
         resp = self.client.get(f"{reverse('career_cockpit')}?track=empty-track&stage=pipeline")
         self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "Get Started in 3 Simple Steps")
-        self.assertContains(resp, "Define Target &amp; Profile")
-        self.assertContains(resp, "Discover &amp; Ingest Roles")
-        self.assertContains(resp, "Triage, Tailor &amp; Track")
-        self.assertContains(resp, "Find Jobs in Sandbox")
+        self.assertContains(resp, "Welcome")
+        self.assertContains(resp, "Search Profile is ready")
+        self.assertContains(resp, "Find jobs in Target &amp; Discover")
+        self.assertContains(resp, "Edit Search Profile")
 
     def test_tracker_positive_momentum(self):
         self.client.login(username="tenant_tester", password=self.password)
 
         resp = self.client.get(reverse("performance_dashboard"))
         self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "Career Momentum &amp; Outcomes")
+        self.assertContains(resp, "Tracker")
         self.assertContains(resp, "Weekly Goal Progress")
         self.assertContains(resp, "Active Streak")
         # Ensure punitive warnings are absent

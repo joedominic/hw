@@ -43,7 +43,8 @@
             </button>
 
             <button type="button" id="save-prompt-btn"
-                    class="inline-flex items-center space-x-1.5 px-4 py-1.5 rounded-lg bg-brand hover:bg-brand-deep text-white text-xs font-semibold shadow-sm transition">
+                    class="inline-flex items-center space-x-1.5 px-4 py-1.5 rounded-lg bg-brand hover:bg-brand-deep text-white text-xs font-semibold shadow-sm transition"
+                    title="System prompts affect all tenants">
                 <span class="material-symbols-outlined text-sm">save</span>
                 <span id="save-prompt-text">Save Template</span>
             </button>
@@ -951,6 +952,9 @@ Click "Run Test" above to evaluate this prompt with injected variables.
     savePromptBtn.addEventListener('click', async () => {
         const buf = promptBuffers[activeKey];
         if (!buf) return;
+        if (!confirm('This system prompt affects all tenants. Save changes?')) {
+            return;
+        }
 
         savePromptBtn.disabled = true;
         savePromptText.textContent = 'Saving...';

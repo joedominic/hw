@@ -28,7 +28,7 @@
                 {% if is_power_user %}
                 Manage preference profiles for pipeline scoring and resume association. Each profile can have its own PDF versions and search context.
                 {% else %}
-                Upload a resume PDF and assign it to a search profile (for example FinCrimes or PE). The apply agent and match scoring use that profile’s resume.
+                Upload a resume PDF and assign it to a Search Profile (for example FinCrimes or PE). Match scoring and resume tailoring use this profile’s resume.
                 {% endif %}
             </p>
         </div>
@@ -443,7 +443,7 @@
                           class="w-full rounded-concierge border border-slate-200 px-3 py-2 text-sm focus:border-concierge-slate focus:outline-none focus:ring-1 focus:ring-concierge-slate"></textarea>
             </div>
             <div id="edit-track-schedule-custom-warning" class="hidden rounded bg-amber-50 border border-amber-200 p-2 text-xs text-amber-800">
-                This search profile uses a custom cron schedule configured on the Job Automation dashboard. Modifying schedule options here will overwrite your custom cron schedule.
+                This Search Profile uses a custom cron schedule. Prefer editing it from the Career Cockpit Automation drawer; changing options here will overwrite the custom cron.
             </div>
             <div class="grid grid-cols-2 gap-2 border-t border-slate-100 pt-3">
                 <div>
