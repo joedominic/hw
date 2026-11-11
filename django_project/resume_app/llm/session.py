@@ -142,9 +142,10 @@ def resolve_optimizer_provider(
     """
     Resolve which LLM provider the Optimizer UI / enqueue path should use.
 
-    Prefers the user's BYOK active provider. When none is connected, falls back
-    to the first cloud platform default for the optimizer writer chain that has
-    an environment key available (same gateway path as Skill Radar / Huey).
+    Prefers the user's BYOK cloud provider (active provider or from the preference list).
+    When none is configured:
+    - If the user is on a BYOK plan (e.g. BYOK Rails), platform keys are excluded.
+    - Otherwise, falls back to the first cloud platform default for the optimizer writer chain.
 
     Returns:
         {
@@ -152,16 +153,33 @@ def resolve_optimizer_provider(
             "model": str | None,
             "using_platform_key": bool,
             "ready": bool,
+            "is_byok_plan": bool,
+            "blocked_by_byok_plan": bool,
+            "error": str | None,
         }
     """
     from .gateway import (
         USAGE_QUERY_OPTIMIZER_WRITER,
+        _preference_candidates,
         _system_default_candidates,
         cloud_llm_available,
+        is_llm_on_cooldown,
         provider_is_local,
     )
     from .services import DEFAULT_MODELS
+    from ..subscriptions import get_user_plan, staff_bypasses_quotas
 
+    plan = get_user_plan(user) if user and getattr(user, "is_authenticated", False) else None
+    is_byok_plan = bool(
+        plan
+        and (
+            getattr(plan, "slug", "") == "byok"
+            or getattr(plan, "byok_required_for_completion", False)
+        )
+    )
+    is_staff = bool(user and staff_bypasses_quotas(user))
+
+    # 1. Prefer active provider if cloud
     byok = get_active_llm_provider(user, request)
     if byok and not provider_is_local(byok):
         cfg = _connected_configs_qs(user).filter(provider=byok).first()
@@ -171,8 +189,46 @@ def resolve_optimizer_provider(
             "model": model,
             "using_platform_key": False,
             "ready": True,
+            "is_byok_plan": is_byok_plan,
+            "blocked_by_byok_plan": False,
+            "error": None,
         }
 
+    # 2. Prefer highest-priority non-local candidate from user's preference list
+    for cand in _preference_candidates(user):
+        if cand.get("is_local"):
+            continue
+        prov = (cand.get("provider") or "").strip()
+        model = (cand.get("model_get_llm") or cand.get("model") or "").strip() or DEFAULT_MODELS.get(prov)
+        if is_llm_on_cooldown(prov, model, user=user):
+            continue
+        return {
+            "provider": prov,
+            "model": model,
+            "using_platform_key": False,
+            "ready": True,
+            "is_byok_plan": is_byok_plan,
+            "blocked_by_byok_plan": False,
+            "error": None,
+        }
+
+    # 3. If on a BYOK-only plan without user cloud keys, block platform fallback
+    if is_byok_plan and not is_staff:
+        plan_name = getattr(plan, "name", "BYOK Rails")
+        return {
+            "provider": None,
+            "model": None,
+            "using_platform_key": False,
+            "ready": False,
+            "is_byok_plan": True,
+            "blocked_by_byok_plan": True,
+            "error": (
+                f"The {plan_name} plan requires configuring your own "
+                "cloud API key in Settings -> AI / LLM. Platform-managed API keys are not included on this plan."
+            ),
+        }
+
+    # 4. Fall back to cloud platform defaults (Free / Pro / Power plans)
     for cand in _system_default_candidates(
         USAGE_QUERY_OPTIMIZER_WRITER,
         user=user,
@@ -191,6 +247,9 @@ def resolve_optimizer_provider(
             "model": model,
             "using_platform_key": True,
             "ready": True,
+            "is_byok_plan": is_byok_plan,
+            "blocked_by_byok_plan": False,
+            "error": None,
         }
 
     return {
@@ -198,6 +257,9 @@ def resolve_optimizer_provider(
         "model": None,
         "using_platform_key": False,
         "ready": bool(cloud_llm_available(user)),
+        "is_byok_plan": is_byok_plan,
+        "blocked_by_byok_plan": False,
+        "error": None,
     }
 
 

@@ -5,6 +5,7 @@ Exports via standard OTLP (HTTP/gRPC) to any APM backend (SigNoz, Grafana Tempo,
 """
 from __future__ import annotations
 
+import atexit
 import logging
 from typing import Optional
 
@@ -13,6 +14,22 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 _OTEL_INITIALIZED = False
+_FLUSH_REGISTERED = False
+
+
+def _flush_otel() -> None:
+    try:
+        from opentelemetry import trace
+
+        provider = trace.get_tracer_provider()
+        flush = getattr(provider, "force_flush", None)
+        if flush:
+            flush()
+        shutdown = getattr(provider, "shutdown", None)
+        if shutdown:
+            shutdown()
+    except Exception:
+        logger.debug("OpenTelemetry flush on shutdown failed", exc_info=True)
 
 
 def init_opentelemetry() -> bool:
@@ -64,7 +81,11 @@ def init_opentelemetry() -> bool:
         except ImportError:
             logger.info("opentelemetry-instrumentation-django not installed; skipping automatic Django view instrumentation.")
 
+        global _FLUSH_REGISTERED
         _OTEL_INITIALIZED = True
+        if not _FLUSH_REGISTERED:
+            atexit.register(_flush_otel)
+            _FLUSH_REGISTERED = True
         logger.info("OpenTelemetry initialized with endpoint: %s (service: %s)", endpoint, service_name)
         return True
 

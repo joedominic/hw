@@ -1,5 +1,7 @@
 """Require authentication for all app routes except auth, admin, and static."""
 import logging
+
+from django.http import HttpRequest
 from django.conf import settings
 from django.contrib.auth.views import redirect_to_login
 from django.contrib.sessions.exceptions import SessionInterrupted
@@ -8,6 +10,31 @@ from django.shortcuts import redirect
 from django.urls import resolve, Resolver404, reverse
 
 logger = logging.getLogger("resume_app.session")
+
+_HEALTH_PATHS = ("/health/live", "/health/ready", "/health/")
+
+
+class HealthCheckMiddleware:
+    """Answer health probes before SecurityMiddleware.
+
+    Django checks ALLOWED_HOSTS inside ``request.get_host()``, which
+    SecurityMiddleware calls. Probes use the pod IP as Host and plain HTTP.
+    This middleware returns the response itself and must not call ``get_host``
+    or ``build_absolute_uri``.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request: HttpRequest):
+        path = request.path_info or ""
+        if path not in _HEALTH_PATHS:
+            return self.get_response(request)
+        from resume_app.views import health_live_view, health_ready_view
+
+        if path == "/health/ready":
+            return health_ready_view(request)
+        return health_live_view(request)
 
 
 class SessionInterruptedMiddleware:

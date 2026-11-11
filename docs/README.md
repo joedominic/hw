@@ -14,7 +14,7 @@ This directory is the developer- and agent-facing knowledge base for HireEdge.
 HireEdge is an AI-powered career operating system that integrates executive career profiling, unbiased multi-channel job discovery, high-velocity Kanban triage, multi-agent AI resume tailoring, and interview outcome tracking into a single unified workspace.
 
 The complete user workflow is structured around the **Stitch 3-Tab Model**:
-1. **Tab 1: Target & Discover (`/jobs/profiler/` & `/jobs/search/`)** — AI Resume Profiler and Search Sandbox (Unbiased) with 1-click `+ Add to Review` bridge.
+1. **Tab 1: Target & Discover (`/jobs/profiler/` & `/jobs/search/`)** — AI Resume Profiler and **Find jobs**. Cards use **Save to Cockpit** / **In Cockpit**. Unbiased scoring is the “None (Unbiased / No Profile)” option.
 2. **Tab 2: Career Cockpit (`/jobs/cockpit/`)** — Central tri-pane triage workstation, slide-over Automation Drawer (`openAutomationDrawer()`), deep LLM fit evaluation, and in-funnel resume tailoring return loop.
 3. **Tab 3: Tracker (`/performance/`)** — Career Momentum & Outcomes, active streaks, weekly goals, and employer interview tracking.
 
@@ -41,6 +41,7 @@ For the complete, canonical user journey specification across the 3 tabs, see **
 - [Dual-Sectored Embeddings & Resume RAG](features/dual-sector-embeddings-and-rag.md) — Decomposed Scope/Requirements job embeddings and hierarchical context-prepended resume chunking.
 - [Search Profile Resume Binding & Guards](features/search-profile-resume-binding-and-guards.md) — Strict 1:1 profile resume bindings, zero-fallback resolution, UI incomplete badges, and search gating.
 - [Subscription Plans & Capability Matrix](features/subscription-plans-and-capabilities.md) — Commercial tiers, daily quota ceilings, storage allocations, developer API access, and degradation policies (backed by the [Entitlement Enforcement Audit](architecture/entitlement-enforcement-audit.md)).
+- [LLM Preference Routing & Connectivity Test](features/llm-preference-routing-and-connectivity-test.md) — Preference-list-driven provider resolution, subscription plan BYOK rails enforcement, OpenRouter text model filtering, and in-app LLM Connectivity Test.
 
 ### Architecture & Operations
 - [Architecture](architecture.md) — Runtime stack, component boundaries, background processing, and Redis locks.
@@ -52,8 +53,15 @@ For the complete, canonical user journey specification across the 3 tabs, see **
 - [Agent Guide](agent-guide.md) — Engineering conventions, entry points, and maintenance map for AI agents.
 - [User Journey Trace](user-journey.md) — End-to-end lifecycle trace of a single job listing from ingestion to offer.
 - [Docker Deployment](DOCKER.md) — Containerized multi-service deployment.
+- [Local development profiles](guides/local-development-profiles.md) — Minimal, standard, and production-parity ways to run HireEdge on a workstation.
 - [Container Scaling & Deployment](guides/container-scaling-and-deployment.md) — Horizontal scaling posture, WhiteNoise static assets, S3 presigned redirects, and startup migration coordination.
+- [Cloud deployment (AWS and GCP)](guides/cloud-deployment-aws-gcp.md) — Concrete service choices, required environment, and rollout order for ECS/Fargate or GKE.
+- [Statelessness & Horizontal Scaling Audit](architecture/statelessness-and-horizontal-scaling-audit.md) — Process-local state inventory, silent local-state fallbacks, crash-safety gaps, and capacity ceilings blocking 1→100 pod scale-out.
+- [Statelessness Remediation Plan](architecture/statelessness-remediation-plan.md) — Work items for every audit finding, grouped by complexity (Low/Medium/High), with runtime profiles (`APP_ENV`), local development tiers, phased rollout, dependencies, tests, and acceptance criteria.
 - [Search Profile Consolidation](search-profile-consolidation.md) — Status: Phase 1 done, Phase 2 partial, Phases 3–5 open.
+- [Tenant Experience Simplification](features/tenant-experience-simplification.md) — Cockpit-canonical routing, Search Profile naming, Fit/Interview/Automation fold-ins, Optimizer Executive Mode.
+- [UX Gap Remediation](features/ux-gap-remediation.md) — Platform-key Optimizer, Free 50k/day tokens, Profiler-only onboarding, Pass triage, verify-email interstitial.
+- [Staff Console & Support Workflows](features/staff-console.md) — Impersonation loop, Fit Inspector during hijack, Billing vs Plan & usage nav, Simple/Advanced experience mode.
 
 ### Dated Audits & Point-in-Time Reviews (Informational)
 - [Product Feature Brief](product_feature_brief.md) — High-level capabilities and market positioning overview.

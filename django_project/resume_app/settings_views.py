@@ -539,6 +539,82 @@ def _handle_connect(request, user, provider_infos):
     return None
 
 
+def _handle_test_llm_connectivity(request, user):
+    import time
+    from django.http import JsonResponse
+    from langchain_core.messages import HumanMessage
+    from .crypto import decrypt_api_key
+    from .llm import get_llm, log_llm_invoke
+    from .models import LLMProviderPreference, LLMProviderConfig
+
+    pref_id = (request.POST.get("test_pref_id") or "").strip()
+    provider = (request.POST.get("test_provider") or "").strip()
+    model = (request.POST.get("test_model") or "").strip()
+
+    config = None
+    if pref_id and pref_id.isdigit():
+        pref = LLMProviderPreference.objects.select_related("provider_config").filter(
+            id=int(pref_id),
+            provider_config__owner=user,
+        ).first()
+        if pref:
+            config = pref.provider_config
+            provider = config.provider
+            model = pref.model or config.default_model
+
+    if not config and provider:
+        config = LLMProviderConfig.objects.for_user(user).filter(provider=provider).first()
+        if config and not model:
+            model = config.default_model
+
+    is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest" or "application/json" in request.headers.get("Accept", "")
+
+    if not config or not config.encrypted_api_key:
+        msg = f"No stored API credentials found for {provider or 'selected provider'}."
+        if is_ajax:
+            return JsonResponse({"ok": False, "error": msg}, status=400)
+        messages.error(request, msg)
+        return redirect(reverse("settings") + "?tab=llm")
+
+    api_key_decrypted = decrypt_api_key(config.encrypted_api_key)
+    try:
+        t0 = time.monotonic()
+        llm = get_llm(provider, api_key_decrypted, model=model or None)
+        log_llm_invoke(
+            provider,
+            model or getattr(llm, "_resume_model", None),
+            query="connectivity_test",
+            via="direct",
+        )
+        resp = llm.invoke([HumanMessage(content="Hello! Please reply with 'OK' if you can read this message.")])
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        response_text = (getattr(resp, "content", None) or str(resp)).strip()
+        result_msg = f"Connected to {provider} ({model or 'default'}) in {elapsed_ms}ms: {response_text[:120]}"
+
+        if is_ajax:
+            return JsonResponse({
+                "ok": True,
+                "provider": provider,
+                "model": model,
+                "latency_ms": elapsed_ms,
+                "response": response_text[:300],
+                "message": result_msg,
+            })
+        messages.success(request, result_msg)
+    except Exception as e:
+        err_msg = f"Connection failed to {provider}: {str(e)}"
+        if is_ajax:
+            return JsonResponse({
+                "ok": False,
+                "provider": provider,
+                "model": model,
+                "error": err_msg,
+            }, status=400)
+        messages.error(request, err_msg)
+
+    return redirect(reverse("settings") + "?tab=llm")
+
+
 def _handle_set_active_provider(request, user, provider_infos):
     provider = (request.POST.get("active_provider") or "").strip()
     valid_connected = any(info["name"] == provider and info["key_stored"] for info in provider_infos)
@@ -653,6 +729,8 @@ def settings_view(request):
             resp = _handle_connect(request, user, provider_infos)
             if resp:
                 return resp
+        elif action in ("test_llm_connectivity", "test_connection"):
+            return _handle_test_llm_connectivity(request, user)
         elif action == "set_active_provider":
             resp = _handle_set_active_provider(request, user, provider_infos)
             if resp:
@@ -993,7 +1071,7 @@ def settings_view(request):
             })
 
     for prov, mlist in provider_models_map.items():
-        for m in (mlist or [])[:20]:
+        for m in (mlist or []):
             k = (prov, m)
             if k not in seen_opt_keys:
                 seen_opt_keys.add(k)
@@ -1095,6 +1173,10 @@ def settings_view(request):
         "connected_provider_names": connected_provider_names,
         "provider_models_map": provider_models_map,
         "active_provider": active_provider,
+        "has_cloud_preference": any(
+            not item["pref"].is_local and str(item["cfg"].provider).strip().lower() != "ollama local"
+            for item in provider_preference_rows
+        ),
         "settings_tab": tab,
         "app_automation": AppAutomationSettings.get_for_user(user),
         "experience_settings": UserExperienceSettings.get_for_user(user),

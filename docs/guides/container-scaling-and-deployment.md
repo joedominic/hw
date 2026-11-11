@@ -2,6 +2,8 @@
 
 This guide details the deployment architecture, container configuration, and horizontal scaling capabilities of HireEdge across the web tier and Huey background task workers.
 
+> **Known gaps:** The posture below is the target design. Several defaults silently fall back to per-container state (local media, LocMem cache, `DEBUG=True`), Huey tasks are lost on `SIGTERM`, and MySQL/Redis capacity caps scale-out. See the [Statelessness & Horizontal Scaling Audit](../architecture/statelessness-and-horizontal-scaling-audit.md) before running more than one replica.
+
 ---
 
 ## 1. Architecture & Deployment Tiers
@@ -58,7 +60,7 @@ flowchart TD
 | :--- | :--- | :--- | :--- |
 | **Web Tier** | Supported out of the box | Supported behind LB | Requires `AWS_STORAGE_BUCKET_NAME` for remote media; WhiteNoise serves static assets directly. |
 | **Huey Workers** | Supported out of the box | Supported | Redis queue broker; periodic task leader locks deduplicate crons across workers. |
-| **Sessions** | Database-backed | Database-backed | No sticky sessions required; fully stateless over HTTP. |
+| **Sessions** | Database-backed | Database-backed | No sticky sessions required. Statelessness also requires S3 media and a Redis cache; neither is enforced at startup (see audit S-01, S-02). |
 | **Health Probes** | `/health/ready` | `/health/live` & `/health/ready` | Excluded from login middleware; probes web responsiveness and DB/Redis health. |
 | **Database** | SQLite or MySQL | External MySQL / MariaDB | SQLite fail-closed in production (`ALLOW_SQLITE_IN_PRODUCTION=1` only for dev/demo). |
 
@@ -134,6 +136,7 @@ To prevent multiple web pods or worker containers from competing and causing mig
   - 4 web pods $\times$ 2 workers = 8 connections
   - 2 Huey pods $\times$ 2 threads = 4 connections
   - Total persistent pool = 12 connections (well within MySQL default `max_connections = 151`).
+  - At 100 web + 100 worker pods the floor is 400 connections, plus ORM connections opened by helper threads. A pooler is mandatory (audit S-04).
 - If scaling web pods or workers beyond 50+ total processes, verify `max_connections` on MySQL/MariaDB or deploy an intermediate pooler (ProxySQL or AWS RDS Proxy).
 
 ### Ollama & Local LLM Locality

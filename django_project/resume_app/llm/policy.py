@@ -10,6 +10,7 @@ Canonical docs: ``resume_app/docs/LLM_GATEWAY.md``.
 from __future__ import annotations
 
 import logging
+import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator, TypeVar
@@ -291,14 +292,12 @@ def user_llm_concurrency(user: AbstractBaseUser | None) -> Iterator[None]:
 
     fail_open = bool(getattr(settings, "LLM_RATE_LIMIT_FAIL_OPEN", False))
     key = f"{CONCURRENCY_REDIS_PREFIX}u{int(user.pk)}"
+    lease_id = uuid.uuid4().hex
     acquired = False
     try:
         try:
-            r = _get_redis()
-            current = int(r.incr(key))
-            r.expire(key, 600)
-            acquired = True
-            if current > limit:
+            acquired = _acquire_concurrency_lease(key, lease_id, limit)
+            if not acquired:
                 raise LLMConcurrencyLimitExceeded(
                     f"Too many concurrent LLM calls (limit {limit}). Try again shortly."
                 )
@@ -316,10 +315,9 @@ def user_llm_concurrency(user: AbstractBaseUser | None) -> Iterator[None]:
     finally:
         if acquired:
             try:
-                r = _get_redis()
-                n = int(r.decr(key))
-                if n <= 0:
-                    r.delete(key)
+                from .rate_limit import _get_redis
+
+                _get_redis().zrem(key, lease_id)
             except Exception as e:
                 logger.debug("llm concurrency release failed: %s", e)
 
@@ -328,19 +326,66 @@ def invoke_timeout_seconds() -> float:
     return float(getattr(settings, "LLM_INVOKE_TIMEOUT_SECONDS", 180) or 180)
 
 
+# Drop expired leases, then add this lease only when under the limit.
+_CONCURRENCY_ACQUIRE_LUA = """
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[4]) then return 0 end
+redis.call('ZADD', KEYS[1], ARGV[2], ARGV[3])
+redis.call('EXPIRE', KEYS[1], 3600)
+return 1
+"""
+
+
+def _acquire_concurrency_lease(key: str, lease_id: str, limit: int) -> bool:
+    """True when this call holds a lease. Expired leases free themselves."""
+    import time
+
+    from .rate_limit import _get_redis
+
+    now = time.time()
+    ttl = invoke_timeout_seconds() + 60
+    granted = _get_redis().eval(
+        _CONCURRENCY_ACQUIRE_LUA,
+        1,
+        key,
+        now,
+        now + ttl,
+        lease_id,
+        int(limit),
+    )
+    return int(granted) == 1
+
+
+def _invoke_and_close_db(fn: Callable[[], T]) -> T:
+    from django.db import close_old_connections
+
+    try:
+        return fn()
+    finally:
+        close_old_connections()
+
+
 def run_with_invoke_timeout(fn: Callable[[], T], *, timeout_seconds: float | None = None) -> T:
-    """Run ``fn`` in a worker thread with a wall-clock timeout."""
+    """Backstop wall-clock deadline around an LLM call.
+
+    The provider client timeout is what closes the socket. This pool only
+    unblocks the caller when a provider ignores that timeout. ``wait=False``
+    returns immediately; the abandoned thread exits once the socket times out.
+    """
     timeout = invoke_timeout_seconds() if timeout_seconds is None else float(timeout_seconds)
     if timeout <= 0:
-        return fn()
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        fut = pool.submit(fn)
-        try:
-            return fut.result(timeout=timeout)
-        except FuturesTimeout as e:
-            raise LLMInvokeTimeout(
-                f"LLM invoke exceeded {int(timeout)}s wall-clock deadline."
-            ) from e
+        return _invoke_and_close_db(fn)
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="llm-invoke")
+    fut = pool.submit(_invoke_and_close_db, fn)
+    try:
+        return fut.result(timeout=timeout)
+    except FuturesTimeout as e:
+        logger.warning("LLM invoke exceeded %.1fs; abandoning worker thread", timeout)
+        raise LLMInvokeTimeout(
+            f"LLM invoke exceeded {int(timeout)}s wall-clock deadline."
+        ) from e
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 def estimate_messages_tokens(messages) -> int:

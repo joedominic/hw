@@ -234,6 +234,7 @@ class OptimizedResume(models.Model):
         indexes = [
             models.Index(fields=["owner", "pipeline_entry", "-created_at"], name="opt_res_owner_entry_idx"),
             models.Index(fields=["owner", "status"], name="opt_res_owner_status_idx"),
+            models.Index(fields=["status", "updated_at"], name="opt_res_status_updated_idx"),
         ]
 
 

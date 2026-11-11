@@ -14,6 +14,11 @@
     {% if error %}
         <div class="mb-6 rounded-concierge border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900" role="alert">{{ error }}</div>
     {% endif %}
+    {% if not providers %}
+        <div class="mb-6 rounded-concierge border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="alert">
+            No configured providers found in your Preference List. Connect a provider and add it to your Preference List in <a href="{% url 'settings' %}?tab=llm" class="font-semibold underline">Settings → AI / LLM</a>.
+        </div>
+    {% endif %}
     {% if response_text %}
         <div class="mb-6 rounded-concierge border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900" role="alert">
             Response received successfully.

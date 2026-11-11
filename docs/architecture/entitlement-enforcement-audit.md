@@ -83,7 +83,7 @@ Below is the exhaustive inventory of all columns on `resume_app.models.Plan` as 
 | `is_active` | BooleanField | `True` | Enforced | Determines availability in public checkout and admin |
 | `sort_order` | PositiveIntegerField | `0` | Enforced | Order on `/billing` and `/pricing` cards |
 | `llm_requests_per_day` | PositiveIntegerField | `50` | **Enforced** | Pre-checked in `check_user_llm_rate_limit`; consumed in `gateway._finalize_usage` |
-| `llm_tokens_per_day` | PositiveIntegerField | `8300` | **Enforced** | Pre-checked in `check_token_budget`; reconciled in `_finalize_usage` |
+| `llm_tokens_per_day` | PositiveIntegerField | `50000` (free default; was `8300` pre-`0070`) | **Enforced** | Pre-checked in `check_token_budget`; reconciled in `_finalize_usage` |
 | `job_searches_per_day` | PositiveIntegerField | `5` | **Enforced** | Consumed in `job_search_core.run_job_search_core` (HTTP 429 on exhaustion) |
 | `storage_mb` | PositiveIntegerField | `250` | **Enforced** | Pre-checked in `assert_upload_allowed` across all upload paths |
 | `api_access` | BooleanField | `False` | **Enforced** | Gates `CustomerApiKey` generation and bearer REST API authentication |

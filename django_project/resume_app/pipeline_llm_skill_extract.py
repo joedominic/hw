@@ -180,6 +180,18 @@ def write_run_error(run_dir: Union[Path, str], message: str) -> None:
     write_progress(run_dir, prog)
 
 
+def _replace_atomic(tmp: Path, dest: Path) -> None:
+    """Replace ``dest`` with ``tmp``. Retry when Windows still has ``dest`` open."""
+    for attempt in range(5):
+        try:
+            tmp.replace(dest)
+            return
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+
+
 def write_progress(run_dir: Union[Path, str], data: Dict[str, Any]) -> None:
     data = {**data, "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     key = _storage_key(run_dir, PROGRESS_NAME)
@@ -197,7 +209,7 @@ def write_progress(run_dir: Union[Path, str], data: Dict[str, Any]) -> None:
         tmp = local_p.with_suffix(".tmp")
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
-        tmp.replace(local_p)
+        _replace_atomic(tmp, local_p)
 
 
 def append_skills_batch(run_dir: Union[Path, str], batch_record: Dict[str, Any]) -> None:
@@ -431,7 +443,7 @@ def _write_consolidated_skills(run_dir: Union[Path, str], data: Dict[str, List[s
         tmp = local_p.with_suffix(".tmp")
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
-        tmp.replace(local_p)
+        _replace_atomic(tmp, local_p)
 
 
 def maybe_run_pipeline_consolidation(
@@ -486,6 +498,33 @@ def maybe_run_pipeline_consolidation(
         logger.warning("Pipeline skill consolidation failed (API shows raw merge): %s", e)
 
 
+def _abandon_stale_extract(run_dir: Union[Path, str], prog: Dict[str, Any]) -> Dict[str, Any]:
+    """Mark a run stale when its worker stopped writing progress."""
+    from datetime import datetime, timedelta, timezone as dt_tz
+
+    from django.conf import settings
+
+    if str(prog.get("phase") or "") != "running":
+        return prog
+    raw = str(prog.get("updated_at") or "")
+    try:
+        updated = datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt_tz.utc)
+    except ValueError:
+        return prog
+    minutes = int(getattr(settings, "PIPELINE_EXTRACT_STALE_MINUTES", 30))
+    if datetime.now(dt_tz.utc) - updated <= timedelta(minutes=minutes):
+        return prog
+    message = "Worker stopped before the extract finished. Start it again to resume."
+    prog = {
+        **prog,
+        "phase": "stale",
+        "error": message,
+        "message": message,
+    }
+    write_progress(run_dir, prog)
+    return prog
+
+
 def read_run_status(track_slug: str, run_id: str) -> Optional[Dict[str, Any]]:
     """Load meta + progress + aggregated NDJSON skills for API polling."""
     from django.conf import settings
@@ -504,7 +543,7 @@ def read_run_status(track_slug: str, run_id: str) -> Optional[Dict[str, Any]]:
     run_dir = run_directory(track_slug, run_id)
     try:
         meta = load_run_meta(run_dir)
-        prog = load_progress(run_dir)
+        prog = _abandon_stale_extract(run_dir, load_progress(run_dir))
     except Exception as e:
         logger.warning("read_run_status: could not load run %s/%s: %s", track_slug, run_id, e)
         return None
@@ -1167,7 +1206,7 @@ def _finalize_meta(run_dir: Union[Path, str], completed: bool = True) -> None:
         tmp = local_p.with_suffix(".tmp")
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)
-        tmp.replace(local_p)
+        _replace_atomic(tmp, local_p)
 
 
 def write_initial_run_files(

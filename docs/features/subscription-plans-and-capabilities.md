@@ -12,7 +12,7 @@
 
 ## Overview
 
-HireEdge implements a multi-tier SaaS commercial model governing daily AI consumption, automated job scraping, cloud media storage, and developer REST API access. Every tier runs on OpenAI frontier models with dual-model workload routing: high-volume matching and telemetry run on **GPT-5 nano**, while generative drafting runs on **GPT-5 mini**.
+HireEdge implements a multi-tier SaaS commercial model governing daily AI consumption, automated job scraping, cloud media storage, and developer REST API access. Model choice is the gateway fallback in `SYSTEM_DEFAULT_MODELS` plus the tenant’s own keys: OpenAI `gpt-4o` / `gpt-4o-mini`, Google AI Studio, Anthropic, Groq, and Ollama Local. There is no GPT-5 route in the Python gateway.
 
 Tenant subscriptions and entitlements are managed through three foundational entities in `resume_app.models`:
 - **`Plan`**: Defines commercial plan templates, default daily quota ceilings, storage allocations, and feature flags.
@@ -30,11 +30,10 @@ The commercial ladder is calibrated around realistic human job-search patterns, 
 | **Commercial Price** | **$0 / mo** | **$15 / mo** | **$29 / mo** | **$99 / mo** | Custom negotiated display (e.g. `$299 / mo`) | **Display Only** |
 | **Primary Value Prop** | Evaluation & Discovery | Self-Funded Orchestration Rails | Active High-Velocity Search | Power Candidate / Coach / Agency | Multi-seat / Custom Contract | **Commercial Copy** |
 | **Default on Signup** | **Yes** (`is_default=True`) | No | No | No | No | **Enforced** |
-| **Monthly OpenAI Token Allowance** | **250,000** tokens / mo | **Unmetered** (Direct Provider Billing) | **5,000,000** tokens / mo | **15,000,000** tokens / mo | Custom Contract | **Derived (Daily ×30)** |
-| **Enforced Daily Token Cap (`llm_tokens_per_day`)** | **8,300** tokens / day | **0** (Unmetered on personal keys) | **167,000** tokens / day | **500,000** tokens / day | Dynamic (e.g. `1,000,000+` or `0` for fallback) | **Enforced** |
+| **Monthly OpenAI Token Allowance** | **1,500,000** tokens / mo | **Unmetered** (Direct Provider Billing) | **5,000,000** tokens / mo | **15,000,000** tokens / mo | Custom Contract | **Derived (Daily ×30)** |
+| **Enforced Daily Token Cap (`llm_tokens_per_day`)** | **50,000** tokens / day | **0** (Unmetered on personal keys) | **167,000** tokens / day | **500,000** tokens / day | Dynamic (e.g. `1,000,000+` or `0` for fallback) | **Enforced** |
 | **Daily LLM Request Budget** | **50** requests / day | **0** (Unmetered pipeline runs) | **250** requests / day | **1,000** requests / day | Dynamic | **Enforced** |
-| **Routine AI Model (~70% mix)** | **GPT-5 nano** (Skill Radar, JD cleanse, matching) | **User BYOK Keys** (OpenAI / Anthropic / Groq / Ollama) | **GPT-5 nano** (Skill Radar, JD cleanse, matching) | **GPT-5 nano** (Skill Radar, JD cleanse, matching) | Configurable | **Enforced (Dynamic Tiers)** |
-| **Writing AI Model (~25% mix)** | **GPT-5 mini** (Tailoring, STAR packs, briefs) | **User BYOK Keys** (OpenAI / Anthropic / Groq / Ollama) | **GPT-5 mini** (Tailoring, STAR packs, briefs) | **GPT-5 mini** (Tailoring, STAR packs, briefs) | Configurable | **Enforced (Dynamic Tiers)** |
+| **Default model chain** | Gateway `SYSTEM_DEFAULT_MODELS` (local Ollama, Gemini, `gpt-4o-mini` / `gpt-4o`, Claude, Groq) | **User BYOK keys** (OpenAI, Anthropic, Groq, Google AI Studio, Ollama) | Same gateway chain; cloud calls need a user key for `/llm/complete` | Same gateway chain; platform keys allowed on `/llm/complete` | Tenant or staff model prefs | **Gateway, not a fixed GPT-5 pair** |
 | **Daily Job Searches** | **5** searches / day | **15** searches / day | **25** searches / day | **100** searches / day | Dynamic (e.g. `500+`) | **Enforced** |
 | **Storage Allocation (Media & Resumes)** | **250 MB** | **2,000 MB** (2 GB) | **5,000 MB** (5 GB) | **20,000 MB** (20 GB) | Dynamic (e.g. `50,000 MB`) | **Enforced (100% of Upload Paths)** |
 | **Developer API Access (`api_access`)** | ❌ **Disabled** (`False`) | ✅ **Enabled** (`True`) | ✅ **Enabled** (`True`) | ✅ **Enabled** (`True`) | Configurable boolean toggle | **Enforced (API Keys + Complete)** |
@@ -48,7 +47,7 @@ The commercial ladder is calibrated around realistic human job-search patterns, 
 *(1) Browser session authentication (`SessionOrApiKeyAuth`) permits all logged-in users regardless of plan tier to access product REST endpoints driving the UI (`/api/resume/optimize`, `/api/resume/jobs/search`, etc.). `api_access` controls headless customer API key generation and bearer token access.*
 
 > [!NOTE]
-> All cloud reasoning runs on OpenAI (`gpt-5-nano` and `gpt-5-mini`). Daily token enforcement caps (`8,300` / `167,000` / `500,000`) smooth consumption evenly across the billing cycle. If `llm_tokens_per_day` is set to `0` in a custom or legacy plan, the system safely falls back to `settings.LLM_DAILY_TOKEN_LIMIT_BY_PLAN`.
+> Seeded daily token caps are `50,000` (free), `0` (byok), `167,000` (pro), and `500,000` (power) in `ensure_default_plans()` (migration `0070` raises existing free rows still at the legacy `8,300`). `plan_limit()` uses `llm_tokens_per_day` when it is non-zero. When the column is `0`, a slug in `LLM_DAILY_TOKEN_LIMIT_BY_PLAN` (`free` 50,000, `byok` 0, `pro` 2,000,000, `power` 10,000,000 by default) uses that map. Any other slug with `0` is unlimited. `0` on requests and job searches is unlimited. `LLM_USER_DAILY_TOKEN_LIMIT` is an optional hard ceiling.
 
 ---
 
@@ -58,10 +57,9 @@ The commercial ladder is calibrated around realistic human job-search patterns, 
 - **Target Audience:** Individual candidates exploring the platform, setting up their career profile, and testing AI tailoring.
 - **Assignment:** Automatically assigned to every newly registered user upon account creation when `SAAS_DEFAULT_PLAN_SLUG="free"`.
 - **LLM Capabilities:**
-  - 250,000 monthly OpenAI tokens (enforced strictly at 8,300 tokens per calendar day; resets daily at midnight).
+  - 1,500,000 monthly OpenAI tokens (enforced strictly at 50,000 tokens per calendar day; resets daily at midnight).
   - 50 cloud LLM requests per day.
-  - GPT-5 nano for Skill Radar, job description cleansing, and match scoring.
-  - GPT-5 mini for resume tailoring bullets and basic interview questions.
+  - Skill Radar, JD cleanse, matching, and writing follow `SYSTEM_DEFAULT_MODELS` (local Ollama first for several jobs, then Gemini, `gpt-4o-mini`, Claude, and Groq).
 - **Job Discovery & Application:**
   - 5 multi-channel job scrapes per day (`job_searches_per_day = 5`).
 - **Storage:**
@@ -76,7 +74,7 @@ The commercial ladder is calibrated around realistic human job-search patterns, 
   - **Unmetered Model Tokens:** No platform daily token ceilings (`llm_tokens_per_day = 0`). Users bring their own encrypted API keys in Settings → LLM.
   - **Platform Key Guard:** Strictly blocked from consuming platform-subsidized API keys. If a BYOK user attempts a cloud LLM call without configuring personal keys, the gateway fails closed with an informative advisory to connect keys or use local Ollama models.
 - **Job Discovery & Application:**
-  - 15 multi-channel job searches per day across LinkedIn, Indeed, Glassdoor, and ZipRecruiter.
+  - 15 multi-channel job searches per day across Indeed, LinkedIn, Greenhouse, BuiltIn, Levels.fyi, and Dice.
 - **Storage:**
   - 2,000 MB (2 GB) media and extraction cache storage.
 - **Developer API Access:**
@@ -90,9 +88,9 @@ The commercial ladder is calibrated around realistic human job-search patterns, 
 - **LLM Capabilities:**
   - 5,000,000 monthly OpenAI tokens (enforced strictly at 167,000 tokens per calendar day).
   - 250 cloud LLM requests per day.
-  - Dual-model execution: GPT-5 nano for high-volume indexing; GPT-5 mini for rich resume tailoring diffs and STAR interview briefings.
+  - The same gateway model chain as Free. Headless `/llm/complete` requires a user key.
 - **Job Discovery & Application:**
-  - 25 job search runs per day across LinkedIn, Indeed, Glassdoor, and ZipRecruiter.
+  - 25 job search runs per day across Indeed, LinkedIn, Greenhouse, BuiltIn, Levels.fyi, and Dice.
   - *Priority Scraper Sync & 5 Target Profiles:* Marketed capabilities; currently unenforced in application code (see Audit Gap Backlog).
 - **Storage:**
   - 5,000 MB (5 GB) quota for multiple resume variants, targeted cover letters, and extraction cache trees.
@@ -107,7 +105,7 @@ The commercial ladder is calibrated around realistic human job-search patterns, 
 - **LLM Capabilities:**
   - 15,000,000 monthly OpenAI tokens (enforced strictly at 500,000 tokens per calendar day cost ceiling).
   - 1,000 cloud LLM requests per day.
-  - Dual-model execution with full access to GPT-5 nano and GPT-5 mini for executive panel simulation packs.
+  - The same gateway model chain. Platform keys are allowed on `POST /api/resume/llm/complete` up to the plan’s daily token cap (seeded 500,000).
 - **Job Discovery & Application:**
   - 100 job search runs per day.
   - *Unlimited Target Profiles & Continuous Scraper Daemon:* Marketed capabilities; currently unenforced in application code (see Audit Gap Backlog).
@@ -218,36 +216,45 @@ Enables direct headless prompt completion:
 
 ---
 
-## 6. Admin & Staff Subscription Controls & Management Console
+## 6. Billing Surfaces (Tenant + Staff)
 
-HireEdge provides multi-surface subscription management tools for administrators, support staff, and billing operators across three synchronized interfaces:
+### 6.0 Tenant Plan & usage (`/billing/`, non-staff)
+
+Tenants should keep this page — it is the honest answer to “why did AI stop?” and mirrors **Settings → Usage**.
+
+| Surface | When shown | Behavior |
+| :--- | :--- | :--- |
+| **Current plan + meters** | Always | Live `Plan` name, `price_display`, status, daily LLM/search meters, storage. |
+| **Stripe Checkout / Portal** | `STRIPE_SECRET_KEY` set | Upgrade cards with live quotas; Manage billing portal when a Stripe customer exists. |
+| **Compare plan limits** | Stripe offline | Collapsed reference table only — no Upgrade buttons (plan changes are staff-assigned). |
+
+Tenant / hijack nav label is **Plan & usage**. Staff-as-self use a single Admin Console entry labeled **Billing** (same `/billing/` URL). Preview the tenant page with `?view=candidate`.
+
+`ensure_default_plans()` creates missing built-in slugs (`free` / `byok` / `pro` / `power`) from code defaults and fills blank `price_display`/`description`. All staff quota edits (such as custom `llm_tokens_per_day`) made in the admin console are strictly preserved and never overwritten.
 
 ### 6.1 Billing Plans & Quotas Admin Console (`/billing/`)
-Accessible to all staff users (`request.user.is_staff`) and directly linked in the top navigation under **Tools &rarr; Admin Console &rarr; Subscription &amp; Plans**:
+Accessible to all staff users (`request.user.is_staff` and not hijacked) and linked under **Tools &rarr; Admin Console &rarr; Billing**:
 
 1. **Commercial Tier & Quota Editor (Dropdown Plan Selector):**
    - **Single-Pane Dropdown Selector:** An interactive dropdown selector lets administrators choose one plan to inspect and configure at a time, synchronized with the URL parameter (`?plan=<slug>`).
    - Configure public display names, commercial price strings (e.g. `$29 / mo`), and Stripe Price IDs (`stripe_price_id`).
-   - Calibrate daily quota ceilings for LLM requests (`llm_requests_per_day`), OpenAI tokens (`llm_tokens_per_day`), job scraping runs (`job_searches_per_day`), and disk storage (`storage_mb`).
+   - Calibrate daily quota ceilings for LLM requests (`llm_requests_per_day`), OpenAI tokens (`llm_tokens_per_day`), job scraping runs (`job_searches_per_day`), and disk storage (`storage_mb`). Quota inputs support raw numbers, comma-formatted digits (`200,000`), or metric abbreviations (`200k`, `1.5M`), with live monthly allowance calculation badges (`~6.0M/mo`).
    - Toggle **Developer API Access** (`api_access`) and **BYOK Policy Enforcement** (`byok_required_for_completion`).
    - Designate default onboarding tiers (`is_default`) and activate/deactivate tiers.
    - Dynamic creation modal for bespoke enterprise plans (`create_plan`).
    - Safe plan deletion for non-default tiers with zero active subscribers (`delete_plan`).
-2. **Tenant Subscriptions & Quota Controls Section:**
-   - Full search bar supporting username, email, and Stripe customer ID lookup.
-   - Real-time filters by commercial plan (`sub_plan`) and subscription status (`sub_status`).
-   - **Inline Subscription Adjuster (`update_user_subscription`):** Change a candidate's plan tier, override payment status, or extend trial duration (`+Days`) with one click.
-   - **Emergency Daily Quota Reset (`reset_user_quotas`):** Instantly purges today's `UsageCounter` records for a target candidate to unblock their workflows when daily limits are hit during support inquiries.
+2. **Tenant Operations deep-link:** Card summarizing subscriber counts with a primary CTA to **Staff Console** for per-user plan/status/trial/quota work (no duplicate inline editor on Billing).
 3. **Candidate View Preview:**
    - Staff users can preview the candidate-facing billing interface by clicking **Preview Candidate View** (`/billing/?view=candidate`) or return to the admin console with the top-level staff banner.
 
 ### 6.2 Staff Support Users Directory (`/staff/users/`)
-Accessible to staff with impersonation privileges (`can_impersonate_users`):
+Canonical home for **per-user** billing ops (plan assign, status, trial extend/clear, quota reset, suspend, impersonate). Accessible to staff with impersonation privileges (`can_impersonate_users`):
 - Displays live today-usage metrics (LLM, Search, Storage) alongside user account info.
 - Inline plan selector dropdown (`assign_plan`) allowing immediate assignment of Free, Pro, Power, or custom plans to any tenant or staff account.
 - Status selector dropdown (`set_sub_status`) allowing support operators to transition customer status to `active`, `trialing`, `past_due`, `canceled`, or `unpaid`.
+- **Trial** (`extend_trial` / `clear_trial`) to set or clear `trial_ends_at`.
 - **Reset Quotas** button to clear today's consumption counters directly from the user row.
-- Support impersonation flow (`hijack:acquire`) with mandatory audit logging.
+- Support impersonation flow (`hijack:acquire`) with mandatory audit logging (lands on Career Cockpit).
 
 ### 6.3 Django Admin Console (`/admin/`)
 Low-level database administration via Django ModelAdmin:
@@ -285,6 +292,6 @@ python django_project/manage.py test resume_app.test_llm_policy resume_app.test_
 
 The public marketing landing page (`django_project/resume_app/templates/resume_app/landing.html`) reflects commercial positioning. Engineers and operators should note the enforcement status of marketed points:
 
-1. **Monthly Token Allowances:** Marketed as 250k (Free), 5M (Pro), 15M (Power). In application code, these are strictly enforced as daily ceilings of 8,300 / 167,000 / 500,000 tokens resetting at midnight.
+1. **Monthly Token Allowances:** Marketed as 1.5M (Free), 5M (Pro), 15M (Power). In application code, these are strictly enforced as daily ceilings of 50,000 / 167,000 / 500,000 tokens resetting at midnight.
 2. **Target Profiles & Scraper Sync:** Marketing references "5 target profiles" (Pro) and "continuous scraping daemon / unlimited profiles" (Power). These features are currently commercial copy and unenforced in runtime code (tracked in [Gap Backlog GAP-04](../architecture/entitlement-enforcement-audit.md#gap-04-unenforced-landing-page-claims-profiles--scrapers)).
 3. **Apply Runs:** Mentioned in historical packaging; currently omitted from public marketing cards and decommissioned in code.

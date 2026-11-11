@@ -3,7 +3,7 @@ Fetch list of available models from each LLM provider.
 Used to validate API key (connection works) and to populate model dropdown.
 """
 import logging
-from typing import List
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,13 @@ DEFAULT_MODELS = {
 }
 
 
-def _list_models_generic(api_key: str, fetch_fn, extract_fn, provider: str) -> List[str]:
+def _list_models_generic(
+    api_key: str,
+    fetch_fn,
+    extract_fn,
+    provider: str,
+    limit: Optional[int] = 50,
+) -> List[str]:
     """
     Shared wrapper: call provider SDK/http, extract ids, apply defaults and logging.
     """
@@ -39,7 +45,9 @@ def _list_models_generic(api_key: str, fetch_fn, extract_fn, provider: str) -> L
         ids = extract_fn(resp) or []
         if not ids:
             return [DEFAULT_MODELS[provider]]
-        return sorted(ids)[:50]
+        if limit is not None:
+            return sorted(ids)[:limit]
+        return sorted(ids)
     except Exception as e:
         logger.warning("%s list_models failed: %s", provider, e)
         raise
@@ -191,14 +199,17 @@ def list_models_ollama_local(host_or_ip: str) -> List[str]:
 
 
 def list_models_openrouter(api_key: str) -> List[str]:
-    """List models from OpenRouter (OpenAI-compatible /v1/models)."""
+    """List text generation models from OpenRouter (OpenAI-compatible /v1/models)."""
 
     def fetch(key: str):
         import requests
 
+        headers = {}
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
         r = requests.get(
             "https://openrouter.ai/api/v1/models",
-            headers={"Authorization": f"Bearer {key}"},
+            headers=headers,
             timeout=30,
         )
         r.raise_for_status()
@@ -206,10 +217,29 @@ def list_models_openrouter(api_key: str) -> List[str]:
 
     def extract(data: dict) -> List[str]:
         rows = data.get("data") or []
-        ids = [m["id"] for m in rows if isinstance(m, dict) and m.get("id")]
+        ids: List[str] = []
+        for m in rows:
+            if not isinstance(m, dict) or not m.get("id"):
+                continue
+            arch = m.get("architecture") or {}
+            out_mods = arch.get("output_modalities") or []
+            modality = str(arch.get("modality") or "")
+
+            # Must support text output
+            if "text" not in out_mods and not modality.endswith("->text"):
+                continue
+
+            # Exclude dedicated non-text media generation models (image, audio, video)
+            non_text_mods = {"image", "audio", "video"}
+            if any(t in out_mods for t in non_text_mods):
+                mid = str(m.get("id") or "").lower()
+                if not mid.startswith("openrouter/auto"):
+                    continue
+
+            ids.append(m["id"])
         return ids
 
-    return _list_models_generic(api_key, fetch, extract, "OpenRouter")
+    return _list_models_generic(api_key, fetch, extract, "OpenRouter", limit=None)
 
 
 def list_models_for_provider(provider: str, api_key: str) -> List[str]:

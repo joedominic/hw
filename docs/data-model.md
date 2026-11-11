@@ -26,13 +26,13 @@ erDiagram
     User ||--o{ EmployerInterviewEvent : owns
     User ||--o{ Subscription : has
     User ||--o{ CustomerApiKey : owns
-    User ||--o{ PromptVersionHistory : owns
+    User ||--o{ PromptVersionHistory : authors
 
     UserResume ||--o{ ResumeChunk : contains
     UserResume ||--o{ CareerProfileAnalysis : analyzes
     OptimizedResume ||--o{ AgentLog : logs
     JobSearchTask ||--o{ JobSearchTaskRun : executes
-    SearchProfile ||--o{ JobSearchTask : configures
+    SearchProfile ||--o| JobSearchTask : configures
 
     JobListing ||--o{ PipelineEntry : references
     PipelineEntry ||--o{ EmployerInterviewEvent : tracks
@@ -40,38 +40,41 @@ erDiagram
 ```
 
 ### 2.1 Shared Global Models (No Tenant Owner)
-- **`JobListing`**: Deduplicated catalog of external job postings aggregated across JobSpy (Indeed, LinkedIn), Greenhouse, BuiltIn, Levels.fyi, and Dice. Contains posting title, company, location, salary, description, posted date, source URL, and hash fingerprints.
+- **`JobListing`**: Deduplicated catalog of external job postings aggregated across JobSpy (Indeed, LinkedIn), Greenhouse, BuiltIn, Levels.fyi, and Dice. Unique on `(source, external_id)`. Columns include title, company, location, description, `url`, `posted_at`, `fetched_at`, `raw_json`, and the authenticity audit fields from migration `0055`. Salary is not a column.
 - **`JobDescription`**: Reusable job description text for optimizer runs.
 - **`SystemPromptProfile`**: Singleton admin-managed prompt templates (empty fields fall back to `prompts.py` defaults). Templates support safe interpolation via `inject_variables_into_template`.
-- **`AtsJudgeProfile`**: Reusable ATS scoring prompt templates (`owner = null` for global presets).
+- **`PromptVersionHistory`**: Global Prompt Studio revision log. `author` is an optional staff user (`SET_NULL`), not a tenant `owner`.
+- **`Plan`**, **`StripeWebhookEvent`**, **`FailedTaskQuarantine`**: Global rows with no `owner`. `FailedTaskQuarantine` is the Huey dead-letter queue (`status` is `quarantined`, `replayed`, or `dismissed`) and stores `task_name`, `task_id`, arg/kwarg reprs, error class, message, traceback, `created_at`, and `resolved_at`.
+- **`ImpersonationAuditLog`**: Staff impersonation ledger with `hijacker` and `target`, not `owner`.
+- **`AtsJudgeProfile`**: Runtime presets are rows with `owner` null. The nullable `owner` column remains so legacy per-user rows can exist; those rows are ignored at runtime.
 
 ---
 
 ### 2.2 Resumes & AI Optimization
-- **`UserResume`**: User-uploaded source resume PDFs, parsed text, and optional default `SearchProfile` association.
+- **`UserResume`**: Uploaded PDF plus `original_filename`, a legacy `track` slug, and `is_library`. The profile binding is `SearchProfile.resume`, not a foreign key on `UserResume`.
 - **`ResumeChunk`**: Chunked text and vector embeddings generated from `UserResume` for dense retrieval (RAG).
-- **`CareerProfileAnalysis`**: Output of the AI Resume Profiler (`/jobs/profiler/`). Stores executive positioning, core competencies, target job titles, market salary bands, and raw LLM extraction JSON linked to a `UserResume`.
-- **`OptimizedResume`**: Core output of the resume optimizer. Stores generated markdown/text, ATS fit score, recruiter fit score, token usage, cover letter, and `optimizer_context_snapshot` (char budgets for writer/judge JD and resume inputs).
+- **`CareerProfileAnalysis`**: Output of the AI Resume Profiler (`/jobs/profiler/`). One `resume` foreign key plus `analysis_data` JSON. Named profiler sections live inside that JSON, not as columns.
+- **`OptimizedResume`**: Core output of the resume optimizer. The generated body is `optimized_content`. Also stores `ats_score`, `recruiter_score`, token totals, `cover_letter`, and `optimizer_context_snapshot`. Status is `queued`, `running`, `completed`, or `failed`.
 - **`AgentLog`**: Execution trace logging intermediate outputs from Writer, ATS Judge, and Recruiter Judge nodes.
 - **`OptimizerWorkflow`**: Configurable multi-step optimization workflows (system-wide when `owner = null`).
 
 ---
 
 ### 2.3 Job Discovery, Search Profiles & Automation
-- **`SearchProfile`**: Primary user-facing job search context. Combines search query (`search_term`), target location, enabled boards (`site_names`), target resume, and scheduling parameters.
-  - *Note on Model Aliasing:* `SavedJobSearch` is defined directly in `models.py` as `SavedJobSearch = SearchProfile` for backward compatibility during Phase 1 consolidation.
-- **`Track`**: Legacy track bucket model (`ic`, `mgmt`, `general`), currently retained and dual-written alongside `SearchProfile` during Phase 1 consolidation.
-- **`JobSearchTask`**: Scheduled search automation task. Stores execution schedule (`daily`, `weekdays`, `weekly`, `custom` cron), start time, and active toggle.
-- **`JobSearchTaskRun`**: Execution record of a search task. Stores run timestamps, completion status (`running`, `completed`, `failed`), `jobs_fetched`, `jobs_added_to_pipeline`, and `details` JSON (categorized disposition breakdown).
-- **`JobListingAction`**: Records per-user actions on job listings: likes, dislikes, saves (favourites), hides, and applied flags.
-- **`JobListingEmbedding`**: Dense vector representation of listings for preference calculations.
-- **`JobListingTrackMetrics`**: Stores the user's learned preference centroid vector for a specific search profile.
-- **`UserDisqualifier`**: User-defined exclusion keywords (titles, companies, or locations) used to screen incoming jobs.
+- **`SearchProfile`**: Primary user-facing job search context. Combines `name`, per-owner `slug`, `search_term`, `location`, `site_names`, optional `resume`, `min_score`, `results_wanted`, `llm_model`, and `is_default`. Schedule lives here: `schedule_interval` (`off`, `daily`, `weekdays`, `weekly`, `custom`), `schedule_time`, `schedule_cron`, `schedule_is_active`, `schedule_next_run_at`.
+  - *Note on Model Aliasing:* `SavedJobSearch = SearchProfile` in `models.py`.
+- **`Track`**: Legacy per-user slug bucket, dual-written with `SearchProfile`. `ensure_baseline` seeds `general`. `ic` and `mgmt` are examples, not a closed enum.
+- **`JobSearchTask`**: One-to-one `saved_search` → `SearchProfile` (`related_name="scheduled_task"`). The execution copy is its own row: `search_term`, `location`, `track` (default `ic`), `jobs_to_fetch`, `site_name`, `frequency` (validated 5-field cron), `start_time`, `is_active`, `next_run_at`.
+- **`JobSearchTaskRun`**: Execution record. Status is `running`, `completed`, or `failed`. Counts are `jobs_fetched`, `jobs_after_filter`, and `jobs_added_to_pipeline`. `jobs_eliminated` is computed (`jobs_fetched - jobs_after_filter`). `details` is a list audit log, plus `error_message` and `finished_at`.
+- **`JobListingAction`**: Per-user feedback. `action` is `liked`, `disliked`, `hidden`, or `saved`. There is no `applied` action. Scoped by `owner`, `search_profile`, and the legacy `track` slug.
+- **`JobListingEmbedding`**: Owner-scoped liked or disliked vector for one listing and profile (`embedding_type` `liked` or `disliked`). Preference centroids are computed from these rows. This is not a shared catalog embedding.
+- **`JobListingTrackMetrics`**: Per-job, per-profile score cache: `focus_percent`, `focus_after_penalty`, `preference_margin`, `last_scored_at`. It does not store a centroid.
+- **`UserDisqualifier`**: One exclusion `phrase` per row (unique per owner). There is no title/company/location type.
 
 ---
 
 ### 2.4 Pipeline, Matching & Interview Tracking
-- **`PipelineEntry`**: Core Kanban board entry linking a tenant `User` to a global `JobListing`. Stores current stage (`pipeline`, `vetting`, `applying`, `done`), fit score, interview probability, generated interview prep, and persistent Skill Radar diagnostics:
+- **`PipelineEntry`**: Core Kanban board entry linking a tenant `User` to a global `JobListing`. Board tabs use `pipeline`, `vetting`, `applying`, and `done` (normal UI: New, Review, Applying, Applied). `Stage` also includes `deleted` and `expired`. A blank `stage` means pipeline. Soft removal sets `stage='deleted'` and `removed_at`. There is no `is_saved`, `saved_at`, `shortlisted_at`, `is_applied`, or `focus_score` column. Also stores `search_profile`, legacy `track`, `applied_at`, `applied_resume_markdown`, `applied_optimized_resume`, `interview_prep`, `post_apply_substatus`, and `next_interview_at`. Skill Radar columns:
   - `vetting_match_score` (Integer): Reconciled technical requirements match percentage (0–100%).
   - `vetting_interview_probability` (Integer): Calibrated screening callback odds (0–100%).
   - `vetting_interview_reasoning` (TextField): 1-sentence executive fit diagnosis.
@@ -80,21 +83,19 @@ erDiagram
   - `vetting_interview_resume_id` / `vetting_interview_scored_at`: Associated resume and evaluation timestamp.
 - **`JobMatchResult`**: Semantic and keyword fit score between a specific resume and job description.
 - **`EmployerInterviewEvent`**: Tracks real-world interview progression for a pipeline opportunity:
-  - `round_type`: Screenings, hiring manager interview, technical assessment, on-site, offer, rejection (`PipelineEntry.PostApplySubstatus`).
-  - `status`: Scheduled, completed, cancelled.
-  - `scheduled_at` / `completed_at`: Timestamps.
-  - `interviewer_info`, `notes`, `feedback`: Post-interview notes.
+  - `round_type`: `PipelineEntry.PostApplySubstatus`, default `recruiter_call`.
+  - `status`: `scheduled`, `completed`, or `cancelled` (`max_length=16`).
+  - `scheduled_at`, `duration_minutes` (default 45), `interviewer_names`, `location_or_link`, `notes`. There is no `completed_at`, `interviewer_info`, or `feedback` column.
 
 ---
 
 ### 2.5 LLM Configuration, Governance & Prompts
-- **`LLMProviderConfig`**: Stores user-encrypted API keys (Fernet) and default model choices for OpenAI, Anthropic, Groq, Google, and Ollama.
+- **`LLMProviderConfig`**: One Fernet-encrypted key row per `(owner, provider)`. Providers in `LLM_PROVIDERS`: OpenAI, Anthropic, Groq, Google AI Studio, Ollama Cloud, Ollama Local, OpenRouter.
 - **`LLMProviderPreference`**: Ordered list of fallback models and optional RPM/TPM limits.
 - **`TenantPromptModelPreference`**: Per-tenant model assignments for specific prompts (e.g. assigning local `ollama::qwen2.5:7b` to `resume_judge` or `matching`).
 - **`SystemPromptProfile`**: Global singleton storing customizable system, user, and legacy combined prompts across active platform prompts:
-  - *Optimization Pipeline:* `writer` (Resume Writer), `resume_judge` (Unified Resume Judge), `pipeline_resume_refine` (Pipeline Resume Refine).
-  - *Evaluation & Vetting:* `skill_radar` (Dedicated Pipeline Skill Radar & Fit Diagnostics), `matching` (Job Matching Scorer), `insights` (Batch Job Insights), `jd_cleanse` (JD Cleanser & Parser).
-  - *Candidate & Career Tools:* `career_profiler` (Universal Career Profiler), `pipeline_skill_extract` (Pipeline LLM Skill Extractor), `cover_letter` (Cover Letter Architect), `interview_prep` (Interview Prep Coach).
+  - Prompt Studio keys (14, from `_PROMPT_SPEC`): `writer`, `resume_judge`, `pipeline_resume_refine`, `ats_judge`, `recruiter_judge`, `skill_radar`, `matching`, `insights`, `jd_cleanse`, `fit_check`, `career_profiler`, `pipeline_skill_extract`, `cover_letter`, `interview_prep`.
+  - `job_authenticity*` columns exist on the singleton and are not Prompt Studio keys.
 - **`AtsJudgeProfile`**: Customizable ATS evaluation rule profiles with custom scoring weights and system/user prompts.
 - **`PromptVersionHistory`**: Version control audit log for prompt modifications made in Prompt Studio (`/resume/prompts/`). Stores `prompt_key`, `version_number`, `system_prompt`, `user_prompt`, `legacy_combined`, and `change_summary`.
 - **`LLMAppUsageTotals`**: Lifetime token and request count rollups per user.
@@ -105,36 +106,42 @@ erDiagram
 ---
 
 ### 2.6 SaaS, Billing, Identity & Removed Features
-- **`Plan`**: Commercial subscription tiers (`free`, `byok`, `pro`, `power`) defining daily quotas (`llm_tokens_per_day`, `llm_requests_per_day`, `job_searches_per_day`, `storage_mb`, `api_access`, `byok_required_for_completion`). Legacy `apply_runs_per_day` was permanently removed in migration `0068`.
-- **`Subscription`**: Tenant plan binding, Stripe customer ID, subscription ID, billing status (`active`, `past_due`, `canceled`), and `past_due_since` grace period clock (backfilled via migration `0069`).
+- **`Plan`**: Commercial subscription rows. Seeded slugs are `free`, `byok`, `pro`, and `power` (data, not a model enum). Daily caps are `llm_requests_per_day`, `llm_tokens_per_day`, and `job_searches_per_day` (`0` means unlimited, except token resolution in `plan_limit()` — see the plans doc). Also `storage_mb`, `api_access`, `byok_required_for_completion`, `price_display`, `stripe_price_id`, `is_active`, `is_default`, and `sort_order`. `apply_runs_per_day` was removed in migration `0068`. Migration `0066` deleted slug `unlimited` and moved those subscriptions to `power`.
+- **`Subscription`**: Tenant plan binding, Stripe customer ID, subscription ID, and billing status (`trialing`, `active`, `past_due`, `canceled`, `unpaid`). `past_due_since` was added in `0068`; `0069` backfills existing `past_due` rows from `updated_at`.
 - **`UsageCounter`**: Durable per-day metric ledger tracking daily quota consumption.
 - **`CustomerApiKey`**: Hashed API keys (HMAC prefix lookup) for authenticating to the Django Ninja REST API.
 - **`StripeWebhookEvent`**: Webhook idempotency log preventing duplicate transaction processing.
 - **`ImpersonationAuditLog`**: Audit ledger recording staff impersonation sessions via `django-hijack`.
 - **`UserExperienceSettings`**: Controls UI mode (`normal` vs `power`), onboarding completion, and email verification status.
-- **`AppAutomationSettings`**: Per-user automation toggles and the global `stop_llm_requests` emergency kill-switch.
-  - *Apply-Agent Status:* Autonomous form-filling application attempts and browser agent fields (`apply_agent_enabled`, `apply_automation_mode`, `apply_browser_show_window`, etc.) were **permanently removed in migration `0038`**. Applications now terminate at candidate approval ("Approve & Mark Applied"), followed by post-application tracking via `EmployerInterviewEvent`.
-- **`ApplicantProfile`**: General applicant contact details and demographic information.
+- **`AppAutomationSettings`**: Per-user automation toggles, including `weekly_target_applications` and the per-user `stop_llm_requests` kill switch. The switch is not a process-wide singleton; `llm/policy.py` reads `get_for_user(user)`.
+  - *Removed:* Migration `0038` deleted `ApplicationAttempt`, `ApplicationAttemptStep`, `AtsAutoSubmitStats`, and `SiteCredential`, and removed the `apply_agent_*` / `apply_automation_mode` / `apply_browser_show_window` settings. Submit stops at “Approve & Mark Applied” (`mark_done`).
+- **`ApplicantProfile`**: One-to-one contact and application answers: name, email, phone, location, links, work authorization, sponsorship, salary expectation, cover-letter template, `custom_qa_pairs`, and `include_eeo`. It is not an apply-agent attempt log.
 - **`UserPromptProfile`**: Legacy model retained for schema compatibility (unused at runtime).
 
 ---
 
 ## 3. Pipeline Stages & Stage Transitions
 
-The candidate journey transitions rows in `PipelineEntry` across 4 explicit stages:
+Board tabs (`BOARD_STAGES`) are `pipeline`, `vetting`, `applying`, and `done` (normal UI: New, Review, Applying, Applied). `PipelineEntry.Stage` also includes `deleted` and `expired`. A blank `stage` means pipeline. Leaving the board calls `mark_deleted()` (`stage='deleted'`, `removed_at` set). `can_move_to_vetting()` allows blank or pipeline. `can_move_to_applying()` allows pipeline or vetting. `can_mark_done()` allows any active row.
+
+Cockpit advance posts `action="save"`. `_apply_save_action` maps the current board: pipeline → `move_to_vetting()`, vetting → `move_to_applying()`, applying → `mark_done()`. The `E` hotkey submits that same form (the card’s `.shortlist-btn`).
 
 | Trigger / Action | Origin Stage | Destination Stage | DB Fields Written & Side Effects |
 |------------------|--------------|-------------------|-----------------------------------|
-| **Automated Sourcing Run** (Huey worker `run_job_search_task`) | *None (New Job)* | `pipeline` (New) | Creates `PipelineEntry(owner, job, track, stage='pipeline', focus_score, focus_percent)`. |
-| **Sandbox `+ Add to Review`** (`POST /api/resume/jobs/{id}/save?track={slug}`) | *None* or External | `vetting` (Review) | Creates/updates `PipelineEntry(stage='vetting', is_saved=True, saved_at=now())`; writes `JobListingAction(action_type='save')`. |
-| **Shortlist / Advance from New** (`action="shortlist"` or `E` hotkey on New card) | `pipeline` | `vetting` (Review) | Updates `PipelineEntry.stage = 'vetting'`, sets `shortlisted_at = now()`. |
-| **Advance from Review** (`action="ready"` or `E` hotkey on Review card) | `vetting` | `applying` (Applying) | Updates `PipelineEntry.stage = 'applying'`. |
-| **Save Draft (Optimizer)** (`action="save_draft"` or `Ctrl+S`) | `applying` | `applying` (stays) | Persists edited draft markdown to `OptimizedResume.optimized_markdown` and `PipelineEntry.applied_resume_markdown`. Keeps card in Applying for user review and PDF/DOCX downloads. |
-| **I Submitted This / Mark Applied** (`action="approve_and_mark_applied"` or `Ctrl+Enter` in Optimizer, or `mark-applied` API) | `applying` (or `vetting`) | `done` (Applied) | Updates `PipelineEntry.stage = 'done'`, sets `is_applied = True`, `applied_at = now()`, associates `optimized_resume_id`; writes `JobListingAction(action_type='applied')`. |
-| **Like / Unlike** (`POST /api/resume/jobs/{id}/like` or `L` hotkey) | Any stage | *No stage change* | Writes `JobListingAction(action_type='like')`; recalculates `JobListingTrackMetrics.centroid_embedding`. |
-| **Dislike / Exclude** (`POST /api/resume/jobs/{id}/dislike` or `X` hotkey) | `pipeline` / `vetting` | *Removed from Pipeline* | Deletes `PipelineEntry`; writes `JobListingAction(action_type='dislike')`; updates preference centroid. |
-| **Hide** (`POST /api/resume/jobs/{id}/hide`) | Search / Sandbox | *Hidden from view* | Writes `JobListingAction(action_type='hide')` without updating preference centroid. |
-| **Unsave** (`POST /api/resume/jobs/{id}/unsave`) | Any stage | *Removed from Pipeline* | Deletes `PipelineEntry`; deletes `JobListingAction(action_type='save')`. |
+| **Automated Sourcing Run** (`run_job_search_task`) | *None (New Job)* | `pipeline` (New) | Upserts `PipelineEntry` with `stage='pipeline'` (or restores a soft-deleted row). Preference scores are `JobListingTrackMetrics.focus_percent`, `focus_after_penalty`, and `preference_margin`. |
+| **Find jobs Save to Cockpit** (`POST /api/resume/jobs/{id}/save`) | *None*, soft-deleted, or an existing active row | `vetting` for a new or restored row that is not already Applying or Done; an active row keeps its stage | Writes `JobListingAction.action='saved'`. Query params are `track` and/or `profile`. |
+| **Advance (`action="save"`, or `E`)** | `pipeline` | `vetting` | `move_to_vetting()`. No `shortlisted_at`. |
+| **Advance (`action="save"`, or `E`)** | `vetting` | `applying` | `move_to_applying()`. |
+| **Advance (`action="save"`, or `E`)** | `applying` | `done` | `mark_done()` sets `applied_at`, snapshots `applied_resume_markdown` / `applied_optimized_resume`, and records `JobListingAction.action='liked'`. |
+| **Save Draft** (`action="save_draft"` or `Ctrl+S`) | existing row, or none | unchanged, or new row at `applying` | Writes `OptimizedResume.optimized_content` and `PipelineEntry.applied_resume_markdown`. Does not change stage when the entry already exists. |
+| **I Submitted This** (`action="approve_and_mark_applied"`) | any active stage | `done` | Calls `mark_done()` (liked action, not an `applied` action). |
+| **`POST /api/resume/jobs/{id}/mark-applied`** | unchanged | unchanged | Updates `JobMatchResult.status='applied'` for the given resume. Does not move `PipelineEntry`. |
+| **Like** (`POST .../like` or `L`) | any | unchanged | `action='liked'` and a `JobListingEmbedding` row. Centroids are computed from embeddings, not stored on `JobListingTrackMetrics`. |
+| **Dislike API** (`POST .../dislike`) | unchanged | unchanged | `action='disliked'` and a dislike embedding. The pipeline row stays. |
+| **Dislike on the board** (`action="dislike"`) | any board stage | soft-removed | Dislike action, then `mark_deleted()`. |
+| **Remove (`action="delete"`, or `X`)** | any board stage | soft-removed | `mark_deleted()` only. `X` submits the delete form when it is present, otherwise the dislike form. |
+| **Hide** (`POST .../hide`) | search results | hidden from search | `action='hidden'`. No embedding. |
+| **Unsave** (`POST .../unsave`) | any | soft-removed only when the row is not Applying or Done | Deletes `action='saved'`. Applying and Done rows stay. |
 
 ---
 

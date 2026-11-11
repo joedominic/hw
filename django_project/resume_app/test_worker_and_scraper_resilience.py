@@ -77,10 +77,8 @@ class JobSourceCircuitBreakerTest(TestCase):
         self.cb.record_failure("Failure 2")
         self.assertEqual(self.cb.get_status()["state"], "OPEN")
 
-        # Manually backdate failure time to simulate cooldown expiration
-        data = self.cb._get_state_data()
-        data["last_failure_time"] = time.time() - 10
-        self.cb._save_state_data(data)
+        # Cooldown already elapsed: the open key is in the past, so the next call probes.
+        cache.set(self.cb._open_key(), time.time() - 1, timeout=30)
 
         # Should now be available (HALF_OPEN trial probe)
         self.assertTrue(self.cb.is_available())

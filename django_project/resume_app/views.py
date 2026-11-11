@@ -425,10 +425,13 @@ def optimizer_view(request):
                 llm_key_error = str(e)
                 llm_key_stored = False
     else:
-        llm_key_error = (
-            "No cloud LLM available. Connect an API key in Settings, "
-            "or ask an admin to enable the platform default."
-        )
+        if optimizer_llm.get("blocked_by_byok_plan"):
+            llm_key_error = optimizer_llm.get("error")
+        else:
+            llm_key_error = (
+                "No cloud LLM available. Connect an API key in Settings, "
+                "or ask an admin to enable the platform default."
+            )
 
     # Prompts: system-wide (Prompt Library / prompts.py); read-only on optimizer.
     try:
@@ -707,11 +710,11 @@ def optimizer_view(request):
 
             token_preflight = optimizer_token_preflight(request.user)
             if not llm_key_stored or not selected_provider:
-                messages.error(
-                    request,
+                err_msg = optimizer_llm.get("error") if optimizer_llm.get("blocked_by_byok_plan") else (
                     "No cloud LLM available. Connect an API key in Settings, "
-                    "or ask an admin to enable the platform default.",
+                    "or ask an admin to enable the platform default."
                 )
+                messages.error(request, err_msg)
             elif token_preflight.get("blocked"):
                 messages.error(
                     request,
@@ -974,18 +977,27 @@ def llm_test_view(request):
 
     stop_llm = AppAutomationSettings.get_for_user(request.user).stop_llm_requests
 
-    provider = (request.GET.get("provider") or "").strip()
-    if not provider:
-        provider = request.session.get("active_llm_provider") or _get_active_llm_provider(request.user, request) or ""
-    if not provider:
-        provider = (
-            "Ollama Local"
-            if LLMProviderConfig.objects.for_user(request.user).filter(provider="Ollama Local").exists()
-            else next(iter(LLM_PROVIDERS))
-        )
+    # Only expose providers configured in the user's preference list (or connected keys)
+    pref_rows = list(_get_provider_preference_rows(request.user).order_by("priority", "id"))
+    pref_providers = []
+    seen_provs = set()
+    for p in pref_rows:
+        pr = p.provider_config.provider
+        if pr not in seen_provs and pr in LLM_PROVIDERS:
+            seen_provs.add(pr)
+            pref_providers.append(pr)
 
-    if provider not in LLM_PROVIDERS:
-        provider = next(iter(LLM_PROVIDERS))
+    if not pref_providers:
+        connected_qs = LLMProviderConfig.objects.for_user(request.user).filter(
+            encrypted_api_key__isnull=False
+        ).exclude(encrypted_api_key="")
+        pref_providers = [c.provider for c in connected_qs if c.provider in LLM_PROVIDERS]
+
+    available_providers = pref_providers
+
+    provider = (request.GET.get("provider") or "").strip()
+    if provider not in available_providers:
+        provider = available_providers[0] if available_providers else (next(iter(LLM_PROVIDERS)))
 
     config = LLMProviderConfig.objects.for_user(request.user).filter(provider=provider).first()
     api_key_decrypted = ""
@@ -1059,7 +1071,7 @@ def llm_test_view(request):
                         "resume_app/llm_test.html",
                         {
                             "provider": provider,
-                            "providers": sorted(LLM_PROVIDERS),
+                            "providers": available_providers,
                             "models": models,
                             "selected_model": model,
                             "prompt": prompt,
@@ -1082,7 +1094,7 @@ def llm_test_view(request):
         "resume_app/llm_test.html",
         {
             "provider": provider,
-            "providers": sorted(LLM_PROVIDERS),
+            "providers": available_providers,
             "models": models,
             "selected_model": selected_model,
             "prompt": "",
@@ -3204,7 +3216,7 @@ def health_ready_view(request):
     from django.db import connections
     from django.core.cache import cache
 
-    checks = {"live": True}
+    checks = {"live": True, "app_env": getattr(settings, "APP_ENV", "development")}
     status_code = 200
 
     # 1. Database check
@@ -3220,14 +3232,20 @@ def health_ready_view(request):
 
     # 2. Cache / Redis check
     try:
-        cache_key = "_readiness_check"
-        cache.set(cache_key, "1", timeout=10)
-        val = cache.get(cache_key)
-        if val == "1":
-            checks["cache"] = "ok"
-        else:
-            checks["cache"] = "unexpected_value"
+        cache_backend = str(settings.CACHES.get("default", {}).get("BACKEND", ""))
+        checks["cache_backend"] = cache_backend.rsplit(".", 1)[-1]
+        if cache_backend.endswith("LocMemCache") and getattr(settings, "IS_PRODUCTION", False):
+            checks["cache"] = "locmem_in_production"
             status_code = 503
+        else:
+            cache_key = "_readiness_check"
+            cache.set(cache_key, "1", timeout=10)
+            val = cache.get(cache_key)
+            if val == "1":
+                checks["cache"] = "ok"
+            else:
+                checks["cache"] = "unexpected_value"
+                status_code = 503
     except Exception as exc:
         logger.warning("Readiness probe cache check failed: %s", exc)
         checks["cache"] = "error"

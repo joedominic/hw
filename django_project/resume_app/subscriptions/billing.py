@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from .entitlements import assign_plan, ensure_default_plans, get_or_create_subscription
@@ -93,12 +94,28 @@ def apply_stripe_event(event: dict[str, Any]) -> bool:
     event_id = event.get("id") or ""
     if not event_id:
         return False
-    if StripeWebhookEvent.objects.filter(event_id=event_id).exists():
-        return False
 
     etype = event.get("type") or ""
     data = (event.get("data") or {}).get("object") or {}
 
+    # Claim the id inside a savepoint. IntegrityError marks the surrounding
+    # atomic block as aborted unless the failed statement has its own savepoint.
+    with transaction.atomic():
+        try:
+            with transaction.atomic():
+                StripeWebhookEvent.objects.create(
+                    event_id=event_id,
+                    event_type=etype,
+                    payload=event,
+                )
+        except IntegrityError:
+            return False
+        _apply_stripe_effects(etype, data)
+    return True
+
+
+def _apply_stripe_effects(etype: str, data: dict[str, Any]) -> None:
+    """Apply a Stripe event that this process has already claimed."""
     if etype == "checkout.session.completed":
         user_id = (data.get("metadata") or {}).get("user_id") or data.get("client_reference_id")
         plan_slug = (data.get("metadata") or {}).get("plan_slug")
@@ -184,10 +201,3 @@ def apply_stripe_event(event: dict[str, Any]) -> bool:
                 sub.status = Subscription.Status.ACTIVE
                 sub.save(update_fields=["status", "updated_at"])
                 logger.info("invoice.paid user=%s → active", user.pk)
-
-    StripeWebhookEvent.objects.create(
-        event_id=event_id,
-        event_type=etype,
-        payload=event,
-    )
-    return True

@@ -999,6 +999,61 @@ class APITestCase(TenantTestCase):
     def test_openrouter_is_supported_provider(self):
         self.assertIn("OpenRouter", LLM_PROVIDERS)
 
+    def test_openrouter_filters_non_text_models_and_does_not_truncate(self):
+        from unittest.mock import patch, MagicMock
+        from resume_app.llm.services import list_models_openrouter
+
+        # Generate 70 mock models: 65 text generation models and 5 non-text models
+        mock_data = []
+        for i in range(65):
+            mock_data.append({
+                "id": f"provider/model-text-{i:03d}",
+                "architecture": {
+                    "modality": "text->text",
+                    "output_modalities": ["text"],
+                },
+            })
+        # Add non-text models (image, audio, video)
+        mock_data.extend([
+            {
+                "id": "google/gemini-flash-image",
+                "architecture": {"modality": "text+image->text+image", "output_modalities": ["image", "text"]},
+            },
+            {
+                "id": "openai/gpt-audio-preview",
+                "architecture": {"modality": "text+audio->text+audio", "output_modalities": ["text", "audio"]},
+            },
+            {
+                "id": "google/gemini-omni-video",
+                "architecture": {"modality": "text+video->text+video", "output_modalities": ["text", "video"]},
+            },
+        ])
+        # Add openrouter/auto router
+        mock_data.append({
+            "id": "openrouter/auto",
+            "architecture": {
+                "modality": "text+image+file->text+image",
+                "output_modalities": ["text", "image"],
+            },
+        })
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"data": mock_data}
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch("requests.get", return_value=mock_resp):
+            models = list_models_openrouter("test_key")
+
+        # Must not truncate to 50
+        self.assertEqual(len(models), 66)  # 65 text models + openrouter/auto
+        # Must contain openrouter/auto and text models
+        self.assertIn("openrouter/auto", models)
+        self.assertIn("provider/model-text-060", models)
+        # Must exclude non-text generation models
+        self.assertNotIn("google/gemini-flash-image", models)
+        self.assertNotIn("openai/gpt-audio-preview", models)
+        self.assertNotIn("google/gemini-omni-video", models)
+
     def test_optimize_rejects_invalid_provider(self):
         uploaded = SimpleUploadedFile(
             "x.pdf", b"%PDF", content_type="application/pdf"

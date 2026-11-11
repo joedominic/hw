@@ -80,6 +80,11 @@ class Command(BaseCommand):
             default=500,
             help="Rows per INSERT in the Python dumper (default 500).",
         )
+        parser.add_argument(
+            "--to-storage",
+            action="store_true",
+            help="Also upload the dump to default storage under backups/ (S3 in production).",
+        )
 
     def handle(self, *args, **options):
         db = settings.DATABASES["default"]
@@ -112,6 +117,7 @@ class Command(BaseCommand):
 
             size_mb = out_path.stat().st_size / 1024 / 1024
             self.stdout.write(self.style.SUCCESS(f"Backup written: {out_path} ({size_mb:.2f} MB)"))
+            self._maybe_upload(out_path, options["to_storage"])
             return
 
         if "mysql" not in db.get("ENGINE", ""):
@@ -137,6 +143,18 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(f"Backup written: {out_path} ({size_mb:.2f} MB)")
         )
+        self._maybe_upload(out_path, options["to_storage"])
+
+    def _maybe_upload(self, out_path: Path, enabled: bool) -> None:
+        if not enabled:
+            return
+        from django.core.files.base import ContentFile
+        from django.core.files.storage import default_storage
+
+        key = f"backups/{out_path.name}"
+        with out_path.open("rb") as handle:
+            saved = default_storage.save(key, ContentFile(handle.read()))
+        self.stdout.write(self.style.SUCCESS(f"Backup uploaded: {saved}"))
 
     # -- native mysqldump ---------------------------------------------------
     def _dump_native(self, dump_bin, db, out_path: Path, gzip_out: bool) -> None:

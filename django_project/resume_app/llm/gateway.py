@@ -552,6 +552,18 @@ def _system_default_candidates(
     specs = SYSTEM_DEFAULT_MODELS.get(qk) or SYSTEM_DEFAULT_MODELS.get("*") or []
     out = []
     seen = set()
+
+    is_byok_user = False
+    if user is not None and getattr(user, "is_authenticated", False):
+        try:
+            from ..subscriptions import get_user_plan, staff_bypasses_quotas
+            if not staff_bypasses_quotas(user):
+                u_plan = get_user_plan(user)
+                if u_plan and (getattr(u_plan, "slug", "") == "byok" or getattr(u_plan, "byok_required_for_completion", False)):
+                    is_byok_user = True
+        except Exception:
+            pass
+
     for spec in specs:
         prov = spec["provider"]
         model = spec["model"]
@@ -561,6 +573,8 @@ def _system_default_candidates(
         seen.add(key)
 
         is_loc = provider_is_local(prov)
+        if is_byok_user and not is_loc:
+            continue
         if only_local and not is_loc:
             continue
         if not allow_local and is_loc:

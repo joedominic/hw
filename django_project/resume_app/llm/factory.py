@@ -407,12 +407,15 @@ def get_llm(provider: str, api_key: str = None, model: str = None, user=None, me
         call_metadata.setdefault("trace_name", t_name)
         call_metadata.setdefault("generation_name", g_name)
 
+    from .policy import invoke_timeout_seconds
+
     llm = LiteLLMChatModel(
         model=litellm_model,
         api_key=key,
         api_base=api_base,
         extra_headers=extra_headers,
         metadata=call_metadata or None,
+        timeout=invoke_timeout_seconds(),
     )
 
     # Attach lightweight metadata for runtime failover logic and tenant ownership.

@@ -105,7 +105,10 @@ def _get_redis():
                 kwargs["password"] = password
             if getattr(settings, "REDIS_USE_TLS", False):
                 kwargs["ssl"] = True
-                kwargs["ssl_cert_reqs"] = None
+                kwargs["ssl_cert_reqs"] = getattr(settings, "REDIS_SSL_CERT_REQS_VALUE", None)
+                ca = getattr(settings, "REDIS_SSL_CA", "") or ""
+                if ca:
+                    kwargs["ssl_ca_certs"] = ca
             _redis_client = redis.Redis(**kwargs)
         return _redis_client
 

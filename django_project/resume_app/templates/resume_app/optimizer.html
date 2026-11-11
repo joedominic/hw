@@ -529,7 +529,7 @@
                             {% endif %}
                         </p>
                     {% elif not llm_key_stored %}
-                        <p class="w-full text-xs text-red-600">No cloud AI is available yet. Connect a key in Settings, or ask an admin to enable the platform default.</p>
+                        <p class="w-full text-xs text-red-600">{{ llm_key_error|default:"No cloud AI is available yet. Connect a key in Settings, or ask an admin to enable the platform default." }}</p>
                     {% endif %}
                 </div>
             </div>

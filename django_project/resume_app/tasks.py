@@ -63,14 +63,30 @@ from .prompt_store import (
 )
 from .optimizer_budget import build_optimizer_context_state
 
-def acquire_periodic_leader_lock(task_name: str, lock_ttl_seconds: int = 120) -> bool:
+def acquire_periodic_leader_lock(
+    task_name: str,
+    lock_ttl_seconds: int = 120,
+    cron_expr: str | None = None,
+) -> bool:
+    """One execution per scheduled fire, shared across worker replicas.
+
+    ``cron_expr`` floors the lock to that cron's last fire time, so a task that
+    starts late still collides with the other replicas from the same fire.
+    Without it, the lock is a single key held for ``lock_ttl_seconds`` (tests
+    and callers that are not on a crontab).
     """
-    Acquire a distributed leader election lock for a periodic task cycle.
-    Guarantees that across multi-replica worker deployments, exactly one worker executes
-    the periodic job per cycle, eliminating redundant execution.
-    """
-    lock_key = f"periodic_leader_lock:{task_name}"
-    return bool(cache.add(lock_key, 1, timeout=lock_ttl_seconds))
+    from .coordination import lock_add, scheduled_fire, seconds_until_next_fire
+
+    if not cron_expr:
+        return bool(lock_add(f"periodic_leader_lock:{task_name}", 1, lock_ttl_seconds))
+    fire = scheduled_fire(cron_expr)
+    period = seconds_until_next_fire(cron_expr, fire)
+    slot = fire.strftime("%Y-%m-%dT%H:%M")
+    return bool(lock_add(
+        f"periodic_leader_lock:{task_name}:{slot}",
+        1,
+        max(period * 2, 120),
+    ))
 
 import time
 import logging
@@ -90,7 +106,8 @@ huey_logger = logging.getLogger("huey")
 # Vetting matching (resume vs job) evaluation
 #
 VETTING_MATCHING_LOCK_KEY = "vetting_matching_task_running"  # Legacy global fallback
-VETTING_MATCHING_LOCK_TIMEOUT = 3600  # 1 hour max
+def _vetting_lock_timeout() -> int:
+    return int(getattr(settings, "VETTING_MATCHING_LOCK_TIMEOUT", 1200))
 
 
 def get_vetting_matching_lock_key(user_id: int | str) -> str:
@@ -201,7 +218,8 @@ def get_next_run_at(cron_string: str, from_time=None):
 
 # Lock key so only one job-search task runs at a time per user/tenant (avoids overlap)
 JOB_SEARCH_TASK_LOCK_KEY = "job_search_task_running"  # Legacy global fallback
-JOB_SEARCH_TASK_LOCK_TIMEOUT = 3600  # 1 hour max
+def _job_search_lock_timeout() -> int:
+    return int(getattr(settings, "JOB_SEARCH_TASK_LOCK_TIMEOUT", 1200))
 
 
 def get_job_search_task_lock_key(user_id: int | str) -> str:
@@ -721,7 +739,9 @@ def run_job_search_task(user_id, task_id):
     Uses a per-tenant lock so concurrent job searches for different users run in parallel.
     """
     lock_key = get_job_search_task_lock_key(user_id)
-    if not cache.add(lock_key, 1, JOB_SEARCH_TASK_LOCK_TIMEOUT):
+    from .coordination import lock_add, lock_delete
+
+    if not lock_add(lock_key, 1, _job_search_lock_timeout()):
         logger.warning(
             "[run_job_search_task] Skipping task %s: another job search task is running for user %s",
             task_id,
@@ -733,7 +753,7 @@ def run_job_search_task(user_id, task_id):
     try:
         return _run_job_search_task_impl(user_id, task_id)
     finally:
-        cache.delete(lock_key)
+        lock_delete(lock_key)
 
 
 def _prune_old_runs(task):
@@ -1067,10 +1087,12 @@ def evaluate_vetting_matching_task(
     if not pipeline_entry_ids:
         return {"status": "skipped", "message": "No pipeline_entry_ids provided"}
 
+    from .coordination import lock_add, lock_delete
+
     user = _task_user(user_id)
     lock_key = get_vetting_matching_lock_key(user.id)
 
-    if not cache.add(lock_key, 1, VETTING_MATCHING_LOCK_TIMEOUT):
+    if not lock_add(lock_key, 1, _vetting_lock_timeout()):
         logger.warning(
             "[evaluate_vetting_matching_task] Skipping: another vetting matching task is running for tenant %s (user_id=%s)",
             getattr(user, "username", str(user_id)),
@@ -1295,7 +1317,7 @@ def evaluate_vetting_matching_task(
             "errors": errors[:20],
         }
     finally:
-        cache.delete(lock_key)
+        lock_delete(lock_key)
 
 
 def try_vetting_match_debug(
@@ -1598,7 +1620,7 @@ def _evaluate_due_vetting_matching_for_user(user, max_to_enqueue: int = 20):
 
 @db_periodic_task(crontab(minute="*/20"))
 def enqueue_due_vetting_matching_tasks():
-    if not acquire_periodic_leader_lock("enqueue_due_vetting_matching_tasks", lock_ttl_seconds=60):
+    if not acquire_periodic_leader_lock("enqueue_due_vetting_matching_tasks", cron_expr="*/20 * * * *"):
         logger.info("[enqueue_due_vetting_matching_tasks] Another worker replica is execution leader; skipping.")
         return {"status": "skipped", "reason": "not_leader"}
     """
@@ -1784,7 +1806,7 @@ def process_user_pipeline_manager_task(user_id: int):
 
 @db_periodic_task(crontab(minute="*/30"))
 def pipeline_manager():
-    if not acquire_periodic_leader_lock("pipeline_manager", lock_ttl_seconds=120):
+    if not acquire_periodic_leader_lock("pipeline_manager", cron_expr="*/30 * * * *"):
         logger.info("[pipeline_manager] Another worker replica is execution leader; skipping.")
         return {"status": "skipped", "reason": "not_leader"}
     """
@@ -1886,12 +1908,13 @@ def _pipeline_manager_for_user(user):
     return None
 
 
-MAX_DUE_JOB_SEARCH_TASKS_PER_TICK = 50
+def _max_due_job_search_tasks() -> int:
+    return max(1, int(getattr(settings, "JOB_SEARCH_MAX_DUE_PER_TICK", 50)))
 
 
 @db_periodic_task(crontab(minute="*"))
 def enqueue_due_job_search_tasks():
-    if not acquire_periodic_leader_lock("enqueue_due_job_search_tasks", lock_ttl_seconds=45):
+    if not acquire_periodic_leader_lock("enqueue_due_job_search_tasks", cron_expr="* * * * *"):
         return {"status": "skipped", "reason": "not_leader"}
     """
     Runs every minute: find JobSearchTasks across all users where next_run_at <= now,
@@ -1902,8 +1925,16 @@ def enqueue_due_job_search_tasks():
     due = list(
         JobSearchTask.objects.filter(is_active=True, next_run_at__isnull=False)
         .filter(next_run_at__lte=now)
-        .order_by("next_run_at", "start_time")[:MAX_DUE_JOB_SEARCH_TASKS_PER_TICK]
+        .order_by("next_run_at", "start_time")[:_max_due_job_search_tasks()]
     )
+    due_total = JobSearchTask.objects.filter(is_active=True, next_run_at__isnull=False, next_run_at__lte=now).count()
+    cap = _max_due_job_search_tasks()
+    if due_total > cap:
+        logger.warning(
+            "[enqueue_due_job_search_tasks] capped at %s of %s due tasks; backlog remains",
+            cap,
+            due_total,
+        )
     enqueued_count = 0
     for task in due:
         try:
@@ -1940,22 +1971,28 @@ JOB_SEARCH_RUN_STALE_MINUTES = 60
 
 @db_periodic_task(crontab(minute="*/15"))
 def mark_stale_job_search_runs_failed():
-    if not acquire_periodic_leader_lock("mark_stale_job_search_runs_failed", lock_ttl_seconds=120):
+    if not acquire_periodic_leader_lock("mark_stale_job_search_runs_failed", cron_expr="*/15 * * * *"):
         return {"status": "skipped", "reason": "not_leader"}
     """
     Mark JobSearchTaskRun rows that have been RUNNING longer than JOB_SEARCH_RUN_STALE_MINUTES
     as FAILED. Jobs are only added when a run reaches COMPLETED; stuck RUNNING runs mean
     the worker never finished (e.g. fetch hung or worker restarted).
     """
+    from .coordination import lock_delete
+
     threshold = timezone.now() - timedelta(minutes=JOB_SEARCH_RUN_STALE_MINUTES)
     stale = JobSearchTaskRun.objects.filter(
         status=JobSearchTaskRun.STATUS_RUNNING,
         started_at__lt=threshold,
     )
     stale_task_ids = list(stale.values_list("task_id", flat=True).distinct())
+    stale_owner_ids = list(stale.values_list("task__owner_id", flat=True).distinct())
     for tid in stale_task_ids:
         cache.delete(f"job_task_pending:{tid}")
         cache.delete(f"job_task_manual_cooldown:{tid}")
+    for owner_id in stale_owner_ids:
+        if owner_id:
+            lock_delete(get_job_search_task_lock_key(owner_id))
     count = stale.update(
         status=JobSearchTaskRun.STATUS_FAILED,
         finished_at=timezone.now(),
@@ -1966,6 +2003,29 @@ def mark_stale_job_search_runs_failed():
     if count:
         logger.info("[mark_stale_job_search_runs_failed] marked %d run(s) as failed", count)
     return None
+
+
+def mark_stale_optimizations_failed() -> int:
+    """Fail optimizer runs whose worker stopped updating them."""
+    minutes = int(getattr(settings, "OPTIMIZER_STALE_MINUTES", 20))
+    threshold = timezone.now() - timedelta(minutes=minutes)
+    count = OptimizedResume.objects.filter(
+        status__in=(OptimizedResume.STATUS_QUEUED, OptimizedResume.STATUS_RUNNING),
+        updated_at__lt=threshold,
+    ).update(
+        status=OptimizedResume.STATUS_FAILED,
+        error_message="Worker stopped before completion; please retry.",
+    )
+    if count:
+        logger.info("[mark_stale_optimizations_failed] marked %d run(s) as failed", count)
+    return count
+
+
+@db_periodic_task(crontab(minute="*/10"))
+def mark_stale_optimizations_failed_periodic():
+    if not acquire_periodic_leader_lock("mark_stale_optimizations_failed", cron_expr="*/10 * * * *"):
+        return {"status": "skipped", "reason": "not_leader"}
+    return {"status": "ok", "failed": mark_stale_optimizations_failed()}
 
 
 @db_task()
@@ -2019,7 +2079,7 @@ def purge_inactive_pipeline_entries_task(limit: int = 400):
 
 @db_periodic_task(crontab(minute="30", hour="1"))
 def cleanup_manager():
-    if not acquire_periodic_leader_lock("cleanup_manager", lock_ttl_seconds=300):
+    if not acquire_periodic_leader_lock("cleanup_manager", cron_expr="30 1 * * *"):
         logger.info("[cleanup_manager] Another worker replica is execution leader; skipping.")
         return {"status": "skipped", "reason": "not_leader"}
     """
@@ -2064,7 +2124,7 @@ def process_user_purge_generated_resumes_task(user_id: int):
 
 @db_periodic_task(crontab(minute="15", hour="*/6"))
 def purge_generated_resumes_periodic():
-    if not acquire_periodic_leader_lock("purge_generated_resumes_periodic", lock_ttl_seconds=300):
+    if not acquire_periodic_leader_lock("purge_generated_resumes_periodic", cron_expr="15 */6 * * *"):
         logger.info("[purge_generated_resumes_periodic] Another worker replica is execution leader; skipping.")
         return {"status": "skipped", "reason": "not_leader"}
     """Every 6 hours: fan-out removal of old optimizer ephemeral UserResume PDFs per user."""

@@ -8,6 +8,8 @@ This document covers operational procedures, local setup, environment configurat
 
 Always use the project's virtual environment (`env/`). Do not run Django management commands with a global or system Python interpreter.
 
+From the repository root. `.\scripts\dev.ps1 doctor` prints the active profile. `.\scripts\dev.ps1 web` and `.\scripts\dev.ps1 worker` start the two processes. See [Local development profiles](guides/local-development-profiles.md).
+
 From the repository root:
 
 ```powershell
@@ -41,9 +43,11 @@ Full functionality requires two concurrent processes: the Django web server and 
 
 ## 2. Common Service URLs
 
-- `http://127.0.0.1:8000/` — Landing page (redirects to pipeline/cockpit).
+- `http://127.0.0.1:8000/` — Public marketing page. Anonymous visitors stay here. Signed-in users continue to `/jobs/profiler/` (incomplete setup) or `/jobs/cockpit/` via `get_post_login_url`.
+- `http://127.0.0.1:8000/jobs/profiler/` — AI Resume Profiler (canonical first-run onboarding).
 - `http://127.0.0.1:8000/jobs/cockpit/` — Career Cockpit (search automation hub).
 - `http://127.0.0.1:8000/jobs/search/` — Multi-board job discovery.
+- `http://127.0.0.1:8000/accounts/verify-email/` — Email verification interstitial (when `REQUIRE_EMAIL_VERIFICATION` is on).
 - `http://127.0.0.1:8000/resume/optimizer/` — Multi-agent resume optimizer.
 - `http://127.0.0.1:8000/performance/` — Performance momentum dashboard.
 - `http://127.0.0.1:8000/system/fit-inspector/` — System fit and scoring diagnostics.
@@ -65,7 +69,7 @@ HireEdge reads environment variables from the `.env` file in the repository root
 
 ### 3.2 Redis & Huey Queue (Configured in `.env` / `.env.example`)
 - `HUEY_REDIS_HOST`: Redis host IP (default in `.env.example` is `127.0.0.1`, or `host.docker.internal` for Docker setups).
-- `HUEY_REDIS_PORT`: Redis port (default in `.env.example` is `6380` to keep HireEdge isolated from default 6379 services).
+- `HUEY_REDIS_PORT`: Redis port. `settings.py` defaults to **6379** when the variable is unset. `.env.example` sets **6380** so a copied env file stays off a shared local Redis.
 - `HUEY_REDIS_DB`: Redis database index (default `0`).
 - `REDIS_PASSWORD`: Shared authentication password for Redis.
 - `REDIS_USE_TLS`: Enable SSL/TLS encryption for Redis transport.
@@ -161,6 +165,6 @@ Run Django unit and integration tests using the repo-relative virtualenv from `d
 3. **Automatic Cooldown Reset on Failure:**
    - If a search fails, `tasks.py` and `views.py` automatically clear `job_task_manual_cooldown:{task_id}`, resetting remaining cooldown to 0. Users can click "Run Search Now" immediately without waiting 3 minutes (180s limit).
 4. **Redis Port & Password:**
-   - The default Redis instance runs on port `6380` with password protection. Using default unauthenticated `6379` will fail or connect to unrelated services.
+   - With a copied `.env`, Redis is on port `6380` and expects `REDIS_PASSWORD`. A process started without that env uses `HUEY_REDIS_PORT` **6379**. Match the port and password the worker and web process both see.
 5. **Staff Access & Impersonation:**
    - Use `python manage.py set_staff_user <username>` to grant staff status and add the user to the `Support` group for access to `/staff/users/`.

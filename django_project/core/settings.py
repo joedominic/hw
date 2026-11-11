@@ -22,12 +22,22 @@ if os.path.isfile(_env_file):
 # Detect manage.py test / pytest / makemigrations early (used by DATABASES and cache).
 _IN_TEST = "test" in sys.argv or "pytest" in (sys.argv[0] if sys.argv else "") or "makemigrations" in sys.argv
 
+# development: bare checkout and local runserver. test: manage.py test / pytest.
+# production: set on the runtime image and in deploy manifests. Guards key off this,
+# not DEBUG, so a developer can run DEBUG=False locally.
+_VALID_APP_ENVS = {"development", "test", "production"}
+APP_ENV = "test" if _IN_TEST else env("APP_ENV", default="development")
+if APP_ENV not in _VALID_APP_ENVS:
+    raise ImproperlyConfigured(
+        f"APP_ENV must be one of {sorted(_VALID_APP_ENVS)} (got {APP_ENV!r})."
+    )
+IS_PRODUCTION = APP_ENV == "production"
 
 # SECURITY: keep the secret key used in production secret!
 SECRET_KEY = env("SECRET_KEY", default="django-insecure-+a#*@w#!qb+w*1_6vd4my0q2q^!ddes#&#%jueou)q7(5(=v*n")
 
 # SECURITY: don't run with debug turned on in production!
-DEBUG = env("DEBUG")
+DEBUG = env.bool("DEBUG", default=(APP_ENV == "development"))
 
 # LLM test + Huey monitor nav links; defaults to DEBUG when unset.
 SHOW_DEV_TOOLS = env.bool("SHOW_DEV_TOOLS", default=DEBUG)
@@ -58,6 +68,7 @@ except ImportError:
     _HAS_WHITENOISE = False
 
 MIDDLEWARE = [
+    "resume_app.middleware.HealthCheckMiddleware",
     "django.middleware.security.SecurityMiddleware",
     *(["whitenoise.middleware.WhiteNoiseMiddleware"] if _HAS_WHITENOISE else []),
     "resume_app.middleware.SessionInterruptedMiddleware",
@@ -218,6 +229,14 @@ MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 LOGIN_URL = "/accounts/login/"
 LOGIN_REDIRECT_URL = "pipeline"
 LOGOUT_REDIRECT_URL = "login"
+SESSION_ENGINE = env(
+    "SESSION_ENGINE",
+    default=(
+        "django.contrib.sessions.backends.cached_db"
+        if IS_PRODUCTION
+        else "django.contrib.sessions.backends.db"
+    ),
+)
 SIGNUP_ENABLED = env.bool("SIGNUP_ENABLED", default=True)
 DEFAULT_EXPERIENCE_MODE = env("DEFAULT_EXPERIENCE_MODE", default="normal")
 REQUIRE_EMAIL_VERIFICATION = env.bool("REQUIRE_EMAIL_VERIFICATION", default=False)
@@ -276,7 +295,12 @@ SECURE_HSTS_SECONDS = env.int("SECURE_HSTS_SECONDS", default=(31536000 if not DE
 SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", default=not DEBUG)
 SECURE_HSTS_PRELOAD = env.bool("SECURE_HSTS_PRELOAD", default=False)
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+# Health probes hit the pod over HTTP with Host set to the pod IP. Exempt them
+# even if HealthCheckMiddleware is later reordered below SecurityMiddleware.
+SECURE_REDIRECT_EXEMPT = [r"^health/"]
 CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
+# 0 = ignore X-Forwarded-For and use REMOTE_ADDR. N = take the Nth address from the right.
+TRUSTED_PROXY_COUNT = env.int("TRUSTED_PROXY_COUNT", default=0)
 
 # Optional S3-compatible media (django-storages). Leave bucket empty for local filesystem.
 AWS_STORAGE_BUCKET_NAME = env("AWS_STORAGE_BUCKET_NAME", default="")
@@ -468,14 +492,30 @@ _huey_connection = {
 }
 if REDIS_PASSWORD:
     _huey_connection["password"] = REDIS_PASSWORD
+_REDIS_SSL_CERT_REQS = env("REDIS_SSL_CERT_REQS", default="required")
 if REDIS_USE_TLS:
     # redis-py: ssl connections require the SSL connection class.
     import ssl as _ssl
 
+    if _REDIS_SSL_CERT_REQS == "none":
+        if not env.bool("REDIS_SSL_ALLOW_INSECURE", default=False):
+            raise ImproperlyConfigured(
+                "REDIS_SSL_CERT_REQS=none disables certificate verification. "
+                "Set REDIS_SSL_ALLOW_INSECURE=1 to allow it."
+            )
+        _ssl_cert_reqs = _ssl.CERT_NONE
+    else:
+        _ssl_cert_reqs = _ssl.CERT_REQUIRED
+    REDIS_SSL_CERT_REQS_VALUE = _ssl_cert_reqs
     _huey_connection["connection_class"] = __import__(
         "redis.connection", fromlist=["SSLConnection"]
     ).SSLConnection
-    _huey_connection["ssl_cert_reqs"] = _ssl.CERT_NONE
+    _huey_connection["ssl_cert_reqs"] = _ssl_cert_reqs
+    if env("REDIS_SSL_CA", default=""):
+        _huey_connection["ssl_ca_certs"] = env("REDIS_SSL_CA")
+else:
+    REDIS_SSL_CERT_REQS_VALUE = None
+REDIS_SSL_CA = env("REDIS_SSL_CA", default="")
 
 HUEY = {
     "name": HUEY_NAME,
@@ -487,7 +527,7 @@ HUEY = {
     "blocking": True,
     "connection": _huey_connection,
     "consumer": {
-        "workers": 2,
+        "workers": env.int("HUEY_WORKERS", default=2),
         # thread: works on Windows. process: not picklable on Windows (spawn).
         "worker_type": "thread",
         "scheduler_interval": 1,
@@ -536,7 +576,14 @@ APPLY_USE_MOCK_RESOLVER = env.bool("APPLY_USE_MOCK_RESOLVER", default=False)
 APPLY_BROWSER_CONCURRENCY = env.int("APPLY_BROWSER_CONCURRENCY", default=2)
 APPLY_BROWSER_STEP_TIMEOUT_SECONDS = env.int("APPLY_BROWSER_STEP_TIMEOUT_SECONDS", default=360)
 # When False, Playwright opens a visible Chromium window (dev only; Huey must run locally).
-APPLY_BROWSER_HEADLESS = env.bool("APPLY_BROWSER_HEADLESS", default=False)
+APPLY_BROWSER_HEADLESS = env.bool("APPLY_BROWSER_HEADLESS", default=True)
+# How many due JobSearchTasks one scheduler tick may enqueue.
+JOB_SEARCH_MAX_DUE_PER_TICK = env.int("JOB_SEARCH_MAX_DUE_PER_TICK", default=50)
+# Per-user task locks. Shorter than the old 1h so a killed worker frees the user sooner.
+JOB_SEARCH_TASK_LOCK_TIMEOUT = env.int("JOB_SEARCH_TASK_LOCK_TIMEOUT", default=1200)
+VETTING_MATCHING_LOCK_TIMEOUT = env.int("VETTING_MATCHING_LOCK_TIMEOUT", default=1200)
+OPTIMIZER_STALE_MINUTES = env.int("OPTIMIZER_STALE_MINUTES", default=20)
+PIPELINE_EXTRACT_STALE_MINUTES = env.int("PIPELINE_EXTRACT_STALE_MINUTES", default=30)
 
 # --- LLM rate limits (Redis, shared across workers). Only providers listed in
 # LLM_RATE_LIMIT_BY_PROVIDER are throttled; tune via env vars.
@@ -658,7 +705,7 @@ LOGGING = {
 # ==============================================================================
 # Production Startup Invariant Verification (Fail-Closed Safety Guardrails)
 # ==============================================================================
-if not DEBUG and not _IN_TEST:
+if IS_PRODUCTION:
     if not _HAS_WHITENOISE:
         raise ImproperlyConfigured(
             "Production configuration error: 'whitenoise' is required when DEBUG is False. "
@@ -700,6 +747,32 @@ if not DEBUG and not _IN_TEST:
         raise ImproperlyConfigured(
             "Production billing failure: STRIPE_WEBHOOK_SECRET must be set when STRIPE_SECRET_KEY is configured."
         )
+
+    if (
+        str(CACHES.get("default", {}).get("BACKEND", "")).endswith("LocMemCache")
+        and not env.bool("ALLOW_LOCMEM_CACHE_IN_PRODUCTION", default=False)
+    ):
+        raise ImproperlyConfigured(
+            "Production cache failure: configure Redis (DJANGO_CACHE_URL or DJANGO_CACHE_USE_REDIS=1). "
+            "Per-process cache does not share locks or rate limits across pods."
+        )
+
+    if not AWS_STORAGE_BUCKET_NAME and not env.bool("ALLOW_LOCAL_MEDIA_IN_PRODUCTION", default=False):
+        raise ImproperlyConfigured(
+            "Production storage failure: set AWS_STORAGE_BUCKET_NAME so uploads are visible to every pod. "
+            "Set ALLOW_LOCAL_MEDIA_IN_PRODUCTION=1 only for a single node with a shared volume."
+        )
+
+    if not FERNET_KEYS and not env.bool("ALLOW_DERIVED_FERNET_KEY", default=False):
+        raise ImproperlyConfigured(
+            "Production crypto failure: set FERNET_KEYS so every pod encrypts with the same key. "
+            "Put the current SECRET_KEY-derived key last in the list before rotating."
+        )
+
+import logging as _logging
+
+if not _IN_TEST:
+    _logging.getLogger("resume_app").info("startup profile APP_ENV=%s DEBUG=%s", APP_ENV, DEBUG)
 
 
 

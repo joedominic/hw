@@ -7,11 +7,11 @@ HireEdge is a multi-tenant Django 5.2 application featuring server-rendered HTML
 ## 1. Runtime Stack
 
 - **Web Framework:** Django 5.2.
-- **REST API Framework:** Django Ninja mounted at `/api/` with sub-routers for `/resume/` and `/jobs/`.
+- **REST API Framework:** Django Ninja mounted at `/api/`. `resume_router` is mounted at `/resume`. Job routes are nested on that router, so job JSON is `/api/resume/jobs/…`.
 - **Authentication & Tenancy:** Session authentication with `LoginRequiredMiddleware` enforcing auth globally. Multi-tenancy uses tenant-scoped models (`owner = ForeignKey(User)`) via `resume_app.tenancy`.
 - **Background Worker & Task Queue:** Huey backed by Redis (using `huey.RedisExpireHuey` with automatic result key expiration).
 - **Relational Database:** SQLite for local/test defaults; MySQL/MariaDB for production via PyMySQL.
-- **AI & Workflow Orchestration:** LangGraph and LangChain for structured resume optimization workflows; unified **LiteLLM** abstraction layer supporting OpenAI, Anthropic, Groq, Google Gemini, and local/cloud Ollama; **Langfuse Cloud** telemetry integration with selective PII redaction (`LANGFUSE_MASK_PII`), workflow trace grouping, and step-level generation naming.
+- **AI & Workflow Orchestration:** LangGraph and LangChain for structured resume optimization workflows; unified **LiteLLM** abstraction. `LLM_PROVIDERS` is OpenAI, Anthropic, Groq, Google AI Studio, Ollama Cloud, Ollama Local, and OpenRouter. Gateway fallbacks in `SYSTEM_DEFAULT_MODELS` use those providers (`gpt-4o`, `gpt-4o-mini`, Gemini, Claude, Groq, local Ollama). **Langfuse Cloud** telemetry uses selective PII redaction (`LANGFUSE_MASK_PII`), workflow trace grouping, and step-level generation naming.
 - **Job Sourcing Engine:** Hexagonal architecture supporting JobSpy (Indeed, LinkedIn), Greenhouse direct boards, BuiltIn, Levels.fyi (encrypted API), and Dice (REST API + HTML fallback).
 - **UI Architecture:** Server-rendered Django templates styled with Tailwind CSS, Chart.js for data visualization, and vanilla JavaScript `fetch()` for progressive telemetry and status polling. Brand theme tokens live in `resume_app/templates/resume_app/_tailwind_theme.html`.
 
@@ -27,7 +27,7 @@ JobApp-Main/
 │   │   ├── settings.py               # Configuration, apps, middleware, Huey, LLM settings
 │   │   └── urls.py                   # Central routing and Ninja API registration
 │   └── resume_app/
-│       ├── models.py                 # 37 domain models (tenancy, resumes, jobs, pipeline)
+│       ├── models.py                 # 40 domain models (tenancy, resumes, jobs, pipeline, billing)
 │       ├── views.py                  # HTML views (cockpit, optimizer, search, settings, staff)
 │       ├── pipeline_board.py         # Kanban pipeline board views and stage transitions
 │       ├── api.py                    # Ninja REST API for resume optimizer and LLM endpoints
@@ -113,7 +113,7 @@ To guarantee multi-tenant scalability, prevent duplicate scrapes, and safeguard 
    - 3-minute TTL (180s) preventing accidental or abusive repeated scraping.
    - **Automatic Failure Recovery:** If a task fails due to a network error, exception, or timeout, the worker and the status views immediately delete this key, allowing the user to retry without waiting for cooldown expiry.
 4. **Vetting Matching Concurrency Lock (`vetting_matching_task_running:u{user_id}`):**
-   - 1,800s TTL. Enforces sequential execution of deep analysis per user so local Ollama reuses KV cache prefixes across consecutive jobs.
+   - `VETTING_MATCHING_LOCK_TIMEOUT` is 3,600 seconds. Enforces sequential execution of deep analysis per user so local Ollama reuses KV cache prefixes across consecutive jobs.
 5. **Distributed Periodic Leader Election (`periodic_leader_lock:{task_name}`):**
    - Acquired via atomic `cache.add()` with bounded TTLs (45s–300s).
    - In multi-replica container deployments (e.g. Docker Compose or Kubernetes with multiple worker instances), guarantees that exactly one worker replica acts as execution leader per periodic tick, preventing duplicate scheduled runs of `pipeline_manager`, `cleanup_manager`, and search queues.
@@ -134,14 +134,14 @@ flowchart TD
         P_Jobs["Review-Stage PipelineEntries"] --> P_Cleanse["Heuristic Cleanser<br>(0ms regex, no LLM)"]
         P_Cleanse --> P_Ollama["SkillRadarService.analyze<br>(Candidate Resume Prefix Cached)"]
         P_Ollama --> P_DB["Tenant Write: PipelineEntry<br>(prob, reasoning, stretch_skills)"]
-        P_Ollama --> P_Redis["Redis: cockpit_ollama_skill_radar_... (7d)"]
+        P_Ollama --> P_Redis["Redis: cockpit_llm_skill_radar_... (7d)"]
     end
 ```
 
 1. **Resume Match Radar (`SkillRadarService.analyze`):**
    - **Candidate Resume KV Alignment:** Ordering Candidate Resume ahead of the Job Description allows Ollama to reuse the candidate KV prefix, cutting latency from ~6.95s to ~2.06s (~70% speedup).
    - **Heuristic JD Cleansing:** Zero-latency regex section-stripping (`use_llm=False`) cleans boilerplate without eviction.
-   - **Dual Persistence:** Instant modal loading via Redis cache with fallback persistence in `PipelineEntry`.
+   - **Dual Persistence:** Instant modal loading via Redis (`SkillRadarService.get_cache_key` writes `cockpit_llm_skill_radar_{user}_{resume|none}_{job}`, 7-day TTL). Some readers also check the `cockpit_ollama_skill_radar_…` alias. Fallback persistence is on `PipelineEntry`.
 
 ---
 
@@ -157,7 +157,7 @@ Default compiled graph: **Writer → ATS Judge → Recruiter Judge** (single pas
 
 ## 8. Authentication, Tenancy & Security
 
-- **Authentication:** Django session authentication. `LoginRequiredMiddleware` blocks unauthenticated access across all app paths (exceptions: `/`, `/accounts/*`, `/admin/`, `/static/`).
+- **Authentication:** Django session authentication. `LoginRequiredMiddleware` blocks unauthenticated access. `/` is public because the view name is `landing_view`. Prefix exemptions are `/accounts/`, `/admin/`, `/static/`, `/health/`, `/legal/`, and `/billing/stripe/webhook/`. `/media/` is authenticated.
 - **Owner Scoping:** All user-specific models inherit or use `owner = ForeignKey(User)`. Queries must use `OwnedManager.for_user(user)` or `get_owned_or_404()`.
 - **Media Protection:** Media files under `/media/` are served via `serve_media_view`, which checks authentication and ownership authorization.
 - **Impersonation:** Staff users with `can_impersonate_users` can impersonate users via `django-hijack`. The session logs audit records in `ImpersonationAuditLog`.

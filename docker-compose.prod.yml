@@ -1,16 +1,33 @@
 # Production overrides — use with:
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 services:
+  migrate:
+    image: jobapp-jules-app:latest
+    command: python manage.py migrate --noinput
+    restart: "no"
+    environment:
+      APP_ENV: production
+      DEBUG: "False"
+      RUN_MIGRATIONS: "0"
+    env_file:
+      - path: .env
+        required: false
+
   web:
     command: >
       gunicorn core.wsgi:application
       --bind 0.0.0.0:8000
       --workers 2
       --timeout 120
+      --graceful-timeout 30
     restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     environment:
+      APP_ENV: production
       DEBUG: "False"
-      RUN_MIGRATIONS: "1"
+      RUN_MIGRATIONS: "0"
     healthcheck:
       test:
         [
@@ -26,7 +43,13 @@ services:
 
   huey:
     restart: unless-stopped
+    stop_signal: SIGINT
+    stop_grace_period: 10m
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
     environment:
+      APP_ENV: production
       DEBUG: "False"
       RUN_MIGRATIONS: "0"
     healthcheck:

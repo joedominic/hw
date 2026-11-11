@@ -7,7 +7,8 @@ This document catalogs the complete route surface for HireEdge, registered acros
 ## 1. Authentication & Security Policies
 
 - **Global Protection:** `LoginRequiredMiddleware` protects the site. Unauthenticated HTML requests redirect to `/accounts/login/`; unauthenticated `/api/*` requests return JSON `401`.
-- **Public Exceptions:** `/` (landing), `/accounts/*` (auth flows), `/admin/`, `/static/`, `/legal/privacy/`, and `/legal/terms/`.
+- **Public Exceptions:** `/` is public because the resolved view is `landing_view`. Prefix exemptions in `LOGIN_EXEMPT_URL_PREFIXES` are `/accounts/`, `/admin/`, `/static/`, `/health/`, `/billing/stripe/webhook/`, and `/legal/`. `/billing/` and `/getting-started/` require login. `/favicon.ico` is not exempt.
+- **Email verification:** When `REQUIRE_EMAIL_VERIFICATION` is on, an unverified non-staff user is sent to `/accounts/verify-email/` (resend + Settings link). Unverified `/api/*` requests return JSON `403`. Exempt prefixes for that check include `/accounts/`, `/admin/`, `/static/`, `/media/`, `/legal/`, and `/settings/`.
 - **API Authentication:** Supports Django session auth or Bearer token auth (`Authorization: Bearer <token>`) via `CustomerApiKey` (`SessionOrApiKeyAuth`).
 - **Media Authorization:** `/media/<path>` requests are routed through `serve_media_view`, which validates that the requesting user owns the requested asset.
 
@@ -20,17 +21,22 @@ This document catalogs the complete route surface for HireEdge, registered acros
 - `GET/POST /accounts/login/` — User login.
 - `POST /accounts/logout/` — User logout.
 - `GET/POST /accounts/signup/` — Registration (when `SIGNUP_ENABLED=True`).
-- `GET/POST /accounts/password-reset/` (+ `done/`, `confirm/`, `complete/`) — Standard password reset flow.
-- `GET /accounts/verify-email/<uidb64>/<token>/` — Confirm account email.
+- `GET/POST /accounts/password-reset/` and `GET /accounts/password-reset/done/` — Request a reset.
+- `GET/POST /accounts/reset/<uidb64>/<token>/` and `GET /accounts/reset/done/` — Confirm and complete the reset. There is no `/accounts/password-reset/confirm/` or `/accounts/password-reset/complete/`.
+- `GET /accounts/verify-email/` — Email verification interstitial (check inbox / resend). Login required.
+- `GET /accounts/verify-email/<uidb64>/<token>/` — Confirm account email from the mailed link.
 - `POST /accounts/resend-verification/` — Resend verification email.
-- `GET /getting-started/` — Onboarding checklist.
-- `GET /billing/` — Plan quotas, usage ledger, and Stripe checkout/portal integration.
-- `POST /billing/stripe/webhook/` — Stripe webhook receiver (verifies signatures in production).
+- `GET/POST /getting-started/` — Legacy onboarding URL. Redirects to `/jobs/profiler/` (or Cockpit when setup is complete). Power users go to Cockpit.
+- `GET/POST /billing/` — Plan quotas, usage ledger, and Stripe checkout/portal integration.
+- `POST /billing/stripe/webhook/` — Public Stripe webhook receiver (`csrf_exempt`; verifies signatures in production).
 - `GET /staff/users/` — Staff dashboard for user search, quota auditing, and plan adjustment.
 - `POST /staff/users/<user_id>/action/` — Staff administrative actions (suspend, activate, set plan).
-- `/hijack/` — Staff user impersonation via `django-hijack` (audited in `ImpersonationAuditLog`).
+- `POST /hijack/acquire/` and `POST /hijack/release/` — Staff impersonation via `django-hijack` (audited in `ImpersonationAuditLog`). Acquire posts `user_pk`.
 - `/admin/` — Django admin console.
-- `GET /legal/privacy/`, `GET /legal/terms/` — Public compliance pages.
+- `GET /legal/privacy/`, `GET /legal/terms/` — Public compliance pages (prefix `/legal/`).
+- `GET /health/`, `GET /health/live` — Public liveness JSON.
+- `GET /health/ready` — Public readiness JSON (database and cache).
+- `GET /media/<path>` — Authenticated media. `serve_media_view` checks ownership.
 
 ---
 
@@ -39,16 +45,16 @@ This document catalogs the complete route surface for HireEdge, registered acros
 - `POST /jobs/profiler/api/analyze/` — Analyzes uploaded resume PDF; saves extraction to `CareerProfileAnalysis(analysis_data)`.
 - `POST /jobs/profiler/api/provision/` — Creates or updates `SearchProfile` records and associates the source `UserResume`.
 - `POST /jobs/profiler/api/preview-matches/` — Runs live multi-board preview query across job boards for target titles without writing to the database.
-- `GET/POST /jobs/search/` — **Search Sandbox (Unbiased)** view; query live jobs across Indeed, LinkedIn, Greenhouse, BuiltIn, Levels.fyi, and Dice with 1-click `+ Add to Review` bridge.
+- `GET/POST /jobs/search/` — **Find jobs** view. Live query across Indeed, LinkedIn, Greenhouse, BuiltIn, Levels.fyi, and Dice. Card CTA is **Save to Cockpit** / **In Cockpit**. Unbiased mode is the “None (Unbiased / No Profile)” scoring option.
 - `GET /jobs/tracks/` — Search profile management and resume assignment.
 - `POST /jobs/tracks/<slug>/delete/` — Delete a search profile.
 
 ---
 
 ### 2.3 Tab 2: Career Cockpit & Job Automation
-- `GET /jobs/cockpit/` — **Career Cockpit Tri-Pane Workstation**; primary triage hub for search profiles, 4-stage pipeline, and off-canvas slide-over Automation Drawer (`openAutomationDrawer()`).
-- `POST /jobs/cockpit/api/skill-radar/` — Run or force deep Ollama Local Skill Radar & Fit Diagnostics on-demand with CSRF protection (`job_id`, `track`, `force`). Returns match score, callback probability, verified core competencies, contextual stretch gaps, and executive fit summary.
-- `GET /jobs/cockpit/api/skill-radar/?job_id=<id>&track=<slug>` — Idempotent, read-only retrieval of existing cached/persisted Skill Radar diagnostics. See [Skill Radar Diagnostics](features/skill-radar-diagnostics.md).
+- `GET/POST /jobs/cockpit/` — **Career Cockpit**. GET renders the tri-pane workstation. POST runs board actions (`save`, `like`, `dislike`, `delete`, search-profile saves). `openAutomationDrawer()` opens **Pipeline Automation Policies** (purge, promote, retention). Search schedule, boards, and Run Search Now live on the left rail and in the Search Profile drawer (`openEditProfileDrawer`).
+- `POST /jobs/cockpit/api/skill-radar/` — Run or force Skill Radar diagnostics (`job_id`, `track`, `force`). The view reads `track`, not `profile`. The cockpit client currently calls this URL with `profile=`.
+- `GET /jobs/cockpit/api/skill-radar/?job_id=<id>&track=<slug>` — Read cached or persisted Skill Radar diagnostics. See [Skill Radar Diagnostics](features/skill-radar-diagnostics.md). Primary cache key is `cockpit_llm_skill_radar_{user}_{resume|none}_{job}` (7 days). `cockpit_ollama_skill_radar_…` is a read alias.
 - `POST /jobs/tasks/<task_id>/run/` — Trigger manual search run immediately (sets atomic pending key + 3m cooldown).
 - `GET /jobs/tasks/<task_id>/status/` — JSON status endpoint polled by browser during active search.
 - `POST /jobs/tasks/<task_id>/toggle/` — Toggle task active/inactive status.
@@ -56,25 +62,25 @@ This document catalogs the complete route surface for HireEdge, registered acros
 - `GET/POST /jobs/tasks/<task_id>/edit/` — Edit an existing search task.
 - `GET /jobs/tracks/scheduled-runs/<run_id>/details-json/` — Disposition breakdown JSON for the Cockpit inspection modal.
 - `GET /jobs/tracks/scheduled-runs/<run_id>/download-csv/` — Download run job dispositions as CSV.
-- `GET /jobs/automation/` — **Decommissioned legacy route; permanently redirects to `/jobs/cockpit/`**.
+- `GET /jobs/automation/` (`job_automation`) — **302** to `/jobs/cockpit/?drawer=automation`, keeping the original query string. Not a permanent redirect, and not a bare cockpit URL. Any logged-in user can open that drawer; the left-rail Pipeline Policies card is staff and Power only.
 
 ---
 
 ### 2.4 Tab 3: Tracker & Momentum Analytics
 - `GET /performance/` — **Tracker: Career Momentum & Application Outcomes**; active streak tracking, weekly target progress bar, and interview loop management.
 - `GET /performance/api/metrics/` — Progressive hydration JSON endpoint for metrics (accepts `?refresh=1`).
-- `POST /performance/settings/` — Update performance dashboard tracking settings and weekly target goals.
-- `GET /system/fit-inspector/` — Diagnostics for semantic embeddings, BM25 keywords, and recruiter scoring.
+- Weekly application target is `AppAutomationSettings.weekly_target_applications` (model default 10). `update_dashboard_settings_api` exists in `views.py` and is **not registered**. `POST /performance/settings/` is not a route.
+- `GET/POST /system/fit-inspector/` — Staff diagnostics for embeddings and scoring. Non-staff users are **302**’d to the Cockpit: `drawer=inspector` and `stage=vetting` when `job_id` is present; otherwise Cockpit New (`stage=pipeline`) with no drawer.
 
 ---
 
 ### 2.5 Kanban Stages & Legacy Pipeline Routes
-- `GET/POST /jobs/pipeline/` — Pipeline Kanban board (Stage: New).
-- `GET/POST /jobs/vetting/` — Vetting Kanban board (Stage: Review).
-- `GET/POST /jobs/applying/` — Applying Kanban board (Stage: Tailoring).
-- `GET/POST /jobs/done/` — Done Kanban board (Stage: Applied / Completed).
-- `GET /jobs/<job_listing_id>/focus-breakdown/` — Staff-only focus score diagnostics.
-- `GET /jobs/<job_listing_id>/focus-breakdown/<liked_job_id>/` — Staff-only focus alignment analysis.
+- `GET /jobs/pipeline/`, `/jobs/vetting/`, `/jobs/applying/`, `/jobs/done/` — **302** to `/jobs/cockpit/?stage=pipeline|vetting|applying|done`. Other query params are kept; `stage` is overwritten. These GETs do not render a board.
+- `POST` on those four URLs is handled by `pipeline_board_view` (the action runs, then a redirect).
+- `GET /jobs/<job_listing_id>/focus-breakdown/` — Staff-only focus score diagnostics (non-staff **403**).
+- `GET /jobs/<job_listing_id>/focus-breakdown/<liked_job_id>/` — Staff **302** to `/system/fit-inspector/?job_id=<job_listing_id>`. `liked_job_id` is dropped. Non-staff **403** before that redirect.
+- `GET /jobs/pipeline/<entry_id>/applied-resume/` — Applied-resume JSON.
+- `GET /jobs/pipeline/<entry_id>/export/pdf/` and `.../export/docx/` — Applied resume exports.
 - `GET/POST /jobs/vetting/match-debug/<job_listing_id>/` — Single-job resume match debugging.
 
 ---
@@ -97,7 +103,8 @@ This document catalogs the complete route surface for HireEdge, registered acros
 - `GET/POST /resume/llm-test/` — Developer test view for LLM completions.
 - `GET /workspace/workflows/` — List system-wide optimizer workflows (staff).
 - `GET/POST /workspace/workflows/new/` — Create optimizer workflow (staff).
-- `GET/POST /workspace/workflows/<id>/edit/` — Edit optimizer workflow (staff).
+- `GET/POST /workspace/workflows/<workflow_id>/edit/` — Edit optimizer workflow (staff).
+- `POST /workspace/workflows/<workflow_id>/delete/` — Delete optimizer workflow. Other methods redirect to the list.
 - `GET/POST /settings/` — User settings (LLM keys, model preferences, usage, stop controls; App Automation tab is staff-only).
 
 ---
@@ -125,12 +132,17 @@ Mounted in `resume_app/api.py`.
 - `POST /api/resume/status/{resume_id}/cancel` — Cancel active optimization task.
 - `POST /api/resume/run-step` — Execute an isolated step (`writer`, `ats_judge`, `recruiter_judge`, or `jd_cleanse`).
 - `POST /api/resume/fit-check` — Score resume fit against a job description.
-- `POST /api/resume/llm/complete` — Generic LLM completion (requires `api_access`; Pro tier requires BYOK, Power allows platform keys up to 10M daily tokens).
+- `POST /api/resume/llm/complete` — Generic LLM completion. Requires `api_access`. Pro and BYOK require a user key (`byok_required_for_completion`). Power allows platform keys. The daily token cap is `Plan.llm_tokens_per_day` when that column is non-zero (seeded Power is 500,000). `LLM_DAILY_TOKEN_LIMIT_BY_PLAN` is used only when the column is 0 and the slug is in that map.
 - `POST /api/resume/llm/connect` — Validate and store encrypted provider API keys.
 - `GET /api/resume/llm/models` — Retrieve available models for a provider.
 - `POST /api/resume/llm/set-default-model` — Set default provider/model preference.
 - `GET /api/resume/export/{resume_id}/pdf` — Export tailored resume as PDF.
 - `GET /api/resume/export/{resume_id}/docx` — Export tailored resume as Word document.
+- `GET /api/resume/export/{resume_id}/cover-letter/pdf` and `.../cover-letter/docx` — Export the cover letter.
+- `GET /api/resume/prompts` — Effective prompt templates.
+- `GET/POST/PUT/DELETE /api/resume/ats-judge-profiles` and `.../ats-judge-profiles/{profile_id}` — ATS judge profile CRUD (`PUT` and `DELETE` on the id).
+- `GET/POST/PUT/DELETE /api/resume/workflows` and `.../workflows/{workflow_id}` — Optimizer workflow CRUD.
+- `GET /api/docs` and `GET /api/openapi.json` — Ninja docs. They are not login-exempt, so an anonymous caller receives JSON `401`.
 
 ---
 
@@ -141,31 +153,34 @@ Mounted in `resume_app/jobs_api.py`.
 ### 4.1 Jobs, Pipeline & Feedback Actions (With Exact Side Effects)
 
 - `GET /api/resume/jobs/pipeline` — Retrieve user's pipeline jobs for active stage/profile.
-- `POST /api/resume/jobs/pipeline/delete` — Soft-delete pipeline entry (`PipelineEntry.delete()`).
+- `POST /api/resume/jobs/pipeline/delete` — Soft-delete via `mark_deleted()` (`stage='deleted'`, `removed_at` set). Query args are `job_listing_id` and `track`.
 - `POST /api/resume/jobs/search` — Execute multi-board search query across external sources. Ingests and upserts global `JobListing` records into the catalog (assigning durable integer IDs and deduplication URLs), but performs ZERO writes to the candidate's personal pipeline or preference centroid.
 - `POST /api/resume/jobs/ai-match` — Run batch LLM fit evaluations and return candidate match probabilities.
 - `POST /api/resume/jobs/insights` — Extract aggregated skill insights across multiple jobs.
 - `GET /api/resume/jobs/{job_listing_id}` — Retrieve global job listing details.
 - `POST /api/resume/jobs/fetch-description` — Fetch and enrich full job description from source URL.
-- `POST /api/resume/jobs/{job_listing_id}/save?track={slug}` — **Sandbox to Cockpit Bridge**:
-  - *Side Effect:* Creates or updates `PipelineEntry(owner, job, track, stage='vetting', is_saved=True, saved_at=now())` and writes `JobListingAction(action_type='save')`. Binds the opportunity directly into the active `SearchProfile` slug.
-- `POST /api/resume/jobs/{job_listing_id}/unsave` — **Unsave Job**:
-  - *Side Effect:* Deletes `JobListingAction(action_type='save')` and soft-deletes the active `PipelineEntry` only if it is in Review (`vetting` or legacy blank) stage. Protects candidate applications in `applying` or `done` stages to ensure submission and interview records are never deleted on unsave.
-- `POST /api/resume/jobs/{job_listing_id}/like` — **Like Job**:
-  - *Side Effect:* Creates `JobListingAction(action_type='like')`, removes any opposing dislike action, and triggers recalculation of the tenant's preference centroid (`JobListingTrackMetrics.centroid_embedding`).
-- `POST /api/resume/jobs/{job_listing_id}/unlike` — **Unlike Job**:
-  - *Side Effect:* Deletes `JobListingAction(action_type='like')` and recalculates the preference centroid vector.
-- `POST /api/resume/jobs/{job_listing_id}/dislike` — **Dislike Job**:
-  - *Side Effect:* Creates `JobListingAction(action_type='dislike')`, deletes any active `PipelineEntry`, and recalculates the preference centroid to deprioritize similar roles.
-- `POST /api/resume/jobs/{job_listing_id}/hide` — **Hide Job**:
-  - *Side Effect:* Creates `JobListingAction(action_type='hide')` to suppress card from search results without modifying the preference centroid vector.
-- `POST /api/resume/jobs/{job_listing_id}/unhide` — **Unhide Job**:
-  - *Side Effect:* Deletes `JobListingAction(action_type='hide')` to restore card visibility in search results.
-- `POST /api/resume/jobs/{job_listing_id}/mark-applied` — **Mark Applied**:
-  - *Side Effect:* Updates `PipelineEntry.stage = 'done'`, sets `is_applied = True`, `applied_at = now()`, and creates `JobListingAction(action_type='applied')`.
-- `GET /api/resume/jobs/pipeline-entry/{id}/interview-prep` — Retrieve saved interview preparation questions from `PipelineEntry`.
-- `POST /api/resume/jobs/pipeline-entry/{id}/generate-interview-prep` — Generate customized interview preparation using LLM; writes to `PipelineEntry.interview_prep_questions`.
-- `POST /api/resume/jobs/pipeline-entry/{id}/save-interview-prep` — Save user-edited interview preparation questions to `PipelineEntry`.
-- `GET /api/resume/jobs/disqualifiers` — List user exclusion keyword rules from `UserDisqualifier`.
-- `POST /api/resume/jobs/disqualifiers` — Create exclusion keyword rule in `UserDisqualifier`.
-- `DELETE /api/resume/jobs/disqualifiers/{id}` — Delete exclusion rule from `UserDisqualifier`.
+- `POST /api/resume/jobs/{job_listing_id}/save` — **Find jobs → Cockpit**. Optional query params `track` and `profile`.
+  - *Side Effect:* Writes `JobListingAction.action='saved'`. A new or restored row lands in `vetting` unless the restored stage is already `applying` or `done`. An active row keeps its stage. There is no `is_saved` column.
+- `POST /api/resume/jobs/{job_listing_id}/unsave` — Deletes `action='saved'`. Soft-deletes the pipeline row only when it is not `applying` or `done`.
+- `POST /api/resume/jobs/{job_listing_id}/like` — `action='liked'` and a liked embedding. Clears opposing dislike on that profile. Stage is unchanged.
+- `POST /api/resume/jobs/{job_listing_id}/unlike` — Deletes the liked action and liked embedding for the profile.
+- `POST /api/resume/jobs/{job_listing_id}/dislike` — `action='disliked'` and a dislike embedding. Does **not** change `PipelineEntry`. Board `action="dislike"` is the path that also calls `mark_deleted()`.
+- `POST /api/resume/jobs/{job_listing_id}/hide` — `action='hidden'`. No embedding.
+- `POST /api/resume/jobs/{job_listing_id}/unhide` — Clears hide (and dislike) for the profile.
+- `POST /api/resume/jobs/{job_listing_id}/mark-applied` — Sets `JobMatchResult.status='applied'` for `(job, resume)`. Returns 404 when no match row exists. Does not move the pipeline.
+- `GET /api/resume/jobs/pipeline-entry/{pipeline_entry_id}/interview-prep` — Read `PipelineEntry.interview_prep`.
+- `POST /api/resume/jobs/pipeline-entry/{pipeline_entry_id}/generate-interview-prep` — Generate prep into `PipelineEntry.interview_prep`.
+- `POST /api/resume/jobs/pipeline-entry/{pipeline_entry_id}/save-interview-prep` — Save edited prep to `PipelineEntry.interview_prep`.
+- `POST /api/resume/jobs/pipeline-entry/{pipeline_entry_id}/log-interview` — Create an `EmployerInterviewEvent`.
+- `GET /api/resume/jobs/disqualifiers` — List `UserDisqualifier` phrases.
+- `POST /api/resume/jobs/disqualifiers` — Create one exclusion phrase.
+- `DELETE /api/resume/jobs/disqualifiers/{disqualifier_id}` — Delete one phrase.
+- `GET /api/resume/jobs/resumes` — Resume options for the active user.
+- `POST /api/resume/jobs/search/async` and `GET /api/resume/jobs/search/async/{task_id}/status` — Async search plus status.
+- `GET /api/resume/jobs/pipeline/applied-jobs` — Applied pipeline rows.
+- `POST /api/resume/jobs/pipeline-resume-summary/start`, `GET .../status`, `POST .../stop` — Pipeline resume summary job.
+- `GET /api/resume/jobs/matches` — Stored match payloads.
+- `POST /api/resume/jobs/run-keyword-search` — Keyword search run.
+- `GET /api/resume/jobs/saved` and `GET /api/resume/jobs/disliked` — Saved and disliked listings.
+- `GET /api/resume/jobs/focus-breakdown/{job_listing_id}` — Focus breakdown JSON.
+- `POST /api/resume/jobs/{job_listing_id}/match` — Score one listing against a resume.

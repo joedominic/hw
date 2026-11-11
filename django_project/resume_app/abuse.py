@@ -14,9 +14,22 @@ logger = logging.getLogger(__name__)
 
 
 def _client_ip(request: HttpRequest) -> str:
-    forwarded = (request.META.get("HTTP_X_FORWARDED_FOR") or "").split(",")[0].strip()
-    if forwarded:
-        return forwarded
+    """Client address, ignoring untrusted X-Forwarded-For entries.
+
+    TRUSTED_PROXY_COUNT is how many proxies append to the header. Zero uses
+    REMOTE_ADDR only, so a client cannot pick a fresh throttle bucket by
+    sending its own X-Forwarded-For.
+    """
+    trusted = int(getattr(settings, "TRUSTED_PROXY_COUNT", 0) or 0)
+    if trusted <= 0:
+        return request.META.get("REMOTE_ADDR") or "unknown"
+    forwarded = [
+        part.strip()
+        for part in (request.META.get("HTTP_X_FORWARDED_FOR") or "").split(",")
+        if part.strip()
+    ]
+    if len(forwarded) >= trusted:
+        return forwarded[-trusted]
     return request.META.get("REMOTE_ADDR") or "unknown"
 
 
@@ -31,19 +44,17 @@ def is_rate_limited(scope: str, identity: str, *, limit: int, window_seconds: in
     """
     if limit <= 0:
         return False
-    key = _throttle_key(scope, identity)
     now = int(time.time())
-    bucket = cache.get(key)
-    if not bucket or not isinstance(bucket, dict):
-        cache.set(key, {"start": now, "count": 1}, window_seconds)
-        return False
-    start = int(bucket.get("start") or now)
-    count = int(bucket.get("count") or 0)
-    if now - start >= window_seconds:
-        cache.set(key, {"start": now, "count": 1}, window_seconds)
-        return False
-    count += 1
-    cache.set(key, {"start": start, "count": count}, window_seconds)
+    window = max(1, int(window_seconds))
+    key = _throttle_key(scope, f"{identity}:{now // window}")
+    # add + incr is atomic on Redis. A lost race between two adds only
+    # under-counts by one, which still bounds the window.
+    cache.add(key, 0, timeout=window)
+    try:
+        count = int(cache.incr(key))
+    except ValueError:
+        cache.set(key, 1, timeout=window)
+        count = 1
     return count > limit
 
 

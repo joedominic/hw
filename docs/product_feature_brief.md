@@ -15,7 +15,7 @@ Despite the proliferation of point-solution AI tools, the workflow remains disjo
 
 HireEdge is an **AI-powered job search and career acceleration operating system** that organizes the complete job search lifecycle around the **Stitch 3-Tab Model**:
 
-- **Tab 1: Target & Discover (`/jobs/profiler/` & `/jobs/search/`):** AI Resume Profiler and Search Sandbox with 1-click `+ Add to Review` ingestion.
+- **Tab 1: Target & Discover (`/jobs/profiler/` & `/jobs/search/`):** AI Resume Profiler and Find jobs. Cards use **Save to Cockpit**.
 - **Tab 2: Career Cockpit (`/jobs/cockpit/`):** Central tri-pane triage workstation, slide-over Automation Drawer, deep LLM fit evaluation, and in-funnel resume tailoring return loop.
 - **Tab 3: Tracker (`/performance/`):** Positive career momentum telemetry, weekly goals, active streaks, and employer interview tracking.
 
@@ -25,16 +25,16 @@ HireEdge is an **AI-powered job search and career acceleration operating system*
 
 ## 3. Core Feature Set
 
-### 🎯 Tab 1: AI Profiler & Multi-Source Search Sandbox
+### Tab 1: AI Profiler and Find jobs
 - **AI Resume Profiler:** Parses candidate resumes, evaluates core market strengths, and creates fine-tuned search profiles with targeted Boolean terms.
 - **Multi-Source Sourcing:** Live listings across **Indeed, LinkedIn (via JobSpy), Greenhouse direct boards, BuiltIn, Levels.fyi, and Dice**.
 - **Centroid Preference Learning:** User feedback (likes and dislikes) refines profile semantic embeddings over time.
 - **Cross-Board Deduplication:** Duplicates across multiple boards collapse into a single normalized record.
-- **One-Click Ingestion Bridge:** Any discovered role can be instantly sent to the Cockpit Review stage via `+ Add to Review`.
+- **One-Click Ingestion Bridge:** **Save to Cockpit** posts `POST /api/resume/jobs/{id}/save`. A new row lands in Review.
 
 ### 🕹️ Tab 2: Career Cockpit & Autonomous Search Automation
 - **Unified Tri-Pane Kanban:** Manage jobs across `New`, `Review`, `Applying`, and `Applied`.
-- **Slide-Over Automation Drawer:** Full automation controls (daily, weekdays, weekly, custom cron) kept cleanly out of the daily triage view.
+- **Search Profile drawer:** Schedule (`off`, `daily`, `weekdays`, `weekly`, `custom`) and boards. **Pipeline Automation Policies** (`openAutomationDrawer()`) edits purge, retention, and promotion.
 - **On-Demand "Run Search Now":** Manual triggers with atomic Redis pending state and a 3-minute cooldown (180s limit).
 - **Automatic Cooldown Reset on Failure:** Zero lingering lockout when an execution fails or times out.
 - **Run Inspection Modal:** Granular ingestion disposition breakdowns (New, Reposted, Already in Pipeline, Expired, Eliminated) with CSV and JSON exports.
@@ -70,7 +70,7 @@ HireEdge is an **AI-powered job search and career acceleration operating system*
 |---------|----------|-------------------|
 | **Workflow Scope** | **Stitch 3-Tab Model** (Target & Discover $\rightarrow$ Cockpit $\rightarrow$ Tracker) | Disjointed multi-app point solutions |
 | **Automation Ergonomics** | Slide-Over Automation Drawer with on-demand triggers & failure recovery | Rigid email alerts or hidden background cron |
-| **Sandbox-to-Pipeline Bridge** | 1-click `+ Add to Review` directly into Review stage | Manual copy-paste between browser tabs |
+| **Find jobs to Cockpit** | **Save to Cockpit** places a new role in Review | Manual copy-paste between browser tabs |
 | **Multi-Source Sourcing** | 6 live channels (Indeed, LinkedIn, Greenhouse, BuiltIn, Levels, Dice) | 1–2 scraping boards or manual copy-paste |
 | **Posting Authenticity & Compliance** | 10-point deterministic auditor detecting DOL PERM filings, phantom pools & short windows | Zero authenticity checks (candidates waste hours on fake/internal postings) |
 | **AI Resume Rewriting** | 3-agent LangGraph workflow with ATS + Recruiter evaluations | Single-prompt generic LLM rewrite |
