@@ -1,0 +1,4 @@
+-r requirements.txt
+fakeredis[lua]>=2.26.0
+freezegun>=1.5.0
+django-migration-linter>=5.1.0
