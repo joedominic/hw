@@ -35,6 +35,22 @@ from .job_search_core import (
     pipeline_jobs_to_payloads,
 )
 from .tenancy import api_user, get_owned_or_404
+
+
+def listing_in_user_pipeline(user, job_listing_id: int | None) -> Optional[JobListing]:
+    """Return a shared catalog row only when this user has it on their board.
+
+    Description enrichment writes title, URL, and description onto the global
+    ``JobListing``. Callers that do not have a pipeline entry must not trigger
+    that write.
+    """
+    if not job_listing_id or user is None or not getattr(user, "is_authenticated", False):
+        return None
+    return (
+        JobListing.objects.filter(pk=job_listing_id, pipelineentry__owner=user)
+        .distinct()
+        .first()
+    )
 from .track_actions import (
     normalize_track_slug,
     q_clear_on_sentiment_change,
@@ -1354,13 +1370,17 @@ def disqualifiers_list(request):
 @router.post("/fetch-description", response=FetchJobDescriptionResponse)
 def jobs_fetch_description(request, payload: FetchJobDescriptionRequest):
     """
-    Fetch a full job description from a supported board URL (Dice or Levels.fyi).
+    Fetch a full job description from a supported board URL.
 
-    Optionally updates an existing JobListing when job_listing_id is provided.
+    When ``job_listing_id`` is one of the caller's pipeline jobs, a short stored
+    description may be filled from that listing's own URL. The request URL is
+    never written onto the shared row, and listings outside the caller's
+    pipeline are not updated.
     """
     url = (payload.url or "").strip()
     if not url:
         raise HttpError(400, "url is required")
+    user = api_user(request)
 
     from .sourcing.clients.dice_client import extract_dice_guid, fetch_dice_job_detail, enrich_dice_job_listing_description
     from .sourcing.clients.levels_client import (
@@ -1376,14 +1396,11 @@ def jobs_fetch_description(request, payload: FetchJobDescriptionRequest):
 
     job = None
     if payload.job_listing_id:
-        job = get_object_or_404(JobListing, id=int(payload.job_listing_id))
+        job = listing_in_user_pipeline(user, int(payload.job_listing_id))
 
     if extract_dice_guid(url) or (job and (job.source or "").lower() == "dice"):
         try:
             if job is not None:
-                if not (job.url or "").strip():
-                    JobListing.objects.filter(pk=job.pk).update(url=url)
-                    job.url = url
                 description = enrich_dice_job_listing_description(job)
                 job.refresh_from_db()
                 if not description:
@@ -1420,9 +1437,6 @@ def jobs_fetch_description(request, payload: FetchJobDescriptionRequest):
     if levels_job_id or (job and (job.source or "").lower() == "levels"):
         try:
             if job is not None:
-                if not (job.url or "").strip() and url:
-                    JobListing.objects.filter(pk=job.pk).update(url=url)
-                    job.url = url
                 description = enrich_levels_job_listing_description(job)
                 job.refresh_from_db()
                 if not description:
@@ -1459,9 +1473,6 @@ def jobs_fetch_description(request, payload: FetchJobDescriptionRequest):
     if builtin_job_id or (job and (job.source or "").lower() == "builtin"):
         try:
             if job is not None:
-                if not (job.url or "").strip() and url:
-                    JobListing.objects.filter(pk=job.pk).update(url=url)
-                    job.url = url
                 description = enrich_builtin_job_listing_description(job)
                 job.refresh_from_db()
                 if not description:
@@ -1504,9 +1515,6 @@ def jobs_fetch_description(request, payload: FetchJobDescriptionRequest):
     if gh_jid or (job and (job.source or "").lower() == "greenhouse"):
         try:
             if job is not None:
-                if not (job.url or "").strip() and url:
-                    JobListing.objects.filter(pk=job.pk).update(url=url)
-                    job.url = url
                 description = enrich_greenhouse_job_listing_description(job)
                 job.refresh_from_db()
                 if not description:
@@ -1550,8 +1558,11 @@ def jobs_fetch_description(request, payload: FetchJobDescriptionRequest):
 @router.get("/focus-breakdown/{job_listing_id}")
 def jobs_focus_breakdown(request, job_listing_id: int, track: Optional[str] = None):
     """Staff-only: detailed focus score breakdown (scoring internals / debug)."""
+    from .tenancy import get_real_user
+
     user = api_user(request)
-    if not getattr(user, "is_staff", False):
+    real = get_real_user(request)
+    if not real or not getattr(real, "is_staff", False):
         raise HttpError(403, "Staff access required.")
     session_track = (
         getattr(getattr(request, "session", None), "get", lambda *_: None)("job_search_track")
@@ -1569,19 +1580,21 @@ def jobs_focus_breakdown(request, job_listing_id: int, track: Optional[str] = No
 def jobs_get(request, job_listing_id: int):
     """Get a single job listing (full stored description + metadata; e.g. optimizer pre-fill, Local desc)."""
     job = get_object_or_404(JobListing, id=job_listing_id)
+    user = api_user(request)
     from .sourcing.clients.builtin_client import enrich_builtin_job_listing_description
     from .sourcing.clients.dice_client import enrich_dice_job_listing_description
     from .sourcing.clients.greenhouse_client import enrich_greenhouse_job_listing_description
     from .sourcing.clients.levels_client import enrich_levels_job_listing_description
 
     src = (job.source or "").strip().lower()
-    if src == "levels":
+    may_enrich = listing_in_user_pipeline(user, job.id) is not None
+    if may_enrich and src == "levels":
         desc = enrich_levels_job_listing_description(job)
-    elif src == "dice":
+    elif may_enrich and src == "dice":
         desc = enrich_dice_job_listing_description(job)
-    elif src == "builtin":
+    elif may_enrich and src == "builtin":
         desc = enrich_builtin_job_listing_description(job)
-    elif src == "greenhouse":
+    elif may_enrich and src == "greenhouse":
         desc = enrich_greenhouse_job_listing_description(job)
     else:
         desc = (job.description or "").strip()

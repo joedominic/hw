@@ -111,14 +111,10 @@ def staff_required(view_fn=None, *, allow_hijack_read: bool = False):
 
 
 def _huey_mutations_allowed(request) -> bool:
-    """Queue mutations require staff-as-self (not while impersonating)."""
-    user = getattr(request, "user", None)
-    return bool(
-        user
-        and user.is_authenticated
-        and getattr(user, "is_staff", False)
-        and not getattr(user, "is_hijacked", False)
-    )
+    """Queue mutations require the real staff user, and not an impersonation session."""
+    from .tenancy import real_user_is_staff, request_is_hijacked
+
+    return real_user_is_staff(request) and not request_is_hijacked(request)
 
 
 def _require_huey_mutation(request):

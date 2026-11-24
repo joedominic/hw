@@ -217,7 +217,7 @@ class ImpersonationTests(TestCase):
         client.login(username="support", password="pass12345!")
         resp = client.post(
             "/hijack/acquire/",
-            {"user_pk": self.target.pk, "next": "/"},
+            {"user_pk": self.target.pk, "reason": "support review", "next": "/"},
         )
         self.assertEqual(resp.status_code, 302)
         resp = client.get("/api/resume/jobs/resumes")
@@ -242,7 +242,7 @@ class ImpersonationTests(TestCase):
         self.assertIn("Admin Console", content)
 
         # Hijack: support chrome keeps Fit Inspector; global ops stay staff-as-self only
-        client.post("/hijack/acquire/", {"user_pk": self.target.pk, "next": "/"})
+        client.post("/hijack/acquire/", {"user_pk": self.target.pk, "reason": "support review", "next": "/"})
         resp = client.get("/settings/")
         self.assertEqual(resp.status_code, 200)
         content = resp.content.decode("utf-8")

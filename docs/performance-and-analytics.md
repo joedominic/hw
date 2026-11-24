@@ -79,7 +79,7 @@ To eliminate initial loading delays and prevent user bounce or avoidance:
 - **Database Index Optimization (`JobListing.fetched_at`):** Added a B-tree index (`db_index=True`, migration `0062_alter_joblisting_fetched_at.py`) and 5-minute global cache on market ingestion counts, reducing query execution time from **14.297s** down to **0.016s** (a 900x query speedup and 32x overall performance gain).
 - **Sub-10ms Streak Engine:** `calculate_active_streak` employs a 90-day lookback cutoff instead of unbounded table scans, eliminating database lockup on high-volume activity histories.
 - **Cache Invalidation:** Appending `?refresh=1` forces recalculation across the pipeline and updates the telemetry cache.
-- **Weekly target:** Read from `AppAutomationSettings.weekly_target_applications` (model default 10; `dashboard_stats` falls back to 12 when the attribute is missing). `update_dashboard_settings_api` in `views.py` is not mounted. `POST /performance/settings/` is not a route. The Tracker footer links to `/settings/`.
+- **Weekly target:** Read from `AppAutomationSettings.weekly_target_applications` (default 10). The Tracker form posts to `POST /performance/settings/` (`update_dashboard_settings`). JSON or `X-Requested-With: XMLHttpRequest` returns JSON; a normal form post redirects back to the Tracker.
 
 ---
 

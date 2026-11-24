@@ -4,11 +4,24 @@ import logging
 from django.dispatch import receiver
 from django.utils import timezone
 from hijack.signals import hijack_ended, hijack_started
+from hijack.views import AcquireUserView
 
 from .models import ImpersonationAuditLog
 from .tenancy import clear_impersonation_session_keys
 
 logger = logging.getLogger(__name__)
+
+class ReasonRequiredAcquireUserView(AcquireUserView):
+    """Impersonation requires a non-empty reason, not only the HTML required attribute."""
+
+    def post(self, request, *args, **kwargs):
+        from django.contrib import messages
+        from django.shortcuts import redirect
+
+        if not (request.POST.get("reason") or "").strip():
+            messages.error(request, "Enter a reason before impersonating a user.")
+            return redirect("staff_users")
+        return super().post(request, *args, **kwargs)
 
 
 def _client_ip(request) -> str:

@@ -70,6 +70,30 @@ def local_file_or_temp(file_source: Any):
                 pass
 
 
+def looks_like_pdf_upload(upload) -> bool:
+    """True when the upload name ends in .pdf and the body starts with %PDF."""
+    name = (getattr(upload, "name", "") or "").replace("\\", "/").split("/")[-1].lower()
+    if not name.endswith(".pdf"):
+        return False
+    try:
+        position = upload.tell()
+    except Exception:
+        position = None
+    try:
+        header = upload.read(5)
+    except Exception:
+        return False
+    finally:
+        try:
+            if position is None:
+                upload.seek(0)
+            else:
+                upload.seek(position)
+        except Exception:
+            pass
+    return header.startswith(b"%PDF")
+
+
 def parse_pdf(file_source: Any) -> str:
     """
     Extract text from a PDF file. Accepts a local path string, FieldFile, or File-like object.

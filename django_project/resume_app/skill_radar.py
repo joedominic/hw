@@ -43,6 +43,30 @@ def _is_cloud_platform_gap(gap_str: str) -> bool:
     return any(bool(re.search(r"\b" + re.escape(c) + r"\b", g)) for c in CLOUD_PLATFORM_KEYWORDS)
 
 
+def _is_cloud_platform_demanded_in_text(gap_str: str, jd_text: str) -> bool:
+    """Return True if the specific cloud platform mentioned in gap_str is actually present in jd_text."""
+    if not gap_str:
+        return True
+    if not jd_text:
+        return False
+    g_lower = gap_str.lower()
+    jd_lower = jd_text.lower()
+
+    cloud_patterns = {
+        "aws": (r"\baws\b", r"\bamazon web services\b"),
+        "gcp": (r"\bgcp\b", r"\bgoogle cloud\b"),
+        "azure": (r"\bazure\b", r"\bmicrosoft azure\b"),
+        "oci": (r"\boci\b", r"\boracle cloud\b"),
+        "alibaba": (r"\balibaba cloud\b", r"\baliyun\b"),
+    }
+
+    for cloud_key, patterns in cloud_patterns.items():
+        if any(re.search(pat, g_lower) for pat in patterns):
+            return any(re.search(pat, jd_lower) for pat in patterns)
+
+    return True
+
+
 CREDENTIAL_INDICATORS = {
     "certification", "certifications", "certified", "degree", "degrees",
     "license", "licenses", "licensure", "certificate", "certificates",
@@ -599,26 +623,67 @@ def reconcile_skills_with_ground_truth(
     raw_ko = adjusted_ko
     raw_sec = adjusted_sec
 
+    raw_desc = (job_description or "").strip()
+    is_stub_desc = (
+        "full job description text was not provided" in raw_desc.lower()
+        or len(raw_desc) < 160
+    )
+
     final_ko: list[str] = []
-    for k in raw_ko:
-        k_clean = clean_skill_string(k)
-        if (
-            is_valid_competency(k_clean)
-            and not is_skill_covered_by_core(k_clean, reconciled_core)
-            and not is_duplicate_or_subsumed(k_clean, final_ko)
-        ):
-            final_ko.append(k_clean)
+    if not is_stub_desc:
+        for k in raw_ko:
+            k_clean = clean_skill_string(k)
+            if (
+                is_valid_competency(k_clean)
+                and not is_skill_covered_by_core(k_clean, reconciled_core)
+                and not is_duplicate_or_subsumed(k_clean, final_ko)
+                and (not _is_cloud_platform_gap(k_clean) or _is_cloud_platform_demanded_in_text(k_clean, job_description))
+            ):
+                final_ko.append(k_clean)
 
     final_sec: list[str] = []
-    for s in raw_sec:
-        s_clean = clean_skill_string(s)
-        if (
-            is_valid_competency(s_clean)
-            and not is_skill_covered_by_core(s_clean, reconciled_core)
-            and not is_duplicate_or_subsumed(s_clean, final_ko)
-            and not is_duplicate_or_subsumed(s_clean, final_sec)
-        ):
-            final_sec.append(s_clean)
+    if not is_stub_desc:
+        for s in raw_sec:
+            s_clean = clean_skill_string(s)
+            if (
+                is_valid_competency(s_clean)
+                and not is_skill_covered_by_core(s_clean, reconciled_core)
+                and not is_duplicate_or_subsumed(s_clean, final_ko)
+                and not is_duplicate_or_subsumed(s_clean, final_sec)
+                and (not _is_cloud_platform_gap(s_clean) or _is_cloud_platform_demanded_in_text(s_clean, job_description))
+            ):
+                final_sec.append(s_clean)
+
+    if is_stub_desc:
+        final_stretch = []
+    else:
+        final_stretch = [
+            s for s in final_stretch
+            if not _is_cloud_platform_gap(s) or _is_cloud_platform_demanded_in_text(s, job_description)
+        ]
+
+    # Sanitize fit_summary to prevent ungrounded cloud or gap hallucinations
+    fit_summary = parsed.get("fit_summary", "")
+    if fit_summary:
+        if is_stub_desc:
+            fit_summary = re.sub(
+                r",?\s*(currently requiring transition|requiring transition|lacks? required|with a gap in|with an addressable gap in|missing experience in|needing experience in)[^.]*",
+                "",
+                fit_summary,
+                flags=re.IGNORECASE,
+            ).strip()
+        elif not _is_cloud_platform_demanded_in_text("aws", job_description):
+            fit_summary = re.sub(
+                r",?\s*(currently requiring transition|requiring transition)[^.]*aws[^.]*",
+                "",
+                fit_summary,
+                flags=re.IGNORECASE,
+            ).strip()
+        if fit_summary.endswith(",") or fit_summary.endswith(";"):
+            fit_summary = fit_summary[:-1].strip()
+        if fit_summary and not fit_summary.endswith("."):
+            fit_summary += "."
+        parsed["fit_summary"] = fit_summary
 
     parsed["core_competencies"] = reconciled_core[:10]
     parsed["stretch_skills"] = final_stretch[:8]
@@ -761,6 +826,22 @@ def reconcile_skills_with_ground_truth(
         parsed["llm_interview_probability"] = None
         parsed["score_delta_match"] = 0
         parsed["score_delta_interview"] = 0
+
+    if is_stub_desc:
+        parsed["confidence_level"] = "LOW_STUB_DESCRIPTION"
+        parsed["is_stub_description"] = True
+        if parsed.get("match_score") is not None:
+            parsed["match_score"] = min(parsed["match_score"], 68)
+        if parsed.get("deterministic_match_score") is not None:
+            parsed["deterministic_match_score"] = min(parsed["deterministic_match_score"], 68)
+        if parsed.get("llm_match_score") is not None:
+            parsed["llm_match_score"] = min(parsed["llm_match_score"], 68)
+        if parsed.get("interview_probability") is not None:
+            parsed["interview_probability"] = min(parsed["interview_probability"], 58)
+        if parsed.get("deterministic_interview_probability") is not None:
+            parsed["deterministic_interview_probability"] = min(parsed["deterministic_interview_probability"], 58)
+        if parsed.get("llm_interview_probability") is not None:
+            parsed["llm_interview_probability"] = min(parsed["llm_interview_probability"], 58)
 
     return parsed
 
@@ -943,7 +1024,9 @@ class SkillRadarService:
                     notice = (
                         f"\n(Note: Full job description text was not provided for this posting. "
                         f"Evaluate baseline viability strictly from the role title '{title}'{company_ctx}. "
-                        f"Do not fabricate unmentioned low-level tools or assume unverified stack alignment.)"
+                        f"Since no detailed technical requirements or tech stack were specified in the posting, qualification_gaps (both knockout_gaps and secondary_gaps) and stretch_skills MUST be empty arrays ([]). "
+                        f"Do not assume, extrapolate, or fabricate any unmentioned technologies, tools, or cloud ecosystems. "
+                        f"Cap match_score at 68 and interview_probability at 55 to reflect high uncertainty from the missing job description.)"
                     )
                     desc_slice = (desc_slice + notice).strip() if desc_slice else notice.strip()
 
@@ -1045,6 +1128,11 @@ class SkillRadarService:
                     if is_stub_desc:
                         parsed["confidence_level"] = "LOW_STUB_DESCRIPTION"
                         calibrated_ip = min(calibrated_ip, 58)
+                        parsed["match_score"] = min(parsed.get("match_score", 65), 68)
+                        if "deterministic_match_score" in parsed and parsed["deterministic_match_score"] is not None:
+                            parsed["deterministic_match_score"] = min(parsed["deterministic_match_score"], 68)
+                        if "llm_match_score" in parsed and parsed["llm_match_score"] is not None:
+                            parsed["llm_match_score"] = min(parsed["llm_match_score"], 68)
                         if "deterministic_interview_probability" in parsed and parsed["deterministic_interview_probability"] is not None:
                             parsed["deterministic_interview_probability"] = min(parsed["deterministic_interview_probability"], 58)
                     else:

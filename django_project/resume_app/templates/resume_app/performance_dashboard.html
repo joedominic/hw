@@ -153,9 +153,9 @@
                     <p id="hero-subtext" class="text-xs sm:text-sm text-slate-600 leading-relaxed font-normal">
                         {% if stats %}
                             {% if stats.ready_queue_count > 0 %}
-                                <strong id="hero-applied-week">{{ stats.applied_this_week|default:"0" }}</strong> of {{ stats.weekly_target|default:"8" }} weekly applications submitted. You are in a strong rhythm — quality always beats volume.
+                                <strong id="hero-applied-week">{{ stats.applied_this_week|default:"0" }}</strong> of {{ stats.weekly_target|default:"10" }} weekly applications submitted. You are in a strong rhythm — quality always beats volume.
                             {% else %}
-                                {{ stats.applied_this_week|default:"0" }} of {{ stats.weekly_target|default:"8" }} weekly applications submitted. Quality beats volume. Background ingestion is actively monitoring new executive opportunities.
+                                {{ stats.applied_this_week|default:"0" }} of {{ stats.weekly_target|default:"10" }} weekly applications submitted. Quality beats volume. Background ingestion is actively monitoring new executive opportunities.
                             {% endif %}
                         {% else %}
                             <span class="inline-block w-3/5 h-4 rounded skeleton-shimmer mt-1"></span>
@@ -173,9 +173,17 @@
                                 <div id="hero-progress-bar" class="h-2 rounded-full transition-all duration-700 bg-[#0F382A]" style="width: {{ stats.pacing_pct|default:'0' }}%"></div>
                             </div>
                             <span id="hero-progress-fraction" class="text-xs font-bold text-slate-900 tabular-nums">
-                                {% if stats %}{{ stats.applied_this_week|default:"0" }} / {{ stats.weekly_target|default:"8" }} Complete{% else %}-- / -- Complete{% endif %}
+                                {% if stats %}{{ stats.applied_this_week|default:"0" }} / {{ stats.weekly_target|default:"10" }} Complete{% else %}-- / -- Complete{% endif %}
                             </span>
                         </div>
+                        {% if stats %}
+                        <form method="post" action="{% url 'update_dashboard_settings' %}" class="flex items-center gap-1">
+                            {% csrf_token %}
+                            <label class="sr-only" for="weekly-target">Weekly application goal</label>
+                            <input id="weekly-target" name="weekly_target_applications" type="number" min="1" max="100" value="{{ stats.weekly_target|default:10 }}" class="w-14 rounded border border-slate-200 bg-white px-1 py-0.5 text-xs tabular-nums text-slate-900">
+                            <button type="submit" class="text-xs font-semibold text-slate-700 hover:text-slate-900">Save goal</button>
+                        </form>
+                        {% endif %}
                     </div>
                 </div>
 
@@ -552,7 +560,7 @@
                         } else if (sec === 'pulse') {
                             hydratePulse({ total_applied: 0, outbound_response_rate: '0.0%', outbound_benchmark_multiplier: 'Awaiting first logged application response', avg_ats_score: null, keywords_aligned: '0' });
                         } else if (sec === 'hero') {
-                            hydrateHero({ streak_days: 0, weekly_target: 8, applied_this_week: 0, pacing_pct: 0, ready_queue_count: 0 });
+                            hydrateHero({ streak_days: 0, weekly_target: 10, applied_this_week: 0, pacing_pct: 0, ready_queue_count: 0 });
                         } else if (sec === 'journey') {
                             hydrateJourney({ roles_scanned: '0', ready_queue_count: 0, total_applied: 0 });
                         }
@@ -591,14 +599,14 @@
                         heroHeadline.innerHTML = 'You have <span class="text-[#0F382A] font-extrabold">' + readyCount + '</span> high-fit opportunit' + (readyCount === 1 ? 'y' : 'ies') + ' ready to be tailored' + companiesStr + '.';
                     }
                     if (heroSubtext) {
-                        heroSubtext.innerHTML = '<strong>' + (s.applied_this_week || 0) + '</strong> of ' + (s.weekly_target || 8) + ' weekly applications submitted. You are in a strong rhythm — quality always beats volume.';
+                        heroSubtext.innerHTML = '<strong>' + (s.applied_this_week || 0) + '</strong> of ' + (s.weekly_target || 10) + ' weekly applications submitted. You are in a strong rhythm — quality always beats volume.';
                     }
                     if (heroTimeEstimate) {
                         heroTimeEstimate.innerText = '~10 minutes to tailor and review';
                     }
 
                     if (heroPrimaryBtn) {
-                        heroPrimaryBtn.href = s.top_ready_action_url || '/jobs/cockpit/?stage=applying';
+                        heroPrimaryBtn.href = s.top_ready_action_url || '{% url "resume_optimizer" %}';
                         heroPrimaryBtn.className = 'w-full sm:w-auto inline-flex items-center justify-center gap-2 py-3 px-5 rounded-xl bg-brand hover:bg-brand-dark text-white active:scale-[0.98] text-sm font-bold shadow-sm transition-all transform hover:-translate-y-0.5';
                     }
                     if (heroCtaText) {
@@ -615,7 +623,7 @@
                         heroHeadline.innerText = "You're all caught up for today. All queued applications have been submitted.";
                     }
                     if (heroSubtext) {
-                        heroSubtext.innerText = (s.applied_this_week || 0) + ' of ' + (s.weekly_target || 8) + ' weekly applications submitted. Quality beats volume. Background ingestion is actively monitoring new executive opportunities.';
+                        heroSubtext.innerText = (s.applied_this_week || 0) + ' of ' + (s.weekly_target || 10) + ' weekly applications submitted. Quality beats volume. Background ingestion is actively monitoring new executive opportunities.';
                     }
                     if (heroTimeEstimate) {
                         heroTimeEstimate.innerText = 'Zero pending triage tasks';
@@ -633,7 +641,7 @@
                     heroProgressBar.style.width = (s.pacing_pct || 0) + '%';
                 }
                 if (heroProgressFraction) {
-                    heroProgressFraction.innerText = (s.applied_this_week || 0) + ' / ' + (s.weekly_target || 8) + ' Complete';
+                    heroProgressFraction.innerText = (s.applied_this_week || 0) + ' / ' + (s.weekly_target || 10) + ' Complete';
                 }
             }
 

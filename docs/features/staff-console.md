@@ -13,7 +13,7 @@
 
 ## Support loop (canonical)
 
-1. **Staff Console** (`/staff/users/`) — find tenant, adjust plan/status/trial/quotas, **Impersonate** (lands on Career Cockpit).
+1. **Staff Console** (`/staff/users/`) — find tenant, adjust plan/status/trial/quotas, **Impersonate** (lands on Career Cockpit). Acquire rejects an empty reason before the session switches. A hijacked session cannot start Stripe Checkout or the billing portal. Focus breakdown stays available and reads the tenant's data.
 2. While hijacked: one sticky banner (`_hijack_banner.html`) offers **Cockpit · Automation · Release**. It is included from `_top_nav.html` (Cockpit, Profiler, Tracker, and every page that extends `base.html`), and also from the public shells and Django admin so those pages keep **Release**. django-hijack’s stock bottom card is off (`HIJACK_INSERT_BEFORE = None`). Product chrome shows tenant data; **Fit Inspector** and **Huey (read-only)** plus **Pipeline Policies** remain available (gated on `get_real_user().is_staff`).
 3. **Release** from the sticky banner; return to Staff Console or Billing as needed.
 

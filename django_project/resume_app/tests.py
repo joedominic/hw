@@ -5546,6 +5546,79 @@ The base compensation range for this role is $158,900 USD - $295,100 USD.
         sec_gaps = parsed.get("qualification_gaps", {}).get("secondary_gaps", [])
         self.assertEqual(len(sec_gaps), 1)
 
+    def test_skill_radar_stub_job_description_prunes_hallucinated_gaps_and_transitions(self):
+        from resume_app.skill_radar import reconcile_skills_with_ground_truth
+
+        payload = {
+            "domain_alignment": "DIRECT_MATCH",
+            "seniority_alignment": "MATCH",
+            "match_score": 92,
+            "interview_probability": 88,
+            "qualification_gaps": {
+                "knockout_gaps": [],
+                "secondary_gaps": ["AWS Ecosystem Experience"]
+            },
+            "core_competencies": [
+                "Large-Scale Distributed Systems Architecture",
+                "Generative AI & LLM Orchestration",
+                "Cloud-Native Platform Engineering",
+                "Financial Services Regulatory Compliance"
+            ],
+            "stretch_skills": ["AWS Ecosystem Experience"],
+            "fit_summary": "Distinguished financial services architect with deep expertise in AI-driven modernization and enterprise-scale systems, currently requiring transition from GCP to AWS environments."
+        }
+
+        stub_jd = "(Note: Full job description text was not provided for this posting. Evaluate baseline viability strictly from the role title 'Principal Engineer' at Allstate Insurance Company. Do not fabricate unmentioned low-level tools or assume unverified stack alignment.)"
+        resume = "Principal Engineer with 20 years experience. Cloud Architecture (GCP & Azure). Distributed systems and AI orchestration."
+
+        result = reconcile_skills_with_ground_truth(payload, resume_text=resume, job_description=stub_jd, job_title="Principal Engineer", is_frontier=True)
+
+        self.assertTrue(result.get("is_stub_description"))
+        self.assertEqual(result.get("confidence_level"), "LOW_STUB_DESCRIPTION")
+        self.assertEqual(result.get("stretch_skills"), [], "Must clear stretch skills when JD is a stub")
+        self.assertEqual(result.get("knockout_gaps"), [], "Must clear knockout gaps when JD is a stub")
+        self.assertEqual(result.get("secondary_gaps"), [], "Must clear secondary gaps when JD is a stub")
+        self.assertEqual(result.get("qualification_gaps", {}).get("secondary_gaps"), [])
+        self.assertLessEqual(result.get("match_score"), 68, "Match score must be capped on stub descriptions")
+        self.assertLessEqual(result.get("interview_probability"), 58, "Interview probability must be capped on stub descriptions")
+        self.assertNotIn("AWS", result.get("fit_summary", ""), "Fit summary must not fabricate AWS transition when JD is a stub")
+
+    def test_skill_radar_cloud_gap_grounded_in_job_description(self):
+        from resume_app.skill_radar import reconcile_skills_with_ground_truth
+
+        payload = {
+            "domain_alignment": "DIRECT_MATCH",
+            "seniority_alignment": "MATCH",
+            "match_score": 85,
+            "interview_probability": 75,
+            "qualification_gaps": {
+                "knockout_gaps": [],
+                "secondary_gaps": ["AWS Ecosystem Experience"]
+            },
+            "core_competencies": [
+                "Large-Scale Distributed Systems",
+                "Generative AI Architecture",
+                "Platform Engineering",
+                "Regulatory Compliance"
+            ],
+            "stretch_skills": ["AWS Ecosystem Experience"],
+            "fit_summary": "Strong architect background in distributed systems."
+        }
+
+        resume = "Cloud Architecture (GCP & Azure). Java, Spring Boot, Kafka."
+
+        # Case 1: Job description does NOT mention AWS -> AWS gap must be rejected
+        jd_without_aws = "Seeking Principal Engineer for enterprise banking platform. Core technologies include Java, Spring Boot, Kafka, and distributed microservices architecture."
+        res1 = reconcile_skills_with_ground_truth(payload.copy(), resume_text=resume, job_description=jd_without_aws, job_title="Principal Engineer", is_frontier=True)
+        self.assertEqual(res1.get("secondary_gaps"), [], "AWS gap must be pruned if not demanded in JD")
+        self.assertEqual(res1.get("stretch_skills"), [])
+
+        # Case 2: Job description DOES mention AWS -> AWS gap is valid under cloud parity
+        jd_with_aws = "Seeking Principal Engineer. Must have deep experience building on AWS (Amazon Web Services), including ECS, Lambda, and DynamoDB."
+        res2 = reconcile_skills_with_ground_truth(payload.copy(), resume_text=resume, job_description=jd_with_aws, job_title="Principal Engineer", is_frontier=True)
+        self.assertIn("AWS Ecosystem Experience", res2.get("secondary_gaps"))
+        self.assertIn("AWS Ecosystem Experience", res2.get("stretch_skills"))
+
     def test_skill_radar_broadcom_hardware_company_reanchors_to_adjacent_domain(self):
         from resume_app.skill_radar import reconcile_skills_with_ground_truth
 

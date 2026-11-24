@@ -1,6 +1,5 @@
 from typing import Any, List, Optional
 import logging
-import re
 import litellm
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
@@ -261,23 +260,17 @@ class LiteLLMChatModel(BaseChatModel):
 
 
 def _normalize_ollama_local_host(host_or_ip: str, default_port: int = 11434) -> str:
+    """Normalize a user or platform Ollama host and reject SSRF targets.
+
+    Accepts a bare host, host:port, or http(s) URL. Link-local, metadata, and
+    unlisted public hosts raise ValueError.
     """
-    Accepts:
-      - "192.168.1.10" -> "http://192.168.1.10:11434"
-      - "192.168.1.10:11434" -> "http://192.168.1.10:11434"
-      - "http://192.168.1.10:11434" -> unchanged
-    """
-    raw = (host_or_ip or "").strip()
-    if not raw:
-        raise ValueError("Ollama Local host/IP is required")
-    if raw.startswith("http://") or raw.startswith("https://"):
-        return raw.rstrip("/")
-    m = re.match(r"^(?P<host>.+):(?P<port>\d+)$", raw)
-    if m:
-        host = m.group("host")
-        port = m.group("port")
-        return f"http://{host}:{port}"
-    return f"http://{raw}:{default_port}"
+    from .ollama_url import OllamaHostRejected, normalize_ollama_local_base_url
+
+    try:
+        return normalize_ollama_local_base_url(host_or_ip, default_port=default_port)
+    except OllamaHostRejected as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def map_provider_model(provider: str, model: str) -> tuple[str, Optional[str], Optional[dict]]:
@@ -362,9 +355,6 @@ def get_llm(provider: str, api_key: str = None, model: str = None, user=None, me
     if provider == "Ollama Local":
         api_base = _normalize_ollama_local_host(key)
         key = None
-        if api_base:
-            import os
-            os.environ.setdefault("OLLAMA_API_BASE", api_base)
         if litellm_model not in litellm.model_cost:
             try:
                 litellm.register_model({

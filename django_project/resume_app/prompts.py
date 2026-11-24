@@ -461,9 +461,11 @@ EVALUATION RULES:
    - "OVERQUALIFIED": Candidate operates at a significantly higher seniority tier than required.
 
 3. qualification_gaps:
+   - STRICT GROUNDING MANDATE: Every item in knockout_gaps and secondary_gaps MUST correspond directly to an explicit requirement stated in the target job description text. NEVER extrapolate, assume, or invent unmentioned tools, frameworks, or cloud ecosystems (e.g., do NOT assume an employer uses AWS, Azure, GCP, or Kubernetes unless explicitly written in the provided job description text). If a requirement is not explicitly stated in the job description, it is FORBIDDEN to list it as a gap.
    - knockout_gaps: Up to 2 mandatory, non-negotiable structural requirements (e.g., core runtime languages/frameworks, required professional licensures/certifications, essential platform prerequisites, or regulatory mandates) explicitly mandated in the target role that are COMPLETELY ABSENT or unsubstantiated in the resume. If none, return an empty array.
    - secondary_gaps: Up to 2 preferred qualifications, secondary tool deltas, or ancillary framework differences between candidate background and job requirements. If none, return an empty array.
-   - CLOUD PARITY AS SECONDARY: Equivalent major public cloud ecosystems (e.g., strong GCP or Azure background when AWS is requested, or vice versa) represent transferable architectural competencies and must be classified as secondary_gaps rather than knockout_gaps, unless the candidate has zero cloud infrastructure background whatsoever.
+   - CLOUD PARITY AS SECONDARY: ONLY when the target job description explicitly demands a specific public cloud ecosystem (e.g. AWS), and the candidate demonstrates substantiated experience in an equivalent major cloud (e.g. GCP or Azure), classify this delta as a secondary_gap rather than a knockout_gap. If the job description does NOT explicitly mention a specific cloud platform, NEVER list any cloud platform as a gap.
+   - STUB / MISSING JOB DESCRIPTIONS: If the job description is absent or provides only a role title/location/salary metadata without technical requirements, qualification_gaps (knockout_gaps and secondary_gaps) and stretch_skills MUST all be empty arrays []. NEVER fabricate gaps when no job description was supplied.
    - FORMAT: Output concise noun phrases (e.g., "PCI Standards & Control Frameworks", "ISO / NIST Frameworks") rather than conversational sentences. Do NOT prefix with "No demonstrated experience with" or "Lack of". Keep each under 8 words.
    - EXCLUDED AS GAPS: Do NOT use gap slots on incidental office/workflow utilities or generic soft skills.
    - MUTUAL EXCLUSIVITY & UNIQUENESS: An item in core_competencies can NEVER appear in qualification_gaps. Every item in qualification_gaps must be distinct; do NOT duplicate or repeat items.
@@ -474,7 +476,7 @@ EVALUATION RULES:
    - STRICT ATTRIBUTION & NO SOFT SKILLS: Do NOT include generic soft skills (e.g., "leadership", "communication", "mentorship", "team player"). If not explicitly demonstrated in the resume, do NOT list it.
 
 5. stretch_skills:
-   - Up to 2 distinct key gaps combining the top knockout gap and top secondary gap (for backward compatibility). If only 1 gap exists, return an array with that 1 gap. If no gaps exist, return an empty array. Never repeat or duplicate items.
+   - Up to 2 distinct key gaps combining the top knockout gap and top secondary gap (for backward compatibility). If only 1 gap exists, return an array with that 1 gap. If no gaps exist or if the job description is absent, return an empty array. Never repeat or duplicate items.
 
 6. match_score (Integer 0-100):
    - Assess objective technical alignment between the candidate's verified background and the target role's core requirements.
@@ -482,17 +484,19 @@ EVALUATION RULES:
    - 74-87: Strong fit with 1-2 secondary gaps or platform deltas.
    - 52-73: Moderate fit with noticeable scope, stack, or seniority deltas.
    - Under 50: Severe domain mismatch or critical knockout requirements missing.
+   - STUB / MISSING JOB DESCRIPTIONS: When full job description text is not provided, evaluate seniority and title baseline only. Cap match_score between 60-70 to reflect high uncertainty from the missing specification.
 
 7. interview_probability (Integer 0-100):
    - Realistic likelihood of passing resume screening and securing an interview callback in a competitive market.
    - Real-world callback odds are typically 5-15% lower than raw technical match_score due to applicant competition and seniority friction.
    - Even standout candidates rarely exceed 85-90%. Knockout gaps drop callback probability below 35%.
+   - STUB / MISSING JOB DESCRIPTIONS: Cap interview_probability at 50-58 to reflect missing job requirements.
 
 8. fit_summary:
    - Provide exactly 1 punchy, high-impact sentence (under 25 words) summarizing candidate viability.
-   - STRUCTURE: State the candidate's core domain or architectural anchor, followed by their single most critical qualification gap or platform delta.
+   - STRUCTURE: State the candidate's core domain or architectural anchor. If verified qualification gaps exist from the job description, note the primary delta. If no gaps exist or if the job description is absent, summarize candidate seniority and domain alignment without inventing gaps or cloud transitions.
    - TONE: Professional executive recruiter assessment.
-   - FORBIDDEN: Do NOT use conversational filler (e.g., "Overall,", "This candidate is...", "I believe"), quotation marks inside the summary, or generic praise ("rockstar", "exceptional").
+   - FORBIDDEN: Do NOT use conversational filler (e.g., "Overall,", "This candidate is...", "I believe"), quotation marks inside the summary, or generic praise ("rockstar", "exceptional"). Do NOT invent transitions between unrequested tools (e.g., do NOT invent a transition to AWS if AWS was not in the job description).
 
 OUTPUT FORMAT:
 Generate valid JSON matching this exact structure:

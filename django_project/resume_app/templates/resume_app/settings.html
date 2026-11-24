@@ -742,9 +742,11 @@
                     <span id="run-connectivity-spinner" class="hidden material-symbols-outlined text-[16px] animate-spin">refresh</span>
                     <span id="run-connectivity-label">Test connection</span>
                 </button>
+                {% if show_dev_tools or real_user_is_staff %}
                 <a class="inline-flex items-center justify-center rounded-concierge border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-medium text-concierge-slate hover:bg-slate-100" href="{% url 'llm_test' %}" title="Open full testing console with custom prompts">
                     Custom Prompt
                 </a>
+                {% endif %}
             </form>
 
             <div id="connectivity-result" class="mt-4 hidden rounded-xl p-3 text-xs leading-relaxed"></div>
@@ -1186,6 +1188,7 @@
             </script>
         </div>
 
+        {% if real_user_is_staff and not is_hijacked %}
         <div class="rounded-concierge border border-slate-200 bg-white p-6 shadow-sm">
             <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
@@ -1206,6 +1209,7 @@
                 </div>
             </div>
         </div>
+        {% endif %}
     </div>
     {% endif %}
 </div>

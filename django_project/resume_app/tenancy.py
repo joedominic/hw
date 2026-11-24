@@ -92,6 +92,30 @@ def api_user(request: HttpRequest) -> AbstractBaseUser:
     return get_active_user(request)
 
 
+def request_is_hijacked(request: HttpRequest) -> bool:
+    """True when this session is impersonating another user."""
+    user = getattr(request, "user", None)
+    if user is not None and getattr(user, "is_hijacked", False):
+        return True
+    session = getattr(request, "session", None)
+    if session is None:
+        return False
+    try:
+        return bool(session.get("hijack_history"))
+    except Exception:
+        return False
+
+
+def real_user_is_staff(request: HttpRequest) -> bool:
+    """Staff flag of the signed-in operator, not the impersonated tenant."""
+    user = get_real_user(request)
+    return bool(
+        user
+        and getattr(user, "is_authenticated", False)
+        and getattr(user, "is_staff", False)
+    )
+
+
 def get_real_user(request: HttpRequest) -> Optional[AbstractBaseUser]:
     """
     Actual signed-in user (support admin during hijack).

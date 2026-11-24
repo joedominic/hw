@@ -15,7 +15,7 @@ from django.contrib.auth.decorators import login_required
 from django.http import HttpResponseForbidden, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
-from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
+from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_http_methods
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -57,12 +57,14 @@ logger = logging.getLogger(__name__)
 
 
 def _staff_required(view_fn):
-    """Decorator: returns 403 for non-staff users (JSON for APIs, forbidden response for HTML)."""
+    """Decorator: staff-as-self. Closed while impersonating, even if the tenant is staff."""
     from functools import wraps
+
+    from .tenancy import real_user_is_staff, request_is_hijacked
 
     @wraps(view_fn)
     def _wrapped(request, *args, **kwargs):
-        if not (request.user and request.user.is_authenticated and request.user.is_staff):
+        if not real_user_is_staff(request) or request_is_hijacked(request):
             if (
                 request.path.startswith("/resume/prompts/api/")
                 or request.content_type == "application/json"
@@ -346,7 +348,6 @@ def prompt_library_view(request):
 # ---------------------------------------------------------------------------
 
 
-@csrf_exempt
 @_staff_required
 @require_http_methods(["POST"])
 def prompt_studio_save_api(request):
@@ -437,7 +438,6 @@ def prompt_studio_save_api(request):
     )
 
 
-@csrf_exempt
 @_staff_required
 @require_http_methods(["POST"])
 def prompt_studio_set_model_preference_api(request):
@@ -471,7 +471,6 @@ def prompt_studio_set_model_preference_api(request):
     })
 
 
-@csrf_exempt
 @_staff_required
 @require_http_methods(["POST"])
 def prompt_studio_test_run_api(request):
@@ -611,7 +610,6 @@ def prompt_studio_test_run_api(request):
         )
 
 
-@csrf_exempt
 @_staff_required
 @require_http_methods(["GET"])
 def prompt_studio_history_api(request):
@@ -639,7 +637,6 @@ def prompt_studio_history_api(request):
     return JsonResponse({"status": "success", "prompt_key": prompt_key, "versions": items})
 
 
-@csrf_exempt
 @_staff_required
 @require_http_methods(["POST"])
 def prompt_studio_restore_api(request):
@@ -670,7 +667,6 @@ def prompt_studio_restore_api(request):
     )
 
 
-@csrf_exempt
 @_staff_required
 @require_http_methods(["POST"])
 def prompt_studio_delete_version_api(request):
@@ -693,7 +689,6 @@ def prompt_studio_delete_version_api(request):
     return JsonResponse({"status": "success", "message": "Revision deleted."})
 
 
-@csrf_exempt
 @_staff_required
 @require_http_methods(["POST"])
 def prompt_studio_clear_history_api(request):
@@ -717,7 +712,6 @@ def prompt_studio_clear_history_api(request):
     )
 
 
-@csrf_exempt
 @_staff_required
 @require_http_methods(["GET"])
 def prompt_studio_resume_content_api(request):
@@ -738,7 +732,6 @@ def prompt_studio_resume_content_api(request):
         return JsonResponse({"status": "error", "message": f"Failed reading resume: {e}"}, status=500)
 
 
-@csrf_exempt
 @_staff_required
 @require_http_methods(["GET"])
 def prompt_studio_job_content_api(request):

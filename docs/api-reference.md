@@ -8,7 +8,7 @@ This document catalogs the complete route surface for HireEdge, registered acros
 
 - **Global Protection:** `LoginRequiredMiddleware` protects the site. Unauthenticated HTML requests redirect to `/accounts/login/`; unauthenticated `/api/*` requests return JSON `401`.
 - **Public Exceptions:** `/` is public because the resolved view is `landing_view`. Prefix exemptions in `LOGIN_EXEMPT_URL_PREFIXES` are `/accounts/`, `/admin/`, `/static/`, `/health/`, `/billing/stripe/webhook/`, and `/legal/`. `/billing/` and `/getting-started/` require login. `/favicon.ico` is not exempt.
-- **Email verification:** When `REQUIRE_EMAIL_VERIFICATION` is on, an unverified non-staff user is sent to `/accounts/verify-email/` (resend + Settings link). Unverified `/api/*` requests return JSON `403`. Exempt prefixes for that check include `/accounts/`, `/admin/`, `/static/`, `/media/`, `/legal/`, and `/settings/`.
+- **Email verification:** When `REQUIRE_EMAIL_VERIFICATION` is on, an unverified non-staff user is sent to `/accounts/verify-email/` (resend + Settings link). Unverified `/api/*` requests return JSON `403`. Exempt prefixes for that check include `/accounts/`, `/admin/`, `/static/`, `/media/`, `/legal/`, `/settings/`, and `/billing/`.
 - **API Authentication:** Supports Django session auth or Bearer token auth (`Authorization: Bearer <token>`) via `CustomerApiKey` (`SessionOrApiKeyAuth`).
 - **Media Authorization:** `/media/<path>` requests are routed through `serve_media_view`, which validates that the requesting user owns the requested asset.
 
@@ -28,10 +28,10 @@ This document catalogs the complete route surface for HireEdge, registered acros
 - `POST /accounts/resend-verification/` — Resend verification email.
 - `GET/POST /getting-started/` — Legacy onboarding URL. Redirects to `/jobs/profiler/` (or Cockpit when setup is complete). Power users go to Cockpit.
 - `GET/POST /billing/` — Plan quotas, usage ledger, and Stripe checkout/portal integration.
-- `POST /billing/stripe/webhook/` — Public Stripe webhook receiver (`csrf_exempt`; verifies signatures in production).
+- `POST /billing/stripe/webhook/` — Public Stripe webhook receiver (`csrf_exempt`). Events are accepted only with a valid `STRIPE_WEBHOOK_SECRET` signature. Unsigned JSON is accepted only by the test client when that secret is empty. `DEBUG=True` does not accept forged events. A hijacked session cannot start Checkout or the billing portal.
 - `GET /staff/users/` — Staff dashboard for user search, quota auditing, and plan adjustment.
 - `POST /staff/users/<user_id>/action/` — Staff administrative actions (suspend, activate, set plan).
-- `POST /hijack/acquire/` and `POST /hijack/release/` — Staff impersonation via `django-hijack` (audited in `ImpersonationAuditLog`). Acquire posts `user_pk`.
+- `POST /hijack/acquire/` and `POST /hijack/release/` — Staff impersonation via `django-hijack` (audited in `ImpersonationAuditLog`). Acquire posts `user_pk` and a non-empty `reason`. An empty reason redirects to Staff Console and does not start impersonation. Staff mutations use the real operator and stay closed during hijack. Focus breakdown remains readable so support can inspect the tenant.
 - `/admin/` — Django admin console.
 - `GET /legal/privacy/`, `GET /legal/terms/` — Public compliance pages (prefix `/legal/`).
 - `GET /health/`, `GET /health/live` — Public liveness JSON.
@@ -53,8 +53,8 @@ This document catalogs the complete route surface for HireEdge, registered acros
 
 ### 2.3 Tab 2: Career Cockpit & Job Automation
 - `GET/POST /jobs/cockpit/` — **Career Cockpit**. GET renders the tri-pane workstation. POST runs board actions (`save`, `like`, `dislike`, `delete`, search-profile saves). `openAutomationDrawer()` opens **Pipeline Automation Policies** (purge, promote, retention). Search schedule, boards, and Run Search Now live on the left rail and in the Search Profile drawer (`openEditProfileDrawer`).
-- `POST /jobs/cockpit/api/skill-radar/` — Run or force Skill Radar diagnostics (`job_id`, `track`, `force`). The view reads `track`, not `profile`. The cockpit client currently calls this URL with `profile=`.
-- `GET /jobs/cockpit/api/skill-radar/?job_id=<id>&track=<slug>` — Read cached or persisted Skill Radar diagnostics. See [Skill Radar Diagnostics](features/skill-radar-diagnostics.md). Primary cache key is `cockpit_llm_skill_radar_{user}_{resume|none}_{job}` (7 days). `cockpit_ollama_skill_radar_…` is a read alias.
+- `POST /jobs/cockpit/api/skill-radar/` — Run or force Skill Radar diagnostics. Accepts `job_id`, `profile` (preferred) or `track`, `force`, and `tier`. The Cockpit Re-Analyze button POSTs this URL with the active profile slug.
+- `GET /jobs/cockpit/api/skill-radar/?job_id=<id>&profile=<slug>` — Read cached or persisted Skill Radar diagnostics (`track` is still accepted). `force=1` on GET runs analysis only in the test suite. See [Skill Radar Diagnostics](features/skill-radar-diagnostics.md). Primary cache key is `cockpit_llm_skill_radar_{user}_{resume|none}_{job}` (7 days). `cockpit_ollama_skill_radar_…` is a read alias.
 - `POST /jobs/tasks/<task_id>/run/` — Trigger manual search run immediately (sets atomic pending key + 3m cooldown).
 - `GET /jobs/tasks/<task_id>/status/` — JSON status endpoint polled by browser during active search.
 - `POST /jobs/tasks/<task_id>/toggle/` — Toggle task active/inactive status.
@@ -62,14 +62,15 @@ This document catalogs the complete route surface for HireEdge, registered acros
 - `GET/POST /jobs/tasks/<task_id>/edit/` — Edit an existing search task.
 - `GET /jobs/tracks/scheduled-runs/<run_id>/details-json/` — Disposition breakdown JSON for the Cockpit inspection modal.
 - `GET /jobs/tracks/scheduled-runs/<run_id>/download-csv/` — Download run job dispositions as CSV.
-- `GET /jobs/automation/` (`job_automation`) — **302** to `/jobs/cockpit/?drawer=automation`, keeping the original query string. Not a permanent redirect, and not a bare cockpit URL. Any logged-in user can open that drawer; the left-rail Pipeline Policies card is staff and Power only.
+- `GET /jobs/automation/` (`job_automation`) — **302** to `/jobs/cockpit/?drawer=automation`, keeping the original query string. Not a permanent redirect, and not a bare cockpit URL. Any logged-in user can open that drawer and POST `update_pipeline_retention` for their own `AppAutomationSettings`. The left-rail Pipeline Policies card is staff and Advanced only.
 
 ---
 
 ### 2.4 Tab 3: Tracker & Momentum Analytics
-- `GET /performance/` — **Tracker: Career Momentum & Application Outcomes**; active streak tracking, weekly target progress bar, and interview loop management.
+- `GET /performance/` — **Tracker: Career Momentum & Application Outcomes**; active streak tracking, weekly target progress bar, and interview loop management. The weekly goal form posts to `POST /performance/settings/`.
 - `GET /performance/api/metrics/` — Progressive hydration JSON endpoint for metrics (accepts `?refresh=1`).
-- Weekly application target is `AppAutomationSettings.weekly_target_applications` (model default 10). `update_dashboard_settings_api` exists in `views.py` and is **not registered**. `POST /performance/settings/` is not a route.
+- `POST /performance/settings/` — Updates `AppAutomationSettings.weekly_target_applications` (1–100) for the active user. Form posts redirect back to the Tracker. JSON or `X-Requested-With: XMLHttpRequest` returns JSON.
+- Weekly application target defaults to 10.
 - `GET/POST /system/fit-inspector/` — Staff diagnostics for embeddings and scoring. Non-staff users are **302**’d to the Cockpit: `drawer=inspector` and `stage=vetting` when `job_id` is present; otherwise Cockpit New (`stage=pipeline`) with no drawer.
 
 ---
@@ -77,7 +78,7 @@ This document catalogs the complete route surface for HireEdge, registered acros
 ### 2.5 Kanban Stages & Legacy Pipeline Routes
 - `GET /jobs/pipeline/`, `/jobs/vetting/`, `/jobs/applying/`, `/jobs/done/` — **302** to `/jobs/cockpit/?stage=pipeline|vetting|applying|done`. Other query params are kept; `stage` is overwritten. These GETs do not render a board.
 - `POST` on those four URLs is handled by `pipeline_board_view` (the action runs, then a redirect).
-- `GET /jobs/<job_listing_id>/focus-breakdown/` — Staff-only focus score diagnostics (non-staff **403**).
+- `GET /jobs/<job_listing_id>/focus-breakdown/` — Staff-only focus score diagnostics. The signed-in operator must be staff; impersonation still allows the read so support can inspect the tenant. Non-staff **403**.
 - `GET /jobs/<job_listing_id>/focus-breakdown/<liked_job_id>/` — Staff **302** to `/system/fit-inspector/?job_id=<job_listing_id>`. `liked_job_id` is dropped. Non-staff **403** before that redirect.
 - `GET /jobs/pipeline/<entry_id>/applied-resume/` — Applied-resume JSON.
 - `GET /jobs/pipeline/<entry_id>/export/pdf/` and `.../export/docx/` — Applied resume exports.

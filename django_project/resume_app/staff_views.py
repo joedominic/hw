@@ -81,7 +81,6 @@ def staff_users_view(request):
             "Is Staff",
             "LLM Requests Today",
             "Searches Today",
-            "Applies Today",
             "Storage (MB)",
             "Lifetime Input Tokens",
             "Lifetime Output Tokens",

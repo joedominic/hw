@@ -807,19 +807,23 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
 
                 original_name = original_name.split("\\")[-1].split("/")[-1].strip()
 
-                if original_name.lower().endswith(".pdf"):
-                    from .subscriptions import QuotaExceeded, assert_upload_allowed
-                    try:
-                        assert_upload_allowed(user, resume_file)
-                        uploaded_resume = UserResume.objects.create(
-                            owner=user,
-                            file=resume_file,
-                            original_filename=original_name[:255],
-                            is_library=True,
-                        )
-                    except QuotaExceeded as exc:
-                        messages.error(request, str(exc))
-                        return redirect(next_url)
+                from .services import looks_like_pdf_upload
+
+                if not looks_like_pdf_upload(resume_file):
+                    messages.error(request, "Resume file must be a PDF.")
+                    return redirect(next_url)
+                from .subscriptions import QuotaExceeded, assert_upload_allowed
+                try:
+                    assert_upload_allowed(user, resume_file)
+                    uploaded_resume = UserResume.objects.create(
+                        owner=user,
+                        file=resume_file,
+                        original_filename=original_name[:255],
+                        is_library=True,
+                    )
+                except QuotaExceeded as exc:
+                    messages.error(request, str(exc))
+                    return redirect(next_url)
 
 
 
@@ -1106,10 +1110,6 @@ def pipeline_board_view(request, board_stage: str, template_name: str = "resume_
 
 
         elif action in ("update_pipeline_retention", "update_pipeline_policies"):
-
-            if not (power_user or real_user_is_staff):
-                messages.error(request, "Pipeline automation policies are available on Advanced / staff accounts only.")
-                return redirect(reverse("career_cockpit") + f"?profile={raw_track}&stage={board_stage}")
 
             cfg = AppAutomationSettings.get_for_user(user)
 
@@ -3326,7 +3326,15 @@ def cockpit_skill_radar_api(request):
 
         job_id = (request.POST.get("job_id") or body_data.get("job_id") or request.GET.get("job_id") or "").strip()
 
-        raw_track = (request.POST.get("track") or body_data.get("track") or request.GET.get("track") or "").strip().lower()
+        raw_track = (
+            request.POST.get("profile")
+            or request.POST.get("track")
+            or body_data.get("profile")
+            or body_data.get("track")
+            or request.GET.get("profile")
+            or request.GET.get("track")
+            or ""
+        ).strip().lower()
 
         force_refresh = (
 
@@ -3344,7 +3352,7 @@ def cockpit_skill_radar_api(request):
 
         job_id = (request.GET.get("job_id") or "").strip()
 
-        raw_track = (request.GET.get("track") or "").strip().lower()
+        raw_track = (request.GET.get("profile") or request.GET.get("track") or "").strip().lower()
 
         force_refresh = request.GET.get("force") in ("1", "true", True) and _in_test
 
@@ -3391,12 +3399,6 @@ def cockpit_skill_radar_api(request):
             logger.warning("Could not parse resume PDF: %s", e)
 
 
-
-    force_refresh = (
-        request.GET.get("force") in ("1", "true", True)
-        or request.POST.get("force") in ("1", "true", True)
-        or body_data.get("force") in ("1", "true", True)
-    )
 
     target_tier = (
         request.POST.get("tier")

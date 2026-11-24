@@ -233,7 +233,7 @@ Tenant / hijack nav label is **Plan & usage**. Staff-as-self use a single Admin 
 `ensure_default_plans()` creates missing built-in slugs (`free` / `byok` / `pro` / `power`) from code defaults and fills blank `price_display`/`description`. All staff quota edits (such as custom `llm_tokens_per_day`) made in the admin console are strictly preserved and never overwritten.
 
 ### 6.1 Billing Plans & Quotas Admin Console (`/billing/`)
-Accessible to all staff users (`request.user.is_staff` and not hijacked) and linked under **Tools &rarr; Admin Console &rarr; Billing**:
+Accessible to the real operator (`get_real_user().is_staff` and not hijacked) and linked under **Tools &rarr; Admin Console &rarr; Billing**:
 
 1. **Commercial Tier & Quota Editor (Dropdown Plan Selector):**
    - **Single-Pane Dropdown Selector:** An interactive dropdown selector lets administrators choose one plan to inspect and configure at a time, synchronized with the URL parameter (`?plan=<slug>`).

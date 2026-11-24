@@ -1267,8 +1267,9 @@ def _validate_workflow_steps(steps: list) -> None:
 
 
 def _require_staff_api(request) -> None:
-    user = api_user(request)
-    if not user or not getattr(user, "is_staff", False):
+    from .tenancy import real_user_is_staff, request_is_hijacked
+
+    if request_is_hijacked(request) or not real_user_is_staff(request):
         raise HttpError(403, "Staff access required.")
 
 

@@ -109,7 +109,7 @@ def get_hero_stats(user) -> dict:
     start_of_week = now - timedelta(days=now.weekday(), hours=now.hour, minutes=now.minute, seconds=now.second, microseconds=now.microsecond)
 
     settings = AppAutomationSettings.get_for_user(user)
-    weekly_target = getattr(settings, "weekly_target_applications", 12) or 12
+    weekly_target = getattr(settings, "weekly_target_applications", 10) or 10
     streak_days = calculate_active_streak(user)
 
     done_qs = PipelineEntry.objects.filter(owner=user, stage=PipelineEntry.Stage.DONE)
@@ -147,11 +147,11 @@ def get_hero_stats(user) -> dict:
     if top_ready_entry and top_ready_entry.job_listing:
         top_ready_company = (top_ready_entry.job_listing.company_name or "Target Company").strip()
         top_ready_role = (top_ready_entry.job_listing.title or "Target Role").strip()
-        top_ready_action_url = f"/jobs/cockpit/?track={top_ready_entry.track}&stage=applying&job_id={top_ready_entry.job_listing_id}"
+        top_ready_action_url = f"/resume/optimizer/?job_id={top_ready_entry.job_listing_id}&track={top_ready_entry.track}"
     else:
         top_ready_company = ""
         top_ready_role = ""
-        top_ready_action_url = "/jobs/cockpit/?stage=applying"
+        top_ready_action_url = "/resume/optimizer/"
 
     return {
         "streak_days": streak_days,

@@ -91,7 +91,7 @@ class StaffExperienceModeTests(TestCase):
         login_client(self.client, self.staff)
         self.client.post(
             "/hijack/acquire/",
-            {"user_pk": self.tenant.pk, "next": reverse("career_cockpit")},
+            {"user_pk": self.tenant.pk, "reason": "support review", "next": reverse("career_cockpit")},
         )
         pages = (
             "career_cockpit",
@@ -123,7 +123,7 @@ class StaffExperienceModeTests(TestCase):
         login_client(self.client, self.staff)
         self.client.post(
             "/hijack/acquire/",
-            {"user_pk": self.tenant.pk, "next": reverse("career_cockpit")},
+            {"user_pk": self.tenant.pk, "reason": "support review", "next": reverse("career_cockpit")},
         )
         resp = self.client.post(
             reverse("settings"),
@@ -139,7 +139,7 @@ class StaffExperienceModeTests(TestCase):
         login_client(self.client, self.staff)
         self.client.post(
             "/hijack/acquire/",
-            {"user_pk": self.tenant.pk, "next": reverse("career_cockpit")},
+            {"user_pk": self.tenant.pk, "reason": "support review", "next": reverse("career_cockpit")},
         )
         resp = self.client.get(reverse("settings") + "?tab=app")
         self.assertEqual(resp.status_code, 302)
@@ -149,7 +149,7 @@ class StaffExperienceModeTests(TestCase):
         login_client(self.client, self.staff)
         self.client.post(
             "/hijack/acquire/",
-            {"user_pk": self.tenant.pk, "next": reverse("career_cockpit")},
+            {"user_pk": self.tenant.pk, "reason": "support review", "next": reverse("career_cockpit")},
         )
         resp = self.client.get(reverse("huey_dashboard"))
         self.assertEqual(resp.status_code, 200)

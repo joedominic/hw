@@ -181,7 +181,7 @@ class FitInspectorHijackTests(TestCase):
         client.login(username="fit_support", password="pass12345!")
         resp = client.post(
             "/hijack/acquire/",
-            {"user_pk": self.target.pk, "next": reverse("career_cockpit")},
+            {"user_pk": self.target.pk, "reason": "support review", "next": reverse("career_cockpit")},
         )
         self.assertEqual(resp.status_code, 302)
 

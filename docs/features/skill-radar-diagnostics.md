@@ -69,6 +69,7 @@ To eliminate divergent scoring between background queues and manual Cockpit tria
       - **Local SLMs (`is_frontier=False`)**: Smaller on-prem models (7B/8B on Ollama) are prone to attention decay and inverted hallucinations; for SLMs, the full heuristic safety net (false-negative recovery, hallucination pruning, and domain re-anchoring) remains active.
     - **Cloud Parity Reclassification (`CLOUD_PLATFORM_KEYWORDS`)**:
       - When candidate has verified major public cloud infrastructure experience (GCP, Azure, AWS) in their resume, an alternative cloud platform requirement (e.g. AWS when candidate is a GCP Cloud Architect) is recognized as a transferable secondary platform delta rather than a fatal knockout gap.
+      - **Strict Grounding Mandate**: Cloud platforms (e.g. AWS) are only classified as a delta if that cloud platform is **explicitly mandated** in the target job description text. If the target job description does not mention AWS (or any specific cloud), the reconciler and prompt strictly bar hallucinating unmentioned cloud platform gaps or transitions.
       - Both the prompt instructions and the Python reconciler reclassify cross-cloud provider deltas from `knockout_gaps` to `secondary_gaps`, preventing multi-cloud leaders from being falsely penalized with structural knockout ceilings.
     - **Calibrated Multi-Knockout Ceilings for `DIRECT_MATCH`**:
       - For roles with `DIRECT_MATCH` domain alignment and $\ge 2$ knockout gaps, the scoring ceiling is calibrated to `match_score <= 52%` and `interview_probability <= 28%` (softened from the non-direct `45%` / `22%` threshold), recognizing that the candidate possesses direct domain and functional alignment.
@@ -95,8 +96,9 @@ To eliminate divergent scoring between background queues and manual Cockpit tria
       - Tech IC bands (`Engineer Software 5`, `SWE Level 5`, `IC5-7`, `Level V-VII`) are recognized as `staff_principal` individual contributor tiers.
       - Recognizes financial services corporate rank norms: Executive Directors or VPs in Architecture/Engineering with substantiated hands-on technical architecture (Kafka, Kubernetes, LangGraph, Python) are evaluated without false managerial `SCOPE_MISMATCH` penalties when applying to high-band Staff/Principal technical IC roles.
   - **Stub / Minimal Job Description Safeguards**:
-    - **Anti-Circular Bias Prompting**: When a job listing has only a brief title, location, or salary snippet (< 160 characters), the prompt directs the SLM to evaluate baseline viability strictly from the role title and company domain, without circular confirmation bias against the candidate's own resume.
-    - **Stub Confidence & Probability Dampening**: Flags stub evaluations with `is_stub_description = True` and `confidence_level = "LOW_STUB_DESCRIPTION"`, capping interview callback probability ($\le 58\%$) to prevent inflated expectations on unverified postings.
+    - **Anti-Circular Bias Prompting & Strict Grounding**: When a job listing has only a brief title, location, or salary snippet (< 160 characters), the prompt directs the model to evaluate baseline viability strictly from the role title and company domain, without fabricating unmentioned tools or cloud ecosystems.
+    - **Empty Gaps Enforcement on Stub Postings**: Because no technical requirements or stack details were supplied in the posting, `qualification_gaps` (`knockout_gaps` and `secondary_gaps`) and `stretch_skills` are deterministically cleared to empty arrays `[]`. Any hallucinated gap/transition clauses in `fit_summary` (e.g. "requiring transition from GCP to AWS") are automatically pruned.
+    - **Stub Confidence & Score Ceilings**: Flags stub evaluations with `is_stub_description = True` and `confidence_level = "LOW_STUB_DESCRIPTION"`. Caps both `match_score` ($\le 68\%$) and `interview_probability` ($\le 58\%$) to prevent inflated expectations on unverified postings.
     - The Career Cockpit displays an informative `"Role & Domain Evaluated"` tag and notice to alert the user that detailed posting text was not supplied by the source.
 
 ---
@@ -191,7 +193,7 @@ X-CSRFToken: <csrf-token>
 ```
 
 - **Mutation / Force Re-analysis (`POST`):** Requires `POST` with CSRF protection. When `force: true`, cache is bypassed, Ollama Local evaluates the listing, and vetting scores/competencies are persisted to `PipelineEntry`.
-- **Read-Only Inspection (`GET`):** `GET /jobs/cockpit/api/skill-radar/?job_id=<job_id>&track=<track_slug>` provides idempotent retrieval of existing cached/persisted results without triggering background mutations.
+- **Read-Only Inspection (`GET`):** `GET /jobs/cockpit/api/skill-radar/?job_id=<job_id>&profile=<slug>` provides idempotent retrieval of existing cached/persisted results without triggering analysis. `track` is still accepted. `force=1` on GET is honored only while the test suite is running. Re-Analyze POSTs the same URL with `profile`, `force=1`, and `tier`.
 - Response schema:
   ```json
   {

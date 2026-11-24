@@ -89,7 +89,7 @@ flowchart TD
 Two drawers share the right edge:
 
 - **Search Profile drawer (`openEditProfileDrawer`):** Profile name, bound resume, query, location, boards (Indeed, LinkedIn, Greenhouse, BuiltIn, Levels.fyi, Dice), and schedule (`off`, `daily`, `weekdays`, `weekly`, `custom`). This is where Run Search Now’s schedule is edited.
-- **Pipeline Automation Policies (`openAutomationDrawer()`):** Auto-purge threshold, retention days, and auto-promotion. The form posts `action="update_pipeline_retention"`. The left-rail card that opens it is staff and Power only. `/jobs/automation/` still 302s any logged-in user to `?drawer=automation`, and that POST is not staff-checked. Esc and the close button dismiss it. Clicking the backdrop does not.
+- **Pipeline Automation Policies (`openAutomationDrawer()`):** Auto-purge threshold, retention days, and auto-promotion. The form posts `action="update_pipeline_retention"` and saves the active user's settings, including a normal tenant. The left-rail card that opens it is staff and Advanced only. `/jobs/automation/` still 302s any logged-in user to `?drawer=automation`. Esc and the close button dismiss it. Clicking the backdrop does not.
 
 ### 2.3 Sandbox $\rightarrow$ Cockpit Ingestion Bridge
 Candidates exploring roles under Target & Discover → Find jobs (`/jobs/search/`) can bridge discoveries into their daily workflow with a single click:

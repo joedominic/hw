@@ -14,6 +14,7 @@ from django.contrib.auth.views import (
 from django.http import HttpResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse, reverse_lazy
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_http_methods
 
 from .account import (
@@ -120,7 +121,13 @@ def resend_verification_view(request):
         messages.success(request, "Verification email sent. Check your inbox.")
     else:
         messages.error(request, "Could not send verification email. Check your email address and try again.")
-    next_url = (request.POST.get("next") or "").strip() or reverse("verify_email_pending")
+    next_url = (request.POST.get("next") or "").strip()
+    if not url_has_allowed_host_and_scheme(
+        next_url,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        next_url = reverse("verify_email_pending")
     return redirect(next_url)
 
 

@@ -2954,7 +2954,21 @@ Select an opportunity to read the full job description.
 
                 try {
                     showToast(isCloud ? 'Running deep analysis with Cloud LLM (~15-20s)...' : 'Running deep analysis with local SLM (~45s)...');
-                    const resp = await fetch(`/jobs/cockpit/api/skill-radar/?job_id=${jobId}&profile=${track}&force=1&tier=${tier}`);
+                    const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
+                    const radarParams = new URLSearchParams({
+                        job_id: jobId,
+                        profile: track,
+                        track: track,
+                        force: '1',
+                        tier: tier,
+                    });
+                    const resp = await fetch(`/jobs/cockpit/api/skill-radar/?${radarParams}`, {
+                        method: 'POST',
+                        headers: {
+                            'X-CSRFToken': csrfToken,
+                            'X-Requested-With': 'XMLHttpRequest',
+                        },
+                    });
                     const data = await resp.json();
                     
                     clearInterval(analysisTimerInterval);

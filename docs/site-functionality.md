@@ -92,7 +92,7 @@ flowchart LR
   - `E`: Submits the card’s `action="save"` form (Move to Review, Move to Applying, or Mark Submitted).
   - `L`: Likes or unlikes the focused card (`action="like"` / `action="unlike"`), updating the preference centroid.
   - `X`: Submits `action="delete"` when that form is on the card, otherwise `action="dislike"`.
-  - `T`: Opens `/resume/optimizer/?job_id=<id>&profile=<slug>` (plus `resume_id` when the profile has a bound resume). `optimizer_view` reads `track` or session `optimizer_track`. It does not read `profile`.
+  - `T`: Opens `/resume/optimizer/?job_id=<id>&profile=<slug>` (plus `resume_id` when the profile has a bound resume). `optimizer_view` reads `profile` first, then `track`, then session `optimizer_track`.
   - `Esc`: Closes open inspector, profile drawer, or automation drawer.
 
 ### 4.3 Right Diagnostic Inspector / Slide Drawer
@@ -140,7 +140,7 @@ A multi-agent tailoring engine orchestrated with LangGraph (Writer → ATS Judge
 ## 7. Global Navigation, Tools & Settings
 
 ### 7.1 Tools Dropdown (Role-Scoped)
-- **Tenants:** Tools → Tailor Resume deep-links Cockpit Applying (`/jobs/cockpit/?stage=applying`); card Tailor still opens `/resume/optimizer/` with `job_id`. **Plan & usage** (`/billing/`) shows live plan name/price, daily meters, and storage. Stripe Checkout/Portal only when `STRIPE_SECRET_KEY` is set; otherwise a collapsed compare table (no fake shop). Fit diagnostics live in the Cockpit inspector. `/system/fit-inspector/` sends non-staff users to the Cockpit: `drawer=inspector` and `stage=vetting` when `job_id` is present; otherwise Cockpit New with no drawer. Cockpit renders flash messages and a soft quota strip when meters are ≥80% used.
+- **Tenants:** Tools → Tailor Resume opens the Resume Optimizer (`/resume/optimizer/`); card Tailor opens `/resume/optimizer/` with `job_id`. **Plan & usage** (`/billing/`) shows live plan name/price, daily meters, and storage. Stripe Checkout/Portal only when `STRIPE_SECRET_KEY` is set; otherwise a collapsed compare table (no fake shop). Fit diagnostics live in the Cockpit inspector. `/system/fit-inspector/` sends non-staff users to the Cockpit: `drawer=inspector` and `stage=vetting` when `job_id` is present; otherwise Cockpit New with no drawer. Cockpit renders flash messages and a soft quota strip when meters are ≥80% used.
 - **Staff (as self):** Admin Console: Fit Inspector, Workflows, Huey Monitor, Prompt Library, **Billing** (plan catalog — single billing entry; no duplicate Plan & usage), and **Staff Console** only when the user has `can_impersonate_users`. Experience mode **Advanced** shows a nav badge.
 - **Staff (hijacked):** One sticky banner: Cockpit · Automation · Release. The django-hijack bottom “stop impersonating” card is not rendered. Admin Console keeps **Fit Inspector** + **Huey (read-only)**. Global mutations (Workflows / Prompts / Billing catalog / Staff Console / Huey pause-flush) stay staff-as-self. **Plan & usage** reappears for the tenant view. Cockpit **Pipeline Policies** remain visible for the real staff user.
 - **Automation:** Cockpit Automation Drawer is the tenant policy/schedule home. `/jobs/automation/` redirects to Cockpit with `drawer=automation` and preserves query params. Settings **Account defaults** (staff-as-self) edits the staff account only; during hijack that tab redirects to the Cockpit drawer.

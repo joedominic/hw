@@ -62,7 +62,8 @@ HireEdge reads environment variables from the `.env` file in the repository root
 
 ### 3.1 Core & Database
 - `SECRET_KEY`: Django cryptographic key.
-- `DEBUG`: Set to `True` for local development; `False` in production.
+- `DEBUG`: Set to `True` for local development; `False` in production. When `DEBUG` is `False`, `SECRET_KEY` must not be the insecure default.
+- `APP_ENV`: `development`, `test`, or `production`. Secure cookies and HSTS default on when this is `production`, even if `DEBUG` was left on.
 - `ALLOWED_HOSTS`: Permitted hostnames.
 - `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_HOST`, `MYSQL_PORT`: Configures MySQL/MariaDB connection (PyMySQL). If `MYSQL_DATABASE` is empty, the app defaults to SQLite at `django_project/db.sqlite3`.
 - `MYSQL_CONN_HEALTH_CHECKS`: Enables persistent connection validation.
@@ -90,6 +91,8 @@ HireEdge reads environment variables from the `.env` file in the repository root
 - `LLM_PLATFORM_DAILY_TOKEN_LIMIT`: Daily spending ceiling for environment-backed platform keys.
 - `LLM_USER_MAX_CONCURRENT`: Maximum in-flight LLM requests per user (default `2`).
 - `OPTIMIZER_JUDGES_PREFER_LOCAL`: Route ATS and Recruiter judges to local Ollama (default `True`).
+- `OLLAMA_LOCAL_HOST`: Platform Ollama base URL (default `http://127.0.0.1:11434`). Also accepted as a tenant-stored host.
+- `OLLAMA_LOCAL_ALLOWED_HOSTS`: Comma-separated extra public Ollama hosts a tenant may store. Loopback and private LAN addresses are allowed without this list. Link-local and cloud-metadata addresses are always rejected. The server does not copy a tenant host into `OLLAMA_API_BASE`.
 
 ### 3.4 Job Scraping Settings
 - `LEVELS_FYI_STANDARD_LEVELS`: Seniority level filters for Levels.fyi.

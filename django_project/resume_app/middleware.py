@@ -169,7 +169,7 @@ class LoginRequiredMiddleware:
             if path.startswith(prefix):
                 return False
         # Allow Settings → Account so users can resend / update email.
-        if path.startswith("/settings/"):
+        if path.startswith("/settings/") or path.startswith("/billing/"):
             return False
         from .account import is_email_verified
 

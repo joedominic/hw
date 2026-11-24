@@ -135,17 +135,44 @@ def _job_search_options_open(
     return False
 
 
-def _staff_required(view_fn):
-    """Decorator: returns 403 for non-staff users on operational/monitor endpoints."""
+def _staff_required(view_fn=None, *, allow_hijack: bool = False):
+    """Decorator: staff-as-self. Global tools stay closed during impersonation.
+
+    ``allow_hijack=True`` is for read-only diagnostics that should follow the
+    tenant being supported (the real user must still be staff).
+    """
     from functools import wraps
 
-    @wraps(view_fn)
-    def _wrapped(request, *args, **kwargs):
-        if not (request.user and request.user.is_authenticated and request.user.is_staff):
-            return HttpResponseForbidden("Staff access required.")
-        return view_fn(request, *args, **kwargs)
+    from .tenancy import real_user_is_staff, request_is_hijacked
 
-    return _wrapped
+    def decorator(fn):
+        @wraps(fn)
+        def _wrapped(request, *args, **kwargs):
+            if not real_user_is_staff(request):
+                return HttpResponseForbidden("Staff access required.")
+            if request_is_hijacked(request) and not allow_hijack:
+                return HttpResponseForbidden("Release impersonation before using this staff tool.")
+            return fn(request, *args, **kwargs)
+
+        return _wrapped
+
+    if view_fn is not None:
+        return decorator(view_fn)
+    return decorator
+
+
+def _profile_slug_from_request(request, session_key: str = "optimizer_track") -> str:
+    """Search-profile slug from profile= (preferred), track=, then the session."""
+    for source in (getattr(request, "POST", None), getattr(request, "GET", None)):
+        if not source:
+            continue
+        slug = (source.get("profile") or source.get("track") or "").strip()
+        if slug:
+            return slug
+    session = getattr(request, "session", None)
+    if session is not None:
+        return (session.get(session_key) or "").strip()
+    return ""
 
 
 def _user_library_resumes(user):
@@ -271,7 +298,7 @@ def optimizer_view(request):
     # OptimizedResume id: loads status, agent logs, Word/PDF download in the status card.
     opt_id = request.GET.get("opt_id")
     job_id = request.GET.get("job_id")
-    track_slug = request.GET.get("track") or request.session.get("optimizer_track")
+    track_slug = _profile_slug_from_request(request)
     prefill_job_description = ""
     prefill_resume_id = None
     target_job = None
@@ -449,7 +476,7 @@ def optimizer_view(request):
 
         if action == "save_draft":
             target_job_id = request.POST.get("job_id") or request.GET.get("job_id") or request.session.get("optimizer_job_id")
-            track_slug = request.POST.get("track") or request.GET.get("track") or request.session.get("optimizer_track") or track_slug
+            track_slug = _profile_slug_from_request(request) or track_slug
             opt_id_val = request.POST.get("opt_id") or request.GET.get("opt_id") or opt_id
 
             from .models import OptimizedResume, PipelineEntry, SearchProfile
@@ -527,7 +554,7 @@ def optimizer_view(request):
 
         elif action in ("approve_and_mark_applied", "mark_applied"):
             target_job_id = request.POST.get("job_id") or request.GET.get("job_id") or request.session.get("optimizer_job_id")
-            track_slug = request.POST.get("track") or request.GET.get("track") or request.session.get("optimizer_track") or track_slug
+            track_slug = _profile_slug_from_request(request) or track_slug
             opt_id_val = request.POST.get("opt_id") or request.GET.get("opt_id") or opt_id
 
             from .models import OptimizedResume, PipelineEntry, SearchProfile
@@ -782,7 +809,7 @@ def optimizer_view(request):
                     opt_id = result.get("resume_id")
                     if opt_id:
                         target_jid = request.POST.get("job_id") or request.GET.get("job_id") or request.session.get("optimizer_job_id") or (target_job.id if target_job else None)
-                        tr_slug = request.POST.get("track") or request.GET.get("track") or request.session.get("optimizer_track") or track_slug
+                        tr_slug = _profile_slug_from_request(request) or track_slug
                         if target_jid:
                             from .models import PipelineEntry, OptimizedResume
                             pe = PipelineEntry.objects.filter(owner=request.user, job_listing_id=int(target_jid))
@@ -968,7 +995,13 @@ def llm_test_view(request):
     Manual test page for LLM connectivity + response rendering.
 
     Uses stored `LLMProviderConfig` keys where possible (including Ollama Local host/IP).
+    Open to staff, or to anyone when SHOW_DEV_TOOLS is on. Closed during impersonation.
     """
+    from .tenancy import real_user_is_staff, request_is_hijacked
+
+    dev_tools = getattr(settings, "SHOW_DEV_TOOLS", settings.DEBUG)
+    if request_is_hijacked(request) or not (dev_tools or real_user_is_staff(request)):
+        return HttpResponseForbidden("The LLM test console is not available.")
     from .models import LLMProviderConfig, AppAutomationSettings
     from .crypto import decrypt_api_key
     from .llm import get_llm
@@ -2126,7 +2159,9 @@ def track_list_view(request):
             original_name = (getattr(resume_file, "name", "") or "resume.pdf").strip()
             # Windows sometimes includes path-like names in uploads.
             original_name = original_name.split("\\")[-1].split("/")[-1].strip()
-            if not original_name.lower().endswith(".pdf"):
+            from .services import looks_like_pdf_upload
+
+            if not looks_like_pdf_upload(resume_file):
                 messages.error(request, "Resume file must be a PDF.")
                 return redirect("track_list")
             file_size = getattr(resume_file, "size", None)
@@ -2472,7 +2507,13 @@ def vetting_match_debug_view(request, job_listing_id: int):
     """
     One-shot vetting LLM match with full raw response for troubleshooting.
     Same prompt path as automation; does not update PipelineEntry fields.
+    Staff only. During impersonation the row is the tenant's.
     """
+    from .tenancy import real_user_is_staff
+
+    if not real_user_is_staff(request):
+        messages.error(request, "Match debug is a staff tool.")
+        return redirect("career_cockpit")
     tracks_qs = Track.ensure_baseline(request.user)
     available_slugs = list(tracks_qs.values_list("slug", flat=True))
     raw_track = (request.GET.get("track") or request.session.get("job_search_track") or "").strip().lower()
@@ -2581,7 +2622,7 @@ def vetting_match_debug_view(request, job_listing_id: int):
     return render(request, "resume_app/vetting_match_debug.html", context)
 
 
-@_staff_required
+@_staff_required(allow_hijack=True)
 def focus_breakdown_view(request, job_listing_id: int):
     """Staff-only: title vs role similarity breakdown (scoring internals)."""
     # Use the same track as the job search page so centroids and preference
@@ -3188,10 +3229,16 @@ def update_dashboard_settings_api(request):
         if phrase:
             UserDisqualifier.objects.filter(owner=user, phrase__iexact=phrase).delete()
 
-    return JsonResponse({
-        "status": "ok",
-        "weekly_target_applications": settings.weekly_target_applications,
-    })
+    if (
+        request.content_type == "application/json"
+        or request.headers.get("X-Requested-With") == "XMLHttpRequest"
+    ):
+        return JsonResponse({
+            "status": "ok",
+            "weekly_target_applications": settings.weekly_target_applications,
+        })
+    messages.success(request, "Weekly application goal updated.")
+    return redirect("performance_dashboard")
 
 
 from .pipeline_export_views import (

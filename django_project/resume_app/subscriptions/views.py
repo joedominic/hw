@@ -210,6 +210,11 @@ def billing_view(request):
     plans = list(Plan.objects.filter(is_active=True).order_by("sort_order", "name"))
 
     if request.method == "POST":
+        from ..tenancy import request_is_hijacked
+
+        if request_is_hijacked(request):
+            messages.error(request, "Release impersonation before changing this account's billing.")
+            return redirect("billing")
         action = (request.POST.get("action") or "").strip()
         if action == "checkout":
             plan_slug = (request.POST.get("plan_slug") or "").strip()
@@ -287,8 +292,8 @@ def stripe_webhook(request):
             logger.warning("stripe webhook verify failed: %s", exc)
             return HttpResponseBadRequest("invalid signature")
         event_dict = event if isinstance(event, dict) else event.to_dict()
-    elif getattr(settings, "DEBUG", False):
-        # Dev/test only: allow unsigned JSON when webhook secret is unset.
+    elif getattr(settings, "_IN_TEST", False) and not secret:
+        # Test client only. DEBUG must not accept forged billing events.
         import json
 
         try:
@@ -296,7 +301,7 @@ def stripe_webhook(request):
         except Exception:
             return HttpResponseBadRequest("invalid json")
     else:
-        logger.error("stripe webhook rejected: STRIPE_WEBHOOK_SECRET required when DEBUG=False")
+        logger.error("stripe webhook rejected: STRIPE_WEBHOOK_SECRET required")
         return HttpResponseBadRequest("webhook secret required")
 
     try:

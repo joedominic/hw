@@ -49,7 +49,7 @@
                 </button>
                 <div id="nav-tools-menu"
                      class="hidden absolute left-0 mt-1.5 w-56 rounded-xl bg-white shadow-xl border border-slate-200 py-1.5 text-xs z-50 animate-in fade-in zoom-in-95 duration-100">
-                    <a href="{% url 'career_cockpit' %}?stage=applying" class="flex items-center gap-2.5 px-3 py-2 text-slate-700 hover:bg-slate-50 font-medium transition-colors {% if url_name == 'resume_optimizer' or url_name == 'resume_status' or url_name == 'resume_save_draft' or url_name == 'optimizer_context_debug' %}bg-slate-50 text-[#0F382A] font-bold{% endif %}">
+                    <a href="{% url 'resume_optimizer' %}" class="flex items-center gap-2.5 px-3 py-2 text-slate-700 hover:bg-slate-50 font-medium transition-colors {% if url_name == 'resume_optimizer' or url_name == 'resume_status' or url_name == 'resume_save_draft' or url_name == 'optimizer_context_debug' %}bg-slate-50 text-[#0F382A] font-bold{% endif %}">
                         <span class="material-symbols-outlined text-[17px] text-emerald-700">edit_note</span>
                         <span>Tailor Resume</span>
                     </a>
@@ -150,7 +150,7 @@
     <div class="border-t border-slate-100 pt-2 space-y-1 text-xs">
         <div class="text-[10px] font-mono uppercase font-bold text-slate-400 px-1">Tools</div>
         <div class="grid grid-cols-2 gap-1.5">
-            <a href="{% url 'career_cockpit' %}?stage=applying" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-slate-700 hover:bg-slate-50">
+            <a href="{% url 'resume_optimizer' %}" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-slate-700 hover:bg-slate-50">
                 <span class="material-symbols-outlined text-[16px] text-emerald-700">edit_note</span>
                 <span>Tailor Resume</span>
             </a>

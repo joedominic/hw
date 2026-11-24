@@ -287,12 +287,14 @@ ABUSE_AUTH_WINDOW_SECONDS = env.int("ABUSE_AUTH_WINDOW_SECONDS", default=300)
 ABUSE_API_LIMIT = env.int("ABUSE_API_LIMIT", default=120)
 ABUSE_API_WINDOW_SECONDS = env.int("ABUSE_API_WINDOW_SECONDS", default=60)
 
-# Production HTTPS / cookies (enabled when DEBUG is False unless overridden)
-SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=not DEBUG)
-SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=not DEBUG)
-CSRF_COOKIE_SECURE = env.bool("CSRF_COOKIE_SECURE", default=not DEBUG)
-SECURE_HSTS_SECONDS = env.int("SECURE_HSTS_SECONDS", default=(31536000 if not DEBUG else 0))
-SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", default=not DEBUG)
+# HTTPS cookies follow APP_ENV, not DEBUG. A production process with DEBUG
+# left on still marks cookies Secure and sends HSTS.
+_SECURE_COOKIE_DEFAULT = IS_PRODUCTION
+SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=_SECURE_COOKIE_DEFAULT)
+SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=_SECURE_COOKIE_DEFAULT)
+CSRF_COOKIE_SECURE = env.bool("CSRF_COOKIE_SECURE", default=_SECURE_COOKIE_DEFAULT)
+SECURE_HSTS_SECONDS = env.int("SECURE_HSTS_SECONDS", default=(31536000 if _SECURE_COOKIE_DEFAULT else 0))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", default=_SECURE_COOKIE_DEFAULT)
 SECURE_HSTS_PRELOAD = env.bool("SECURE_HSTS_PRELOAD", default=False)
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 # Health probes hit the pod over HTTP with Host set to the pod IP. Exempt them
@@ -371,6 +373,13 @@ GOOGLE_API_KEY = env("GOOGLE_API_KEY", default=None)
 OLLAMA_API_KEY = env("OLLAMA_API_KEY", default=None)
 OPENROUTER_API_KEY = env("OPENROUTER_API_KEY", default=None)
 OLLAMA_LOCAL_HOST = env.str("OLLAMA_LOCAL_HOST", default=env.str("OLLAMA_HOST", default="http://127.0.0.1:11434"))
+# Extra public Ollama bases a tenant may store. Loopback, private LAN, and
+# OLLAMA_LOCAL_HOST itself are allowed without being listed here.
+OLLAMA_LOCAL_ALLOWED_HOSTS = [
+    item.strip()
+    for item in env.list("OLLAMA_LOCAL_ALLOWED_HOSTS", default=[])
+    if str(item).strip()
+]
 
 # Preference / abuse cache — configured after Huey Redis settings below.
 # Bump when embedding formula changes (v5 = sentence-level role similarity, pref_role_sentences)
@@ -701,6 +710,16 @@ LOGGING = {
     },
 }
 
+
+if not _IN_TEST and not DEBUG:
+    _insecure_secret_prefixes = (
+        "django-insecure-+a#*@w#!qb+w*1_6vd4my0q2q^!ddes#&#%jueou)q7(5(=v*n",
+        "django-insecure-",
+    )
+    if not SECRET_KEY or any(SECRET_KEY.startswith(prefix) for prefix in _insecure_secret_prefixes):
+        raise ImproperlyConfigured(
+            "SECRET_KEY must be set to a unique secret when DEBUG is False."
+        )
 
 # ==============================================================================
 # Production Startup Invariant Verification (Fail-Closed Safety Guardrails)

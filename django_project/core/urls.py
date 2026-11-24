@@ -12,6 +12,7 @@ from resume_app.subscriptions import views as billing_views
 from resume_app import staff_views
 from resume_app import onboarding_views
 from resume_app.api_keys import SessionOrApiKeyAuth
+from resume_app.hijack_handlers import ReasonRequiredAcquireUserView
 
 api = NinjaAPI(auth=[django_auth, SessionOrApiKeyAuth()])
 api.add_router("/resume", resume_router)
@@ -53,6 +54,7 @@ urlpatterns = [
     ),
     path("billing/", billing_views.billing_view, name="billing"),
     path("billing/stripe/webhook/", billing_views.stripe_webhook, name="stripe_webhook"),
+    path("hijack/acquire/", ReasonRequiredAcquireUserView.as_view(), name="hijack_acquire_reason"),
     path("hijack/", include("hijack.urls", namespace="hijack")),
     path("staff/users/", staff_views.staff_users_view, name="staff_users"),
     path("staff/users/<int:user_id>/action/", staff_views.staff_user_action_view, name="staff_user_action"),
@@ -95,6 +97,7 @@ urlpatterns = [
     path("jobs/cockpit/api/skill-radar/", resume_views.cockpit_skill_radar_api, name="cockpit_skill_radar_api"),
     path("performance/", resume_views.performance_dashboard_view, name="performance_dashboard"),
     path("performance/api/metrics/", resume_views.dashboard_metrics_api, name="dashboard_metrics_api"),
+    path("performance/settings/", resume_views.update_dashboard_settings_api, name="update_dashboard_settings"),
     path("jobs/profiler/", resume_views.career_profiler_view, name="career_profiler"),
     path("jobs/profiler/api/analyze/", resume_views.career_profiler_analyze_api, name="career_profiler_analyze_api"),
     path("jobs/profiler/api/provision/", resume_views.career_profiler_provision_api, name="career_profiler_provision_api"),

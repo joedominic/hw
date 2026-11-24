@@ -160,7 +160,9 @@ def _handle_refresh_provider_models(request, user):
 
 
 def _handle_reset_today_quotas(request, user):
-    if not request.user.is_staff:
+    from .tenancy import real_user_is_staff
+
+    if not real_user_is_staff(request):
         messages.error(request, "Permission denied. Only administrators can reset active daily quotas.")
         return redirect(reverse("settings") + "?tab=usage")
     today = timezone.localdate()
@@ -174,7 +176,9 @@ def _handle_reset_today_quotas(request, user):
 
 
 def _handle_reset_llm_usage_stats(request, user):
-    if not request.user.is_staff:
+    from .tenancy import real_user_is_staff
+
+    if not real_user_is_staff(request):
         messages.error(request, "Permission denied.")
         return redirect(reverse("settings") + "?tab=usage")
     solo = LLMAppUsageTotals.get_for_user(user)
@@ -991,7 +995,10 @@ def settings_view(request):
         daily_usage_rows.append(item)
 
     tenant_usage_rows = []
-    if request.user.is_staff:
+    from .tenancy import real_user_is_staff as operator_is_staff
+    from .tenancy import request_is_hijacked
+
+    if operator_is_staff(request) and not request_is_hijacked(request):
         tenant_usage = defaultdict(lambda: {
             "username": "",
             "email": "",

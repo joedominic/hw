@@ -147,26 +147,13 @@ def list_models_ollama_cloud(api_key: str) -> List[str]:
 
 
 def _normalize_ollama_local_base_url(host_or_ip: str, default_port: int = 11434) -> str:
-    """
-    Accepts:
-      - "192.168.1.10" -> "http://192.168.1.10:11434"
-      - "192.168.1.10:11434" -> "http://192.168.1.10:11434"
-      - "http://192.168.1.10:11434" -> unchanged
-    """
-    import re
+    """Normalize an Ollama Local host and reject addresses the server must not fetch."""
+    from .ollama_url import OllamaHostRejected, normalize_ollama_local_base_url
 
-    raw = (host_or_ip or "").strip()
-    if not raw:
-        raise ValueError("Ollama Local host/IP is required")
-    if raw.startswith("http://") or raw.startswith("https://"):
-        return raw.rstrip("/")
-    # If it already looks like host:port, keep that port.
-    m = re.match(r"^(?P<host>.+):(?P<port>\d+)$", raw)
-    if m:
-        host = m.group("host")
-        port = m.group("port")
-        return f"http://{host}:{port}"
-    return f"http://{raw}:{default_port}"
+    try:
+        return normalize_ollama_local_base_url(host_or_ip, default_port=default_port)
+    except OllamaHostRejected as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def list_models_ollama_local(host_or_ip: str) -> List[str]:
@@ -180,7 +167,7 @@ def list_models_ollama_local(host_or_ip: str) -> List[str]:
         # key is our host/IP for this provider
         url = _normalize_ollama_local_base_url(key) + "/api/tags"
         logger.info("[ollama_local] list models GET %s", url)
-        r = requests.get(url, timeout=15)
+        r = requests.get(url, timeout=15, allow_redirects=False)
         logger.debug("[ollama_local] /api/tags status=%s", r.status_code)
         r.raise_for_status()
         return r.json()
